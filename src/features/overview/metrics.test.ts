@@ -1,4 +1,4 @@
-import { engagementRate, type PostCounters } from "./metrics";
+import { axisMax, engagementRate, weeklyTotals, type PostCounters } from "./metrics";
 
 const post = (over: Partial<PostCounters> = {}): PostCounters => ({ postId: "p", views: 100, likes: 5, comments: 3, shares: 2, ...over });
 
@@ -28,5 +28,22 @@ describe("engagementRate", () => {
 
   it("gives a measured 0% when counters are known zeros and views are positive", () => {
     expect(engagementRate([post({ likes: 0, comments: 0, shares: 0 })])).toMatchObject({ state: "known", ratePct: 0 });
+  });
+});
+
+describe("weeklyTotals", () => {
+  it("buckets by seven days and keeps the remainder as a short final bucket", () => {
+    const day = { shopify: 100, tiktok: 50 };
+    expect(weeklyTotals(Array(9).fill(day))).toEqual([1_050, 300]);
+    expect(weeklyTotals([])).toEqual([]);
+  });
+});
+
+describe("axisMax", () => {
+  it("rounds up to the step, and never collapses to zero", () => {
+    expect(axisMax([44_000, 10_000], 20_000)).toBe(60_000);
+    expect(axisMax([60_000], 20_000)).toBe(60_000);
+    expect(axisMax([0], 20_000)).toBe(20_000);
+    expect(axisMax([], 20_000)).toBe(20_000);
   });
 });

@@ -8,6 +8,9 @@ const REASONS: Record<string, string> = {
 
 export const formatMoney = (m: Money) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: m.currency, minimumFractionDigits: m.minorUnits % 100 === 0 ? 0 : 2 }).format(m.minorUnits / 100);
+export const formatMoneyExact = (m: Money) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: m.currency, minimumFractionDigits: 2 }).format(m.minorUnits / 100);
+export const formatCompact = (n: number) => `${(n / 1000).toFixed(1)}k`;
 export const formatCount = (n: number) => new Intl.NumberFormat("en-US").format(n);
 
 /** Renders a provenance value. Known zero shows 0; unknown or not applicable shows N/A with its reason. */
@@ -16,7 +19,7 @@ export function MetricValue<T>({ value, format }: { value: ProvenanceValue<T>; f
   const reason = (value.reasonCode && REASONS[value.reasonCode]) ?? "Not available from the source.";
   return (
     <span data-state={value.state}>
-      N/A <span style={{ font: "var(--text-small)", color: "var(--color-text-muted)" }}>— {reason}</span>
+      N/A <span style={{ display: "block", font: "var(--text-small)", color: "var(--color-muted)" }}>{reason}</span>
     </span>
   );
 }

@@ -90,13 +90,13 @@ describe("shell", () => {
 
   it("shows the demo label on every demo route", async () => {
     renderAt("/finance");
-    expect(await screen.findByTestId("demo-banner")).toHaveTextContent("Demo data");
+    expect(await screen.findByTestId("demo-banner")).toHaveTextContent("Demo workspace");
   });
 
   it("shows no demo label and no demo values on a live route", async () => {
     renderAt("/overview", createLiveAdapter("sandbox"));
     expect(await screen.findByRole("alert")).toHaveTextContent("not connected");
     expect(screen.queryByTestId("demo-banner")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("metric-Orders")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-Paid orders")).not.toBeInTheDocument();
   });
 });

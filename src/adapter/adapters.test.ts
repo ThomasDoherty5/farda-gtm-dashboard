@@ -39,9 +39,14 @@ describe("demo adapter", () => {
     expect(sum((p) => p.views)).toBe(240_000);
     expect(sum((p) => p.likes) + sum((p) => p.comments) + sum((p) => p.shares)).toBe(12_000);
     expect(data!.orders.value).toBe(400);
-    expect(data!.storeSales.value).toEqual({ minorUnits: 1_259_600, currency: "USD" });
+    expect(data!.netReceipts.value).toEqual({ minorUnits: 1_259_600, currency: "USD" });
     expect(data!.attributedOrders.value).toBe(180);
     expect(data!.attributedNetSales.value).toEqual({ minorUnits: 579_600, currency: "USD" });
+    const daily = data!.daily;
+    expect(daily).toHaveLength(30);
+    expect(daily.reduce((s, d) => s + d.shopify, 0)).toBe(data!.channels[0]!.netReceipts.minorUnits);
+    expect(daily.reduce((s, d) => s + d.tiktok, 0)).toBe(data!.channels[1]!.netReceipts.minorUnits);
+    expect(data!.channels.reduce((s, c) => s + c.orders, 0)).toBe(data!.orders.value);
   });
 
   it("keeps partial coverage counts reconciled to the rows it returns", async () => {

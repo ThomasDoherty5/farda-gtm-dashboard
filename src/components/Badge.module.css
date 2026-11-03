@@ -1,0 +1,7 @@
+/* Figma component set 2:80. */
+.badge { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 var(--space-12); border-radius: var(--space-999); font: var(--text-small); text-decoration: none; white-space: nowrap; flex-shrink: 0; }
+.neutral { background: var(--color-subtle); color: var(--color-muted); }
+.violet { background: var(--color-violetSoft); color: var(--color-violet); }
+.success { background: var(--color-successSoft); color: var(--color-success); }
+.warning { background: var(--color-warningSoft); color: var(--color-warning); }
+.danger { background: var(--color-dangerSoft); color: var(--color-danger); }

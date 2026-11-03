@@ -76,7 +76,7 @@ function Current({ res, data }: { res: Res; data: ApprovalDetail }) {
           <h2 style={{ font: "var(--text-h2)" }}>Changed since you started reviewing</h2>
           <ul>{changes.map((c) => <li key={c.field}>{c.field}: {c.from} → {c.to}</li>)}</ul>
           <p>Your earlier decision was not applied. Review this version before deciding.</p>
-          <Button onClick={() => setReviewedVersion(data.currentVersion)}>Mark as reviewed</Button>
+          <Button variant="secondary" onClick={() => setReviewedVersion(data.currentVersion)}>Mark as reviewed</Button>
         </div>
       )}
       <h2 style={{ font: "var(--text-h2)" }}>What will be sent</h2>
@@ -148,6 +148,7 @@ function DecisionPanel({ res, data, current, decide }: { res: Res; data: Approva
       <textarea id={reasonId} value={reason} rows={2} style={{ width: "100%" }} aria-invalid={Boolean(errors.reason)} aria-describedby={errors.reason ? `${reasonId}-error` : undefined} onChange={(e) => setReason(e.target.value)} />
       {errors.reason && <p id={`${reasonId}-error`}>{errors.reason}</p>}
       <Button
+        variant="secondary"
         loading={decide.isPending && pendingKind === "rejected"}
         disabledReason={blocked}
         onClick={() => {
@@ -163,7 +164,7 @@ function DecisionPanel({ res, data, current, decide }: { res: Res; data: Approva
       <label htmlFor={messageId} style={{ display: "block", font: "var(--text-label)" }}>Message</label>
       <textarea id={messageId} value={message} rows={4} style={{ width: "100%" }} aria-invalid={Boolean(errors.editedMessage)} aria-describedby={errors.editedMessage ? `${messageId}-error` : undefined} onChange={(e) => setMessage(e.target.value)} />
       {errors.editedMessage && <p id={`${messageId}-error`}>{errors.editedMessage}</p>}
-      <Button loading={decide.isPending && pendingKind === "editRequired"} disabledReason={blocked} onClick={() => submit({ decision: "editRequired", editedMessage: message, reason })}>Save as new version</Button>
+      <Button variant="secondary" loading={decide.isPending && pendingKind === "editRequired"} disabledReason={blocked} onClick={() => submit({ decision: "editRequired", editedMessage: message, reason })}>Save as new version</Button>
     </>
   );
 }
@@ -181,7 +182,7 @@ function DecisionFacts({ version }: { version: ApprovalVersion }) {
       {rows.map(([label, value]) => (
         <div key={label}>
           <dt style={{ font: "var(--text-label)" }}>{label}</dt>
-          <dd style={{ margin: "0 0 var(--space-2)" }}>{value}</dd>
+          <dd style={{ margin: "0 0 var(--space-8)" }}>{value}</dd>
         </div>
       ))}
     </dl>
@@ -194,7 +195,7 @@ function History({ data }: { data: ApprovalDetail }) {
       <h2 style={{ font: "var(--text-h2)" }}>Approval history</h2>
       <ol>
         {data.versions.map((v) => (
-          <li key={v.version} style={{ padding: "var(--space-1) 0" }}>
+          <li key={v.version} style={{ padding: "var(--space-4) 0" }}>
             {v.version}: {v.decision ?? "no decision"}{v.decidedAt ? `, ${dateTime(v.decidedAt)}` : ""} · <Link to={`?version=${v.version}`} aria-label={`View historical approval ${v.version}`}>View historical approval</Link>
           </li>
         ))}

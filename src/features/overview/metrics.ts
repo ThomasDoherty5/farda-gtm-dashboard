@@ -30,3 +30,17 @@ export function engagementRate(posts: readonly PostCounters[]): EngagementResult
   if (views === 0) return { state: "notApplicable", reasonCode: "ZERO_VIEWS", includedPosts: complete.length, excludedPosts };
   return { state: "known", ratePct: (100 * engagements) / views, engagements, views, includedPosts: complete.length, excludedPosts };
 }
+
+const WEEK = 7;
+
+/** Sums daily receipts into weekly buckets, in order. The last bucket holds whatever days remain. */
+export function weeklyTotals(daily: readonly { shopify: number; tiktok: number }[]): number[] {
+  const weeks: number[] = [];
+  for (let i = 0; i < daily.length; i += WEEK) weeks.push(daily.slice(i, i + WEEK).reduce((s, d) => s + d.shopify + d.tiktok, 0));
+  return weeks;
+}
+
+/** Smallest multiple of the step that holds the largest value. Never zero, so a flat chart still has an axis. */
+export function axisMax(values: readonly number[], step: number): number {
+  return Math.max(1, Math.ceil(Math.max(0, ...values) / step)) * step;
+}

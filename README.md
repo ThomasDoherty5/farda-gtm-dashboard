@@ -33,11 +33,14 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 
 - Approval flow behavior (THO-296): approval detail and history, agent run approval and unknown-outcome recovery, on an in-memory demo state machine covering FX-10 to FX-18. Start at `/approvals` or `/runs`. Demo state resets on reload. It is unstyled, and its Figma comparison hasn't happened.
 
+- Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
+
 **Not done yet**
-- **All visual design.** Colors, spacing, radii and component visuals are deliberately system defaults. Figma access is blocked; see `docs/figma-access-gap.md` for what unblocks it and what to do first.
+- **Figma comparison for everything except Overview, the shell and Button.** The approval, run and placeholder pages use the real tokens, but their layouts haven't been read from Figma.
+- **The other 13 component sets** in `docs/design-map.md`, and responsive review against the native Operations references.
 - **The rest of THO-296:** real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
-- **Overview filters and charts**, which need the Figma source.
-- **The other 59 sources.** They render labeled placeholders.
+- **Overview's real date range and export.** They need THO-283, so both dialogs say what's missing.
+- **The other 56 sources.** They render labeled placeholders.
 
 ## Commands
 
@@ -47,6 +50,7 @@ npm run dev          # http://localhost:5173 (demo adapter)
 npm run verify       # typecheck + lint + unit tests + build
 npm run test:e2e
 npm run manifest:generate
+node scripts/compare-figma.mjs /overview .handoff/figma/overview-10-217.png   # pixel diff against a local Figma capture
 ```
 
 ## Rules carried from the handoff

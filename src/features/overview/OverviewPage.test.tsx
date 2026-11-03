@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { AdapterError } from "@/adapter/errors";
@@ -26,11 +26,12 @@ const ok = (request: ReadRequest<unknown>): ReadResponse<unknown> => ({
 });
 
 describe("OverviewPage", () => {
-  it("FX-01 shows all six metrics from the overview-original dataset", async () => {
+  it("FX-01 shows the metrics from the overview-original dataset", async () => {
     renderFixture("FX-01-happy-read");
-    expect(await metric("Orders")).toHaveTextContent("400");
-    expect(await metric("Store sales")).toHaveTextContent("$12,596");
-    expect(await metric("Post views")).toHaveTextContent("240,000");
+    expect(await metric("Paid orders")).toHaveTextContent("400");
+    expect(await metric("Net receipts")).toHaveTextContent("$12,596");
+    expect(await metric("Contribution")).toHaveTextContent("$5,680");
+    expect(await metric("Views")).toHaveTextContent("240.0k");
     expect(await metric("Engagement rate")).toHaveTextContent("5.0%");
     expect(await metric("Attributed orders")).toHaveTextContent("180");
     expect(await metric("Attributed net sales")).toHaveTextContent("$5,796");
@@ -46,7 +47,7 @@ describe("OverviewPage", () => {
   it("FX-03 shows an honest empty state instead of zeros or an error", async () => {
     renderFixture("FX-03-empty-filter");
     expect(await screen.findByRole("heading", { name: "No matching records" })).toBeInTheDocument();
-    expect(screen.queryByTestId("metric-Orders")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-Paid orders")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -56,26 +57,26 @@ describe("OverviewPage", () => {
     expect(engagement).toHaveTextContent("N/A");
     expect(engagement).toHaveTextContent("Shares are unavailable");
     expect(engagement).not.toHaveTextContent("%");
-    expect(await metric("Post views")).toHaveTextContent("240,000");
+    expect(await metric("Views")).toHaveTextContent("240.0k");
   });
 
   it("FX-05 warns that totals cover only the available records", async () => {
     renderFixture("FX-05-partial-coverage");
     expect(await screen.findByRole("alert")).toHaveTextContent("3 of 5 source records");
-    expect(await metric("Post views")).toHaveTextContent("180,000");
+    expect(await metric("Views")).toHaveTextContent("180.0k");
   });
 
   it("FX-06 labels stale values with the reason and the last successful sync", async () => {
     renderFixture("FX-06-stale-source");
     expect(await screen.findByRole("alert")).toHaveTextContent("SOURCE_SYNC_DELAYED");
-    expect(screen.getByText(/Metrics as of Oct 30, 2026/)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("Oct 30, 2026");
   });
 
   it("FX-08 shows a neutral denial with no retry and no values", async () => {
     renderFixture("FX-08-forbidden-account");
     expect(await screen.findByRole("heading", { name: "No access to this account" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
-    expect(screen.queryByTestId("metric-Orders")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-Paid orders")).not.toBeInTheDocument();
   });
 
   it("FX-09 asks for a new sign-in and removes values read before the session expired", async () => {
@@ -84,10 +85,34 @@ describe("OverviewPage", () => {
       throw new AdapterError({ code: "SESSION_EXPIRED", message: "expired", requestId: null, correlationId: null, retryable: false, retryAfterMs: null });
     });
     const { client } = renderWithAdapter(<OverviewPage />, adapter);
-    expect(await metric("Orders")).toHaveTextContent("400");
+    expect(await metric("Paid orders")).toHaveTextContent("400");
     await client.refetchQueries();
     await waitFor(() => expect(screen.getByRole("heading", { name: "Sign in again" })).toBeInTheDocument());
-    expect(screen.queryByTestId("metric-Orders")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-Paid orders")).not.toBeInTheDocument();
+  });
+
+  it("derives the secondary figures from the dataset", async () => {
+    renderFixture("FX-01-happy-read");
+    expect(await metric("Blended CAC")).toHaveTextContent("$25.00");
+    expect(await metric("Marketing efficiency")).toHaveTextContent("1.80×");
+    expect(screen.getByText("$31.49 average net receipts")).toBeInTheDocument();
+    expect(screen.getByText("Before marketing · 45.1% margin")).toBeInTheDocument();
+    expect(screen.getByText("66.4% of net receipts")).toBeInTheDocument();
+    expect(screen.getByText("33.6% of net receipts")).toBeInTheDocument();
+    expect(screen.getByText("400 orders · 260 Shopify / 140 TikTok")).toBeInTheDocument();
+  });
+
+  it("offers the chart's values as a table that reconciles with the channel totals", async () => {
+    renderFixture("FX-01-happy-read");
+    const table = await screen.findByRole("table", { name: /Daily net receipts/ });
+    const rows = within(table).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(30);
+    const cents = (text: string | null) => Math.round(Number((text ?? "").replace(/[$,]/g, "")) * 100);
+    const column = (i: number) => rows.reduce((sum, row) => sum + cents(within(row).getAllByRole("cell")[i]!.textContent), 0);
+    expect(column(0)).toBe(836_400);
+    expect(column(1)).toBe(423_200);
+    expect(column(0) + column(1)).toBe(overviewOriginal.netReceipts.value!.minorUnits);
+    expect(within(rows[0]!).getByRole("rowheader")).toHaveTextContent("Sep 30");
   });
 
   it("FX-07 offers a retry, and recovers when the source returns", async () => {
@@ -100,7 +125,7 @@ describe("OverviewPage", () => {
     expect(await screen.findByRole("heading", { name: "Data unavailable" })).toBeInTheDocument();
     expect(screen.getByText("Reference: corr-1")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await metric("Orders")).toHaveTextContent("400");
+    expect(await metric("Paid orders")).toHaveTextContent("400");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -110,9 +135,9 @@ describe("OverviewPage", () => {
       throw new AdapterError({ code: "SOURCE_UNAVAILABLE", message: "down", requestId: null, correlationId: null, retryable: false, retryAfterMs: null });
     });
     const { client } = renderWithAdapter(<OverviewPage />, adapter);
-    expect(await metric("Orders")).toHaveTextContent("400");
+    expect(await metric("Paid orders")).toHaveTextContent("400");
     await client.refetchQueries();
     expect(await screen.findByRole("alert")).toHaveTextContent("last successful read");
-    expect(screen.getByTestId("metric-Orders")).toHaveTextContent("400");
+    expect(screen.getByTestId("metric-Paid orders")).toHaveTextContent("400");
   });
 });

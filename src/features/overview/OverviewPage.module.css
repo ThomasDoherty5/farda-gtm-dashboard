@@ -1,0 +1,89 @@
+/* Figma source 10:217. Sizes at 1440 come from the design; below 1180 the panels stack (implementation adaptation). */
+.page { display: flex; flex-direction: column; gap: var(--space-24); }
+.titleRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-24); }
+.heading { flex: 0 1 850px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.heading h1 { margin: 0; font: var(--text-h1); }
+.heading p { margin: 0; color: var(--color-muted); }
+.periodButton { min-width: 172px; }
+.exportButton { min-width: 166px; }
+.context { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); font: var(--text-small); color: var(--color-muted); }
+.context p { margin: 0; }
+.contextSpace { flex: 0 1 250px; }
+.primary { display: grid; grid-template-columns: minmax(0, 376fr) minmax(0, 900fr); gap: var(--space-20); align-items: start; }
+.secondary { display: grid; grid-template-columns: minmax(0, 376fr) minmax(0, 484fr) minmax(0, 396fr); gap: var(--space-20); align-items: start; }
+.kpis { display: flex; flex-direction: column; gap: var(--space-16); }
+/* Figma children are 48px narrower than their card, border included, so they run 2px past a plain 24px inset. */
+.card { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; padding: var(--space-24) 22px var(--space-24) var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.card h2, .card h3, .card p, .card dl, .card dd { margin: 0; }
+.kpi { flex-direction: row; gap: var(--space-16); align-items: flex-start; }
+.hero { border: 2px solid var(--color-violet); padding-right: var(--space-20); }
+.kpiText { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 0 1 196px; }
+.kpiTextWide { flex-basis: 206px; }
+.kpiText dt { font: var(--text-h3); }
+.kpiText dd { font: var(--text-metric); }
+.kpiText .note { font: var(--text-small); color: var(--color-muted); }
+.note { font: var(--text-small); color: var(--color-muted); }
+.miniBars { display: flex; align-items: flex-end; gap: var(--space-8); width: 116px; height: 68px; flex-shrink: 0; }
+.miniBars span { flex: 1 1 0; background: var(--color-violet); border-radius: 5px; }
+.donut { position: relative; flex-shrink: 0; width: 90px; height: 90px; }
+.donut svg { display: block; }
+.donutTrack { stroke: var(--color-violetSoft); }
+.donutArc { stroke: var(--color-violet); }
+.donut span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: var(--text-h3); color: var(--color-violet); }
+.bubbles { position: relative; flex-shrink: 0; width: 116px; height: 90px; }
+.bubble { position: absolute; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+.bubbleMain { left: 0; top: 8px; width: 78px; height: 78px; background: var(--color-violet); color: var(--color-onDark); font: var(--text-label); }
+.bubbleSecond { left: 62px; top: 0; width: 54px; height: 54px; background: var(--color-chart-secondary); color: var(--color-ink); font: var(--text-small); }
+.chartHead { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-16); }
+.chartHead h2 { font: var(--text-h2); }
+.chartSpace { flex: 0 1 160px; }
+.chartScroll { overflow-x: auto; }
+.chart { position: relative; height: 302px; min-width: 560px; }
+.axisLabel { position: absolute; font: var(--text-micro); color: var(--color-muted); white-space: nowrap; }
+.grid { position: absolute; left: 48px; right: 0; height: 1px; background: var(--color-border); }
+.plot { position: absolute; left: 48px; right: 0; top: 0; height: 270px; }
+.day { position: absolute; top: 0; bottom: 0; width: 22px; }
+.bar { position: absolute; bottom: 0; width: 9px; border-radius: 5px; }
+.barShopify { left: 0; background: var(--color-violet); }
+.barTiktok { left: 11px; background: var(--color-chart-secondary); }
+.chartTotals { display: flex; flex-wrap: wrap; gap: var(--space-24); font: var(--text-label); }
+.totalShopify { color: var(--color-violet); }
+.totalTiktok { color: var(--color-muted); }
+.totalsSpace { flex: 0 1 160px; }
+.textLink { font: var(--text-label); color: var(--color-violet); text-decoration: none; }
+.textLink:hover { text-decoration: underline; }
+.cardTitle { font: var(--text-h3); }
+.channel { display: flex; flex-direction: column; gap: 10px; }
+.channelAmount { display: flex; gap: var(--space-12); font: var(--text-label); }
+.channelAmount span:first-child { flex: 0 1 184px; }
+.progress { height: 8px; background: var(--color-violetSoft); border-radius: var(--space-999); overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--color-violet); border-radius: var(--space-999); }
+.pair { display: flex; gap: var(--space-24); }
+.pair > div { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: var(--space-8); }
+.pair dt { font: var(--text-small); color: var(--color-muted); }
+.pair dd.value { font: var(--text-metric); }
+.divider { height: 1px; background: var(--color-border); border: 0; margin: 0; width: 100%; }
+.violetLabel { font: var(--text-label); color: var(--color-violet); }
+.activity { gap: var(--space-16); }
+.activityHead { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
+.creatorMetrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16) var(--space-20); margin: 0; }
+.creatorMetrics > div { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.creatorMetrics dt { font: var(--text-small); color: var(--color-muted); }
+.creatorMetrics dd { font: var(--text-h2); margin: 0; }
+.event { display: flex; flex-direction: column; gap: 3px; }
+.event strong { font: var(--text-label); }
+.monitorButton { width: 100%; }
+.footer { display: flex; flex-wrap: wrap; gap: var(--space-12); font: var(--text-small); color: var(--color-muted); }
+.footer p { margin: 0; }
+.footerSpace { flex: 0 1 300px; }
+.footer a { font: var(--text-small); }
+@media (max-width: 1179px) {
+  .primary, .secondary { grid-template-columns: minmax(0, 1fr); }
+  .contextSpace, .chartSpace, .totalsSpace, .footerSpace { display: none; }
+}
+@media (max-width: 479px) {
+  .pair { flex-direction: column; }
+  .periodButton, .exportButton { width: 100%; }
+  .card { padding: var(--space-16); }
+  .kpi { flex-wrap: wrap; }
+}

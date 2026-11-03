@@ -19,7 +19,7 @@ export function RoutePlaceholder({ path }: { path: string }) {
   const shown = selected.length ? selected : sources;
   return (
     <section aria-labelledby="ph-title">
-      <h1 id="ph-title" style={{ font: "var(--text-h1)" }}>{shown[0]?.screen ?? path}</h1>
+      <h1 id="ph-title" style={{ font: "var(--text-h1)", marginTop: 0 }}>{shown[0]?.screen ?? path}</h1>
       <p>Not built yet. This route is reserved for the Figma source below and has no data or actions.</p>
       {Object.keys(params).length > 0 && <p>Route parameters: {Object.entries(params).map(([k, v]) => `${k}=${v}`).join(", ")}</p>}
       <SourceTable sources={sources} highlight={new Set(selected.map((s) => s.sourceNodeId))} />
@@ -32,7 +32,7 @@ export function SectionIndex({ seg }: { seg: string }) {
   const sources = sourceScreens.filter((s) => s.path.split("/")[1] === seg);
   return (
     <section aria-labelledby="sec-title">
-      <h1 id="sec-title" style={{ font: "var(--text-h1)" }}>{seg}</h1>
+      <h1 id="sec-title" style={{ font: "var(--text-h1)", marginTop: 0 }}>{seg}</h1>
       <p>Screens in this section. None are built yet except where linked.</p>
       <SourceTable sources={sources} highlight={new Set()} linkPaths />
     </section>
