@@ -17,15 +17,53 @@ const button = (name: string | RegExp) => screen.getByRole("button", { name });
 describe("approval detail", () => {
   it("shows the exact payload, version, role and independent channels", async () => {
     await open("/approvals/demo-approval-exact");
-    expect(status()).toHaveTextContent("Waiting for a decision");
-    expect(status()).toHaveTextContent("Version v1");
-    expect(status()).toHaveTextContent("reviewer");
-    expect(screen.getAllByText("demo-handle-one")).toHaveLength(2);
+    expect(status()).toHaveTextContent("Pending");
+    expect(screen.getByTestId("approval-version")).toHaveTextContent("Version 1");
+    expect(screen.getByText("Assigned operator")).toBeInTheDocument();
+    expect(screen.getByText("demo-handle-one")).toBeInTheDocument();
     expect(screen.getByText("Instagram, TikTok")).toBeInTheDocument();
-    expect(screen.getByText("Social Cat")).toBeInTheDocument();
     expect(screen.getByText("Website")).toBeInTheDocument();
     expect(screen.getByText("15% per eligible sale")).toBeInTheDocument();
     expect(screen.getByTestId("exact-message")).toHaveTextContent("per-sale commission");
+  });
+
+  it("shows Figma's archived sample read-only, with nothing to approve or send", async () => {
+    await open("/approvals/demo-approval-042");
+    expect(screen.getByText("Historical approval snapshot")).toBeInTheDocument();
+    expect(screen.getByText("APR-0042")).toBeInTheDocument();
+    expect(screen.getByText("30 Oct · 18:00 PT")).toBeInTheDocument();
+    expect(screen.getByText("No message has been sent")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve this version" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send approved action" })).not.toBeInTheDocument();
+  });
+
+  it("offers a decision here as well as in Slack, on current records", async () => {
+    await open("/approvals/demo-approval-exact");
+    expect(screen.getByRole("heading", { name: "Decide here" })).toBeInTheDocument();
+    expect(screen.getByText("Decide here or in Slack.")).toBeInTheDocument();
+    expect(screen.getByText(/The first decision recorded wins/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open approval channel" })).toBeInTheDocument();
+  });
+
+  it("refuses a second decision on a version already decided elsewhere", async () => {
+    const adapter = createDemoAdapter();
+    const { user } = await open("/approvals/demo-approval-exact", adapter);
+    await adapter.submitAction({ schemaVersion: "x", operation: "decideApproval", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" }, actionKind: "decideApproval", entityRefs: [], expectedVersion: "v1", approvalRef: "demo-approval-exact", manifestRef: null, idempotencyKey: "from-slack", payload: { decision: "approved" }, requestId: "r" });
+    await user.click(button("Approve this version"));
+    expect(await screen.findByTestId("action-error")).toHaveTextContent("already decided");
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+  });
+
+  it("marks the selected queue item, and links to the others", async () => {
+    await open("/approvals/demo-approval-042");
+    expect(screen.getByRole("link", { name: /@routine\.with\.ella/ })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: /@mira\.moves/ })).toHaveAttribute("href", "/approvals/demo-approval-exact");
+  });
+
+  it("explains a missing source link rather than inventing one", async () => {
+    const { user } = await open("/approvals/demo-approval-042");
+    await user.click(button("Open approval channel"));
+    expect(screen.getByText(/No verified link is available/)).toBeInTheDocument();
   });
 
   it("goes approved, then sent only with a receipt", async () => {
@@ -49,7 +87,7 @@ describe("approval detail", () => {
     expect(error).toHaveTextContent("commission-only");
     expect(error).toHaveTextContent("Nothing was sent.");
     expect(error).toHaveFocus();
-    expect(status()).toHaveTextContent("Waiting for a decision");
+    expect(status()).toHaveTextContent("Pending");
   });
 
   it("requires a reason to reject, and keeps other edits when that fails", async () => {
@@ -61,7 +99,7 @@ describe("approval detail", () => {
     expect(reason).toHaveAccessibleDescription("Enter a reason for rejecting.");
     expect(reason).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByLabelText("Message")).toHaveValue("Draft in progress");
-    expect(status()).toHaveTextContent("Waiting for a decision");
+    expect(status()).toHaveTextContent("Pending");
 
     await user.type(reason, "Wrong creator.");
     await user.click(button("Reject"));
@@ -80,8 +118,8 @@ describe("approval detail", () => {
     await user.clear(screen.getByLabelText("Message"));
     await user.type(screen.getByLabelText("Message"), "Edited words.");
     await user.click(button("Save as new version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Version v2"));
-    expect(status()).toHaveTextContent("Waiting for a decision");
+    await waitFor(() => expect(screen.getByTestId("approval-version")).toHaveTextContent("Version 2"));
+    expect(status()).toHaveTextContent("Pending");
     expect(screen.getByTestId("exact-message")).toHaveTextContent("Edited words.");
     expect(button("Approve this version")).toBeInTheDocument();
   });
@@ -92,8 +130,8 @@ describe("approval detail", () => {
     expect(await screen.findByTestId("action-error")).toHaveTextContent("This record changed");
     const changes = await screen.findByTestId("version-changes");
     expect(changes).toHaveTextContent("Commission: 15% → 20%");
-    expect(status()).toHaveTextContent("Version v2");
-    expect(status()).toHaveTextContent("Waiting for a decision");
+    expect(screen.getByTestId("approval-version")).toHaveTextContent("Version 2");
+    expect(status()).toHaveTextContent("Pending");
     await user.click(button("Approve this version"));
     await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
   });
@@ -110,7 +148,7 @@ describe("approval detail", () => {
 
   it("shows why a role can't decide, and the page stays readable", async () => {
     await open("/approvals/demo-approval-founder");
-    expect(status()).toHaveTextContent("founder");
+    expect(screen.getByText("Founder")).toBeInTheDocument();
     expect(button("Approve this version")).toHaveAccessibleDescription(/role/);
     expect(screen.getByText("Pay accepted historical fee")).toBeInTheDocument();
   });
@@ -201,8 +239,9 @@ describe("agent run approval (CTRL-042, CTRL-043)", () => {
   });
 
   it("offers no invented Slack link", async () => {
-    await open("/runs/demo-run-approval?tab=approval");
-    expect(screen.getByText("No Slack link is available for this approval.")).toBeInTheDocument();
+    const { user } = await open("/runs/demo-run-approval?tab=approval");
+    await user.click(button("View historical approval in Slack"));
+    expect(screen.getByText(/No verified link is available/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Slack/ })).not.toBeInTheDocument();
   });
 
@@ -238,7 +277,8 @@ describe("unknown-outcome recovery (CTRL-044 to CTRL-047)", () => {
     expect(button("Record confirmed sent")).toHaveAttribute("aria-disabled", "true");
     await user.click(button("Request a fresh attempt"));
     await waitFor(() => expect(screen.getByTestId("run-status")).toHaveTextContent("Queued, not sent"));
-    expect(screen.getByTestId("run-status")).toHaveTextContent("Attempt 2");
+    expect(screen.getByText("Attempt")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("keeps both paths blocked when the source shows nothing, and acknowledges Keep paused from the server", async () => {
@@ -273,6 +313,26 @@ describe("unknown-outcome recovery (CTRL-044 to CTRL-047)", () => {
   it("shows not-found for a missing run", async () => {
     await open("/runs/nope?tab=recovery");
     expect(screen.getByRole("heading", { name: "Record not found" })).toBeInTheDocument();
+  });
+});
+
+describe("agent run from Figma", () => {
+  it("shows steps with text statuses, and the current lifecycle stage", async () => {
+    await open("/runs/demo-run-approval?tab=approval");
+    expect(screen.getByRole("heading", { level: 1, name: "Social Cat, step by step." })).toBeInTheDocument();
+    expect(screen.getAllByText("Complete")).toHaveLength(3);
+    expect(screen.getByText("Waiting")).toBeInTheDocument();
+    expect(screen.getAllByText("Blocked")).toHaveLength(3);
+    expect(screen.getByText("Terms & brief").closest("li")).toHaveAttribute("aria-current", "step");
+  });
+
+  it("tells the operator what takeover does, and starts nothing", async () => {
+    const adapter = createDemoAdapter();
+    const spy = vi.spyOn(adapter, "submitAction");
+    const { user } = await open("/runs/demo-run-uncertain?tab=recovery", adapter);
+    await user.click(button("Take over"));
+    expect(screen.getByText(/Only an authorized operator/)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
   });
 });
 

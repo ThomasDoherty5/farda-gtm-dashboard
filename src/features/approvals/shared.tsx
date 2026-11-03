@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useBlocker } from "react-router-dom";
 import type { ActionState, ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
@@ -7,6 +7,7 @@ import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { formatMoney } from "@/components/MetricValue";
 import type { ApprovalPayload } from "./types";
+import styles from "./Approvals.module.css";
 
 export const dateTime = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles", timeZoneName: "short" }).format(new Date(iso));
@@ -14,7 +15,7 @@ export const dateTime = (iso: string) =>
 /** Words shown for each execution state. Only a source receipt ever reads as Sent. */
 export const EXECUTION_LABELS: Record<ActionState, string> = {
   draft: "Draft",
-  approvalPending: "Waiting for approval",
+  approvalPending: "Approval required",
   queued: "Queued, not sent",
   blocked: "Blocked",
   running: "Running",
@@ -42,12 +43,9 @@ export function blockedReason(res: ReadResponse<unknown>, actionKind: string): s
   return capability.reasonCodes.map((code) => CAPABILITY_REASONS[code] ?? code).join(" ") || `This action is ${capability.state}.`;
 }
 
-export function PayloadView({ payload, policyVersion, offerVersion }: { payload: ApprovalPayload; policyVersion: string; offerVersion: string | null }) {
+/** Commission terms and independent channels. Required by the approval contract, though not in Figma's historical sample. */
+export function TermsView({ payload, policyVersion, offerVersion }: { payload: ApprovalPayload; policyVersion: string; offerVersion: string | null }) {
   const rows: [string, string][] = [
-    ["Action", payload.actionLabel],
-    ["Source account", payload.account.sourceId ?? "Unknown"],
-    ["Creator", payload.creator.sourceId ?? "Unknown"],
-    ["Recipients", payload.recipients.map((r) => r.sourceId ?? "Unknown").join(", ")],
     ["Recruitment source", payload.recruitmentSource],
     ["Publishing networks", payload.publishingNetworks.join(", ")],
     ["Checkout", payload.checkout],
@@ -57,20 +55,42 @@ export function PayloadView({ payload, policyVersion, offerVersion }: { payload:
     ["Policy version", policyVersion],
     ["Offer version", offerVersion ?? "None"],
   ];
+  return <Details rows={rows} columns={2} />;
+}
+
+/** Label and value rows (Figma "Detail" rows such as 6:307). */
+export function Details({ rows, columns = 1 }: { rows: [string, string][]; columns?: 1 | 2 }) {
+  const half = Math.ceil(rows.length / 2);
+  const groups = columns === 2 ? [rows.slice(0, half), rows.slice(half)] : [rows];
   return (
-    <>
-      <dl>
-        {rows.map(([label, value]) => (
-          <div key={label}>
-            <dt style={{ font: "var(--text-label)" }}>{label}</dt>
-            <dd style={{ margin: "0 0 var(--space-8)" }}>{value}</dd>
-          </div>
-        ))}
-      </dl>
-      <h3 style={{ font: "var(--text-h3)" }}>Exact message</h3>
-      {/* Rendered as text, never as markup: source and draft text is untrusted data. */}
-      <p style={{ whiteSpace: "pre-wrap" }} data-testid="exact-message">{payload.message}</p>
-    </>
+    <div className={styles.detailColumns}>
+      {groups.map((group, i) => (
+        <dl key={i} className={styles.details}>
+          {group.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        </dl>
+      ))}
+    </div>
+  );
+}
+
+/** The labeled "Historical" box near the top of each approval and run screen. */
+export function HistoricalNote({ title, note, children }: { title: string; note: string; children: ReactNode }) {
+  return (
+    <div className={styles.historical}>
+      <p className={styles.historicalTitle}>{title}</p>
+      <p className={styles.small}>{note}</p>
+      <div className={styles.historicalActions}>{children}</div>
+    </div>
+  );
+}
+
+/** Handoff to a source system. It never invents a destination: a missing link says so. */
+export function SourceDialog({ open, title, url, onClose }: { open: boolean; title: string; url: string | null; onClose: () => void }) {
+  return (
+    <Dialog open={open} title={title} onClose={onClose}>
+      {url ? <p><a href={url} target="_blank" rel="noreferrer">Open in a new tab</a></p> : <p>No verified link is available for this record, so nothing opens from here. Nothing was changed in the source.</p>}
+      <Button variant="secondary" onClick={onClose}>Close</Button>
+    </Dialog>
   );
 }
 

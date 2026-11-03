@@ -1,5 +1,5 @@
 /* Figma component set 2:69. */
-.button { display: inline-flex; align-items: center; justify-content: center; min-width: 152px; min-height: 44px; padding: 0 var(--space-24); border: 1px solid transparent; border-radius: var(--space-999); font: var(--text-label); text-decoration: none; cursor: pointer; }
+.button { display: inline-flex; align-items: center; justify-content: center; min-width: min(152px, 100%); max-width: 100%; min-height: 44px; padding: 0 var(--space-24); border: 1px solid transparent; border-radius: var(--space-999); font: var(--text-label); text-decoration: none; cursor: pointer; }
 .primary { background: var(--color-violet); color: var(--color-onDark); }
 .primary:hover { opacity: 0.9; }
 .primary:active { opacity: 1; background: var(--color-ink); }

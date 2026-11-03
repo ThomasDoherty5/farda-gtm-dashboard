@@ -150,6 +150,17 @@ describe("invalid approvals (FX-13)", () => {
   });
 });
 
+describe("archived records", () => {
+  it("can't be decided or sent, and offers no capabilities", async () => {
+    const { store, approval, data, decide, send } = setup();
+    expect(approval("demo-approval-042").capabilities).toEqual([]);
+    expect((await errorFrom(decide("demo-approval-042", "v3", { decision: "approved" }))).body.code).toBe("APPROVAL_INVALID");
+    expect((await errorFrom(send("demo-approval-042", "v3"))).body.code).toBe("APPROVAL_REQUIRED");
+    expect(data("demo-approval-042").status).toBe("pending");
+    expect(store.stats.dispatches).toBe(0);
+  });
+});
+
 describe("idempotency", () => {
   it("resolves concurrent duplicates to one dispatch and one receipt (FX-14)", async () => {
     const { store, decide, send } = setup();

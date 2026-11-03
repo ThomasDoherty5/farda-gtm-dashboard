@@ -9,7 +9,7 @@ type Props = { tone?: BadgeTone; width?: number; to?: string; testId?: string; c
 
 export function Badge({ tone = "neutral", width, to, testId, children }: Props) {
   const className = `${styles.badge} ${styles[tone]}`;
-  const style = width ? { minWidth: width } : undefined;
+  const style = width ? { minWidth: `min(${width}px, 100%)` } : undefined;
   if (to) return <Link to={to} className={className} style={style} data-testid={testId}>{children}</Link>;
   return <span className={className} style={style} data-testid={testId}>{children}</span>;
 }

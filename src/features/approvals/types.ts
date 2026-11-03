@@ -34,8 +34,26 @@ export type ApprovalVersion = {
   slackPermalink: string | null;
 };
 
+export type QueueItem = { approvalRef: string; handle: string; summary: string; status: string; tone: "warning" | "neutral" };
+export type TimelineEvent = { time: string; title: string; note: string };
+
 export type ApprovalDetail = {
   approvalRef: string;
+  displayId: string;
+  title: string;
+  contextLine: string;
+  source: string;
+  platform: string;
+  actionName: string;
+  requestedBy: string;
+  reviewer: string;
+  /** Set on a record kept for history. It explains why the record can't create new commitments. */
+  historicalNote: string | null;
+  executionPlan: string;
+  capabilityLabel: string;
+  queueLabel: string;
+  queue: QueueItem[];
+  timeline: TimelineEvent[];
   status: ApprovalStatus;
   currentVersion: string;
   requiredRole: string;
@@ -54,8 +72,23 @@ export type Reconciliation = {
   evidence: { receiptRef: string; provider: string; accountId: string; identity: string; observedAt: string } | null;
 };
 
+export type RunStep = { title: string; note: string; status: "Complete" | "Waiting" | "Blocked" };
+
 export type RunDetail = {
   runRef: string;
+  displayId: string;
+  source: string;
+  collaboration: string;
+  handle: string;
+  revision: string;
+  decisionLabel: string;
+  lastEvent: string;
+  historicalNote: string | null;
+  steps: RunStep[];
+  stages: string[];
+  currentStage: string;
+  previewMessage: string;
+  sourceDetails: { label: string; value: string }[];
   version: string;
   jobId: string;
   jobVersion: string;
