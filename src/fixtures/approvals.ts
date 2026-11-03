@@ -51,8 +51,32 @@ const version = (over: Partial<ApprovalVersion> = {}): ApprovalVersion => ({
   ...over,
 });
 
+const queue = [
+  { approvalRef: "demo-approval-042", handle: "@routine.with.ella", summary: "UGC brief · version 3", status: "Selected · pending", tone: "warning" as const },
+  { approvalRef: "demo-approval-exact", handle: "@mira.moves", summary: "Collaboration invitation", status: "Awaiting review", tone: "warning" as const },
+  { approvalRef: "demo-approval-founder", handle: "@cozybyclaire", summary: "Direct fee $150 · founder only", status: "Awaiting review", tone: "warning" as const },
+  { approvalRef: "demo-approval-conflict", handle: "@rae.routines", summary: "Follow-up message", status: "Awaiting review", tone: "neutral" as const },
+];
+
 const approval = (approvalRef: string, over: Partial<ApprovalDetail> = {}): ApprovalDetail => ({
   approvalRef,
+  displayId: approvalRef.replace("demo-approval-", "APR-").toUpperCase(),
+  title: "Send a commission-only invitation",
+  contextLine: "Social Cat · drafted by creator agent",
+  source: "Social Cat",
+  platform: "Social Cat web",
+  actionName: "Send invitation message",
+  requestedBy: "Creator agent",
+  reviewer: "Assigned operator",
+  historicalNote: null,
+  executionPlan: "Zapier queues the approved task → browser agent opens this Social Cat collaboration → sends the locked payload → captures message receipt → updates the Notion record.",
+  capabilityLabel: "Browser capability · to validate",
+  queueLabel: "8 waiting · oldest first",
+  queue,
+  timeline: [
+    { time: "10:42", title: "Draft created", note: "Creator agent · payload v1" },
+    { time: "—", title: "Execution receipt", note: "Not sent · no receipt yet" },
+  ],
   status: "pending",
   currentVersion: "v1",
   requiredRole: "reviewer",
@@ -66,14 +90,40 @@ const approval = (approvalRef: string, over: Partial<ApprovalDetail> = {}): Appr
 /** The server-derived role of the demo session. Nothing the client sends can change it. */
 export const DEMO_ACTOR_ROLE = "reviewer";
 
+const ELLA_MESSAGE = "Hi Ella! We'd love one 30–45 second Instagram Reel showing how Farda fits into your daily routine. The proposed fee is $150, including one revision and 90 days of organic usage. Please confirm the brief and delivery date before we arrange your sample.";
+const ELLA = { ...ref("social-cat", "@routine.with.ella") };
+
 export const seedApprovals = (): ApprovalDetail[] => [
+  /* The sample in Figma source 6:234: an archived fee proposal, so it can be read but never decided. */
+  approval("demo-approval-042", {
+    displayId: "APR-0042",
+    title: "Send a creator brief",
+    contextLine: "Social Cat · collaboration COL-SC-042 · drafted by creator agent",
+    actionName: "Send brief message",
+    expiresAt: "2026-10-31T01:00:00.000Z",
+    currentVersion: "v3",
+    historicalNote: "COL-SC-042 is an earlier $150 content-fee example. This archived proposal cannot create a new upfront-fee commitment under the current acquisition policy.",
+    versions: [
+      version({ payload: payload({ creator: ELLA, recipients: [ELLA], message: ELLA_MESSAGE }), decision: "editRequired", decidedByRole: "reviewer", decidedAt: EARLIER, reason: "Superseded.", decisionReceiptRef: "demo-decision-receipt-042-1" }),
+      version({ version: "v2", payloadHash: "demo-hash-042-2", payload: payload({ creator: ELLA, recipients: [ELLA], message: ELLA_MESSAGE }), decision: "editRequired", decidedByRole: "reviewer", decidedAt: EARLIER, reason: "Superseded.", decisionReceiptRef: "demo-decision-receipt-042-2" }),
+      version({ version: "v3", payloadHash: "demo-hash-042-3", payload: payload({ actionLabel: "Send a creator brief", creator: ELLA, recipients: [ELLA], message: ELLA_MESSAGE, terms: { commissionRatePct: 0, upfrontFee: usd(15_000), sampleCost: null } }) }),
+    ],
+    timeline: [
+      { time: "10:42", title: "Draft created", note: "Creator agent · payload v1" },
+      { time: "10:46", title: "Text revised", note: "Operator · payload v2 superseded" },
+      { time: "10:50", title: "Awaiting Slack decision", note: "Current payload v3 · outbound blocked" },
+      { time: "—", title: "Execution receipt", note: "Not sent · no receipt yet" },
+    ],
+  }),
   approval("demo-approval-exact"),
   approval("demo-approval-conflict"),
   approval("demo-approval-uncertain"),
   approval("demo-approval-fee", { versions: [version({ payload: payload({ terms: { commissionRatePct: 15, upfrontFee: usd(50_000), sampleCost: null } }) })] }),
   approval("demo-approval-expired", { status: "expired", expiresAt: EARLIER }),
   approval("demo-approval-founder", {
+    title: "Pay accepted historical fee",
     requiredRole: "founder",
+    reviewer: "Founder",
     versions: [version({ payload: payload({ actionLabel: "Pay accepted historical fee", terms: { commissionRatePct: 0, upfrontFee: usd(25_000), sampleCost: null } }), policyVersion: "historical-liability@demo" })],
   }),
   approval("demo-approval-history", {
@@ -114,6 +164,32 @@ const run = (runRef: string, approvalRef: string, state: RunDetail["state"], ite
   environment: "demo",
   trigger: "Approved action",
   correlationId: `corr-${runRef}`,
+  displayId: "SC-1042",
+  source: "Social Cat",
+  collaboration: "COL-SC-042",
+  handle: "@routine.with.ella",
+  revision: "3",
+  decisionLabel: "Approved in Slack",
+  lastEvent: "Send clicked · 14:32",
+  historicalNote: "This COL-SC-042 content-fee action belongs to the earlier workflow. Current acquisition creates only commission-based offers; existing accepted terms and their evidence remain preserved.",
+  steps: [
+    { title: "Locate the Social Cat collaboration", note: "Match the creator handle and collaboration before acting.", status: "Complete" },
+    { title: "Read the latest conversation", note: "Terms and last reply checked against the current source page.", status: "Complete" },
+    { title: "Draft the next message", note: "One UGC video · delivery date proposed · usage rights explicit.", status: "Complete" },
+    { title: "Wait for the exact message approval", note: "A person replies approve, edit: or reject: in the Slack thread.", status: "Waiting" },
+    { title: "Send inside Social Cat", note: "Use only the approved revision in the source conversation.", status: "Blocked" },
+    { title: "Confirm the source result", note: "Match the sent message and timestamp; retain a redacted receipt.", status: "Blocked" },
+    { title: "Write the outcome and advance", note: "Update Notion collaboration; Zapier publishes run status.", status: "Blocked" },
+  ],
+  stages: ["Vet", "Pitch", "Terms & brief", "Sample", "Review & revise", "Pay", "Close & rights"],
+  currentStage: "Terms & brief",
+  previewMessage: ELLA_MESSAGE,
+  sourceDetails: [
+    { label: "Task", value: "Brief & outreach" },
+    { label: "Source record", value: "COL-SC-042" },
+    { label: "Execution mode", value: "Browser agent" },
+    { label: "Access status", value: "To validate" },
+  ],
   approvalRef,
   state,
   attempt: 1,
@@ -123,7 +199,7 @@ const run = (runRef: string, approvalRef: string, state: RunDetail["state"], ite
 });
 
 export const seedRuns = (): Omit<RunDetail, "counts">[] => [
-  { ...run("demo-run-approval", "demo-approval-exact", "approvalPending", [item("demo-handle-one", "unsent", null, "APPROVAL_REQUIRED")]), mode: "propose", trigger: "Agent proposal" },
+  { ...run("demo-run-approval", "demo-approval-042", "approvalPending", [item("@routine.with.ella", "unsent", null, "APPROVAL_REQUIRED")]), mode: "propose", trigger: "Agent proposal" },
   run("demo-run-uncertain", "demo-approval-uncertain", "outcomeUncertain", [item("demo-handle-one", "uncertain", null, "TIMEOUT_AFTER_SUBMIT")]),
   run("demo-run-unsent", "demo-approval-uncertain", "outcomeUncertain", [item("demo-handle-one", "uncertain", null, "TIMEOUT_AFTER_SUBMIT")]),
   run("demo-run-noevidence", "demo-approval-uncertain", "outcomeUncertain", [item("demo-handle-one", "uncertain", null, "TIMEOUT_AFTER_SUBMIT")]),
@@ -138,6 +214,7 @@ export const seedRuns = (): Omit<RunDetail, "counts">[] => [
 
 export const demoScenarios = {
   approvals: [
+    ["demo-approval-042", "Figma sample: archived fee proposal"],
     ["demo-approval-exact", "Exact approval, then send"],
     ["demo-approval-conflict", "Terms change while you review"],
     ["demo-approval-fee", "Blocked: includes an upfront fee"],

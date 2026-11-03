@@ -1,0 +1,102 @@
+/* Figma sources 6:234, 5:13 and 5:156. Below 1180 the columns stack (implementation adaptation). */
+.page { display: flex; flex-direction: column; gap: var(--space-24); }
+.titleRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-24); }
+.heading { flex: 0 1 850px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.heading h1 { margin: 0; font: var(--text-h1); }
+.heading p { margin: 0; color: var(--color-muted); }
+.small { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.label { margin: 0; font: var(--text-label); }
+.h2 { margin: 0; font: var(--text-h2); }
+.h3 { margin: 0; font: var(--text-h3); }
+.tight { min-width: 0; padding: 0; white-space: nowrap; }
+.historical { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-20); background: var(--color-violetSoft); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.historicalTitle { margin: 0; font: var(--text-label); }
+.historicalActions { display: flex; flex-wrap: wrap; gap: 10px; }
+.contextRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
+.contextId { font: var(--text-label); }
+.contextText { color: var(--color-muted); }
+.contextSpace { flex: 0 1 490px; }
+.card { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; padding: var(--space-24) 22px var(--space-24) var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.approvalColumns { display: grid; grid-template-columns: minmax(0, 340fr) minmax(0, 936fr); gap: var(--space-20); align-items: start; }
+.queue { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; padding: var(--space-20) 18px var(--space-20) var(--space-20); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.queue ul { display: flex; flex-direction: column; gap: var(--space-16); list-style: none; margin: 0; padding: 0; }
+.queueItem { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: var(--space-16); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-ink); text-decoration: none; }
+.queueItem[aria-current] { background: var(--color-surface); border: 2px solid var(--color-violet); }
+.divider { height: 1px; width: 100%; margin: 0; background: var(--color-border); border: 0; }
+.fullButton { width: 100%; }
+.titleBlock { display: flex; gap: var(--space-16); align-items: flex-start; }
+.titleText { flex: 0 1 680px; min-width: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.detailColumns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: var(--space-20); }
+.details { display: flex; flex-direction: column; gap: 10px; margin: 0; min-width: 0; }
+.details > div { display: grid; grid-template-columns: minmax(0, 182px) minmax(0, 234px); gap: var(--space-12); }
+.details dt { font: var(--text-small); color: var(--color-muted); }
+.details dd { margin: 0; font: var(--text-label); min-width: 0; }
+.payload { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-violetSoft); border-radius: var(--space-24); }
+.payloadTitle { margin: 0; font: var(--text-label); color: var(--color-violet); }
+.payloadNote { margin: 0; font: var(--text-small); color: var(--color-violet); }
+.message { margin: 0; white-space: pre-wrap; }
+.safeguards { display: grid; grid-template-columns: repeat(3, minmax(0, 280px)); gap: var(--space-16); }
+.safeguards > div { display: flex; flex-direction: column; gap: var(--space-8); }
+.handoff { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-12); padding: var(--space-20); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.handoff p { margin: 0; }
+.actionsRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-16); }
+.actionButton { min-width: min(220px, 100%); }
+.actionsSpace { flex: 0 1 80px; }
+.panel { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-12); padding: var(--space-20); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.panel p { margin: 0; }
+.field { width: 100%; max-width: 100%; padding: var(--space-12); font: var(--text-body); color: var(--color-ink); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-16); }
+.fieldLabel { font: var(--text-label); }
+.fieldError { margin: 0; font: var(--text-small); color: var(--color-danger); }
+.timelineCard { gap: var(--space-16); }
+.timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: var(--space-24); list-style: none; margin: 0; padding: 0; }
+.timeline li { display: flex; flex-direction: column; gap: 6px; }
+.time { font: var(--text-small); color: var(--color-violet); }
+.subnav { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.subnav a { min-width: 0; padding: 0; }
+.runColumns { display: grid; grid-template-columns: minmax(0, 832fr) minmax(0, 440fr); gap: var(--space-24); align-items: start; }
+.sideColumn { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
+.sideColumn .details { gap: var(--space-16); }
+.sideColumn .details > div { grid-template-columns: minmax(0, 165px) minmax(0, 212px); }
+.stepsCard { gap: 0; }
+.checklistCard { gap: var(--space-16); }
+.step { display: grid; grid-template-columns: 30px minmax(0, 580px) minmax(0, 100px); gap: var(--space-16); padding: var(--space-16) 0; }
+.stepNumber { margin: 0; font: var(--text-label); color: var(--color-violet); }
+.stepBody { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.statusComplete { color: var(--color-success); }
+.statusWaiting { color: var(--color-warning); }
+.preview { gap: var(--space-16); background: var(--color-violetSoft); align-items: flex-start; }
+.stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: var(--space-12); list-style: none; margin: 0; padding: 0; }
+.stage { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-16); background: var(--color-subtle); border-radius: var(--space-16); font: var(--text-label); }
+.stage[aria-current] { background: var(--color-violetSoft); }
+.stageNumber { font: var(--text-micro); color: var(--color-violet); }
+.alertBox { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-24); background: var(--color-warningSoft); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.alertBox p { margin: 0; }
+.evidence { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-8); }
+.evidence p { margin: 0; }
+.controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-16); }
+.controlRecord { flex: 0 1 252px; }
+.controlFresh { flex: 0 1 260px; }
+.controlPaused { flex: 0 1 220px; }
+.controls > div { display: flex; flex-direction: column; min-width: 0; }
+.controls button { width: 100%; }
+.receipt { gap: var(--space-16); }
+.statusRow { display: flex; }
+.pauseTable { width: 100%; }
+.pauseTable th { padding: var(--space-12) 0; font: var(--text-small); color: var(--color-muted); }
+.pauseTable td { padding: var(--space-16) 0; color: var(--color-muted); }
+.pauseTable td:first-child { font: var(--text-label); color: var(--color-ink); }
+.pauseTable th:nth-child(1) { width: 17.6%; }
+.pauseTable th:nth-child(2) { width: 48.1%; }
+.scroll { overflow-x: auto; }
+@media (max-width: 1179px) {
+  .approvalColumns, .runColumns { grid-template-columns: minmax(0, 1fr); }
+  .contextSpace, .actionsSpace { display: none; }
+  .safeguards { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 479px) {
+  .card, .queue, .payload { padding: var(--space-16); }
+  .step { grid-template-columns: 30px minmax(0, 1fr); }
+  .step > :last-child { grid-column: 2; }
+  .actionButton, .controlRecord, .controlFresh, .controlPaused { flex-basis: 100%; }
+  .titleBlock { flex-wrap: wrap; }
+}

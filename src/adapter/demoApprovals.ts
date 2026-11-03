@@ -43,6 +43,7 @@ export function createDemoApprovals() {
   });
 
   const approvalCapabilities = (a: ApprovalDetail): Capability[] => {
+    if (a.historicalNote) return [];
     if (a.status === "expired") return [{ actionKind: "decideApproval", state: "held", reasonCodes: ["APPROVAL_EXPIRED"] }];
     if (a.status === "pending") {
       if (a.requiredRole !== DEMO_ACTOR_ROLE) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
@@ -100,6 +101,7 @@ export function createDemoApprovals() {
 
   function decide(request: ActionRequest<DecidePayload>): ActionResponse {
     const a = findApproval(request);
+    if (a.historicalNote) fail("APPROVAL_INVALID", "This is an archived record. It can't be decided.", request.requestId);
     if (a.requiredRole !== DEMO_ACTOR_ROLE) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
     if (a.status === "expired") fail("APPROVAL_EXPIRED", "This approval expired. It needs a fresh preview.", request.requestId);
     if (a.approvalRef === "demo-approval-conflict" && !conflictFired) {
@@ -162,7 +164,7 @@ export function createDemoApprovals() {
     }
     const runRef = `demo-run-${a.approvalRef.replace("demo-approval-", "")}`;
     const receiptRef = `demo-source-receipt-${a.approvalRef}`;
-    runs.set(runRef, { ...seedRuns()[0]!, runRef, approvalRef: a.approvalRef, mode: "executeApproved", trigger: "Approved action", correlationId: `corr-${runRef}`, state: "succeeded", items: [{ itemId: "item-1", recipient, state: "confirmed", receiptRef, reasonCode: null }] });
+    runs.set(runRef, { ...seedRuns()[0]!, runRef, approvalRef: a.approvalRef, historicalNote: null, mode: "executeApproved", trigger: "Approved action", correlationId: `corr-${runRef}`, state: "succeeded", items: [{ itemId: "item-1", recipient, state: "confirmed", receiptRef, reasonCode: null }] });
     a.execution = { runRef, state: "succeeded", receiptRefs: [receiptRef] };
     return actionResponse(request, "succeeded", { runRef, receiptRefs: [receiptRef] });
   }

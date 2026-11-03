@@ -31,16 +31,16 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - Unit and contract tests (`src/**/*.test.ts(x)`), Playwright smoke and axe tests (`e2e/`), and a CI workflow.
 - `AGENTS.md`, `docs/intake.md` and `docs/figma-access-gap.md`.
 
-- Approval flow behavior (THO-296): approval detail and history, agent run approval and unknown-outcome recovery, on an in-memory demo state machine covering FX-10 to FX-18. Start at `/approvals` or `/runs`. Demo state resets on reload. It is unstyled, and its Figma comparison hasn't happened.
+- Approval flow behavior (THO-296): approval detail and history, agent run approval and unknown-outcome recovery, on an in-memory demo state machine covering FX-10 to FX-18. Start at `/approvals` or `/runs`. Demo state resets on reload. Its three screens are built from Figma sources 6:234, 5:13 and 5:156.
 
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
 **Not done yet**
-- **Figma comparison for everything except Overview, the shell and Button.** The approval, run and placeholder pages use the real tokens, but their layouts haven't been read from Figma.
+- **Figma for in-app approval decisions.** They were approved after the design, which still shows Slack only. See `docs/design-map.md`.
 - **The other 13 component sets** in `docs/design-map.md`, and responsive review against the native Operations references.
-- **The rest of THO-296:** real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
+- **The rest of THO-296:** the takeover dialog's real copy, real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
 - **Overview's real date range and export.** They need THO-283, so both dialogs say what's missing.
-- **The other 56 sources.** They render labeled placeholders.
+- **The other 56 sources.** They render labeled placeholders. The approval flow's history views use the design's components, but have no Figma source of their own.
 
 ## Commands
 

@@ -13,7 +13,7 @@ Every value is in `src/design-system/tokens.css`, named by each variable's Web c
 | Farda · Semantic, space | 13 | `--space-*` |
 | Text styles | 9 | `--text-*` |
 
-The font is `@fontsource/inter` 4.5.15. The current 5.x build has different letter spacing and matches Figma's render about 2.7× worse, so don't upgrade it without re-running the comparison.
+The font is `@fontsource/inter` 4.5.15. The current 5.x build has different letter spacing and matches Figma's render about 2.7× worse, so don't upgrade it without re-running the comparison. Its latin subset has no arrows, so `tokens.css` loads the "all" build for U+2190-2193 only. Without that, "→" falls back to a system font.
 
 ## Components
 
@@ -39,15 +39,28 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Table row | 6:557 | 4 | Not built | Pending |
 | Table header | 6:564 | 1 | Not built | Pending |
 | Step | 6:595 | 5 | Not built | Pending |
+| Lifecycle/Step | 5:3 | Not counted in the 21 | `Step` in `RunPage` | Built from instances in 5:13 and 5:156 |
 | Drawer | 6:703 | 1 | Not built | Pending |
 | Toast | 6:710 | 2 | Not built | Pending |
 | Tooltip | 6:714 | 1 | Not built | Pending |
 
 ## Overview comparison (source 10:217)
 
-Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, fixture FX-01. Run with `scripts/compare-figma.mjs`. Page size matches exactly, and 0.221% of pixels differ at threshold 0.1 on 2026-11-03. What remains is mostly text and edge antialiasing, plus the intentional differences below. No tolerance is agreed yet (THO-330), so this is a measurement, not a pass.
+Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, fixture FX-01. Run with `scripts/compare-figma.mjs`. Page size matches exactly, and 0.219% of pixels differ at threshold 0.1 on 2026-11-03. What remains is mostly text and edge antialiasing, plus the intentional differences below. No tolerance is agreed yet (THO-330), so this is a measurement, not a pass.
 
 `e2e/overview-fidelity.spec.ts` checks panel geometry, chart scale, text styles and Button states on every run. Button's Primary, Secondary, Hover, Pressed and Disabled states are checked in the browser. Ghost and Loading aren't used on a page that test reaches, and Focus is only partly checked.
+
+## Approval and run comparison (sources 6:234, 5:13, 5:156)
+
+Same capture settings as Overview. The approval and run fixtures reproduce the Figma samples. The sample record is archived, so it shows no decision panel.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 6:234 | `/approvals/demo-approval-042` | Matches (1440×1609) | 0.432%, including the changed decision copy |
+| 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
+| 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (see below) | 4.182%, measured over the shared height |
+
+The recovery figure is high because everything below the added evidence controls sits lower, not because those panels differ.
 
 ## Intentional differences from Figma
 
@@ -60,6 +73,13 @@ Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America
 | Workspace menu | Includes Mobile and Tablet operations, Recovery states, Scheduling preview | Those removed; Approvals and Runs added | Responsive variants are one route; gallery is development-only; nothing else reaches Approvals or Runs |
 | Dialog backdrop | Solid ink frame | Ink at 72% | Keeps the page visible behind a modal |
 | Navigation header | Static | Sticks to the top from 1024px up | Keeps the demo label persistent, as the handoff requires |
+| Approval decisions | None in the app: "Your decision happens in Slack" | Decide in the app or in Slack. A "Decide here" panel on current records, shown when the server offers `decideApproval`, and the queue copy says both. The first decision recorded wins | Product decision, 2026-11-03: Figma needs updating to match |
+| Commission terms on an approval | Not shown; the sample is an archived fee proposal | Terms block on current records | The approval contract requires exact terms |
+| Recovery controls | Record confirmed sent and Request a fresh attempt always enabled | Disabled with a reason until a source check gives evidence, plus a Check the source control | CTRL-044 and CTRL-045 forbid acting without evidence |
+| Queue "Selected" badge | "Selected · pending" | Follows the record's real status | A status label mustn't contradict the record |
+| Approval page footnote | "Design preview · sample approval and message…" | "Demo · sample approval and message…", demo only | This is no longer a design preview |
+| Source links | Open an overlay | A dialog saying no verified link exists | The source-link profile forbids invented destinations |
+| Takeover dialog copy | Not read from Figma; only its name is known | Written from the overlay's name | **Replace with the overlay's real copy when it's read** |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
 
 ## Implementation adaptations
