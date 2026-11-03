@@ -22,7 +22,7 @@
   --color-canvas: Canvas;
   --color-surface: Canvas;
   --color-text: CanvasText;
-  --color-text-muted: GrayText;
+  --color-text-muted: CanvasText; /* GrayText fails WCAG AA contrast. Recheck when the Figma value lands. */
   --color-border: GrayText;
   --color-action: ButtonFace;
   --color-action-text: ButtonText;
