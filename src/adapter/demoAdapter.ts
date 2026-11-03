@@ -2,6 +2,7 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { readCreatorsView } from "./demoCreators";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
@@ -32,6 +33,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
+      const creators = readCreatorsView(request);
+      if (creators) return creators as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo fixture for view ${request.viewKey}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       return overviewResponse(request, fixture) as ReadResponse<T>;
