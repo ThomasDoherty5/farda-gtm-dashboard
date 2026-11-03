@@ -2,6 +2,7 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoOps } from "./demoOps";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { AdapterError } from "./errors";
@@ -17,6 +18,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
+  const ops = createDemoOps();
 
   return {
     environment: "demo",
@@ -28,6 +30,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
+      const opsView = ops.read(request);
+      if (opsView) return opsView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
@@ -38,6 +42,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      const opsResult = ops.submit(request);
+      if (opsResult) return opsResult;
       return approvals.submit(request);
     },
     async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {

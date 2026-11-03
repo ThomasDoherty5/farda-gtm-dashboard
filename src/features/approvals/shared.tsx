@@ -142,11 +142,11 @@ export function ActionError({ error }: { error: Error }) {
 }
 
 /** Asks before leaving with unsaved edits. Keep task (CTRL-177) returns to the form with edits intact. */
-export function LeaveGuard({ dirty }: { dirty: boolean }) {
+export function LeaveGuard({ dirty, subject = "approval" }: { dirty: boolean; subject?: string }) {
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname + currentLocation.search !== nextLocation.pathname + nextLocation.search);
   return (
     <Dialog open={blocker.state === "blocked"} title="Discard your edits?" onClose={() => blocker.reset?.()}>
-      <p>You have unsaved changes on this approval.</p>
+      <p>You have unsaved changes on this {subject}.</p>
       <Button onClick={() => blocker.reset?.()}>Keep task</Button>
       <Button variant="secondary" onClick={() => blocker.proceed?.()}>Discard and leave</Button>
     </Dialog>

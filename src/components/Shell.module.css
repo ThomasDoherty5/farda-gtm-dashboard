@@ -16,6 +16,16 @@
 @media (min-width: 1024px) {
   .header { position: sticky; top: 0; z-index: 5; }
 }
+/* Figma 12:708 (1024): 24px canvas, 16px navigation padding, 24px content padding. */
+@media (min-width: 768px) and (max-width: 1179px) {
+  .canvas { padding: var(--space-24); }
+  .frame { border-radius: var(--space-28); padding: var(--space-8); }
+  .header { padding: var(--space-16); }
+  .brand { width: auto; }
+  .mark, .spacer { display: none; }
+  .navItem { min-width: 0 !important; padding: 0 var(--space-20); }
+  .main { padding: var(--space-24); border-radius: var(--space-24); }
+}
 @media (max-width: 767px) {
   .canvas { padding: var(--space-8); }
   .frame { border-radius: var(--space-24); }
