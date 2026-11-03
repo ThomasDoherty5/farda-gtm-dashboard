@@ -93,10 +93,12 @@ function Run({ tab }: { tab: Tab }) {
           </p>}
         </>
       )}
-      <SourceDialog open={dialog === "source" || dialog === "slack"} title={dialog === "slack" ? "View historical approval in Slack" : "Open source"} url={null} onClose={() => setDialog(null)} />
+      <SourceDialog open={dialog === "source" || dialog === "slack"} title="Continue in the owning tool." url={null} onClose={() => setDialog(null)} />
       <Dialog open={dialog === "takeover"} title="Hand control to an authorized operator" onClose={() => setDialog(null)}>
-        <p>Only an authorized operator can sign in to the source and finish this by hand. Nothing is sent or retried from here, and no session is opened in this demo.</p>
+        <p>The browser task pauses at login, MFA or a changed native screen. The operator restores the session or verifies the correct action before the agent resumes.</p>
+        <p>No success is inferred from a timeout. Preserve the current record and approved terms, then recheck source state before continuing.</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
+        <LinkButton to="/settings/capabilities">Review channel access</LinkButton>
       </Dialog>
     </section>
   );

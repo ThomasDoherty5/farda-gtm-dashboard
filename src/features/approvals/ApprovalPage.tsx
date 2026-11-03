@@ -206,7 +206,7 @@ function Current({ res, data, priorVersion }: { res: Res; data: ApprovalDetail; 
         </ol>
       </section>
       {adapter.kind === "demo" && <p className={styles.small}>Demo · sample approval and message · no live outreach or platform actions are performed.</p>}
-      <SourceDialog open={sourceDialog !== null} title={sourceDialog === "slack" ? "Open approval channel" : "Open Notion record"} url={sourceDialog === "slack" ? current.slackPermalink : null} onClose={() => setSourceDialog(null)} />
+      <SourceDialog open={sourceDialog !== null} title="Continue in the owning tool." url={sourceDialog === "slack" ? current.slackPermalink : null} onClose={() => setSourceDialog(null)} />
     </>
   );
 }

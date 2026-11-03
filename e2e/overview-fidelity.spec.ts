@@ -72,6 +72,32 @@ test.describe("Overview against Figma at 1440", () => {
     await expect(disabled).toHaveCSS("color", "rgb(104, 105, 117)");
   });
 
+  test("Button's Ghost, Focus and Loading states match set 2:69", async ({ page }) => {
+    await page.goto("/runs/demo-run-uncertain?tab=recovery");
+    const ghost = page.getByRole("button", { name: "Keep paused" });
+    await expect(ghost).toHaveCSS("background-color", "rgb(255, 255, 255)");
+    await expect(ghost).toHaveCSS("border-top-color", "rgba(0, 0, 0, 0)");
+    await expect(ghost).toHaveCSS("color", "rgb(23, 24, 28)");
+
+    await page.goto("/overview");
+    await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
+    const primary = page.getByRole("button", { name: "Export report" });
+    await page.keyboard.press("Tab");
+    await primary.focus();
+    await page.getByRole("button", { name: "Last 30 days" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(primary).toBeFocused();
+    await expect(primary).toHaveCSS("box-shadow", "rgb(240, 236, 255) 0px 0px 0px 4px inset");
+    await expect(primary).toHaveCSS("outline-style", "solid");
+
+    // The Loading behavior is covered in Button.test.tsx. Here the busy attribute is set by hand to check its Figma styling.
+    await page.goto("/overview");
+    const busy = page.getByRole("button", { name: "Export report" });
+    await busy.evaluate((el) => el.setAttribute("aria-busy", "true"));
+    await expect(busy).toHaveCSS("background-color", "rgb(101, 71, 245)");
+    await expect(busy).toHaveCSS("cursor", "progress");
+  });
+
   test("the current section uses the active nav style", async ({ page }) => {
     await open(page);
     const active = page.getByRole("link", { name: "Overview" });
