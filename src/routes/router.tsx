@@ -6,6 +6,11 @@ import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
+import { AutomationsPage } from "@/features/settings/AutomationsPage";
+import { CapabilitiesPage } from "@/features/settings/CapabilitiesPage";
+import { ConnectionsPage } from "@/features/settings/ConnectionsPage";
+import { SchedulePage } from "@/features/settings/SchedulePage";
+import { TeamPage } from "@/features/settings/TeamPage";
 import { sourceScreens } from "./manifest.generated";
 import { navSections } from "./nav";
 import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
@@ -17,6 +22,11 @@ const implemented: Record<string, JSX.Element> = {
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,
   "/runs/:runId": <RunPage />,
+  "/settings/connections": <ConnectionsPage />,
+  "/settings/team": <TeamPage />,
+  "/automations": <AutomationsPage />,
+  "/automations/:jobId/schedule": <SchedulePage />,
+  "/settings/capabilities": <CapabilitiesPage />,
 };
 
 /** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */

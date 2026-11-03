@@ -9,13 +9,14 @@ type Option = { value: string; label: string };
  * A filter that lives in the URL. It shows the current choice on the button, offers only allowed
  * values, and never writes to a source. Choosing applies at once, so Back restores the previous choice.
  */
-export function FilterButton({ name, title, options, value, onChange, width }: { name: string; title: string; options: Option[]; value: string; onChange: (value: string) => void; width?: number }) {
+/** `bare` shows only the current choice, as Figma's run filters do; the name stays in the accessible label. */
+export function FilterButton({ name, title, options, value, onChange, width, bare = false }: { name: string; title: string; options: Option[]; value: string; onChange: (value: string) => void; width?: number; bare?: boolean }) {
   const [open, setOpen] = useState(false);
   const group = useId();
   const current = options.find((o) => o.value === value) ?? options[0]!;
   return (
     <>
-      <Button variant="secondary" aria-haspopup="dialog" style={width ? { minWidth: width } : undefined} onClick={() => setOpen(true)}>{name}: {current.label}</Button>
+      <Button variant="secondary" aria-haspopup="dialog" aria-label={bare ? `${name}: ${current.label}` : undefined} style={width ? { minWidth: width } : undefined} onClick={() => setOpen(true)}>{bare ? current.label : `${name}: ${current.label}`}</Button>
       <Dialog open={open} title={title} onClose={() => setOpen(false)}>
         <fieldset className={styles.options}>
           <legend>{name}</legend>

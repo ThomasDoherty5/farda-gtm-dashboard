@@ -34,6 +34,8 @@ const CAPABILITY_REASONS: Record<string, string> = {
   EVIDENCE_REQUIRED: "Check the source first. This needs independent evidence.",
   NOTHING_TO_PAUSE: "There is no unsent work to pause.",
   PLAYBACK_UNVERIFIED: "Blocked until permitted playback and actually observed intervals support the claimed review depth. Elapsed time, captions and thumbnails don't count.",
+  CONNECTION_UNVERIFIED: "Enabling needs a verified connection, authorized schedule settings, a time zone and any required approval, then an explicit server acknowledgment.",
+  TAKEOVER_NOT_ASSIGNED: "Taking over needs a server-confirmed assignment for this task.",
   SOURCE_ACCESS_UNVERIFIED: "Blocked until source access, a real account configuration, quota capacity and an authorized runtime exist. A demo can't start a live job.",
 };
 
