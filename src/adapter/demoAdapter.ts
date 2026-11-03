@@ -4,6 +4,7 @@ import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
+import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
 import { AdapterError } from "./errors";
 import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
 
@@ -30,6 +31,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+      if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo fixture for view ${request.viewKey}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       return overviewResponse(request, fixture) as ReadResponse<T>;
@@ -55,6 +57,25 @@ function wait(ms: number, signal?: AbortSignal) {
     const t = setTimeout(resolve, ms);
     signal?.addEventListener("abort", () => { clearTimeout(t); reject(signal.reason); }, { once: true });
   });
+}
+
+const PIPELINE_FACETS: { [K in keyof PipelineFilters]: readonly string[] } = {
+  source: ["both", "social-cat", "tiktok-shop"],
+  network: ["all", "instagram", "tiktok"],
+  checkout: ["all", "website", "tiktok-shop"],
+  window: ["sep-oct", "sep", "oct"],
+};
+
+/** Only allowed facet values are accepted; an unknown one is a validation error, not a silent default. */
+function pipelineFilters(raw: unknown, requestId: string): PipelineFilters {
+  const given = (raw ?? {}) as Partial<Record<keyof PipelineFilters, string>>;
+  const filters = { ...DEFAULT_PIPELINE_FILTERS } as Record<keyof PipelineFilters, string>;
+  for (const key of Object.keys(PIPELINE_FACETS) as (keyof PipelineFilters)[]) {
+    const value = given[key] ?? filters[key];
+    if (!PIPELINE_FACETS[key].includes(value)) err("VALIDATION_FAILED", `${key} must be one of ${PIPELINE_FACETS[key].join(", ")}.`, requestId);
+    filters[key] = value;
+  }
+  return filters as PipelineFilters;
 }
 
 function err(code: string, message: string, requestId: string): never {
