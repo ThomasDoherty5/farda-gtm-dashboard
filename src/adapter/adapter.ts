@@ -1,4 +1,4 @@
-import type { Environment, ReadRequest, ReadResponse } from "./contract";
+import type { ActionRequest, ActionResponse, Environment, ReadRequest, ReadResponse } from "./contract";
 
 export type ReadOptions = { signal?: AbortSignal };
 
@@ -7,4 +7,5 @@ export interface FardaAdapter {
   readonly environment: Environment;
   readonly kind: "demo" | "live";
   readView<F, T>(request: ReadRequest<F>, options?: ReadOptions): Promise<ReadResponse<T>>;
+  submitAction<P>(request: ActionRequest<P>, options?: ReadOptions): Promise<ActionResponse>;
 }

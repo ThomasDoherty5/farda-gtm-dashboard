@@ -135,7 +135,7 @@ export const readResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
   });
 export type ReadResponse<T> = Omit<z.infer<ReturnType<typeof readResponseSchema>>, "data"> & { data: T | null };
 
-/** Section 4 action operations. Only the names are frozen here; payloads come with THO-283/THO-321. */
+/** Section 4 action operations. Generic envelopes are below; domain payloads come with THO-283/THO-321. */
 export const actionOperations = [
   "previewAction",
   "requestApproval",
@@ -146,3 +146,80 @@ export const actionOperations = [
   "controlRun",
 ] as const;
 export type ActionOperation = (typeof actionOperations)[number];
+
+export type ActionRequest<P> = {
+  schemaVersion: string;
+  operation: Exclude<ActionOperation, "inspectRun">;
+  requestedScope: RequestedScope;
+  actionKind: string;
+  entityRefs: SourceRef[];
+  expectedVersion: string;
+  approvalRef: string | null;
+  manifestRef: string | null;
+  idempotencyKey: string;
+  payload: P;
+  requestId: string;
+};
+
+export const actionStateSchema = z.enum([
+  "draft",
+  "approvalPending",
+  "queued",
+  "blocked",
+  "running",
+  "succeeded",
+  "partiallySucceeded",
+  "failed",
+  "outcomeUncertain",
+  "reconciling",
+  "paused",
+  "canceled",
+]);
+export type ActionState = z.infer<typeof actionStateSchema>;
+
+export const actionResponseSchema = z.object({
+  schemaVersion: z.string(),
+  requestId: z.string(),
+  scope: verifiedScopeSchema,
+  actionRef: z.string(),
+  state: actionStateSchema,
+  runRef: z.string().nullable(),
+  approvalRef: z.string().nullable(),
+  manifestRef: z.string().nullable(),
+  payloadVersion: z.string(),
+  policyVersion: z.string(),
+  modelVersion: z.string().nullable(),
+  offerVersion: z.string().nullable(),
+  reasonCodes: z.array(z.string()),
+  receiptRefs: z.array(z.string()),
+  nextAction: z
+    .object({ kind: z.string(), ownerRef: z.string().nullable(), dueAt: z.string().nullable(), available: z.boolean() })
+    .nullable(),
+  nextPollAfterMs: z.number().nullable(),
+});
+export type ActionResponse = z.infer<typeof actionResponseSchema>;
+
+/** Versioned saves that never dispatch a provider action. */
+export type SaveResourceRequest<P> = {
+  schemaVersion: string;
+  operation: "saveResource";
+  requestedScope: RequestedScope;
+  resourceKind: "actionDraft" | "reviewerAssessment" | "evidenceDraft" | "configurationDraft";
+  resourceRef: string | null;
+  expectedVersion: string | null;
+  idempotencyKey: string;
+  requestId: string;
+  payload: P;
+};
+
+export type SaveResourceResponse<T> = {
+  schemaVersion: string;
+  requestId: string;
+  scope: VerifiedScope;
+  resourceRef: string;
+  resourceVersion: string;
+  persistedAt: string;
+  persistedByRef: string;
+  record: T;
+  reasonCodes: string[];
+};

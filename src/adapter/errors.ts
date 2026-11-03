@@ -2,6 +2,7 @@
 export type ErrorCategory =
   | "unauthenticated"
   | "forbidden"
+  | "notFound"
   | "validation"
   | "conflict"
   | "approvalHold"
@@ -18,6 +19,7 @@ const CODE_TO_CATEGORY: Record<string, ErrorCategory> = {
   SESSION_EXPIRED: "unauthenticated",
   FORBIDDEN: "forbidden",
   SOURCE_AUTHORITY_DENIED: "forbidden",
+  RECORD_NOT_FOUND: "notFound",
   VALIDATION_FAILED: "validation",
   POLICY_VIOLATION: "validation",
   STALE_VERSION: "conflict",
@@ -46,6 +48,9 @@ export type AdapterErrorBody = {
   correlationId: string | null;
   retryable: boolean;
   retryAfterMs: number | null;
+  fieldErrors?: Record<string, string>;
+  currentVersion?: string | null;
+  executionCertainty?: "notApplied" | "uncertain" | "applied";
 };
 
 export class AdapterError extends Error {

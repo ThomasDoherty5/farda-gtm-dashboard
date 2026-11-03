@@ -1,9 +1,8 @@
 import type { ProvenanceValue } from "@/adapter/contract";
-import { AdapterError } from "@/adapter/errors";
 import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
-import { Button } from "@/components/Button";
 import { MetricValue, formatCount, formatMoney } from "@/components/MetricValue";
+import { ViewError } from "@/components/ViewError";
 import type { OverviewData } from "@/fixtures/overview";
 import { engagementRate } from "./metrics";
 
@@ -23,7 +22,7 @@ export function OverviewPage() {
     <section aria-labelledby="overview-title" data-figma-source="10:217">
       <h1 id="overview-title" style={{ font: "var(--text-h1)", marginTop: 0 }}>Performance overview</h1>
       {query.isPending && <p role="status">Loading overview…</p>}
-      {query.isError && <ErrorState error={query.error} hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
+      {query.isError && <ViewError error={query.error} subject="The overview" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && <Body res={query.data} environment={adapter.environment} />}
     </section>
   );
@@ -87,26 +86,5 @@ function Metrics({ data }: { data: OverviewData }) {
         ))}
       </dl>
     </>
-  );
-}
-
-function ErrorState({ error, hasPriorData, onRetry }: { error: Error; hasPriorData: boolean; onRetry: () => void }) {
-  const category = error instanceof AdapterError ? error.category : "unknown";
-  const ref = error instanceof AdapterError ? error.body.correlationId : null;
-  const copy: Record<string, { title: string; body: string; retry: boolean }> = {
-    unauthenticated: { title: "Sign in again", body: "Your session ended. No data from the previous session is shown.", retry: false },
-    forbidden: { title: "No access to this account", body: "You don't have permission to view this account's data.", retry: false },
-    unavailable: { title: "Data unavailable", body: error.message, retry: true },
-    unknown: { title: "Something went wrong", body: "The overview could not be loaded.", retry: true },
-  };
-  const c = copy[category] ?? copy.unknown!;
-  return (
-    <div role="alert">
-      <h2 style={{ font: "var(--text-h2)" }}>{c.title}</h2>
-      <p>{c.body}</p>
-      {hasPriorData && <p>The values below are from the last successful read and may be out of date.</p>}
-      {ref && <p style={{ font: "var(--text-small)" }}>Reference: {ref}</p>}
-      {c.retry && <Button onClick={onRetry}>Try again</Button>}
-    </div>
   );
 }

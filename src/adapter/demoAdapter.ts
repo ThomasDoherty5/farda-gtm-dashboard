@@ -1,15 +1,18 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
-import { SCHEMA_VERSION, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { createDemoApprovals } from "./demoApprovals";
 import { AdapterError } from "./errors";
 import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
 
 /**
- * Deterministic demo adapter. Frozen clock, environment "demo", no network, no dispatch.
- * Every action capability reports "unverified" so nothing can look sent or paid.
+ * Deterministic demo adapter. Frozen clock, environment "demo", no network, no provider dispatch.
+ * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
+ * Overview capabilities report "unverified" so nothing can look sent or paid.
  */
 export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
+  const approvals = createDemoApprovals();
 
   return {
     environment: "demo",
@@ -18,9 +21,17 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
+      if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo fixture for view ${request.viewKey}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       return overviewResponse(request, fixture) as ReadResponse<T>;
+    },
+    async submitAction<P>(request: ActionRequest<P>, options?: ReadOptions): Promise<ActionResponse> {
+      if (request.requestedScope.environment !== "demo")
+        throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+      await wait(latencyMs, options?.signal);
+      return approvals.submit(request);
     },
   };
 }
