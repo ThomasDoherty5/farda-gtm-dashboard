@@ -12,7 +12,8 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | Framework | React 18, Vite 5, TypeScript 5 in strict mode |
 | Routing | React Router 6, data router built from the generated manifest |
 | Data | TanStack Query 5 over the adapter seam; Zod for contract schemas |
-| Styling | CSS custom properties and CSS modules |
+| Styling | CSS custom properties from Figma tokens, and CSS modules |
+| Font | `@fontsource/inter` 4.5.15, pinned (see `design-map.md`) |
 | Tests | Vitest and Testing Library; Playwright and axe |
 | Auth | None yet. Demo scope is fixed; live scope comes from THO-283 |
 
@@ -47,7 +48,7 @@ Approval history has no proposed path, so it uses query values on the approval r
 
 ## Open inputs
 
-- Figma design context: see `figma-access-gap.md`.
+- Figma: a copy works; the original still refuses this account. See `figma-access-gap.md`.
 - THO-283 has not published a transport, so the contract in `src/adapter/contract.ts` stays proposed.
 - Approval and run view models in `src/features/approvals/types.ts` are proposals. THO-283 and THO-321 freeze the real schemas.
 

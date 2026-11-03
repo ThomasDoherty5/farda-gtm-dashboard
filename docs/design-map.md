@@ -1,0 +1,67 @@
+# Design-to-code map
+
+Required by handoff section 5 (accuracy gate 2). Figma file: see `figma-access-gap.md`. Captured 2026-11-03.
+
+## Tokens
+
+Every value is in `src/design-system/tokens.css`, named by each variable's Web code syntax.
+
+| Figma | Count | Code |
+| -- | -- | -- |
+| Farda · Primitives | 16 | `--primitive-*` |
+| Farda · Semantic, colors | 16 | `--color-*`, aliasing primitives |
+| Farda · Semantic, space | 13 | `--space-*` |
+| Text styles | 9 | `--text-*` |
+
+The font is `@fontsource/inter` 4.5.15. The current 5.x build has different letter spacing and matches Figma's render about 2.7× worse, so don't upgrade it without re-running the comparison.
+
+## Components
+
+No Code Connect mappings exist. Mappings below are by hand.
+
+| Figma set | Node | Variants | Code | Status |
+| -- | -- | -- | -- | -- |
+| Button | 2:69 | 8 | `Button`, `LinkButton` (`variant` primary, secondary, ghost; `loading`; `disabledReason`) | Built |
+| Badge | 2:80 | 5 | `Badge` (`tone`) | Built |
+| Nav item | 2:85 | 2 | `Shell` nav links | Built |
+| Alert | 6:616 | 4 | `Alert` (`state`) | Built |
+| Empty state | 6:649 | 4 | `EmptyState` (`state`) | Built |
+| Skeleton | 6:659 | 2 | `SkeletonCard` | Card built; Row pending |
+| Modal | 6:687 | 3 | `Dialog` | Built from the Overview dialogs; set not read yet |
+| Input | 6:404 | 5 | Not built | Pending |
+| Search | 6:414 | 3 | Not built | Pending |
+| Tab | 6:424 | 3 | Not built | Pending |
+| Checkbox | 6:443 | 4 | Not built | Pending |
+| Toggle | 6:459 | 3 | Not built | Pending |
+| Source freshness | 6:500 | 5 | Not built | Pending |
+| KPI card | 6:516 | 3 | Overview `card` styles | Overview uses its own instances; set not read yet |
+| Table cell | 6:528 | 3 | Not built | Pending |
+| Table row | 6:557 | 4 | Not built | Pending |
+| Table header | 6:564 | 1 | Not built | Pending |
+| Step | 6:595 | 5 | Not built | Pending |
+| Drawer | 6:703 | 1 | Not built | Pending |
+| Toast | 6:710 | 2 | Not built | Pending |
+| Tooltip | 6:714 | 1 | Not built | Pending |
+
+## Overview comparison (source 10:217)
+
+Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, fixture FX-01. Run with `scripts/compare-figma.mjs`. Page size matches exactly, and 0.221% of pixels differ at threshold 0.1 on 2026-11-03. What remains is mostly text and edge antialiasing, plus the intentional differences below. No tolerance is agreed yet (THO-330), so this is a measurement, not a pass.
+
+`e2e/overview-fidelity.spec.ts` checks panel geometry, chart scale, text styles and Button states on every run. Button's Primary, Secondary, Hover, Pressed and Disabled states are checked in the browser. Ghost and Loading aren't used on a page that test reaches, and Focus is only partly checked.
+
+## Intentional differences from Figma
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| "35%" in the orders bubble | Violet on chartSecondary (4.2:1) | Ink | 12px text needs 4.5:1 |
+| Button focus | 4px violetSoft border | That, plus a 2px violet outline | violetSoft alone isn't visible on white |
+| Dialog badge | "Interactive prototype" | "Demo" | This isn't the prototype |
+| Export dialog title | "Your report preview is ready." | "Report preview", stating no file is generated | No report exists; the handoff bans fake exports |
+| Workspace menu | Includes Mobile and Tablet operations, Recovery states, Scheduling preview | Those removed; Approvals and Runs added | Responsive variants are one route; gallery is development-only; nothing else reaches Approvals or Runs |
+| Dialog backdrop | Solid ink frame | Ink at 72% | Keeps the page visible behind a modal |
+| Navigation header | Static | Sticks to the top from 1024px up | Keeps the demo label persistent, as the handoff requires |
+| Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
+
+## Implementation adaptations
+
+Only Operations has native 390 and 1024 designs. For Overview and the shell, panels stack below 1180px, the header wraps, and the chart scrolls inside a labeled region. These are proposals to review under THO-306, not matches to a design.

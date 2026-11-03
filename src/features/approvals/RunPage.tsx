@@ -66,7 +66,7 @@ function ApprovalTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
       <h2 style={{ font: "var(--text-h2)" }}>Approval</h2>
       <p><Link to={`/approvals/${data.approvalRef}`}>Open approval {data.approvalRef}</Link></p>
       <p>No Slack link is available for this approval.</p>
-      <Button loading={pausing} disabledReason={blockedReason(res, "pauseRun")} onClick={onPause}>Pause run</Button>
+      <Button variant="secondary" loading={pausing} disabledReason={blockedReason(res, "pauseRun")} onClick={onPause}>Pause run</Button>
     </>
   );
 }
@@ -87,7 +87,7 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
       {uncertain && (
         <>
           <p role="alert">The source may or may not have applied this action. Nothing can be retried until that is settled.</p>
-          <Button loading={pending("lookup")} disabledReason={blockedReason(res, "lookupSource")} onClick={() => send("lookup")}>Check the source</Button>
+          <Button variant="secondary" loading={pending("lookup")} disabledReason={blockedReason(res, "lookupSource")} onClick={() => send("lookup")}>Check the source</Button>
           <div data-testid="reconciliation">
             {result === "notChecked" && <p>Not checked yet.</p>}
             {result === "stillUnknown" && <p>The source shows no evidence either way. Keep this paused and escalate to the account owner.</p>}
@@ -95,8 +95,8 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
             {result === "sourceReceiptFound" && evidence && <p>Source receipt {evidence.receiptRef} found: {evidence.provider}, account {evidence.accountId}, {evidence.identity}, observed {dateTime(evidence.observedAt)}.{adapter.kind === "demo" ? " Synthetic demo evidence." : ""}</p>}
           </div>
           <Button loading={pending("recordConfirmedSent")} disabledReason={blockedReason(res, "recordConfirmedSent")} onClick={() => send("recordConfirmedSent")}>Record confirmed sent</Button>{" "}
-          <Button loading={pending("freshAttempt")} disabledReason={blockedReason(res, "requestFreshAttempt")} onClick={() => send("freshAttempt")}>Request a fresh attempt</Button>{" "}
-          <Button loading={pausing} disabledReason={data.pausedAt ? "Already paused." : blockedReason(res, "pauseRun")} onClick={onPause}>Keep paused</Button>
+          <Button variant="secondary" loading={pending("freshAttempt")} disabledReason={blockedReason(res, "requestFreshAttempt")} onClick={() => send("freshAttempt")}>Request a fresh attempt</Button>{" "}
+          <Button variant="secondary" loading={pausing} disabledReason={data.pausedAt ? "Already paused." : blockedReason(res, "pauseRun")} onClick={onPause}>Keep paused</Button>
           {reconcile.error && <ActionError error={reconcile.error} />}
         </>
       )}

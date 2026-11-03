@@ -1,32 +1,22 @@
-# Figma access gap
+# Figma access
 
-Handoff section 5 says to record the exact missing input when Figma MCP is unavailable, keep building what does not depend on it, and claim no fidelity.
+Handoff section 5 requires Figma MCP. This records which file works and what that does and doesn't prove.
 
-## Status: blocked as of 2026-11-03
+## Status: working on a copy, as of 2026-11-03
 
-Every Figma MCP file tool tried on file `UkX7Vy6r5BGgYvUCAi6Pmd` fails with "you don't have edit access to this file": `create_session`, `get_metadata`, `get_screenshot` and `get_variable_defs`.
+| File | Key | MCP access |
+| -- | -- | -- |
+| Original (the handoff's source) | `UkX7Vy6r5BGgYvUCAi6Pmd` | Refused: "no edit access" |
+| Copy on the UCSC account | `z9knjMdQ3kxL6Fblvu1tKc` | Works, with a Full seat on a student plan |
 
-The connected account has a View seat on its own Starter team, and the file belongs to another team.
+Node IDs in the source manifest worked on the copy for every node read so far.
 
-## What unblocks it
+## Limits of using a copy
 
-The file owner gives this account edit access to the file. If the failure continues after that, the account may also need a paid Dev or Full seat. See Figma's [MCP access rules](https://developers.figma.com/docs/figma-mcp-server/rate-limits-access/).
+- It won't pick up later changes to the original. Before relying on a screen, check with the design owner that the copy is still current, or refresh it.
+- Comparison evidence must name the copy's key. It isn't proof against the original until someone confirms they match.
+- Code Connect is unavailable, because it needs an Organization or Enterprise plan. Component mappings are by hand in `design-map.md`.
 
-To confirm: `create_session` succeeds and `get_variable_defs` returns values for node `2:69`.
+## To remove the limit
 
-## What is blocked
-
-| Item | Issue |
-| -- | -- |
-| 45 variables, 21 component sets, 71 variants, instance overrides | THO-292 |
-| Shell, Button and Overview visuals and chart geometry | THO-292, THO-293 |
-| Layout of the other 58 sources | THO-287 to THO-289, THO-293 to THO-306 |
-| Visual comparison baselines | THO-330 |
-
-The Inter text styles in `src/design-system/tokens.css` come from the handoff's table, not from Figma. Every color, space and radius there is a placeholder.
-
-## What to do first once unblocked
-
-1. Run the section 5 intake on Button `2:69` and Overview `10:217`.
-2. Replace the pending tokens and write the token and component map.
-3. Build and compare the first slice before touching other screens.
+Have the file owner share the original with an account that has a Dev or Full seat, then point this document back at it.

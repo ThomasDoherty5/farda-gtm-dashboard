@@ -3,8 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * Browser journeys, accessibility and visual comparison (THO-330).
  * Viewports follow handoff section 11: 390, 768, 1024, 1440, 1920.
- * Visual baselines are Figma captures stored under e2e/figma-captures/,
- * never auto-updated from the implementation (handoff section 12, gate 5).
+ * Figma captures stay out of this public repo, so pixel comparison runs locally through
+ * scripts/compare-figma.mjs. Baselines never update from the implementation (handoff section 12, gate 5).
  */
 export default defineConfig({
   testDir: "./e2e",

@@ -20,7 +20,8 @@ describe("Button", () => {
     render(<Button loading onClick={onClick}>Save</Button>);
     const button = screen.getByRole("button", { name: /Save/ });
     expect(button).toHaveAttribute("aria-busy", "true");
-    expect(button).toHaveAccessibleName("Save (in progress)");
+    expect(button).toHaveAccessibleName("Save in progress");
+    expect(button).toHaveTextContent("Working…");
     await userEvent.dblClick(button);
     expect(onClick).not.toHaveBeenCalled();
   });

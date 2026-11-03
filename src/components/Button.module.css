@@ -1,4 +1,13 @@
-/* PENDING Figma 2:69. Neutral system styling only. */
-.button { font: var(--text-label); padding: var(--space-2) var(--space-4); min-height: 44px; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-action); color: var(--color-action-text); cursor: pointer; }
-.button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
-.reason { display: block; font: var(--text-small); color: var(--color-text-muted); margin-top: var(--space-1); }
+/* Figma component set 2:69. */
+.button { display: inline-flex; align-items: center; justify-content: center; min-width: 152px; min-height: 44px; padding: 0 var(--space-24); border: 1px solid transparent; border-radius: var(--space-999); font: var(--text-label); text-decoration: none; cursor: pointer; }
+.primary { background: var(--color-violet); color: var(--color-onDark); }
+.primary:hover { opacity: 0.9; }
+.primary:active { opacity: 1; background: var(--color-ink); }
+.secondary { background: var(--color-surface); border-color: var(--color-border); color: var(--color-ink); }
+.ghost { background: var(--color-surface); color: var(--color-ink); }
+.secondary:hover, .ghost:hover { background: var(--color-subtle); }
+/* Figma's focus state is a 4px violetSoft border. That alone is too faint on white, so a violet outline stays too. */
+.button:focus-visible { box-shadow: inset 0 0 0 4px var(--color-violetSoft); }
+.button[aria-disabled="true"] { background: var(--color-subtle); border-color: transparent; color: var(--color-muted); opacity: 1; cursor: not-allowed; }
+.button[aria-busy="true"] { background: var(--color-violet); color: var(--color-onDark); cursor: progress; }
+.reason { display: block; font: var(--text-small); color: var(--color-muted); margin: var(--space-4) 0 var(--space-8); }

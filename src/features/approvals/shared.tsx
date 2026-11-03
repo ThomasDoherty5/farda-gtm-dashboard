@@ -2,7 +2,9 @@ import { useEffect, useRef } from "react";
 import { useBlocker } from "react-router-dom";
 import type { ActionState, ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
+import { Alert } from "@/components/Alert";
 import { Button } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
 import { formatMoney } from "@/components/MetricValue";
 import type { ApprovalPayload } from "./types";
 
@@ -61,7 +63,7 @@ export function PayloadView({ payload, policyVersion, offerVersion }: { payload:
         {rows.map(([label, value]) => (
           <div key={label}>
             <dt style={{ font: "var(--text-label)" }}>{label}</dt>
-            <dd style={{ margin: "0 0 var(--space-2)" }}>{value}</dd>
+            <dd style={{ margin: "0 0 var(--space-8)" }}>{value}</dd>
           </div>
         ))}
       </dl>
@@ -106,31 +108,23 @@ export function ActionError({ error }: { error: Error }) {
   };
   const certainty = adapterError?.body.executionCertainty;
   return (
-    <div ref={ref} role="alert" tabIndex={-1} data-testid="action-error">
-      <h3 style={{ font: "var(--text-h3)" }}>{titles[category] ?? "Something went wrong"}</h3>
+    <Alert ref={ref} state="error" focusable title={titles[category] ?? "Something went wrong"} testId="action-error">
       <p>{category === "unknown" ? "This action could not be completed." : error.message}</p>
       {certainty === "notApplied" && <p>Nothing was sent.</p>}
       {certainty === "uncertain" && <p>Don't retry until the outcome is reconciled.</p>}
-      {adapterError?.body.correlationId && <p style={{ font: "var(--text-small)" }}>Reference: {adapterError.body.correlationId}</p>}
-    </div>
+      {adapterError?.body.correlationId && <p>Reference: {adapterError.body.correlationId}</p>}
+    </Alert>
   );
 }
 
 /** Asks before leaving with unsaved edits. Keep task (CTRL-177) returns to the form with edits intact. */
 export function LeaveGuard({ dirty }: { dirty: boolean }) {
   const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname + currentLocation.search !== nextLocation.pathname + nextLocation.search);
-  const dialog = useRef<HTMLDialogElement>(null);
-  const open = blocker.state === "blocked";
-  useEffect(() => {
-    if (open) dialog.current?.showModal?.();
-    else dialog.current?.close?.();
-  }, [open]);
   return (
-    <dialog ref={dialog} aria-labelledby="leave-title" onCancel={() => blocker.reset?.()}>
-      <h2 id="leave-title" style={{ font: "var(--text-h2)", marginTop: 0 }}>Discard your edits?</h2>
+    <Dialog open={blocker.state === "blocked"} title="Discard your edits?" onClose={() => blocker.reset?.()}>
       <p>You have unsaved changes on this approval.</p>
-      <Button onClick={() => blocker.reset?.()}>Keep task</Button>{" "}
-      <Button onClick={() => blocker.proceed?.()}>Discard and leave</Button>
-    </dialog>
+      <Button onClick={() => blocker.reset?.()}>Keep task</Button>
+      <Button variant="secondary" onClick={() => blocker.proceed?.()}>Discard and leave</Button>
+    </Dialog>
   );
 }

@@ -17,8 +17,8 @@ test("Overview renders the labeled demo dataset", async ({ page }) => {
   await page.goto("/");
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByTestId("demo-banner")).toBeVisible();
-  await expect(page.getByTestId("metric-Orders")).toHaveText("400");
-  await expect(page.getByTestId("metric-Store sales")).toHaveText("$12,596");
+  await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
+  await expect(page.getByTestId("metric-Net receipts")).toHaveText("$12,596");
   await expect(page.getByTestId("metric-Engagement rate")).toHaveText("5.0%");
   expect(errors).toEqual([]);
 });
@@ -42,14 +42,14 @@ test("Back and Forward restore the route", async ({ page }) => {
   await expect(page).toHaveURL(/\/finance$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/overview$/);
-  await expect(page.getByTestId("metric-Orders")).toHaveText("400");
+  await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
   await page.goForward();
   await expect(page).toHaveURL(/\/finance$/);
 });
 
 test("selecting the current section adds no history entry (CTRL-220)", async ({ page }) => {
   await page.goto("/overview");
-  await expect(page.getByTestId("metric-Orders")).toHaveText("400");
+  await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
   const before = await page.evaluate(() => history.length);
   await page.getByRole("link", { name: "Overview" }).click();
   expect(await page.evaluate(() => history.length)).toBe(before);
@@ -72,7 +72,7 @@ for (const [fixture, heading] of [
   test(`${fixture} renders "${heading}"`, async ({ page }) => {
     await page.goto(`/overview?fixture=${fixture}`);
     await expect(page.getByRole("heading", { name: heading })).toBeVisible();
-    await expect(page.getByTestId("metric-Orders")).toHaveCount(0);
+    await expect(page.getByTestId("metric-Paid orders")).toHaveCount(0);
   });
 }
 
