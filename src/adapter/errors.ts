@@ -1,0 +1,67 @@
+/** Section 5 error categories and the UI behaviour each one requires. */
+export type ErrorCategory =
+  | "unauthenticated"
+  | "forbidden"
+  | "validation"
+  | "conflict"
+  | "approvalHold"
+  | "capabilityHold"
+  | "resourceHold"
+  | "rateLimited"
+  | "unavailable"
+  | "outcomeUncertain"
+  | "replayed"
+  | "unknown";
+
+const CODE_TO_CATEGORY: Record<string, ErrorCategory> = {
+  UNAUTHENTICATED: "unauthenticated",
+  SESSION_EXPIRED: "unauthenticated",
+  FORBIDDEN: "forbidden",
+  SOURCE_AUTHORITY_DENIED: "forbidden",
+  VALIDATION_FAILED: "validation",
+  POLICY_VIOLATION: "validation",
+  STALE_VERSION: "conflict",
+  APPROVAL_INVALID: "conflict",
+  MANIFEST_CHANGED: "conflict",
+  LEASE_CONFLICT: "conflict",
+  APPROVAL_REQUIRED: "approvalHold",
+  APPROVAL_EXPIRED: "approvalHold",
+  CAPABILITY_UNVERIFIED: "capabilityHold",
+  CAPABILITY_UNSUPPORTED: "capabilityHold",
+  SOURCE_LOGIN_REQUIRED: "capabilityHold",
+  SOURCE_UI_CHANGED: "capabilityHold",
+  QUOTA_OR_STOCK_HOLD: "resourceHold",
+  BUDGET_HOLD: "resourceHold",
+  RATE_LIMITED: "rateLimited",
+  SOURCE_UNAVAILABLE: "unavailable",
+  TIMEOUT: "unavailable",
+  INTEGRATION_PENDING: "unavailable",
+  OUTCOME_UNCERTAIN: "outcomeUncertain",
+};
+
+export type AdapterErrorBody = {
+  code: string;
+  message: string;
+  requestId: string | null;
+  correlationId: string | null;
+  retryable: boolean;
+  retryAfterMs: number | null;
+};
+
+export class AdapterError extends Error {
+  readonly category: ErrorCategory;
+  constructor(readonly body: AdapterErrorBody) {
+    super(body.message);
+    this.name = "AdapterError";
+    this.category = categorize(body.code);
+  }
+}
+
+export function categorize(code: string): ErrorCategory {
+  return CODE_TO_CATEGORY[code] ?? "unknown";
+}
+
+/** Categories after which protected cached data must be dropped, not shown. */
+export function mustClearProtectedData(category: ErrorCategory): boolean {
+  return category === "unauthenticated" || category === "forbidden";
+}

@@ -1,0 +1,4 @@
+/* PENDING Figma 2:69. Neutral system styling only. */
+.button { font: var(--text-label); padding: var(--space-2) var(--space-4); min-height: 44px; border: 1px solid var(--color-border); border-radius: var(--radius); background: var(--color-action); color: var(--color-action-text); cursor: pointer; }
+.button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.6; }
+.reason { display: block; font: var(--text-small); color: var(--color-text-muted); margin-top: var(--space-1); }

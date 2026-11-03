@@ -1,0 +1,49 @@
+/*
+ * Farda design tokens.
+ * TEXT STYLES: from the handoff's Inter text-style list (Figma file UkX7Vy6r5BGgYvUCAi6Pmd).
+ * COLORS / SPACING / RADII: PENDING. The 45 Figma variables (Primitives 16, Semantic 29) have not been
+ * extracted because Figma MCP access is blocked (docs/figma-access-gap.md). Until then every color below
+ * maps to a CSS system color on purpose, so nothing here pretends to match the design.
+ */
+:root {
+  --font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+
+  --text-display: 600 40px/48px var(--font-family);
+  --text-h1: 600 30px/38px var(--font-family);
+  --text-h2: 600 22px/30px var(--font-family);
+  --text-h3: 600 17px/24px var(--font-family);
+  --text-body: 400 14px/22px var(--font-family);
+  --text-label: 500 14px/20px var(--font-family);
+  --text-small: 400 12px/18px var(--font-family);
+  --text-micro: 500 11px/16px var(--font-family);
+  --text-metric: 600 32px/40px var(--font-family);
+
+  /* PENDING Figma Semantic collection (VariableCollectionId:2:6). */
+  --color-canvas: Canvas;
+  --color-surface: Canvas;
+  --color-text: CanvasText;
+  --color-text-muted: GrayText;
+  --color-border: GrayText;
+  --color-action: ButtonFace;
+  --color-action-text: ButtonText;
+  --color-focus: Highlight;
+  --color-demo: Mark;
+  --color-demo-text: MarkText;
+
+  /* PENDING Figma Primitives collection (VariableCollectionId:2:5). */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius: 0;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { color-scheme: light; }
+body { margin: 0; font: var(--text-body); letter-spacing: 0; background: var(--color-canvas); color: var(--color-text); }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.skip-link { position: absolute; left: var(--space-2); top: -100px; padding: var(--space-2); background: var(--color-surface); }
+.skip-link:focus { top: var(--space-2); z-index: 10; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
