@@ -44,7 +44,7 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
   });
 }
 
-function dropProtectedData(client: QueryClient, root: readonly unknown[]) {
+export function dropProtectedData(client: QueryClient, root: readonly unknown[]) {
   client.removeQueries({ queryKey: root, type: "inactive" });
   for (const query of client.getQueryCache().findAll({ queryKey: root })) query.setState({ data: undefined, dataUpdatedAt: 0 });
 }

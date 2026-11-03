@@ -31,9 +31,11 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - Unit and contract tests (`src/**/*.test.ts(x)`), Playwright smoke and axe tests (`e2e/`), and a CI workflow.
 - `AGENTS.md`, `docs/intake.md` and `docs/figma-access-gap.md`.
 
+- Approval flow behavior (THO-296): approval detail and history, agent run approval and unknown-outcome recovery, on an in-memory demo state machine covering FX-10 to FX-18. Start at `/approvals` or `/runs`. Demo state resets on reload. It is unstyled, and its Figma comparison hasn't happened.
+
 **Not done yet**
 - **All visual design.** Colors, spacing, radii and component visuals are deliberately system defaults. Figma access is blocked; see `docs/figma-access-gap.md` for what unblocks it and what to do first.
-- **The stateful approval flow** that handoff section 5 requires before expanding to other screens, and its action, approval and save schemas.
+- **The rest of THO-296:** real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
 - **Overview filters and charts**, which need the Figma source.
 - **The other 59 sources.** They render labeled placeholders.
 

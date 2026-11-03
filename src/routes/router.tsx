@@ -1,19 +1,29 @@
 import { Navigate, type RouteObject } from "react-router-dom";
 import { Shell } from "@/components/Shell";
+import { ApprovalPage } from "@/features/approvals/ApprovalPage";
+import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
+import { RunPage } from "@/features/approvals/RunPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { sourceScreens } from "./manifest.generated";
 import { navSections } from "./nav";
 import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
 
 /** Screens implemented so far. Every other manifest path renders a labeled placeholder. */
-const implemented: Record<string, JSX.Element> = { "/overview": <OverviewPage /> };
+const implemented: Record<string, JSX.Element> = {
+  "/overview": <OverviewPage />,
+  "/approvals/:approvalId": <ApprovalPage />,
+  "/runs/:runId": <RunPage />,
+};
+
+/** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */
+const sectionPages: Record<string, JSX.Element> = { approvals: <ApprovalsIndex />, runs: <RunsIndex /> };
 
 export function buildRoutes(): RouteObject[] {
   const paths = [...new Set(sourceScreens.map((s) => s.path))];
   const children: RouteObject[] = [
     { index: true, element: <Navigate to="/overview" replace /> },
     ...paths.map((path) => ({ path, element: implemented[path] ?? <RoutePlaceholder path={path} /> })),
-    ...navSections.filter((s) => !paths.includes(s.path)).map((s) => ({ path: s.path, element: <SectionIndex seg={s.seg} /> })),
+    ...navSections.filter((s) => !paths.includes(s.path)).map((s) => ({ path: s.path, element: sectionPages[s.seg] ?? <SectionIndex seg={s.seg} /> })),
     { path: "*", element: <NotFound /> },
   ];
   return [{ path: "/", element: <Shell />, children }];

@@ -1,10 +1,10 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
-import type { Environment, ReadRequest, ReadResponse } from "./contract";
+import type { ActionRequest, ActionResponse, Environment, ReadRequest, ReadResponse } from "./contract";
 import { AdapterError } from "./errors";
 
 /**
  * Live adapter placeholder. The authenticated backend boundary (THO-283) is not deployed,
- * so every read fails with INTEGRATION_PENDING. It never falls back to demo data.
+ * so every read and action fails with INTEGRATION_PENDING. It never falls back to demo data.
  * When wired: same-origin cookie session only; no provider credentials or tokens in the client.
  */
 export function createLiveAdapter(environment: Exclude<Environment, "demo">): FardaAdapter {
@@ -19,6 +19,17 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">): Fa
         correlationId: null,
         retryable: false,
         retryAfterMs: null,
+      });
+    },
+    async submitAction<P>(request: ActionRequest<P>, _options?: ReadOptions): Promise<ActionResponse> {
+      throw new AdapterError({
+        code: "INTEGRATION_PENDING",
+        message: "The live action service is not connected yet. Nothing was sent.",
+        requestId: request.requestId,
+        correlationId: null,
+        retryable: false,
+        retryAfterMs: null,
+        executionCertainty: "notApplied",
       });
     },
   };

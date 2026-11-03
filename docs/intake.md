@@ -43,8 +43,19 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 
 Proposed paths from handoff section 6 are used as written. Sources that share a path are selected by query value or returned record state. `/design-system/states` is routable but left out of primary navigation because it is a development surface.
 
+Approval history has no proposed path, so it uses query values on the approval route: `/approvals/:approvalId?view=history` and `?version=vN`. `/approvals` and `/runs` aren't Figma sources. In demo they list the labeled scenarios; otherwise they show the section index.
+
 ## Open inputs
 
 - Figma design context: see `figma-access-gap.md`.
 - THO-283 has not published a transport, so the contract in `src/adapter/contract.ts` stays proposed.
-- Action, approval and save schemas (adapter document section 4) are not transcribed yet. They arrive with the first stateful flow.
+- Approval and run view models in `src/features/approvals/types.ts` are proposals. THO-283 and THO-321 freeze the real schemas.
+
+## Questions for the THO-283 freeze
+
+Raised by the approval flow:
+
+- `ActionResponse.state` has no value for "approved, awaiting dispatch". The demo returns `blocked` with `AWAITING_DISPATCH`.
+- The error catalogue has no not-found code. The demo uses `RECORD_NOT_FOUND`.
+- `ActionRequest` has no run reference for `controlRun` and `reconcileRun`. The demo puts `runRef` in the payload.
+- `executionCertainty` has no defined values. The demo uses `notApplied`, `uncertain` and `applied`.

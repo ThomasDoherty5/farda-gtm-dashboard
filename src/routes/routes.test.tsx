@@ -1,27 +1,16 @@
-import { QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import type { FardaAdapter } from "@/adapter/adapter";
-import { ScopeProvider } from "@/adapter/scope";
-import { scopeFor, testClient } from "@/test/renderWithAdapter";
+import { renderRoute } from "@/test/renderWithAdapter";
 import { sourceScreens } from "./manifest.generated";
 import { navSections } from "./nav";
-import { buildRoutes } from "./router";
 
-function renderAt(path: string, adapter: FardaAdapter = createDemoAdapter()) {
-  const router = createMemoryRouter(buildRoutes(), { initialEntries: [path] });
-  render(
-    <QueryClientProvider client={testClient()}>
-      <ScopeProvider adapter={adapter} scope={scopeFor(adapter.environment)} principal="tester">
-        <RouterProvider router={router} />
-      </ScopeProvider>
-    </QueryClientProvider>,
-  );
-  return router;
-}
+const renderAt = (path: string, adapter: FardaAdapter = createDemoAdapter()) => renderRoute(path, adapter);
+
+/** Overview, approval detail, and the two run tabs. The tabless run path is the hourly variant, not built. */
+const BUILT_SOURCES = new Set(["10:217", "6:234", "5:13", "5:156"]);
 
 const concrete = (path: string) => path.replace(/:(\w+)/g, "demo-$1");
 
@@ -55,7 +44,7 @@ describe("routes", () => {
     renderAt(concrete(source.path) + (query ? `?${query}` : ""));
     const main = await screen.findByRole("main");
     expect(await within(main).findByRole("heading", { level: 1 })).toBeInTheDocument();
-    if (source.path !== "/overview") {
+    if (!BUILT_SOURCES.has(source.sourceNodeId)) {
       expect(within(main).getByText(/Not built yet/)).toBeInTheDocument();
       expect(within(main).getByRole("link", { name: source.sourceNodeId })).toBeInTheDocument();
     }
