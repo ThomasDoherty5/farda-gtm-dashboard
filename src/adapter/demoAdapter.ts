@@ -1,5 +1,6 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
+import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
@@ -15,6 +16,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
+  const evidence = createDemoEvidence();
 
   return {
     environment: "demo",
@@ -25,6 +27,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       await wait(latencyMs, options?.signal);
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
+      if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
@@ -36,6 +39,12 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
       return approvals.submit(request);
+    },
+    async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {
+      if (request.requestedScope.environment !== "demo")
+        throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+      await wait(latencyMs, options?.signal);
+      return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
   };
 }

@@ -33,6 +33,7 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 
 - Approval flow behavior (THO-296): approval detail and history, agent run approval and unknown-outcome recovery, on an in-memory demo state machine covering FX-10 to FX-18. Start at `/approvals` or `/runs`. Demo state resets on reload. Its three screens are built from Figma sources 6:234, 5:13 and 5:156.
 - Daily sourcing (`/creators/discovery`, source 102:555, THO-287): the draft plan, capacity table, URL-backed filters, and the locked live-discovery and research-scope controls. Demo data only.
+- Video evidence review (`/creators/:creatorId/evidence/:evidenceId`, source 102:364, THO-288): save a partial review of an Instagram or TikTok video address, time-coded observations and the checkout route. A saved draft is never a completed review, Mark watched stays blocked until playback can be verified, and profile addresses are refused. Saves go through the adapter's `saveResource` with version checks and idempotency keys. Demo data only; reviewer disagreement and override are not built.
 
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
