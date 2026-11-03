@@ -50,5 +50,8 @@ export function scriptedAdapter(answer: (request: ReadRequest<unknown>, call: nu
     submitAction: async (request) => {
       throw new AdapterError({ code: "INTEGRATION_PENDING", message: "No scripted action.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
     },
+    saveResource: async (request) => {
+      throw new AdapterError({ code: "INTEGRATION_PENDING", message: "No scripted save.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
+    },
   };
 }

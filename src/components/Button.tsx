@@ -14,12 +14,14 @@ type Props = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "disabled"> & {
   variant?: ButtonVariant;
   loading?: boolean;
   disabledReason?: string | null;
+  /** When the reason is shown elsewhere on the page, give that element's id here to avoid showing it twice. */
+  reasonFor?: string;
   children: ReactNode;
 };
 
 const classes = (variant: ButtonVariant, className?: string) => [styles.button, styles[variant], className].filter(Boolean).join(" ");
 
-export function Button({ variant = "primary", loading = false, disabledReason = null, onClick, children, type = "button", className, ...rest }: Props) {
+export function Button({ variant = "primary", loading = false, disabledReason = null, reasonFor, onClick, children, type = "button", className, ...rest }: Props) {
   const reasonId = useId();
   const blocked = loading || Boolean(disabledReason);
   return (
@@ -30,7 +32,7 @@ export function Button({ variant = "primary", loading = false, disabledReason = 
         className={classes(variant, className)}
         aria-busy={loading || undefined}
         aria-disabled={blocked || undefined}
-        aria-describedby={disabledReason ? reasonId : rest["aria-describedby"]}
+        aria-describedby={disabledReason ? (reasonFor ?? reasonId) : rest["aria-describedby"]}
         onClick={(e) => {
           if (blocked) { e.preventDefault(); return; }
           onClick?.(e);
@@ -38,7 +40,7 @@ export function Button({ variant = "primary", loading = false, disabledReason = 
       >
         {loading ? <><span aria-hidden="true">Working…</span><span className="visually-hidden">{children} in progress</span></> : children}
       </button>
-      {disabledReason && <span id={reasonId} className={styles.reason}>{disabledReason}</span>}
+      {disabledReason && !reasonFor && <span id={reasonId} className={styles.reason}>{disabledReason}</span>}
     </>
   );
 }

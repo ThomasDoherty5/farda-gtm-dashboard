@@ -1,5 +1,5 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
-import type { ActionRequest, ActionResponse, Environment, ReadRequest, ReadResponse } from "./contract";
+import type { ActionRequest, ActionResponse, Environment, ReadRequest, ReadResponse, SaveResourceRequest, SaveResourceResponse } from "./contract";
 import { AdapterError } from "./errors";
 
 /**
@@ -25,6 +25,17 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">): Fa
       throw new AdapterError({
         code: "INTEGRATION_PENDING",
         message: "The live action service is not connected yet. Nothing was sent.",
+        requestId: request.requestId,
+        correlationId: null,
+        retryable: false,
+        retryAfterMs: null,
+        executionCertainty: "notApplied",
+      });
+    },
+    async saveResource<P, T>(request: SaveResourceRequest<P>, _options?: ReadOptions): Promise<SaveResourceResponse<T>> {
+      throw new AdapterError({
+        code: "INTEGRATION_PENDING",
+        message: "The live save service is not connected yet. Nothing was saved.",
         requestId: request.requestId,
         correlationId: null,
         retryable: false,

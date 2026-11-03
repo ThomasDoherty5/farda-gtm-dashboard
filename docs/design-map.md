@@ -28,7 +28,7 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Empty state | 6:649 | 4 | `EmptyState` (`state`) | Built |
 | Skeleton | 6:659 | 2 | `SkeletonCard` | Card built; Row pending |
 | Modal | 6:687 | 3 | `Dialog` | Built from the Overview dialogs; set not read yet |
-| Input | 6:404 | 5 | Not built | Pending |
+| Input | 6:404 | 5 | `Field`, `TextField`, `SelectField` (label, 48px field, help or error text) | Default, filled and error built; disabled and focus not checked |
 | Search | 6:414 | 3 | Not built | Pending |
 | Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked |
 | Checkbox | 6:443 | 4 | Not built | Pending |
@@ -49,6 +49,7 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Source | Route | Size | Pixels different |
 | -- | -- | -- | -- |
 | 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.432% |
+| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2261 tall, not 2211 (see below) | 0.218%, measured over the top 1450px |
 
 ## Proposed pass mark
 
@@ -100,6 +101,11 @@ The recovery figure is high because everything below the added evidence controls
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
+| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding about 50px | CTRL-154 requires a visible reason. This is why the page is 2261 tall, not 2211 |
+| Video URL field | Placeholder text "Awaiting validated source URL" shown as if populated | A real input, empty at first, with that text as the placeholder | The field has to accept an address |
+| Checkout route | Fixed select appearance | Native select | Keyboard and screen reader behavior come for free |
+| Observation rows | No way to undo | A Remove link on each recorded observation | Drafts need correcting before they are saved |
+| Evidence review state | Static "Pending" values | Coverage is derived from recorded intervals, tied to the video they were recorded against. Changing the address invalidates earlier observations. There is no watched state | CTRL-154 and CTRL-156: a saved draft is never a completed review, and a profile URL is not video evidence |
 
 ## Implementation adaptations
 

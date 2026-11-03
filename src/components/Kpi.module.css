@@ -1,6 +1,7 @@
 /* Figma component set 6:516. 152px tall at the design's width. */
 .row { display: grid; grid-template-columns: repeat(var(--kpi-columns, 4), minmax(0, 1fr)); gap: var(--space-16); }
 .kpi { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; min-height: 152px; margin: 0; padding: var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.hug { min-height: 0; padding-block: 24px; }
 .label { font: var(--text-label); color: var(--color-muted); }
 .value { margin: 0; font: var(--text-metric); color: var(--color-ink); }
 .context { margin: 0; font: var(--text-small); color: var(--color-muted); }
