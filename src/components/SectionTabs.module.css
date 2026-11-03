@@ -1,0 +1,5 @@
+/* Figma component set 6:424. */
+.tabs { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.tab { display: inline-flex; justify-content: center; min-height: 44px; padding: var(--space-12); background: var(--color-surface); border-radius: var(--space-12); font: var(--text-label); color: var(--color-ink); text-decoration: none; }
+.tab:hover { background: var(--color-subtle); }
+.tab[aria-current] { background: var(--color-violetSoft); color: var(--color-violet); }

@@ -30,25 +30,40 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Modal | 6:687 | 3 | `Dialog` | Built from the Overview dialogs; set not read yet |
 | Input | 6:404 | 5 | Not built | Pending |
 | Search | 6:414 | 3 | Not built | Pending |
-| Tab | 6:424 | 3 | Not built | Pending |
+| Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked |
 | Checkbox | 6:443 | 4 | Not built | Pending |
 | Toggle | 6:459 | 3 | Not built | Pending |
 | Source freshness | 6:500 | 5 | Not built | Pending |
-| KPI card | 6:516 | 3 | Overview `card` styles | Overview uses its own instances; set not read yet |
-| Table cell | 6:528 | 3 | Not built | Pending |
-| Table row | 6:557 | 4 | Not built | Pending |
-| Table header | 6:564 | 1 | Not built | Pending |
+| KPI card | 6:516 | 3 | `Kpi`, `KpiRow` | Built from ACQ03. Overview still uses its own cards |
+| Table cell | 6:528 | 3 | `DataTable` | Text cell built |
+| Table row | 6:557 | 4 | `DataTable` | Default built |
+| Table header | 6:564 | 1 | `DataTable` | Built |
 | Step | 6:595 | 5 | Not built | Pending |
 | Lifecycle/Step | 5:3 | Not counted in the 21 | `Step` in `RunPage` | Built from instances in 5:13 and 5:156 |
 | Drawer | 6:703 | 1 | Not built | Pending |
 | Toast | 6:710 | 2 | Not built | Pending |
 | Tooltip | 6:714 | 1 | Not built | Pending |
 
+## Acquisition comparison (source 102:555)
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.432% |
+
+## Proposed pass mark
+
+Proposed for THO-330, not yet agreed. At threshold 0.1, DPR 1 and the design's exact width:
+
+- Page size matches exactly, unless a listed intentional difference changes it.
+- At most 0.5% of pixels differ, checked with `scripts/compare-figma.mjs <path> <capture> 0.1 0.5`.
+- The diff image shows only text and edge antialiasing, plus listed intentional differences. A person checks this.
+- A screen whose size differs on purpose is judged on its geometry tests and the diff above the first change.
+
 ## Overview comparison (source 10:217)
 
 Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, fixture FX-01. Run with `scripts/compare-figma.mjs`. Page size matches exactly, and 0.219% of pixels differ at threshold 0.1 on 2026-11-03. What remains is mostly text and edge antialiasing, plus the intentional differences below. No tolerance is agreed yet (THO-330), so this is a measurement, not a pass.
 
-`e2e/overview-fidelity.spec.ts` checks panel geometry, chart scale, text styles and Button states on every run. Button's Primary, Secondary, Hover, Pressed and Disabled states are checked in the browser. Ghost and Loading aren't used on a page that test reaches, and Focus is only partly checked.
+`e2e/overview-fidelity.spec.ts` checks panel geometry, chart scale, text styles and Button states on every run. All eight Button states are checked in the browser. Pressed and Hover are read from the primary button. Figma's Focus state is applied alongside the extra outline listed below.
 
 ## Approval and run comparison (sources 6:234, 5:13, 5:156)
 
@@ -78,8 +93,12 @@ The recovery figure is high because everything below the added evidence controls
 | Recovery controls | Record confirmed sent and Request a fresh attempt always enabled | Disabled with a reason until a source check gives evidence, plus a Check the source control | CTRL-044 and CTRL-045 forbid acting without evidence |
 | Queue "Selected" badge | "Selected · pending" | Follows the record's real status | A status label mustn't contradict the record |
 | Approval page footnote | "Design preview · sample approval and message…" | "Demo · sample approval and message…", demo only | This is no longer a design preview |
-| Source links | Open an overlay | A dialog saying no verified link exists | The source-link profile forbids invented destinations |
-| Takeover dialog copy | Not read from Figma; only its name is known | Written from the overlay's name | **Replace with the overlay's real copy when it's read** |
+| Source dialog copy | "This prototype previews the handoff and performs no external action." | Says whether a verified link exists | The source-link profile forbids invented destinations, and this isn't the prototype |
+| Lifestyle only | A button with no stated behavior | Opens a dialog explaining the locked research scope | CTRL-164 requires an explanation, and the scope must not be widenable |
+| Start live discovery | Disabled button | Disabled, with the reason beside it | CTRL-165 requires a visible reason |
+| Publishing filter | A button | A radio dialog, and a note that the demo's counts don't split by network | The demo batch isn't split by network, so no result is faked |
+| Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
+| Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
 
 ## Implementation adaptations

@@ -331,7 +331,7 @@ describe("agent run from Figma", () => {
     const spy = vi.spyOn(adapter, "submitAction");
     const { user } = await open("/runs/demo-run-uncertain?tab=recovery", adapter);
     await user.click(button("Take over"));
-    expect(screen.getByText(/Only an authorized operator/)).toBeInTheDocument();
+    expect(screen.getByText(/No success is inferred from a timeout/)).toBeInTheDocument();
     expect(spy).not.toHaveBeenCalled();
   });
 });

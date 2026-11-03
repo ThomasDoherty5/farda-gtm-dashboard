@@ -3,7 +3,7 @@ import { useBlocker } from "react-router-dom";
 import type { ActionState, ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
 import { Alert } from "@/components/Alert";
-import { Button } from "@/components/Button";
+import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { formatMoney } from "@/components/MetricValue";
 import type { ApprovalPayload } from "./types";
@@ -33,6 +33,7 @@ const CAPABILITY_REASONS: Record<string, string> = {
   ROLE_REQUIRED: "You don't have the role this decision needs.",
   EVIDENCE_REQUIRED: "Check the source first. This needs independent evidence.",
   NOTHING_TO_PAUSE: "There is no unsent work to pause.",
+  SOURCE_ACCESS_UNVERIFIED: "Blocked until source access, a real account configuration, quota capacity and an authorized runtime exist. A demo can't start a live job.",
 };
 
 /** The reason a capability blocks an action, or null when the server allows it. UI state is advisory; the server still enforces. */
@@ -84,12 +85,14 @@ export function HistoricalNote({ title, note, children }: { title: string; note:
   );
 }
 
-/** Handoff to a source system. It never invents a destination: a missing link says so. */
+/** Handoff to a source system (Figma overlay 42:1709). It never invents a destination: a missing link says so. */
 export function SourceDialog({ open, title, url, onClose }: { open: boolean; title: string; url: string | null; onClose: () => void }) {
   return (
     <Dialog open={open} title={title} onClose={onClose}>
-      {url ? <p><a href={url} target="_blank" rel="noreferrer">Open in a new tab</a></p> : <p>No verified link is available for this record, so nothing opens from here. Nothing was changed in the source.</p>}
-      <Button variant="secondary" onClick={onClose}>Close</Button>
+      <p>{url ? "This opens the verified source record in its owning platform." : "No verified link is available for this record, so nothing opens from here. Nothing was changed in the source."}</p>
+      {url && <a href={url} target="_blank" rel="noreferrer">Open in a new tab</a>}
+      <LinkButton variant="secondary" to="/settings/connections">View connection settings</LinkButton>
+      <Button variant="secondary" onClick={onClose}>Close preview</Button>
     </Dialog>
   );
 }
