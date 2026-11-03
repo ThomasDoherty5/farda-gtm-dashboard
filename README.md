@@ -28,22 +28,14 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
   - known zero is distinct from N/A
   - stale, partial, empty and error states
 
+- Unit and contract tests (`src/**/*.test.ts(x)`), Playwright smoke and axe tests (`e2e/`), and a CI workflow.
+- `AGENTS.md`, `docs/intake.md` and `docs/figma-access-gap.md`.
+
 **Not done yet**
-- **Unit and contract tests** (`src/**/*.test.ts(x)`). The cases to cover:
-  - known zero vs unknown
-  - engagement N/A when shares are missing
-  - fixture arithmetic
-  - late-response scope guard
-  - scope isolation
-  - no demo fallback
-  - 60 unique manifest entries
-- **Playwright smoke and axe tests** in `e2e/`.
-- **CI workflow** (`.github/workflows/ci.yml`), plus `AGENTS.md` and `docs/intake.md`.
-- **All visual design.** Colors, spacing, radii and component visuals are deliberately system defaults (`src/design-system/tokens.css`). The Figma MCP returned "no edit access": this account has a View seat on a Starter team, and the file belongs to Kevon's team. Once Kevon grants a Dev or Full seat:
-  1. Run the mandatory intake (create_session → get_design_context → get_variable_defs → get_code_connect_map) for Button `2:69` and Overview `10:217`.
-  2. Replace the pending tokens.
-  3. Build the layout.
-  4. Then propagate to the remaining 59 sources.
+- **All visual design.** Colors, spacing, radii and component visuals are deliberately system defaults. Figma access is blocked; see `docs/figma-access-gap.md` for what unblocks it and what to do first.
+- **The stateful approval flow** that handoff section 5 requires before expanding to other screens, and its action, approval and save schemas.
+- **Overview filters and charts**, which need the Figma source.
+- **The other 59 sources.** They render labeled placeholders.
 
 ## Commands
 

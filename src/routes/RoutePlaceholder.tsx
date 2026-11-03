@@ -41,7 +41,7 @@ export function SectionIndex({ seg }: { seg: string }) {
 
 function SourceTable({ sources, highlight, linkPaths = false }: { sources: SourceScreen[]; highlight: Set<string>; linkPaths?: boolean }) {
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div style={{ overflowX: "auto" }} role="region" aria-label="Figma sources for this route" tabIndex={0}>
       <table>
         <caption className="visually-hidden">Figma sources for this route</caption>
         <thead><tr><th scope="col">Screen</th><th scope="col">Owner</th><th scope="col">Figma source</th><th scope="col">Route</th><th scope="col">Scope</th></tr></thead>

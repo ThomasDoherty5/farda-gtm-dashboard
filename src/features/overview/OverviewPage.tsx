@@ -8,7 +8,7 @@ import type { OverviewData } from "@/fixtures/overview";
 import { engagementRate } from "./metrics";
 
 const dateTime = (iso: string) =>
-  new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/Los_Angeles", timeZoneName: "short" }).format(new Date(iso));
+  new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles", timeZoneName: "short" }).format(new Date(iso));
 
 /**
  * Performance overview (Figma source 10:217, owner THO-293).
@@ -23,7 +23,7 @@ export function OverviewPage() {
     <section aria-labelledby="overview-title" data-figma-source="10:217">
       <h1 id="overview-title" style={{ font: "var(--text-h1)", marginTop: 0 }}>Performance overview</h1>
       {query.isPending && <p role="status">Loading overview…</p>}
-      {query.isError && <ErrorState error={query.error} onRetry={() => void query.refetch()} />}
+      {query.isError && <ErrorState error={query.error} hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && <Body res={query.data} environment={adapter.environment} />}
     </section>
   );
@@ -90,7 +90,7 @@ function Metrics({ data }: { data: OverviewData }) {
   );
 }
 
-function ErrorState({ error, onRetry }: { error: Error; onRetry: () => void }) {
+function ErrorState({ error, hasPriorData, onRetry }: { error: Error; hasPriorData: boolean; onRetry: () => void }) {
   const category = error instanceof AdapterError ? error.category : "unknown";
   const ref = error instanceof AdapterError ? error.body.correlationId : null;
   const copy: Record<string, { title: string; body: string; retry: boolean }> = {
@@ -104,6 +104,7 @@ function ErrorState({ error, onRetry }: { error: Error; onRetry: () => void }) {
     <div role="alert">
       <h2 style={{ font: "var(--text-h2)" }}>{c.title}</h2>
       <p>{c.body}</p>
+      {hasPriorData && <p>The values below are from the last successful read and may be out of date.</p>}
       {ref && <p style={{ font: "var(--text-small)" }}>Reference: {ref}</p>}
       {c.retry && <Button onClick={onRetry}>Try again</Button>}
     </div>

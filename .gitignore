@@ -7,3 +7,6 @@ test-results
 .env.*
 !.env.example
 .DS_Store
+
+# Local snapshot of the private Linear handoff. Never commit: this repo is public.
+.handoff/
