@@ -35,6 +35,8 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - Daily sourcing (`/creators/discovery`, source 102:555, THO-287): the draft plan, capacity table, URL-backed filters, and the locked live-discovery and research-scope controls. Demo data only.
 - Video evidence review (`/creators/:creatorId/evidence/:evidenceId`, source 102:364, THO-288): save a partial review of an Instagram or TikTok video address, time-coded observations and the checkout route. A saved draft is never a completed review, Mark watched stays blocked until playback can be verified, and profile addresses are refused. Saves go through the adapter's `saveResource` with version checks and idempotency keys. Demo data only; reviewer disagreement and override are not built.
 
+- Launch and analytics screens (THO-293), on demo datasets in `src/fixtures/analytics.ts` that reconcile to the Overview's 400 orders / $12,596: Launch snapshot (`/launch?view=snapshot`, source 3:6), Launch control (`?view=control`, 14:74), Performance attribution (`/analytics/attribution`, 14:377), Paid media (`/analytics/paid-media`, 30:349), Campaign funnel (`/campaigns/:campaignId?tab=funnel`, 30:550) and Commerce, support and reviews (`/analytics/customer-journey`, 30:721). Every metric shows its denominator and window, a missing input reads N/A with a reason, and L stays unset. Nothing here records a launch decision, approves a date or opens a provider record. Filters are URL state.
+
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
 **Not done yet**
@@ -42,7 +44,7 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - **The other 13 component sets** in `docs/design-map.md`, and responsive review against the native Operations references.
 - **The rest of THO-296:** the takeover dialog's real copy, real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
 - **Overview's real date range and export.** They need THO-283, so both dialogs say what's missing.
-- **The other 55 sources.** They render labeled placeholders. The approval flow's history views use the design's components, but have no Figma source of their own.
+- **The other sources.** They render labeled placeholders. The approval flow's history views use the design's components, but have no Figma source of their own.
 
 ## Commands
 

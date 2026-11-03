@@ -10,7 +10,7 @@ import { navSections } from "./nav";
 const renderAt = (path: string, adapter: FardaAdapter = createDemoAdapter()) => renderRoute(path, adapter);
 
 /** Overview, approval detail, and the two run tabs. The tabless run path is the hourly variant, not built. */
-const BUILT_SOURCES = new Set(["10:217", "6:234", "5:13", "5:156", "102:555", "102:364"]);
+const BUILT_SOURCES = new Set(["10:217", "6:234", "5:13", "5:156", "102:555", "102:364", "3:6", "14:74", "14:377", "30:349", "30:550", "30:721"]);
 
 const concrete = (path: string) => path.replace(/:(\w+)/g, "demo-$1");
 
