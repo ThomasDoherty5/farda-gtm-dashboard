@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useQueryClient } from "@tanstack/react-query";
 import type { FardaAdapter } from "./adapter";
 import type { RequestedScope } from "./contract";
 
@@ -22,6 +22,15 @@ export function ScopeProvider({ adapter, scope, principal, children }: ScopeValu
       client.removeQueries({ queryKey: previous.current });
     }
     previous.current = key;
+  }, [client, value]);
+  // Connectivity returning refetches this scope's active reads, fresh or not: figures shown while offline were not current.
+  // A 401/403 on that refetch still clears protected data (useView).
+  useEffect(() => {
+    let wasOnline = onlineManager.isOnline();
+    return onlineManager.subscribe((online) => {
+      if (online && !wasOnline) void client.invalidateQueries({ queryKey: scopeKey(value) });
+      wasOnline = online;
+    });
   }, [client, value]);
   return <ScopeContext.Provider value={value}>{children}</ScopeContext.Provider>;
 }
