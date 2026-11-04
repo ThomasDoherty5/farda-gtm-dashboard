@@ -189,7 +189,9 @@ function DashboardBody({ res, data }: { res: ReadResponse<TikTokDashboardData>; 
       <section className={`${styles.panel} ${styles.panelWide}`} aria-labelledby="tt-native-title">
         <div className={acquisition.sectionTitle}>
           <h2 id="tt-native-title" className={acquisition.h2}>Native commerce, native settlement.</h2>
-          <p className={acquisition.small}>Keep these controls separate from the monitoring performance above; live commission and access data remain unverified.</p>
+          <p className={acquisition.small} data-testid="channel-route">
+            <span data-field="acquisition-source">Source: Affiliate Center</span> · <span data-field="publishing-network">Publishing: TikTok</span> · <span data-field="checkout">Checkout: TikTok Shop</span> · <span data-field="payout-owner">Payout: TikTok native settlement</span>. Kept apart from the monitoring above; live data is unverified.
+          </p>
         </div>
         <ul className={styles.settle}>
           <li><Badge tone="violet" width={140}>Read native rates</Badge><p className={styles.settleName}>Standard / Shop Ads commission</p><p className={acquisition.small}>Capture active, proposed and effective terms; source determines the winning rate</p></li>
