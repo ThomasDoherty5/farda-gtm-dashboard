@@ -2,6 +2,7 @@ import { Navigate, type RouteObject } from "react-router-dom";
 import { Shell } from "@/components/Shell";
 import { EvidencePage } from "@/features/acquisition/EvidencePage";
 import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
+import { PipelinePage } from "@/features/acquisition/PipelinePage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
@@ -14,6 +15,7 @@ import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
 const implemented: Record<string, JSX.Element> = {
   "/overview": <OverviewPage />,
   "/creators/discovery": <DiscoveryPage />,
+  "/creators/pipeline": <PipelinePage />,
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,
   "/runs/:runId": <RunPage />,
