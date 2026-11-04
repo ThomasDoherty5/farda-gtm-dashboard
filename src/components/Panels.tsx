@@ -121,9 +121,9 @@ export function Meter({ percent, tone, label }: { percent: number; tone?: "warni
 }
 
 /** Labeled bars (Figma "Chart row / …": a 110px label, a 390px track, a 56px value). `max` is the value a full track stands for. */
-export function BarRows({ label, rows, max, gap = 16, widths }: { label: string; rows: { label: string; value: number; display?: string; warn?: boolean }[]; max: number; gap?: 16 | 20; /** Label, track and value column widths in px where a design sets them other than 110, 390 and 56. */ widths?: [number, number, number] }) {
+export function BarRows({ label, rows, max, gap = 16, widths, trackTop }: { label: string; rows: { label: string; value: number; display?: string; warn?: boolean }[]; max: number; gap?: 16 | 20; /** Label, track and value column widths in px where a design sets them other than 110, 390 and 56. */ widths?: [number, number, number]; /** Space above the track in px, where a design sets other than 6. */ trackTop?: number }) {
   return (
-    <ul className={styles.barRows} style={{ gap, ...(widths ? ({ "--bar-cols": widths.map((w) => `minmax(0, ${w}px)`).join(" ") } as React.CSSProperties) : {}) }} aria-label={label}>
+    <ul className={styles.barRows} style={{ gap, ...(widths ? ({ "--bar-cols": widths.map((w) => `minmax(0, ${w}px)`).join(" ") } as React.CSSProperties) : {}), ...(trackTop !== undefined ? ({ "--bar-top": `${trackTop}px` } as React.CSSProperties) : {}) }} aria-label={label}>
       {rows.map((r) => (
         <li key={r.label} className={styles.barRow}>
           <span>{r.label}</span>

@@ -31,6 +31,16 @@ test.describe("against Figma at 1440", () => {
     expect(await box(page.getByTestId("metric-Running").locator("xpath=ancestor::dl[1]"))).toMatchObject({ x: 400, w: 312, h: 152 });
   });
 
+  test("the schedule's steps are 77px apart, as in 14:911", async ({ page }) => {
+    await page.goto("/automations/zap-12/schedule");
+    await page.evaluate(() => document.fonts.ready);
+    const steps = page.getByTestId("zap-pipeline").getByRole("listitem");
+    await expect(steps.first()).toBeVisible();
+    const y = async (i: number) => Math.round((await steps.nth(i).boundingBox())!.y);
+    expect((await y(2)) - (await y(1))).toBe(77);
+    expect((await y(3)) - (await y(2))).toBe(77);
+  });
+
   test("Channel capabilities matches 66:641 in height", async ({ page }) => {
     await page.goto("/settings/capabilities");
     await page.evaluate(() => document.fonts.ready);

@@ -37,6 +37,16 @@ test.describe("settlement screens against Figma at 1440", () => {
     expect(Math.round((await bars.nth(6).boundingBox())!.height)).toBe(58);
   });
 
+  test("TikTok's route chips are the widths 66:447 gives them, 16px apart", async ({ page }) => {
+    await page.goto("/finance/settlements/TT-NATIVE-DEMO");
+    const chips = page.locator('ul[aria-label="Browser task route"] > li');
+    await expect(chips).toHaveCount(4);
+    const boxes = [] as { x: number; w: number }[];
+    for (let i = 0; i < 4; i++) { const b = (await chips.nth(i).boundingBox())!; boxes.push({ x: Math.round(b.x), w: Math.round(b.width) }); }
+    expect(boxes.map((b) => b.w)).toEqual([232, 246, 246, 172]);
+    for (let i = 1; i < 4; i++) expect(boxes[i]!.x - (boxes[i - 1]!.x + boxes[i - 1]!.w)).toBe(16);
+  });
+
   test("panels sit where the Figma frames put them", async ({ page }) => {
     const box = async (loc: ReturnType<typeof page.locator>) => { const b = (await loc.boundingBox())!; return { x: Math.round(b.x), w: Math.round(b.width), h: Math.round(b.height) }; };
     await page.goto("/finance/settlements/COMM-DEMO-D");
