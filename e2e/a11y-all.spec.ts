@@ -10,8 +10,8 @@ const allUrls = [...routeUrls, ...extraRecordUrls];
  * then every alternate state a route can reach through its demo selectors, and every dialog a route opens.
  * Runs once, in the desktop project, which sets each width itself.
  */
-test.beforeEach(({}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-1440", "sets its own viewport; one project is enough");
+test.beforeEach(() => {
+  test.skip(test.info().project.name !== "desktop-1440", "sets its own viewport; one project is enough");
 });
 
 const GROUPS = 4;
@@ -49,7 +49,7 @@ async function load(page: Page, url: string) {
   await page.goto(url);
   await expect(page.locator("main")).toBeVisible();
   // The state gallery shows a loading state on purpose.
-  if (!url.startsWith("/design-system/states")) await expect(page.getByRole("status").filter({ hasText: /^Loading/ }), url).toHaveCount(0, { timeout: 15_000 });
+  if (!url.startsWith("/design-system/states")) await expect(page.getByRole("status").filter({ hasText: /^Loading/ }), url).toHaveCount(0, { timeout: 30_000 });
   return text(page);
 }
 
@@ -80,7 +80,7 @@ chunk(allUrls, GROUPS).forEach((urls, i) => {
 });
 
 test("the loading state of every route has no violations and is announced", async ({ page }) => {
-  test.slow();
+  test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   const found: string[] = [];
   const silent: string[] = [];

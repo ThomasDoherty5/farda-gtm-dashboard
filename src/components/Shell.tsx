@@ -7,6 +7,8 @@ import { Button, LinkButton } from "./Button";
 import { Dialog } from "./Dialog";
 import styles from "./Shell.module.css";
 
+/** Navigation items kept in the header at tablet width (Figma 12:710); the rest move into "More". */
+const TABLET_ITEMS = 4;
 const SITE_TITLE = "Farda GTM Operations";
 
 /**
@@ -60,19 +62,22 @@ export function Shell() {
       <div className={styles.frame}>
         <header className={styles.header}>
           <span className={styles.brand}><span className={styles.mark} aria-hidden="true">f</span>farda</span>
-          <nav aria-label="Primary">
+          <nav aria-label="Primary" className={styles.primary}>
             <ul className={styles.nav}>
-              {primaryNav.map((item) => {
+              {primaryNav.map((item, index) => {
                 const inSection = (item.sections as readonly string[]).includes(section);
                 const onPage = inSection && pathname === item.to.split("?")[0];
                 return (
-                  <li key={item.label}>
+                  <li key={item.label} className={index >= TABLET_ITEMS ? styles.overflowItem : undefined}>
                     <Link to={item.to} className={styles.navItem} style={{ minWidth: item.width }} aria-current={onPage ? "page" : inSection ? "true" : undefined}>{item.label}</Link>
                   </li>
                 );
               })}
             </ul>
           </nav>
+          {/* Figma 12:708 ends the 1024 navigation in "More"; 12:653 replaces it with "Menu" at 390. Both open the workspace menu, which lists every section. */}
+          <button type="button" className={`${styles.navItem} ${styles.more}`} aria-haspopup="dialog" onClick={() => setMenuOpen(true)}>More</button>
+          <button type="button" className={styles.menuButton} aria-haspopup="dialog" onClick={() => setMenuOpen(true)}>Menu</button>
           <span className={styles.spacer} />
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
           <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : "Menu"}</button>
@@ -83,6 +88,15 @@ export function Shell() {
       </div>
       <Dialog open={menuOpen} title="Explore the Farda workspace." badge={demo ? "Demo" : undefined} onClose={() => setMenuOpen(false)}>
         <p>Choose a workflow.{demo ? " All views use illustrative data." : ""}</p>
+        {/* Below 1180px the header shows fewer sections, so the menu lists them all. */}
+        <nav aria-label="Sections" className={styles.sections}>
+          <ul>
+            {primaryNav.map((item) => {
+              const inSection = (item.sections as readonly string[]).includes(section);
+              return <li key={item.label}><LinkButton to={item.to} variant={inSection ? "primary" : "secondary"} aria-current={inSection ? "true" : undefined} onClick={() => setMenuOpen(false)}>{item.label}</LinkButton></li>;
+            })}
+          </ul>
+        </nav>
         {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}
         <Button variant="secondary" onClick={() => setMenuOpen(false)}>Close menu</Button>
       </Dialog>

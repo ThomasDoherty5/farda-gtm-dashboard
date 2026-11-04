@@ -10,6 +10,13 @@
 .navItem[aria-current] { background: var(--color-violet); }
 .navItem:focus-visible, .profile:focus-visible { outline-color: var(--color-onDark); }
 .spacer { flex: 0 1 116px; }
+.more, .menuButton { display: none; }
+.more { background: none; border: 0; cursor: pointer; min-width: 132px; }
+.menuButton { align-items: center; justify-content: center; min-width: 96px; min-height: 44px; padding: 0 var(--space-16); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-999); font: var(--text-label); color: var(--color-ink); cursor: pointer; }
+.menuButton:focus-visible { outline-color: var(--color-onDark); }
+.sections { display: none; }
+.sections ul { display: flex; list-style: none; margin: 0; padding: 0; flex-direction: column; gap: var(--space-8); }
+.sections li > a { width: 100%; }
 .profile { min-width: 44px; min-height: 44px; padding: 0; text-align: left; background: none; border: 0; border-radius: var(--space-999); font: var(--text-label); color: var(--color-onDark); cursor: pointer; }
 .main { display: block; padding: var(--space-32); background: var(--color-surface); border-radius: var(--space-28); }
 .main:focus, .main h1:focus { outline: none; }
@@ -18,6 +25,9 @@
 }
 /* Figma 12:708 (1024): 24px canvas, 16px navigation padding, 24px content padding. */
 @media (min-width: 768px) and (max-width: 1179px) {
+  .overflowItem, .profile { display: none; }
+  .more { display: flex; }
+  .sections { display: block; }
   .canvas { padding: var(--space-24); }
   .frame { border-radius: var(--space-28); padding: var(--space-8); }
   .header { padding: var(--space-16); }
@@ -27,10 +37,15 @@
   .main { padding: var(--space-24); border-radius: var(--space-24); }
 }
 @media (max-width: 767px) {
-  .canvas { padding: var(--space-8); }
-  .frame { border-radius: var(--space-24); }
-  .header { padding: var(--space-8); }
+  .primary, .profile { display: none; }
+  .menuButton { display: inline-flex; order: 2; margin-left: auto; }
+  .sections { display: block; }
+  /* Figma 12:653 (390): 16px canvas, 4px frame, a 76px navigation of "farda" and Menu with 16px padding. */
+  .canvas { padding: var(--space-16); }
+  .frame { padding: var(--space-4); border-radius: var(--space-24); }
+  .header { padding: var(--space-16); gap: var(--space-16); }
+  .brand { width: auto; }
   .main { padding: var(--space-16); border-radius: var(--space-20); }
-  .spacer { display: none; }
+  .mark, .spacer { display: none; }
   .navItem { min-width: 0 !important; }
 }

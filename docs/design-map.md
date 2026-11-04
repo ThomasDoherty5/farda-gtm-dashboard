@@ -209,7 +209,7 @@ Owner THO-306, a development-only reference. Same capture settings and method as
 
 ## Mobile and tablet Operations (12:653, 12:708)
 
-The native 390 and 1024 Operations designs are built with `/operations` under THO-301 (see "Operations comparison" below), not under THO-306. The shell part is still open: both designs collapse the navigation ("Menu" at 390, "More" at 1024), which would change how every screen is reached on narrow screens, and several existing browser tests click the primary navigation at 390. It needs Kevon's decision, so the shell still wraps, and the Operations comparison below attributes most of its remaining difference to that.
+The native 390 and 1024 Operations designs are built with `/operations` under THO-301 (see "Operations comparison" below). The shell now collapses as both designs do: "More" ends the navigation at 1024 (12:708) and "Menu" replaces it at 390 (12:653); both open the workspace menu, which lists all five sections. Browser tests that click the primary navigation use `e2e/support/nav.ts`, which goes through the menu when the header has collapsed. Built as the open THO-306 item; Kevon to confirm.
 
 `e2e/responsive.spec.ts` checks the screens built under THO-304, THO-305 and THO-306 at 390, 720 (200% zoom of 1440), 768, 1024 and 1920px for page overflow, a visible H1, and a table that scrolls inside a labeled region.
 
@@ -507,4 +507,30 @@ Pending Kevon Baha's confirmation.
 
 ## Implementation adaptations
 
-Only Operations has native 390 and 1024 designs. For Overview and the shell, panels stack below 1180px, the header wraps, and the chart scrolls inside a labeled region. These are proposals to review under THO-306, not matches to a design.
+Only Operations has native 390 and 1024 designs (12:653, 12:708). Everything else below is a proposal for Kevon to review (THO-306 FE14-01, FHC-04), not a match to a design. `e2e/responsive-all.spec.ts` holds each rule to account on every route at 320, 390, 720 (200% zoom of 1440), 768, 1024, 1440 and 1920px.
+
+| Where | Below | Adaptation | Reason |
+| -- | -- | -- | -- |
+| Shell navigation | 1180px | Header keeps Overview, Creators, Operations and Finance, plus "More"; Automations moves into the menu | Native, from 12:708 ("More" ends the 1024 navigation). Automations is the fifth item the design leaves out; its place under More is a proposal |
+| Shell navigation | 768px | Navigation is replaced by a "Menu" button beside the brand | Native, from 12:653. The menu lists all five sections and the workspace links |
+| Workspace menu | 1180px | Adds a "Sections" list with all five primary destinations | The menu is the only way to reach a section that the header drops |
+| Demo workspace badge | any | Stays in the header at every width and wraps under the brand when it must | The designs omit it; demo data is always labeled |
+| Panels and card rows | 1180px | Stack to one column (per page, see the page tables above) | Proposal |
+| Data tables | any | Scroll sideways inside a labeled, keyboard-focusable region; the page never scrolls sideways | WCAG 1.4.10; checked by `region:` in the layout audit |
+| Charts | 1296px | Scroll inside a labeled region; values stay in an accessible table | Proposal |
+| Commission status bar (`/finance/commissions`) | 768px | Segments stack, one per row, each with its label and amount; wide screens keep proportional segments with a text-width minimum | A $30 segment was 23px wide and cut its label |
+| Fulfillment "Best dispatch day" | 600px | Label above value | The two-column grid overflowed with WCAG text spacing |
+| Buttons with a design minimum width | 360px | The inline minimum is dropped so a 280px button fits a 264px column | 320px reflow |
+| Scorecard decision copy | 360px | 280px minimum width dropped | 320px reflow |
+| Text links alone on a line or in a table cell | any | The hit area grows to 24px with padding (matching negative margin where the link is a block), so lines and rows do not move | WCAG 2.5.8 target size |
+| Policy checkbox rows (lifecycle flows) | any | Label is 24px tall | WCAG 2.5.8 |
+| Hidden accessible tables | any | Wrapped in a clipping container | A hidden table widened the page by 4px under WCAG text spacing |
+
+### Accessibility behavior added with these
+
+| Behavior | Detail |
+| -- | -- |
+| Page title | `<title>` is "<H1> · Farda" on every route, and follows the heading as data loads |
+| Focus on navigation | After a route change (path, not query) focus moves to the page heading, or to main while the heading is still loading. The first load, tabs and filters never move focus |
+| Focus never invisible | A link hidden for sighted users (`Open approval …` on the run page) is hidden only until focused (`.visually-hidden-focusable`) |
+| Demo hook | `?latency=<ms>` (demo adapter only, capped at 10s) holds reads in flight so the loading state can be inspected and tested |

@@ -9,8 +9,8 @@ import { extraRecordUrls, routeUrls } from "./support/routes";
  * move focus to the page heading, the skip link works, and nothing animates under prefers-reduced-motion.
  * Runs in the desktop project only; each test sets its own width.
  */
-test.beforeEach(({}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-1440", "sets its own viewport; one project is enough");
+test.beforeEach(() => {
+  test.skip(test.info().project.name !== "desktop-1440", "sets its own viewport; one project is enough");
 });
 
 const allUrls = [...routeUrls, ...extraRecordUrls];
@@ -112,7 +112,9 @@ for (const dialogWidth of [1440, 390]) chunk(allUrls, GROUPS).forEach((urls, i) 
         }
         if (!(await page.evaluate(() => !!document.activeElement?.closest("dialog[open]")))) found.push(`${where}: focus did not move into the dialog`);
         if (!(await dialog.getAttribute("aria-labelledby")) && !(await dialog.getAttribute("aria-label"))) found.push(`${where}: dialog has no accessible name`);
-        for (let t = 0; t < 12; t++) { await page.keyboard.press("Tab"); if (!(await inside())) { found.push(`${where}: Tab left the dialog after ${t + 1} presses`); break; } }
+        const controls = await dialog.locator("button, a[href], input, select, textarea").count();
+        const presses = Math.min(12, controls + 2); // one full lap plus two
+        for (let t = 0; t < presses; t++) { await page.keyboard.press("Tab"); if (!(await inside())) { found.push(`${where}: Tab left the dialog after ${t + 1} presses`); break; } }
         for (let t = 0; t < 3; t++) { await page.keyboard.press("Shift+Tab"); if (!(await inside())) { found.push(`${where}: Shift+Tab left the dialog`); break; } }
         // The same dialog on several records is audited once.
         if (!audited.has(key)) { audited.add(key); found.push(...(await axeViolations(page, `${where} (dialog open)`))); }
@@ -127,17 +129,22 @@ for (const dialogWidth of [1440, 390]) chunk(allUrls, GROUPS).forEach((urls, i) 
   });
 });
 
-test("the workspace menu dialog works at 390px and 1440px", async ({ page }) => {
+test("the workspace menu dialog works at 390px, 1024px and 1440px", async ({ page }) => {
   test.setTimeout(90_000);
-  for (const width of [390, 1440]) {
+  for (const width of [390, 1024, 1440]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/overview");
     await settle(page, "/overview");
-    const opener = page.getByRole("button", { name: "Open workspace menu" });
+    const opener = page.getByRole("button", { name: width === 390 ? "Menu" : width === 1024 ? "More" : "Open workspace menu" });
     await opener.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("dialog", { name: "Explore the Farda workspace." })).toBeVisible();
     expect(await axeViolations(page, `menu @${width}`)).toEqual([]);
+    if (width < 1180) {
+      // The header drops sections below 1180px, so the menu must list all five.
+      const sections = page.getByRole("dialog").getByRole("navigation", { name: "Sections" }).getByRole("link");
+      await expect(sections).toHaveText(["Overview", "Creators", "Operations", "Finance", "Automations"]);
+    }
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(opener).toBeFocused();

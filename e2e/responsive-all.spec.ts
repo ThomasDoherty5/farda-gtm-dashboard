@@ -11,8 +11,8 @@ const urls = [...routeUrls, ...extraRecordUrls];
  * the rest are adaptations listed in docs/design-map.md. Runs once, in the desktop project, which sets each width itself.
  */
 test.describe("every route fits at every width", () => {
-  test.beforeEach(({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop-1440", "sets its own viewport; one project is enough");
+  test.beforeEach(() => {
+    test.skip(test.info().project.name !== "desktop-1440", "sets its own viewport; one project is enough");
   });
 
   // 720 is 200% zoom of 1440 (WCAG 1.4.4); 320 is 400% zoom of 1280 (WCAG 1.4.10).
@@ -36,8 +36,8 @@ test.describe("every route fits at every width", () => {
  * overlap or leave the screen, at a narrow and a wide layout.
  */
 test.describe("text spacing", () => {
-  test.beforeEach(({}, testInfo) => {
-    test.skip(testInfo.project.name !== "desktop-1440", "sets its own viewport; one project is enough");
+  test.beforeEach(() => {
+    test.skip(test.info().project.name !== "desktop-1440", "sets its own viewport; one project is enough");
   });
   for (const width of [390, 1440]) {
     test(`${urls.length} routes keep every control and label with WCAG text spacing at ${width}px`, async ({ page }) => {
@@ -53,4 +53,44 @@ test.describe("text spacing", () => {
       expect(failures, `${failures.length} problems with text spacing at ${width}px`).toEqual([]);
     });
   }
+});
+
+/** The shell collapses as the native designs do: "More" ends the 1024 navigation (12:708), "Menu" replaces it at 390 (12:653). */
+test.describe("shell navigation by width", () => {
+  test.beforeEach(() => {
+    test.skip(test.info().project.name !== "desktop-1440", "sets its own viewport; one project is enough");
+  });
+  const primary = (page: import("@playwright/test").Page) => page.getByRole("navigation", { name: "Primary" }).getByRole("link");
+  test("1440px shows five sections and the profile button", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/operations");
+    await expect(primary(page)).toHaveText(["Overview", "Creators", "Operations", "Finance", "Automations"]);
+    await expect(page.getByRole("button", { name: "Open workspace menu" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "More" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
+  });
+  test("1024px shows four sections and More", async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.goto("/operations");
+    await expect(primary(page)).toHaveText(["Overview", "Creators", "Operations", "Finance"]);
+    await expect(page.getByRole("link", { name: "Operations" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("button", { name: "More" })).toBeVisible();
+    const header = await page.locator("header").boundingBox();
+    expect(header?.height, "the header stays on one row (Figma 12:710 is 76px)").toBeLessThan(100);
+  });
+  test("390px shows the brand and Menu only", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/operations");
+    await expect(page.getByRole("navigation", { name: "Primary" })).toHaveCount(0);
+    const menu = page.getByRole("button", { name: "Menu", exact: true });
+    await expect(menu).toBeVisible();
+    const box = await menu.boundingBox();
+    expect(box?.height).toBeGreaterThanOrEqual(44);
+    await menu.click();
+    const dialog = page.getByRole("dialog", { name: "Explore the Farda workspace." });
+    await dialog.getByRole("navigation", { name: "Sections" }).getByRole("link", { name: "Finance" }).click();
+    await expect(page).toHaveURL(/\/finance$/);
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("heading", { level: 1 })).toBeFocused();
+  });
 });
