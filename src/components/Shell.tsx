@@ -30,7 +30,7 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
       // While a lazy screen loads, React keeps the previous screen's heading in the DOM but hidden: it is not the new page's heading.
       const h = heading();
       const target = h && h.getClientRects().length > 0 ? h : el;
-      if (target !== el) target.tabIndex = -1;
+      if (target !== el) target.setAttribute("tabindex", "-1");
       target.focus();
       return target !== el && document.activeElement === target;
     };
