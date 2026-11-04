@@ -15,7 +15,7 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | Styling | CSS custom properties from Figma tokens, and CSS modules |
 | Font | `@fontsource/inter` 4.5.15, pinned (see `design-map.md`) |
 | Tests | Vitest and Testing Library; Playwright and axe |
-| Auth | None yet. Demo scope is fixed; live scope comes from THO-283 |
+| Auth | None yet in the app. Demo scope is fixed; live scope comes from THO-283. The reference server has a fake dev sign-in only |
 
 ## Commands
 
@@ -30,13 +30,15 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | All of the above | `npm run verify` |
 | Browser tests (first run `npx playwright install chromium`) | `npm run test:e2e` |
 | Regenerate routes | `npm run manifest:generate` |
+| Reference server, a test double on 127.0.0.1 (see `tools/reference-server/README.md`) | `npm run reference-server` |
+| Browser test against the reference server (starts and stops it; not part of `verify` or `test:e2e`) | `npm run test:e2e:reference` |
 
 ## Environment variables
 
 | Name | Purpose |
 | -- | -- |
 | `VITE_FARDA_ADAPTER` | `demo` (default), `sandbox` or `production`. Anything else is a startup error |
-| `VITE_FARDA_ADAPTER_BASE_URL` | Reserved for the THO-283 adapter. Passed untouched to a host-supplied transport factory; unused while no transport is published (see `live-adapter.md`) |
+| `VITE_FARDA_ADAPTER_BASE_URL` | Where the HTTP transport (`src/adapter/httpTransport.ts`) sends requests; paths are in `docs/adapter-decisions.md`. Used only when `VITE_FARDA_ADAPTER` is `sandbox` or `production`. With no value the live adapter keeps its pending transport and answers `INTEGRATION_PENDING`. Must be https, or http for localhost. No production backend exists, so the only server that answers is the reference server |
 
 `VITE_` values ship to the browser, so they never hold secrets.
 

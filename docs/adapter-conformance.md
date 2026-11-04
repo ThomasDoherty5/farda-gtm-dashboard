@@ -16,7 +16,7 @@ The suite builds no transport and knows no backend URL.
 | `VALUE-*` | Known zero, unknown and N/A stay distinct through the contract schemas and through adapter data. Missing data never becomes zero. |
 | `IDEM-*` | A write needs an idempotency key. Repeating it returns the first answer. The same key with a changed payload is refused. |
 | `VER-*` | A stale expected version is a recoverable `STALE_VERSION` conflict. It applies nothing and returns `currentVersion`. |
-| `SENT-*` | Approved is not Sent. An approval has no receipt and no success state. Dispatch before approval is refused. A success needs a source receipt. An unknown outcome is not success. |
+| `SENT-*` | Approved is not Sent. An approval has no receipt and no success state. Dispatch before approval is refused. A success needs a source receipt. An unknown outcome is not success: `SENT-4` expects an answer with state `outcomeUncertain`, and `SENT-5` (added with the reference server, D-12) accepts that or a rejected `OUTCOME_UNCERTAIN` with `executionCertainty: uncertain`. |
 | `SCHEMA-*` | Bad shapes and unknown fields are rejected. See the note on strictness below. |
 
 ## Plugging in THO-283
@@ -46,3 +46,7 @@ The stub rejects every call with `INTEGRATION_PENDING`. It passes the `PENDING-*
 - The contract has no zod schema for the save response. The suite carries a local mirror of `SaveResourceResponse`. Move it into `contract.ts` when the freeze lands.
 - The demo adapter now refuses an empty idempotency key with `VALIDATION_FAILED`, which `IDEM-1` and `IDEM-4` required.
 - `PENDING-4` is pending for the demo: its offline fixture fails reads only.
+
+## The reference server target
+
+`tools/reference-server/conformance.test.ts` runs the suite against `createLiveAdapter` + `createHttpTransport` over real HTTP to the reference server (a test double). It has a scenario for every rule. `SENT-4` is a registered known failure there, because D-12 makes an uncertain write an error and never a 2xx; `SENT-5` checks the decided behavior. This is reference-server-verified only. It is not integration verification.
