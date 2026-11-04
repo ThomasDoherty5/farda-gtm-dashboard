@@ -10,6 +10,7 @@ import { ConsentPage } from "@/features/lifecycle/ConsentPage";
 import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
 import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
 import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
+import { StateGalleryPage } from "@/features/states/StateGalleryPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { AutomationsPage } from "@/features/settings/AutomationsPage";
 import { CapabilitiesPage } from "@/features/settings/CapabilitiesPage";
@@ -39,6 +40,7 @@ const implemented: Record<string, JSX.Element> = {
   "/customers/flows/review-request": <EmailFlowPage flow="review-request" />,
   "/customers/consent": <ConsentPage />,
   "/customers/activation": <ActivationPage />,
+  "/design-system/states": <StateGalleryPage />,
 };
 
 /** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */

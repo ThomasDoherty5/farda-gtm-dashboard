@@ -18,7 +18,7 @@ export const primaryNav = [
   { label: "Creators", to: "/creators/social-cat?view=dashboard", width: 122, sections: ["creators", "collaborations", "approvals", "offers", "batches", "content"] },
   { label: "Operations", to: "/operations", width: 122, sections: ["operations", "orders", "shipments", "returns", "inventory", "support"] },
   { label: "Finance", to: "/finance", width: 122, sections: ["finance"] },
-  { label: "Automations", to: "/automations", width: 146, sections: ["automations", "settings", "runs"] },
+  { label: "Automations", to: "/automations", width: 146, sections: ["automations", "settings", "runs", "design-system"] },
 ] as const;
 
 /** Workspace menu from Figma overlay 42:1890. Approvals and Runs are added because no other control reaches them yet. */
