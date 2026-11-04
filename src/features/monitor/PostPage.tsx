@@ -4,7 +4,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, ViewShell, usd, useIsDemo } from "@/features/analytics/parts";
-import type { PostPerformanceData } from "@/fixtures/monitor";
+import type { PostGmv, PostPerformanceData } from "@/fixtures/monitor";
 import { count, deltaHeight, interactionsOf, ratePct } from "./monitorMath";
 import a from "@/features/analytics/Analytics.module.css";
 import m from "./Monitor.module.css";
@@ -22,6 +22,15 @@ export function PostPage() {
       </ViewShell>
     </section>
   );
+}
+
+/** GMV states are different facts: a reported figure, a TikTok post whose source gave none, and an Instagram post where TikTok Shop GMV does not apply. */
+export function gmvSentence(gmv: PostGmv): string {
+  switch (gmv.state) {
+    case "reported": return `TikTok-reported GMV ${usd(gmv.amount)} (${gmv.definition}, ${gmv.window}) is retained separately.`;
+    case "not-reported": return "TikTok has not reported GMV for this post. That is unknown, not $0, and it is retained separately from net sales.";
+    case "not-applicable": return "TikTok Shop GMV does not apply to an Instagram post. It is retained separately from net sales.";
+  }
 }
 
 function Post({ data }: { data: PostPerformanceData }) {
@@ -49,7 +58,7 @@ function Post({ data }: { data: PostPerformanceData }) {
         <KpiCard label="Views" context="Post view count; not unique reach" testId="metric-views">{data.views === null ? "N/A" : count(data.views)}</KpiCard>
         <KpiCard label="Engagement rate" context={inter !== null && data.views ? `${count(inter)} interactions / ${count(data.views)} views` : "Needs both interactions and views"} testId="metric-engagement">{inter !== null && data.views ? ratePct(inter, data.views) : "N/A"}</KpiCard>
         <KpiCard label="Attributed orders" context="Distinct matched paid orders" testId="metric-orders">{data.orders === null ? "N/A" : count(data.orders)}</KpiCard>
-        <KpiCard label="Attributed net sales" context="After discounts and refunds; USD" testId="metric-net-sales">{data.netSales === null ? "N/A" : usd(data.netSales)}</KpiCard>
+        <KpiCard label="Attributed net sales" context="After discounts and refunds; USD · not GMV" testId="metric-net-sales">{data.netSales === null ? "N/A" : usd(data.netSales)}</KpiCard>
       </KpiGrid>
       <div className={a.split} style={{ gridTemplateColumns: "832fr 440fr", gap: 24 }}>
         <Card labelledBy="growth-title" className={a.card20}>
@@ -82,7 +91,7 @@ function Post({ data }: { data: PostPerformanceData }) {
         <Card labelledBy="attribution-title" className={a.card20}>
           <h2 id="attribution-title" className={a.cardH2} style={{ margin: 0 }}>Sales require an order match</h2>
           <p className={a.small}>{data.orders === null ? "No order match is available for this post." : `${data.orders} distinct paid order IDs join to this content through the recorded affiliate attribution.`} The net-sales calculation deducts discounts and refunds using the order ledger.</p>
-          <p className={a.small}>TikTok-reported GMV is retained separately with its source definition and window. It is never relabeled as net sales.</p>
+          <p className={a.small} data-testid="gmv-note">{gmvSentence(data.gmv)} It is never relabeled as net sales.</p>
           <div className={a.btnRow}><Button variant="secondary" style={{ minWidth: 280 }} aria-haspopup="dialog" onClick={() => setDialog("attribution")}>View attribution evidence</Button></div>
         </Card>
         <Card labelledBy="status-title" className={a.card20}>
@@ -98,7 +107,7 @@ function Post({ data }: { data: PostPerformanceData }) {
         <p>Source links come from the adapter, never from a guess. This opens nothing, and the post's counts are unchanged.</p>
       </HandoffDialog>
       <HandoffDialog open={dialog === "attribution"} onClose={() => setDialog(null)} title="Attribution evidence"
-        rows={[{ label: "Matched orders", value: data.orders === null ? "Unknown" : `${data.orders} distinct paid order IDs` }, { label: "Net sales", value: data.netSales === null ? "Unknown" : `${usd(data.netSales)} after discounts and refunds` }, { label: "Window", value: "Sep 30–Oct 29, 2026" }, { label: "Source", value: data.details.salesSource }, { label: "GMV", value: "TikTok-reported GMV is kept apart and is never net sales" }]}>
+        rows={[{ label: "Matched orders", value: data.orders === null ? "Unknown" : `${data.orders} distinct paid order IDs` }, { label: "Net sales", value: data.netSales === null ? "Unknown" : `${usd(data.netSales)} after discounts and refunds` }, { label: "Window", value: "Sep 30–Oct 29, 2026" }, { label: "Source", value: data.details.salesSource }, { label: "GMV", value: `${gmvSentence(data.gmv)} Never net sales.` }]}>
         <p>Order IDs aren't listed in this build. Reading this evidence doesn't assign or change an attribution.</p>
       </HandoffDialog>
     </>
