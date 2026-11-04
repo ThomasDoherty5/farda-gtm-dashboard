@@ -93,9 +93,9 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
       <div className={creators.row}>
         <SectionTabs label="Collaboration views" gap={12} tabs={tabs.map((t) => ({ ...t, width: 146, current: t.label === currentLabel || (t.label === "Content" && tab === "content") }))} />
         <span className={creators.spacer} style={{ "--spacer": contentView ? "330px" : "210px" } as React.CSSProperties} aria-hidden="true" />
-        <Badge tone="violet" width={contentView ? 182 : 116}>{contentView ? `Draft ${content.version} · in review` : data.stage}</Badge>
+        <Badge tone="violet" width={contentView ? 182 : 116}>{contentView && terms.postingDue !== null ? `Draft ${content.version} · in review` : data.stage}</Badge>
       </div>
-      <ContextBox title={contentView ? "Existing content and rights obligations" : "Existing collaboration · accepted historical terms"} text={contentView ? `This ${data.ref} review fulfills an earlier accepted agreement. New commission-only acquisition does not erase its revisions, usage limits, fee or settlement obligations.` : `${data.ref} retains its agreed ${formatMoney(terms.agreedFee)} content fee and original obligations. Repeating or recruiting again creates a new commission-only offer, with a fresh assessment and approval.`}>
+      <ContextBox title={contentView ? "Existing content and rights obligations" : "Existing collaboration · accepted historical terms"} text={terms.postingDue === null ? `${data.ref} has no content or posting obligation: its accepted terms commit the creator to commission on tracked sales only. A missing post is not a violation, and no posting reminder applies.` : contentView ? `This ${data.ref} review fulfills an earlier accepted agreement. New commission-only acquisition does not erase its revisions, usage limits, fee or settlement obligations.` : `${data.ref} retains its agreed ${formatMoney(terms.agreedFee)} content fee and original obligations. Repeating or recruiting again creates a new commission-only offer, with a fresh assessment and approval.`}>
         <div className={creators.contextActions}>
           <LinkButton variant="secondary" to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 208.5 }}>Current affiliate terms</LinkButton>
           <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
@@ -112,7 +112,7 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
       )}
 
       {tab === "overview" && <Overview data={data} onOpen={open} onGifted={() => setGifted(true)} />}
-      {tab === "content" && <ContentReview data={data} onOpen={open} blocker={approvalBlocker(data)} remaining={remaining} />}
+      {tab === "content" && (terms.postingDue === null ? <NoSource title="No content obligation" text="The accepted terms commit the creator to no post, so there is no draft to review, no due date and nothing to be late for. Any post that appears is welcome, not owed." /> : <ContentReview data={data} onOpen={open} blocker={approvalBlocker(data)} remaining={remaining} />)}
       {tab === "rights" && <RightsPanel data={data} />}
       {tab === "brief" && <BriefPanel data={data} />}
       {tab === "messages" && <NoSource title="Messages" text="Provider-scoped message history and pending drafts belong here. Reading never sends. This demo has no message history, and this tab has no Figma source yet." />}
@@ -135,7 +135,7 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
       <div className={creators.pairWide}>
         <section className={creators.panel} aria-labelledby="rel-title" style={{ gap: 20 }}>
           <h2 id="rel-title" className={acquisition.h2}>{data.handle}</h2>
-          <p style={{ margin: 0, color: "var(--color-muted)" }}>Paid UGC collaboration · 1 original video · {terms.revisionRounds.used} revision round</p>
+          <p style={{ margin: 0, color: "var(--color-muted)" }}>{due === null ? "Affiliate-only collaboration · no content committed" : `Paid UGC collaboration · 1 original video · ${terms.revisionRounds.used} revision round`}</p>
           <div className={styles.props}>
             <dl className={styles.kvList}>
               <div className={styles.kv}><dt>Channel</dt><dd>{data.channel}</dd></div>
@@ -144,9 +144,9 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
               <div className={styles.kv}><dt>Agreed fee</dt><dd data-testid="agreed-fee">{terms.agreedFee.currency} {terms.agreedFee.minorUnits / 100}</dd></div>
             </dl>
             <dl className={styles.kvList}>
-              <div className={styles.kv}><dt>Posting due</dt><dd>{longDate(due)}</dd></div>
-              <div className={styles.kv}><dt>Grace period</dt><dd>{terms.graceDays} days</dd></div>
-              <div className={styles.kv}><dt>Review after</dt><dd data-testid="review-after">{longDate(reviewAfter(due, terms.graceDays))}</dd></div>
+              <div className={styles.kv}><dt>Posting due</dt><dd data-testid="posting-due">{due === null ? "No posting obligation" : longDate(due)}</dd></div>
+              <div className={styles.kv}><dt>Grace period</dt><dd>{terms.graceDays === null ? "Not applicable" : `${terms.graceDays} days`}</dd></div>
+              <div className={styles.kv}><dt>Review after</dt><dd data-testid="review-after">{due === null ? "N/A · no posting date was agreed" : longDate(reviewAfter(due, terms.graceDays)!)}</dd></div>
               <div className={styles.kv}><dt>Source record</dt><dd>{terms.sourceRecord}</dd></div>
             </dl>
           </div>
@@ -190,7 +190,7 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
       <section className={`${creators.panel} ${creators.panelWide}`} aria-labelledby="deal-title">
         <div className={acquisition.sectionTitle}>
           <h2 id="deal-title" className={acquisition.h2}>Close according to the accepted deal.</h2>
-          <p className={acquisition.small}>The selected collaboration is a Paid {formatMoney(terms.agreedFee)} content example; Gifted closure is a separate outcome.</p>
+          <p className={acquisition.small}>{terms.postingDue === null ? "This affiliate-only collaboration has no paid content; Gifted closure is a separate outcome." : `The selected collaboration is a Paid ${formatMoney(terms.agreedFee)} content example; Gifted closure is a separate outcome.`}</p>
         </div>
         <ul className={creators.settle}>
           <li><Badge width={140}>Closed without content</Badge><p className={creators.settleName}>Gifted · no content published</p><p className={acquisition.small}>Retain sample cost; no automatic clawback. Record reliability and suppression</p></li>
@@ -285,7 +285,7 @@ function BriefPanel({ data }: { data: CollaborationData }) {
       <dl className={styles.kvList}>
         <div className={styles.kv}><dt>Deliverable</dt><dd>{terms.deliverable}</dd></div>
         <div className={styles.kv}><dt>Agreed fee</dt><dd>{formatMoney(terms.agreedFee)} · historical, read-only</dd></div>
-        <div className={styles.kv}><dt>Posting due</dt><dd>{longDate(terms.postingDue)}</dd></div>
+        <div className={styles.kv}><dt>Posting due</dt><dd>{terms.postingDue === null ? "No posting obligation" : longDate(terms.postingDue)}</dd></div>
         <div className={styles.kv}><dt>Revision rounds</dt><dd>{terms.revisionRounds.used} of {terms.revisionRounds.allowed} used</dd></div>
       </dl>
       <p className={acquisition.small}>Approved brief accepted in Social Cat. This tab has no Figma source yet, and a brief here can't create a new fee.</p>

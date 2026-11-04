@@ -4,7 +4,7 @@ import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { respondWith } from "@/adapter/demoViews";
 import { AdapterError } from "@/adapter/errors";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
-import { collaborationDemo } from "@/fixtures/collaboration";
+import { collaborationAffiliate, collaborationDemo, reviewAfter } from "@/fixtures/collaboration";
 import { renderRoute, scriptedAdapter } from "@/test/renderWithAdapter";
 
 const OVERVIEW = "/collaborations/demo-collaboration-1?tab=overview";
@@ -235,5 +235,53 @@ describe("content review and rights (9:436)", () => {
     await user.click(dialog("Reject with reason").getByRole("button", { name: "Request rejection", hidden: true }));
     expect(await screen.findByTestId("action-error")).toHaveTextContent("This record changed");
     expect(screen.queryByTestId("action-ack")).not.toBeInTheDocument();
+  });
+});
+
+describe("FE03-04 posting timing only where the terms create the obligation", () => {
+  const AFFILIATE = "/collaborations/demo-collaboration-affiliate?tab=overview";
+
+  it("a paid collaboration shows its posting due date, grace period and a derived review date", async () => {
+    await open(OVERVIEW);
+    expect(screen.getByTestId("posting-due")).toHaveTextContent("04 Nov 2026");
+    expect(screen.getByText("3 days")).toBeInTheDocument();
+    expect(screen.getByTestId("review-after")).toHaveTextContent("07 Nov 2026");
+  });
+
+  it("an affiliate-only collaboration has no posting date, no grace period and no review date", async () => {
+    await open(AFFILIATE);
+    expect(screen.getByTestId("posting-due")).toHaveTextContent("No posting obligation");
+    expect(screen.getByText("Not applicable")).toBeInTheDocument();
+    expect(screen.getByTestId("review-after")).toHaveTextContent("N/A · no posting date was agreed");
+    expect(screen.getByText(/A missing post is not a violation, and no posting reminder applies/)).toBeInTheDocument();
+    expect(screen.getByText(/Optional\. No posting date was agreed\./)).toBeInTheDocument();
+  });
+
+  it("never invents an overdue, late or violation state for uncommitted content", async () => {
+    await open(AFFILIATE);
+    const page = screen.getByRole("main");
+    expect(within(page).queryByText(/overdue|late post|no-post violation|breach/i)).not.toBeInTheDocument();
+  });
+
+  it("offers no posting reminder for an affiliate-only collaboration, and the content tab says there is nothing owed", async () => {
+    expect(collaborationDemo.allowedActions.some((a) => a.key === "remindCreator")).toBe(true);
+    await open(AFFILIATE);
+    renderRoute("/collaborations/demo-collaboration-affiliate?tab=content", createDemoAdapter());
+    expect(await screen.findByRole("heading", { name: "No content obligation" })).toBeInTheDocument();
+    expect(screen.getByText(/Any post that appears is welcome, not owed/)).toBeInTheDocument();
+  });
+
+  it("the review date is null when there is no posting date", () => {
+    expect(reviewAfter(null, null)).toBeNull();
+    expect(reviewAfter("2026-11-04", null)).toBeNull();
+    expect(collaborationAffiliate.allowedActions.map((a) => a.key)).toEqual(["recordNote"]);
+    expect(collaborationAffiliate.terms.agreedFee.minorUnits).toBe(0);
+  });
+
+  it("commands on the read-only affiliate record are held with a reason, so nothing can be queued", async () => {
+    const adapter = createDemoAdapter();
+    const spy = vi.spyOn(adapter, "submitAction");
+    await open(AFFILIATE, adapter);
+    expect(spy).not.toHaveBeenCalled();
   });
 });

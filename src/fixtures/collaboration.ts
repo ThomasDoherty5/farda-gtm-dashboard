@@ -7,6 +7,7 @@ import type { Money } from "@/adapter/contract";
 
 export const COLLABORATION_ID = "demo-collaboration-1";
 export const COLLABORATION_REF = "COL-SC-042";
+export const COLLABORATION_AFFILIATE_ID = "demo-collaboration-affiliate";
 
 export type EventState = "Completed" | "Running" | "Pending";
 export type RightsRow = { key: string; label: string; value: string };
@@ -20,7 +21,7 @@ export type CollaborationData = {
   owner: string;
   stage: string;
   /** The deliverable and its accepted, historical terms. The fee is read-only and never offered again. */
-  terms: { deliverable: string; agreedFee: Money; postingDue: string; graceDays: number; sourceRecord: string; revisionRounds: { allowed: number; used: number } };
+  terms: { deliverable: string; agreedFee: Money; /** Null when the accepted terms create no posting obligation. Then there is no due date, no grace period and nothing to be late for. */ postingDue: string | null; graceDays: number | null; sourceRecord: string; revisionRounds: { allowed: number; used: number } };
   timeline: { title: string; note: string; state: EventState }[];
   eligibility: { current: string; suppression: string; lastDecision: string; suppressed: boolean };
   /** What the server will accept as a next action for this collaboration. */
@@ -86,12 +87,35 @@ export const collaborationDemo: CollaborationData = {
   requests: [],
 };
 
-/** Review is due after the posting due date plus the grace period. Derived, so it can't disagree with its inputs. */
-export function reviewAfter(postingDue: string, graceDays: number): string {
+/** Review is due after the posting due date plus the grace period. Derived, so it can't disagree with its inputs. With no posting obligation there is no date. */
+export function reviewAfter(postingDue: string | null, graceDays: number | null): string | null {
+  if (postingDue === null || graceDays === null) return null;
   const d = new Date(`${postingDue}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + graceDays);
   return d.toISOString().slice(0, 10);
 }
+
+/**
+ * An affiliate-only collaboration. Its accepted terms commit the creator to nothing: no post, no due date, no fee. A missing post
+ * is therefore not a violation, and no reminder or late-post action exists for it.
+ */
+export const collaborationAffiliate: CollaborationData = {
+  ...collaborationDemo,
+  collaborationId: COLLABORATION_AFFILIATE_ID,
+  ref: "COL-TT-017",
+  handle: "@demo.affiliate.03",
+  channel: "TikTok Shop",
+  stage: "Tracking active",
+  terms: { deliverable: "None committed · affiliate link only", agreedFee: { minorUnits: 0, currency: "USD" }, postingDue: null, graceDays: null, sourceRecord: "Notion · COL-TT-017", revisionRounds: { allowed: 0, used: 0 } },
+  timeline: [
+    { title: "Native acceptance", note: "Accepted in TikTok Shop; the receipt also evidences terms.", state: "Completed" },
+    { title: "Tracking active", note: "Issued link tested after acceptance.", state: "Completed" },
+    { title: "First post", note: "Optional. No posting date was agreed.", state: "Pending" },
+  ],
+  allowedActions: [{ key: "recordNote", label: "Record a note in the source" }],
+  unresolved: [],
+  requests: [],
+};
 
 export const revisionsRemaining = (r: CollaborationData["terms"]["revisionRounds"]) => Math.max(0, r.allowed - r.used);
 export const approvalBlocker = (c: CollaborationData): string | null => (c.content.licenseSigned ? null : "Acceptance remains blocked while the required license is missing.");

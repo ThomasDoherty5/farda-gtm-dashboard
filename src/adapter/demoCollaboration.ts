@@ -1,7 +1,7 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError } from "./errors";
 import { respondWith } from "./demoViews";
-import { COLLABORATION_ID, collaborationDemo, revisionsRemaining, type CollaborationData } from "@/fixtures/collaboration";
+import { COLLABORATION_AFFILIATE_ID, COLLABORATION_ID, collaborationAffiliate, collaborationDemo, revisionsRemaining, type CollaborationData } from "@/fixtures/collaboration";
 
 const fail = (code: string, message: string, requestId: string): never => {
   throw new AdapterError({ code, message, requestId, correlationId: `demo-${requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
@@ -54,6 +54,8 @@ export function createDemoCollaboration() {
   return {
     read(request: ReadRequest<unknown>): ReadResponse<CollaborationData> {
       const { collaborationId } = (request.filters ?? {}) as { collaborationId?: string };
+      if (collaborationId === COLLABORATION_AFFILIATE_ID)
+        return respondWith(request, structuredClone(collaborationAffiliate), { dataVersion: "collab-affiliate-v1", capabilities: COMMANDS.map((actionKind) => ({ actionKind, state: "held" as const, reasonCodes: ["DEMO_RECORD_READ_ONLY"] })) });
       if (collaborationId !== COLLABORATION_ID) fail("RECORD_NOT_FOUND", "This collaboration does not exist or was removed.", request.requestId);
       return respondWith(request, { ...structuredClone(collaborationDemo), requests: structuredClone(requests) }, {
         dataVersion: version(),

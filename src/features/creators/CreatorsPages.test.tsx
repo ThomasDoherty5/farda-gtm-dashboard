@@ -329,3 +329,39 @@ describe("states shared by every view", () => {
     await waitFor(() => expect(adapter.calls.map((c) => c.filters)).toEqual([{ network: "all" }, { network: "tiktok" }]));
   });
 });
+
+describe("FE02-03 acquisition source, publishing network, checkout and payout owner are kept apart", () => {
+  it("Social Cat's dashboard names each separately and says they remain separate", async () => {
+    await open("/creators/social-cat?view=dashboard", "Linked-post views");
+    expect(screen.getByText(/Recruitment source, publishing network and checkout remain separate/)).toBeInTheDocument();
+    expect(screen.getByText(/Social Cat source · Instagram \+ TikTok publishing · Shopify website checkout · illustrative Collabs provider/)).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Publishing network" })).toBeInTheDocument();
+  });
+
+  it("TikTok Shop's dashboard names its source, publishing network, checkout route and provider-owned settlement", async () => {
+    await open("/creators/tiktok?view=dashboard", "Post views");
+    expect(screen.getByText("Source: Affiliate Center")).toBeInTheDocument();
+    expect(screen.getByText("Publishing: TikTok")).toBeInTheDocument();
+    expect(screen.getByText(/Recruitment source, publishing network and checkout remain separate/)).toBeInTheDocument();
+    expect(screen.getByText("Provider-owned")).toBeInTheDocument();
+    expect(screen.getByText(/Reconcile native adjustments and cash; no second manual commission payment/)).toBeInTheDocument();
+  });
+});
+
+describe("FE02-05 commission-only policy, prior model state, next actions, and separate daily and hourly destinations", () => {
+  it.each([["/creators/social-cat?view=dashboard", "Linked-post views"], ["/creators/tiktok?view=dashboard", "Post views"]])("%s says commission-only and links daily sourcing apart from hourly monitoring", async (path, ready) => {
+    await open(path, ready);
+    expect(screen.getByText("Commission-only acquisition")).toBeInTheDocument();
+    expect(screen.getByText(/No upfront content fee; product and shipping are approved separately/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Daily sourcing" })).toHaveAttribute("href", "/creators/discovery");
+    expect(screen.getAllByRole("link", { name: "Full acquisition funnel" })[0]).toHaveAttribute("href", "/creators/pipeline");
+    expect(screen.getByText("Demo · hourly plan not live")).toBeInTheDocument();
+  });
+
+  it.each(["/creators/social-cat?view=board", "/creators/tiktok?view=board"])("%s links daily sourcing and the full funnel, and keeps historical terms valid", async (path) => {
+    renderRoute(path, createDemoAdapter());
+    expect(await screen.findByRole("link", { name: "Daily sourcing" })).toHaveAttribute("href", "/creators/discovery");
+    expect(screen.getAllByRole("link", { name: "Full acquisition funnel" })[0]).toHaveAttribute("href", "/creators/pipeline");
+    expect(screen.getByText(/New offers are commission-only; accepted historical terms remain valid/)).toBeInTheDocument();
+  });
+});

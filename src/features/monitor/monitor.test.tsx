@@ -227,6 +227,19 @@ describe("post performance (25:481)", () => {
     expect(screen.getByRole("img", { name: /Daily views gained: Oct 19 1k/ })).toBeInTheDocument();
   });
 
+  it("FE07-05: TikTok-reported GMV is labeled as GMV in the attribution evidence, and net sales is defined as after discounts and refunds", async () => {
+    const user = userEvent.setup();
+    open("/content/P-001");
+    expect(await metric("net-sales")).toHaveTextContent("$2,015");
+    expect(screen.getByText("After discounts and refunds; USD")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "View attribution evidence" }));
+    const dialog = await openDialog();
+    expect(within(dialog).getByText("GMV")).toBeInTheDocument();
+    expect(within(dialog).getByText("TikTok-reported GMV is kept apart and is never net sales")).toBeInTheDocument();
+    expect(within(dialog).getByText(/\$2,015 after discounts and refunds/)).toBeInTheDocument();
+    expect(screen.getByText(/TikTok-reported GMV is retained separately with its source definition and window/)).toBeInTheDocument();
+  });
+
   it("a post with no consecutive snapshots says so instead of drawing a flat chart", async () => {
     open("/content/P-002");
     expect(await screen.findByText(/Daily snapshots aren't available for this post/)).toBeInTheDocument();
