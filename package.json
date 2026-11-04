@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "manifest:generate": "node scripts/generate-route-manifest.mjs",
+    "adapter:register": "node scripts/adapter-freeze-extract.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
