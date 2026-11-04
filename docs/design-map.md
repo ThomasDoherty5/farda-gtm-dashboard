@@ -57,7 +57,7 @@ Every row meets the pass mark (0.5% of pixels) except where "judged over" says w
 | 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
 | 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (added evidence controls) | 0.162%, judged over the top 1030px |
 | 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.431% |
-| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2267 tall, not 2211 (blocked-action reasons, +56) | 0.179%, judged over the top 1700px |
+| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (2267 before the disagreement section was added; see below) | 0.179%, measured over the top 1450px |
 | 102:74 | `/creators/pipeline` | Matches (1440×2552) | 0.264% |
 | 6:24 | `/creators/social-cat?view=board` | Matches (1440×1658) | 0.270% |
 | 9:143 | `/creators/tiktok?view=board` | Matches (1440×1712) | 0.270% |
@@ -296,7 +296,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
-| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding 56px | CTRL-154 requires a visible reason. This is why the page is 2267 tall, not 2211 |
+| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding 56px | CTRL-154 requires a visible reason. This is why the page is 2267 tall, not 2211, before the disagreement section (VE-08) is added |
 | Video URL field | Placeholder text "Awaiting validated source URL" shown as if populated | A real input, empty at first, with that text as the placeholder | The field has to accept an address |
 | Checkout route | Fixed select appearance | Native select | Keyboard and screen reader behavior come for free |
 | Observation rows | No way to undo | A Remove link on each recorded observation | Drafts need correcting before they are saved |
@@ -560,3 +560,80 @@ Only Operations has native 390 and 1024 designs (12:653, 12:708). Everything els
 | Focus on navigation | After a route change (path, not query) focus moves to the page heading, or to main while the heading is still loading. The first load, tabs and filters never move focus |
 | Focus never invisible | A link hidden for sighted users (`Open approval …` on the run page) is hidden only until focused (`.visually-hidden-focusable`) |
 | Demo hook | `?latency=<ms>` (demo adapter only, capped at 10s) holds reads in flight so the loading state can be inspected and tested |
+
+## Prototype flow coverage
+
+Owner THO-330 (flows and states). Read 2026-11-03 from the prototype page (07 · Interactive prototype) of the copy `z9knjMdQ3kxL6Fblvu1tKc` through the Plugin API, read-only. The page has 20 flows and 1,040 reactions on the 113 non-archived frames (the handoff counts 1,205 with the archived ones). The six primary-navigation items on every frame are one shared header, covered by `e2e/smoke.spec.ts`; that leaves **596 edges** on 93 screen frames and 20 overlay frames. Prototype clicks are navigation evidence, not saved data: the app is held to the control contract where the two disagree.
+
+`e2e/prototype-edges.spec.ts` opens each frame's route in the built app and checks every edge: a navigation needs a link to the target route (and, when a control carries the prototype's label, that clicking it goes there), an overlay needs a control that opens a dialog which Escape closes, and an overlay's own links and close are checked inside the open dialog. Anything that doesn't work must be recorded in `e2e/support/prototypeDifferences.ts`; an unrecorded failure fails the test, and so does a recorded difference that now works.
+
+Result: **391 of 596 edges work as drawn** (238 navigate by their label, 25 reach the target under another label, 92 open a dialog that closes, 20 close, 4 are overlay links under another name, 12 are responsive variants of `/operations`). **205 differ or are not built.** Each is one of these kinds; I read a sample of each kind, not every edge, and the full list is in `prototypeDifferences.ts`.
+
+| Kind | Edges | What it means | Why it isn't changed |
+| -- | -- | -- | -- |
+| acts-in-place | 32 | The control exists and works, but changes the page (scrolls to a section, filters, saves) instead of opening the frame the prototype names. | The page is the right place for the result. Example: Save draft saves a new version and says it doesn't enable or send (FHC-04). |
+| different-destination | 14 | The control exists and goes somewhere else. | Deliberate: `Open creator economics` opens the offer's economics (`/offers/:id`), not the historical fee settlement, because new acquisition is commission-only. Review proposals opens the approvals index, which lists the labeled scenarios. |
+| real-route-replaces-overlay | 18 | The prototype previews an outcome in an overlay; the app goes to the real screen that holds it. | Example: Reconcile unknown result opens the recovery tab, where the source check is the only way to a receipt. |
+| outcome-preview | 31 | The prototype's overlay shows a simulated success or hand-off (paused, canceled, confirmed receipt, statement matched, resolved). | Not built on purpose. A demo that shows "confirmed" or "canceled" without the server's acknowledgment breaks "approved is not sent". The app reaches the honest equivalent through its demo state machines (pause and cancel on the batch, recovery on the run). |
+| orphan-overlay | 48 | No prototype control opens this overlay, or only an overlay that is itself unreachable does. | Nothing to attach it to. The workspace menu (3 of them) is the Shell dialog, covered by `smoke.spec.ts`. |
+| dialog-is-filter-not-nav | 23 | The prototype's filter overlay lists destinations; the app's filter dialog filters in place, and the destinations are in the page navigation. | Filters live in the URL (CTRL-008 to CTRL-012) and keep Back working. |
+| label-not-control | 11 | The prototype hangs a reaction on a label or a chart row (`Shipping`, `TikTok Shop`, `Open accounting month`). | The app keeps data labels as text. A label that navigates would add a control with no accessible name or role. |
+| not-built | 28 | A control or dialog the prototype has and the app doesn't (for example Pause flow on the setup email, Founder review on Team, Close with evidence on Return). | Open. The Return close is shown disabled with its reason instead. These are the candidates for a later pass. |
+
+| # | Prototype flow | Start | Edges | Work in the app | Differ or not built | Journey tests |
+| -- | -- | -- | -- | -- | -- | -- |
+| 01 | GTM overview | `28:1127` | 11 | 11 | 0 | edge audit |
+| 02 | Social Cat dashboard | `41:2829` | 41 | 38 | 3 (3 acts-in-place) | flows.spec (acquisition journey) |
+| 03 | Social Cat recruitment | `41:4380` | 50 | 47 | 3 (1 different-destination, 1 real-route-replaces-overlay, 1 acts-in-place) | flows.spec (acquisition journey) |
+| 04 | TikTok invitations + browser fallback | `41:4597` | 55 | 41 | 14 (7 outcome-preview, 3 real-route-replaces-overlay, 3 dialog-is-filter-not-nav, 1 different-destination) | flows.spec (acquisition journey), recruitment.spec |
+| 05 | Hourly creator monitoring | `41:2627` | 27 | 20 | 7 (7 acts-in-place) | edge audit |
+| 06 | Operations and fulfillment | `28:1391` | 58 | 33 | 25 (9 not-built, 4 acts-in-place, 4 dialog-is-filter-not-nav, 3 different-destination, 3 label-not-control, 2 outcome-preview) | flows.spec (returns), operations.spec |
+| 07 | Finance and close | `28:2200` | 31 | 21 | 10 (4 not-built, 2 label-not-control, 1 different-destination, 1 acts-in-place, 1 real-route-replaces-overlay, 1 dialog-is-filter-not-nav) | flows.spec (finance close), finance.spec |
+| 08 | Customer lifecycle and email flows | `28:4103` | 38 | 20 | 18 (7 acts-in-place, 4 outcome-preview, 3 not-built, 3 dialog-is-filter-not-nav, 1 label-not-control) | edge audit |
+| 09 | Launch readiness | `28:4907` | 10 | 4 | 6 (3 acts-in-place, 2 outcome-preview, 1 not-built) | edge audit |
+| 10 | Performance and attribution | `28:5210` | 9 | 6 | 3 (2 label-not-control, 1 different-destination) | edge audit |
+| 11 | Automations and recovery | `28:5470` | 76 | 48 | 28 (6 different-destination, 6 dialog-is-filter-not-nav, 5 outcome-preview, 4 real-route-replaces-overlay, 3 acts-in-place, 3 not-built, 1 label-not-control) | flows.spec (approval, recovery), approvals.spec |
+| 12 | Paid media | `41:3471` | 5 | 5 | 0 | edge audit |
+| 13 | Campaign economics | `41:3677` | 4 | 0 | 4 (2 real-route-replaces-overlay, 1 not-built, 1 label-not-control) | edge audit |
+| 14 | Commerce and support | `41:3848` | 7 | 3 | 4 (2 real-route-replaces-overlay, 1 label-not-control, 1 not-built) | edge audit |
+| 15 | Mobile operations | `28:3676` | 4 | 4 | 0 | edge audit |
+| 16 | Tablet operations | `28:3731` | 12 | 8 | 4 (4 not-built) | edge audit |
+| 17 | Launch snapshot | `28:69` | 11 | 6 | 5 (5 outcome-preview) | edge audit |
+| 18 | Creator offers and score modes | `76:3659` | 6 | 6 | 0 | edge audit |
+| 19 | Commission ledger and provider settlement | `76:3940` | 49 | 37 | 12 (5 dialog-is-filter-not-nav, 3 real-route-replaces-overlay, 2 acts-in-place, 2 not-built) | edge audit |
+| 20 | Finite batch operations | `76:4517` | 42 | 33 | 9 (4 outcome-preview, 2 real-route-replaces-overlay, 1 acts-in-place, 1 dialog-is-filter-not-nav, 1 different-destination) | recruitment.spec |
+| — | Overlays no prototype control opens | | 50 | 0 | 50 (48 orphan-overlay, 2 outcome-preview) | edge audit |
+| | **All** | | **596** | **391** | **205** | |
+
+Frames were grouped into flows by area (Figma's flow starting points reach nearly the same set of frames through the shared header, so reachability can't separate them); an overlay counts with the flow of the first screen that opens it.
+
+### Journey tests (`e2e/flows.spec.ts`)
+
+| Journey | Steps checked |
+| -- | -- |
+| Approval (flow 5) | Pending; nothing offers to send; approve; "Approved, not sent" with no receipt; send; a labeled synthetic receipt |
+| Recovery (flow 11) | Approve and send an uncertain action; "Outcome unknown", no receipt; Open recovery; Record confirmed sent is disabled until Check the source returns evidence; then "Sent, source receipt on file" |
+| Acquisition (flow 3) | Pipeline, Review evidence, save a partial review (not a completed review, Mark watched still blocked, readiness says why), TikTok Shop, Prepare invitation, Social Cat dashboard, creator lifecycle, collaboration, content review |
+| Finance close (flow 7) | Finance, month-end close (open month, progress), the read-only reconciliation dialog ("does not close the books"), payout reconciliation, a statement match is queued and nothing is marked reconciled |
+| Operations returns (flow 6) | Operations, order detail, active return (Prepare browser task is "waiting for approval"; close is disabled), resolved return (the chain of receipts), reopen dialog, back to support |
+
+Gaps in the journeys, kept visible: order milestones (Refund requested, Return received) are text, so the order-to-return step is not a click in the app; and demo state is in memory, so a reload resets it, which the journeys avoid relying on.
+
+## Video evidence disagreement and override (VE-08)
+
+Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 250px taller than the 2267 pinned for the blocked-action reasons (2517). Reason for the new pin: VE-08 (reviewer disagreement and override) needs the first reviewer's record, the "not ready" reasons, the list of disagreements and the dispute dialog's entry points on the page, and the Figma source 102:364 has no frame for any of it. The e2e pin in `e2e/evidence.spec.ts` moves from 2267 to 2517 for that reason and no other; the cards above it keep the heights 102:364 gives them.
+
+| Rule | Where it is enforced |
+| -- | -- |
+| The first reviewer's record is frozen when the first observations are saved and never edited | `demoEvidence.ts` (`firstReview`); a later draft, disagreement or override leaves it as it was |
+| A disagreement or override needs a reason (12 to 500 characters) | `validateDispute` in the form and again in the service |
+| An override proposes a valid replacement or "remove"; a plain disagreement proposes nothing | `validateDispute` |
+| It disputes only an observation in the first record, never a draft observation | service: `observationId` field error |
+| It keeps a copy of what it disputes (`prior`), its reviewer role and time | `Dispute` type |
+| It does not change coverage, assessments or the watched state, and there is no watched state | service and `EvidenceDisputes.test.tsx` |
+| Material changes invalidate it: another video marks the first record and its disputes "Invalidated: different video", and a changed route says the model no longer applies | `readinessOf`, `MEDIA_CHANGED`, `ROUTE_CHANGED` |
+| Readiness is "Not ready" with the reasons in words (no completed review; contested; video changed; route changed); nothing here authorizes outreach | `READINESS_TEXT` |
+| Recording is its own save against the saved version; it is blocked, with the reason on the page, while the draft has unsaved edits | `EvidenceDisputes` |
+| Stale version is a conflict and keeps the typed reason; the same key replays; a changed payload under the same key is refused; identical content under a new key is recorded once | `demoEvidence.test.ts` |
+
+Two fixtures: `demo-evidence-2` has a saved review to dispute, and `demo-evidence-3` already has one override on file.

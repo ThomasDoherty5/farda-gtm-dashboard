@@ -159,6 +159,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `payCommission` | `unsupported` (`PROVIDER_OWNS_PAYOUT`) | `settlementDetail` | none | proposed |
 | `purchaseReward` | `unverified` (`OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`) | `offerRewards` | none | proposed |
 | `recordDecision` | `unverified` (`DEMO_NO_DISPATCH`) | every analytics view | none | proposed |
+| `recordDisagreement` | `held` (`NO_REVIEW_ON_FILE`) until a first review exists, then `available` | `evidenceRecord` | `acquisition/EvidenceDisputes` | proposed |
 | `recordPermissionEvidence` | `available` | `channelCapabilities` | `settings/CapabilitiesPage` | conflict (C-15) |
 | `reopenCase` | `unsupported` (`INTERCOM_OWNS_CASES`) | `supportWorkspace` | none | proposed |
 | `requestFreshAttempt` | only while the outcome is uncertain: `available`, or `held` (`EVIDENCE_REQUIRED`) until a not-executed result is confirmed | `runDetail` | `approvals/RunPage` | conflict (C-03) |

@@ -1,4 +1,4 @@
-import type { CheckoutRoute, Modality, Observation, ObservationCategory } from "./evidenceTypes";
+import type { CheckoutRoute, DisputeDraft, EvidenceRecord, Modality, Observation, ObservationCategory, Readiness } from "./evidenceTypes";
 
 export const MODEL_FOR_ROUTE: Record<CheckoutRoute, string> = { website: "WEBSITE-AFFILIATE-v3", "tiktok-shop": "TIKTOK-SHOP-AFFILIATE-v3" };
 export const ROUTE_LABEL: Record<CheckoutRoute, string> = { website: "Shopify website", "tiktok-shop": "TikTok Shop" };
@@ -75,3 +75,39 @@ export function coveredSeconds(observations: readonly Observation[], modality: M
   }
   return total;
 }
+
+export const MIN_REASON = 12;
+export const MAX_REASON = 500;
+export const MAX_DISPUTES = 100;
+
+/** Field errors for one dispute, keyed by field. Used by the form and, again, by the service. */
+export function validateDispute(d: Pick<DisputeDraft, "stance" | "reason" | "proposed">): Record<string, string> {
+  const errors: Record<string, string> = {};
+  if (d.stance !== "disagree" && d.stance !== "override") errors.stance = "Choose disagree or override.";
+  const reason = (d.reason ?? "").trim();
+  if (reason.length < MIN_REASON) errors.reason = `Give a reason of at least ${MIN_REASON} characters, so the next reviewer can see why.`;
+  else if (reason.length > MAX_REASON) errors.reason = `Keep the reason under ${MAX_REASON} characters.`;
+  if (d.stance === "disagree" && d.proposed !== null) errors.proposed = "A disagreement doesn't propose a replacement. Choose override to do that.";
+  if (d.stance === "override") {
+    if (d.proposed === null) errors.proposed = "Say what it should be, or choose to remove it.";
+    else if (d.proposed !== "remove") for (const [field, message] of Object.entries(validateObservation(d.proposed))) errors[`proposed.${field}`] = message;
+  }
+  return errors;
+}
+
+/** Why the evidence is not ready. Derived from the record on every read, so it can't drift from the facts. */
+export function readinessOf(record: Pick<EvidenceRecord, "mediaUrl" | "checkoutRoute" | "firstReview" | "disputes">): Readiness {
+  const reasonCodes = ["NO_COMPLETE_REVIEW"];
+  const first = record.firstReview;
+  if (record.disputes.some((d) => d.recordedAgainst === record.mediaUrl && d.recordedRoute === record.checkoutRoute)) reasonCodes.push("CONTESTED");
+  if (first && first.mediaUrl !== record.mediaUrl) reasonCodes.push("MEDIA_CHANGED");
+  if (first && first.checkoutRoute !== record.checkoutRoute) reasonCodes.push("ROUTE_CHANGED");
+  return { state: "notReady", reasonCodes };
+}
+
+export const READINESS_TEXT: Record<string, string> = {
+  NO_COMPLETE_REVIEW: "No completed review exists. Saving a draft, a disagreement or an override doesn't create one.",
+  CONTESTED: "A reviewer has disputed the first record, so it is contested until it is reviewed again.",
+  MEDIA_CHANGED: "The video changed since the first review, so those observations and disputes no longer apply.",
+  ROUTE_CHANGED: "The checkout route changed since the first review, so the model it was read against no longer applies.",
+};
