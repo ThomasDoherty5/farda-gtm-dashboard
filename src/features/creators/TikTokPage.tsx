@@ -6,6 +6,7 @@ import { LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { Kpi, KpiRow } from "@/components/Kpi";
+import { SearchField } from "@/components/Search";
 import { formatCompact, formatCount, formatMoney } from "@/components/MetricValue";
 import type { TikTokBoardData, TikTokDashboardData } from "@/fixtures/creators";
 import { DEMO_ASSESSMENT_ID, DEMO_BATCH_ID, DEMO_CREATOR_ID, DEMO_SETTLEMENT_ID } from "@/fixtures/ids";
@@ -76,7 +77,7 @@ function BoardBody({ res, data, q, onQuery }: { res: ReadResponse<TikTokBoardDat
         <div className={`${styles.sectionRow} ${styles.top}`}>
           <h2 id="tt-worklist-title" className={acquisition.h2}>Creator worklist</h2>
           <span className={styles.spacer} style={{ "--spacer": "490px" } as React.CSSProperties} aria-hidden="true" />
-          <input className={styles.search} type="search" aria-label="Search TikTok creators" placeholder="Search TikTok creators" value={q} onChange={(e) => onQuery(e.target.value)} />
+          <SearchField label="Search TikTok creators" value={q} onChange={onQuery} />
         </div>
         {data.rows.length === 0 ? (
           <p className={acquisition.small} role="status">No creator matches “{q}”. Clear the search to see the full worklist.</p>
@@ -189,7 +190,9 @@ function DashboardBody({ res, data }: { res: ReadResponse<TikTokDashboardData>; 
       <section className={`${styles.panel} ${styles.panelWide}`} aria-labelledby="tt-native-title">
         <div className={acquisition.sectionTitle}>
           <h2 id="tt-native-title" className={acquisition.h2}>Native commerce, native settlement.</h2>
-          <p className={acquisition.small}>Keep these controls separate from the monitoring performance above; live commission and access data remain unverified.</p>
+          <p className={acquisition.small} data-testid="channel-route">
+            <span data-field="acquisition-source">Source: Affiliate Center</span> · <span data-field="publishing-network">Publishing: TikTok</span> · <span data-field="checkout">Checkout: TikTok Shop</span> · <span data-field="payout-owner">Payout: TikTok native settlement</span>. Kept apart from the monitoring above; live data is unverified.
+          </p>
         </div>
         <ul className={styles.settle}>
           <li><Badge tone="violet" width={140}>Read native rates</Badge><p className={styles.settleName}>Standard / Shop Ads commission</p><p className={acquisition.small}>Capture active, proposed and effective terms; source determines the winning rate</p></li>

@@ -36,6 +36,7 @@ const CAPABILITY_REASONS: Record<string, string> = {
   NOTHING_TO_PAUSE: "There is no unsent work to pause.",
   NOTHING_TO_CANCEL: "There is no unsent work to cancel.",
   ALREADY_PAUSED: "New work is already paused.",
+  NO_REVIEW_ON_FILE: "There is no saved review to dispute yet. Save a partial review first.",
   PLAYBACK_UNVERIFIED: "Blocked until permitted playback and actually observed intervals support the claimed review depth. Elapsed time, captions and thumbnails don't count.",
   CONNECTION_UNVERIFIED: "Enabling needs a verified connection, authorized schedule settings, a time zone and any required approval, then an explicit server acknowledgment.",
   TAKEOVER_NOT_ASSIGNED: "Taking over needs a server-confirmed assignment for this task.",

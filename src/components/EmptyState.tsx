@@ -15,12 +15,20 @@ export function EmptyState({ state, title, children, alert = false }: Props) {
   );
 }
 
-/** Skeleton card (Figma component set 6:659). Widths are the design's; decorative only. */
-export function SkeletonCard({ label }: { label: string }) {
+/**
+ * Skeleton (Figma component set 6:659). Card is three bars, Row is two. Widths are the design's and the bars are
+ * decorative: the status line says what is loading, so a screen reader hears one message, not empty shapes.
+ */
+const BARS = { card: [120, 240, 180], row: [220, 160] } as const;
+
+export function Skeleton({ variant, label }: { variant: "card" | "row"; label: string }) {
   return (
-    <div role="status" className={styles.skeleton}>
+    <div role="status" className={styles.skeleton} data-variant={variant}>
       <span className="visually-hidden">{label}</span>
-      {[120, 240, 180].map((width) => <span key={width} aria-hidden="true" className={styles.bone} style={{ width }} />)}
+      {BARS[variant].map((width) => <span key={width} aria-hidden="true" className={styles.bone} style={{ width }} />)}
     </div>
   );
 }
+
+export const SkeletonCard = ({ label }: { label: string }) => <Skeleton variant="card" label={label} />;
+export const SkeletonRow = ({ label }: { label: string }) => <Skeleton variant="row" label={label} />;

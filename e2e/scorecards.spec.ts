@@ -77,3 +77,28 @@ test("Hold candidate stays read-only and explains why", async ({ page }) => {
   await expect(hold).toHaveAttribute("aria-disabled", "true");
   await expect(page.getByText(/Hold candidate is read-only: no current opportunity/)).toBeVisible();
 });
+
+test.describe("milestone rewards (Offer Economics v1)", () => {
+  const REWARDS = "/offers/demo-offer-1/rewards";
+  test("the ladder renders with its recommendation label and has no axe violations", async ({ page }) => {
+    await page.goto(`${REWARDS}?scenario=existing-redemption`);
+    await expect(page.getByRole("heading", { name: "Milestone rewards, earned on matured sales." })).toBeVisible();
+    await expect(page.getByTestId("rewards-recommendation")).toContainText("Pending owner approval");
+    await expect(page.getByTestId("obl-outstanding")).toHaveText("$1,200");
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  });
+
+  test("incomplete evidence stays N/A and a scenario switch updates the ladder", async ({ page }) => {
+    await page.goto(`${REWARDS}?scenario=incomplete-evidence`);
+    await expect(page.getByTestId("obl-contribution")).toContainText("N/A");
+    await page.getByLabel("Fixture scenario").selectOption("zero-sales");
+    await expect(page.getByTestId("metric-matured")).toHaveText("$0");
+  });
+
+  test("the offer links to the rewards page", async ({ page }) => {
+    await page.goto("/offers/demo-offer-1");
+    await page.getByRole("link", { name: "Milestone rewards" }).click();
+    await expect(page).toHaveURL(/\/offers\/demo-offer-1\/rewards$/);
+  });
+});

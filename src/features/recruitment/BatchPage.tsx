@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import { useScope } from "@/adapter/scope";
 import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
@@ -38,8 +39,8 @@ export const countByState = (items: BatchItem[]) => items.reduce<Record<ItemStat
 /** One example row per state, in the order the states are listed. */
 export const exampleRows = (items: BatchItem[]) => COUNTED.map((c) => c.state).concat(["paused", "canceled"]).flatMap((s) => items.find((i) => i.state === s) ?? []);
 
-type Tab = "detail" | "exceptions" | "capacity";
-const parseTab = (raw: string | null): Tab => (raw === "exceptions" || raw === "capacity" ? raw : "detail");
+type Tab = "detail" | "exceptions" | "capacity" | "samples";
+const parseTab = (raw: string | null): Tab => (raw === "exceptions" || raw === "capacity" || raw === "samples" ? raw : "detail");
 
 /** Bulk batch detail (Figma source 66:821, owner THO-298). Pause and cancel touch unsent items only, through the adapter; nothing is dispatched. */
 export function BatchPage() {
@@ -108,6 +109,7 @@ function Body({ res, data, tab, onParam }: { res: ReadResponse<BatchData>; data:
         { label: "Batch detail", to: `/batches/${data.batchId}`, width: 116, current: tab === "detail" },
         { label: "Exceptions", to: `/batches/${data.batchId}?tab=exceptions`, width: 102, current: tab === "exceptions" },
         { label: "Capacity", to: `/batches/${data.batchId}?tab=capacity`, width: 100, current: tab === "capacity" },
+        { label: "Sample requests", to: `/batches/${data.batchId}?tab=samples`, width: 136, current: tab === "samples" },
       ]} />
       <StaleNotice res={res} />
       {pauseBlocked && <p id="pause-note" className={acquisition.small}>{pauseBlocked}</p>}
@@ -122,6 +124,7 @@ function Body({ res, data, tab, onParam }: { res: ReadResponse<BatchData>; data:
       {tab === "detail" && <DetailTab data={data} counts={counts} approved={approved} unsent={unsent} held={held} heldTotal={heldTotal} maxHeld={maxHeld} noSample={noSample} rows={rows} cancelBlocked={cancelBlocked} onParam={onParam} onDialog={(d) => { action.reset(); setDialog(d); }} />}
       {tab === "exceptions" && <ExceptionsTab data={data} counts={counts} />}
       {tab === "capacity" && <CapacityTab data={data} />}
+      {tab === "samples" && <SamplesTab res={res} data={data} />}
 
       <Dialog open={dialog?.kind === "pause"} title="Pause new work" onClose={closeDialog}>
         <p>This stops {counts.queued} queued {counts.queued === 1 ? "item" : "items"} from being sent. Running items finish safely, and confirmed sends are never touched. Nothing is canceled.</p>
@@ -344,6 +347,69 @@ function CapacityTab({ data }: { data: BatchData }) {
         minWidth={720}
       />
       <LinkButton variant="secondary" to="/settings/capabilities" style={{ alignSelf: "flex-start" }}>Open channel access</LinkButton>
+    </section>
+  );
+}
+
+/** TikTok sample decisions (FE06-05). A decision is recorded only through the verified API route and counts once TikTok returns a receipt. Where TikTok refuses the account's scope, an owner takes over and nothing is claimed. */
+function SamplesTab({ res, data }: { res: ReadResponse<BatchData>; data: BatchData }) {
+  const action = useAction<{ batchId: string; sampleId: string; decision: "approve" | "decline" }>();
+  const [last, setLast] = useState<{ sampleId: string; response: ActionResponse } | null>(null);
+  const blocked = blockedReason(res, "decideTikTokSample");
+  // In the demo no request reaches TikTok, so a receipt here is synthetic. It is worded as recorded in the demo until a real source receipt exists.
+  const demo = useScope().adapter.kind === "demo";
+  const costApproval = discoveryDemo.capacityRows.find((x) => x.source === "Product and shipping")?.evidence ?? "Separate approval";
+  const decide = (sampleId: string, decision: "approve" | "decline") =>
+    action.mutate(
+      { operation: "controlRun", actionKind: "decideTikTokSample", entityRefs: [], expectedVersion: data.version, approvalRef: null, manifestRef: null, payload: { batchId: data.batchId, sampleId, decision } },
+      { onSuccess: (response) => setLast({ sampleId, response }) },
+    );
+  const pending = data.samples.filter((s) => s.state === "pending").length;
+  return (
+    <section className={`${creators.panel} ${creators.panelWide}`} aria-labelledby="batch-samples-title" data-testid="samples-tab">
+      <div className={acquisition.sectionTitle}>
+        <h2 id="batch-samples-title" className={acquisition.h2}>Sample requests, decided where TikTok allows it. {demo && <Badge tone="violet">Demo</Badge>}</h2>
+        <p className={acquisition.small}>
+          {pending} of {data.samples.length} waiting.{" "}
+          {demo
+            ? "Decisions are recorded in the demo only: no request reaches TikTok and the receipts are synthetic. A real decision counts only when TikTok's API returns a receipt."
+            : "A decision counts only when TikTok's API returns a receipt."}{" "}
+          If TikTok refuses this account's scope, the request goes to its owner and nothing is recorded as decided. A sample decision never approves its product and shipping cost, which is a {costApproval.toLowerCase()}. This tab has no Figma source yet.
+        </p>
+      </div>
+      {blocked && <p className={acquisition.small} role="status" data-testid="samples-blocked">{blocked}</p>}
+      {action.error && <ActionError error={action.error} />}
+      {last && last.response.state === "succeeded" && (
+        <p className={styles.status} role="status" data-testid="sample-ack">
+          {last.response.receiptRefs.length > 0
+            ? `${demo ? `Recorded in the demo for ${last.sampleId}. Demo receipt ${last.response.receiptRefs.join(", ")} is synthetic: TikTok was not contacted.` : `Decided in TikTok for ${last.sampleId}. Receipt ${last.response.receiptRefs.join(", ")}.`} Product and shipping cost still need a separate approval.`
+            : `TikTok acknowledged ${last.sampleId} but returned no receipt yet, so it is not shown as decided.`}
+        </p>
+      )}
+      {last && last.response.state === "blocked" && (
+        <p className={styles.status} role="status" data-testid="sample-handoff">
+          TikTok refused this account's authority for {last.sampleId}. Nothing was decided. {last.response.nextAction?.ownerRef ?? "The owner"} has the request and must decide it in TikTok.
+        </p>
+      )}
+      <DataTable
+        caption="TikTok sample requests"
+        columns={[{ label: "Creator" }, { label: "Product" }, { label: "Units" }, { label: "Cost approval" }, { label: "Status" }, { label: "Decision" }]}
+        rows={data.samples.map((s) => [
+          s.handle,
+          s.product,
+          String(s.units),
+          costApproval,
+          s.state === "pending" ? "Waiting for a decision" : s.state === "approved" ? `Approved in ${demo ? "the demo" : "TikTok"} · ${s.receiptRef}` : s.state === "declined" ? `Declined in ${demo ? "the demo" : "TikTok"} · ${s.receiptRef}` : `Not decided · handed to ${s.ownerRef}`,
+          s.state === "pending" ? (
+            <span key="d" style={{ display: "inline-flex", gap: 8 }}>
+              <Button variant="secondary" loading={action.isPending && action.variables?.payload.sampleId === s.id && action.variables.payload.decision === "approve"} disabledReason={blocked ?? undefined} aria-label={`Approve sample ${s.id}`} onClick={() => decide(s.id, "approve")}>Approve</Button>
+              <Button variant="secondary" disabledReason={blocked ?? undefined} aria-label={`Decline sample ${s.id}`} onClick={() => decide(s.id, "decline")}>Decline</Button>
+            </span>
+          ) : s.state === "handoff" ? <LinkButton key="d" variant="ghost" to="/settings/capabilities">Open channel access</LinkButton> : "Recorded",
+        ])}
+        testId="sample-requests"
+        minWidth={720}
+      />
     </section>
   );
 }
