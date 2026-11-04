@@ -39,7 +39,8 @@ describe("collaboration view schemas", () => {
     });
     it("is accepted with a null fee and null content, and null content is not the same as a missing block", () => {
       expect(schemas.collaborationDetail!.safeParse(voluntaryCollaborationDemo).success).toBe(true);
-      const { content: _dropped, ...withoutContent } = voluntaryCollaborationDemo;
+      const withoutContent: Record<string, unknown> = { ...voluntaryCollaborationDemo };
+      delete withoutContent.content;
       expect(schemas.collaborationDetail!.safeParse(withoutContent).success).toBe(false);
     });
     expectRejections(schemas.collaborationDetail!, voluntaryCollaborationDemo, [
