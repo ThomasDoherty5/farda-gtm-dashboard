@@ -1,5 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
@@ -24,6 +25,7 @@ export function TikTokPage() {
 /* ---------------------------------- Board ---------------------------------- */
 
 function Board() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const q = search.get("q") ?? "";
   const query = useView<{ q: string }, TikTokBoardData>("tiktokBoard", { q }, null, { keepPrevious: true });
@@ -41,13 +43,13 @@ function Board() {
       </PageTitle>
       <BoardPlatforms current="TikTok Shop">
         <Badge tone="violet" width={246}>Approved API route preferred</Badge>
-        <span className={acquisition.small}>Demo data</span>
+        {demo && <span className={acquisition.small}>Demo data</span>}
       </BoardPlatforms>
       <BoardContext />
       <Pending query={query} subject="the TikTok funnel">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? <BoardBody res={query.data as ReadResponse<TikTokBoardData>} data={query.data.data} q={q} onQuery={setQuery} /> : <EmptyState state="Empty" title="No TikTok creators yet"><p>The source responded, but no creator is in this funnel.</p></EmptyState>)}
       </Pending>
-      <p className={styles.footnote}>Illustrative funnel · canonical stages from the creator-agent specification. Extended terminal states are proposed product coverage.</p>
+      {query.data && <p className={styles.footnote}>Illustrative funnel · canonical stages from the creator-agent specification. Extended terminal states are proposed product coverage.</p>}
     </section>
   );
 }

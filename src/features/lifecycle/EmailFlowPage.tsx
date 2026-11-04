@@ -6,6 +6,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Field, SelectField, TextField } from "@/components/Field";
 import { ContextLine, Page, PageHeader, Small, kit } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
@@ -53,6 +54,7 @@ export function EmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
         <LinkButton variant="secondary" to="/customers/lifecycle" style={{ minWidth: 184 }}>Back to lifecycle</LinkButton>
         <Button style={{ minWidth: 160 }} loading={save.isPending} disabledReason={blocked} onClick={onSave}>Save draft</Button>
       </PageHeader>
+      <ReadState res={query.data} subject="This email flow" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading the flow…" />}
       {query.isError && <ViewError error={query.error} subject="This email flow" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && draft ? (

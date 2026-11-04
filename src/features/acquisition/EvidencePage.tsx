@@ -11,6 +11,7 @@ import { Dialog } from "@/components/Dialog";
 import { SkeletonCard } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { Kpi } from "@/components/Kpi";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, LeaveGuard, blockedReason } from "@/features/approvals/shared";
 import { CATEGORY_LABEL, MODEL_FOR_ROUTE, ROUTE_LABEL, coveredSeconds, formatTime, parseTime, validateMediaUrl, validateObservation } from "./evidenceRules";
@@ -37,6 +38,7 @@ export function EvidencePage() {
   const record = query.data?.data ?? null;
   return (
     <section aria-labelledby="evidence-title" data-figma-source="102:364" className={styles.page}>
+      <ReadState res={query.data} subject="This evidence record" />
       {record ? (
         <Review key={record.evidenceRef} res={query.data as Res} record={record} />
       ) : (

@@ -8,6 +8,7 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { SkeletonCard, EmptyState } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { formatMoney } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
@@ -49,6 +50,7 @@ export function DiscoveryPage() {
         <LinkButton to="/settings/capabilities" style={{ minWidth: 162 }}>Validate access</LinkButton>
       </div>
       <AcquisitionTabs current="Daily sourcing" />
+      <ReadState res={query.data} subject="Daily sourcing" only={["stale"]} />
       {query.isPending && <SkeletonCard label="Loading daily sourcing…" />}
       {query.isError && <ViewError error={query.error} subject="Daily sourcing" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&

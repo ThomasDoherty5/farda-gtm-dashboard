@@ -5,6 +5,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { Divider, FactList, FlatTable, HalfColumns, Meter, Notice, Page, PageHeader, Panel } from "@/components/Panels";
@@ -40,6 +41,7 @@ export function FinanceDashboardPage() {
         <Button aria-haspopup="dialog" style={{ minWidth: 210 }} onClick={() => setDialog({ source: "Open QuickBooks" })}>Open QuickBooks</Button>
       </PageHeader>
       <FinanceNav current="overview" />
+      <ReadState res={query.data} subject="The finance dashboard" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading finance…" />}
       {query.isError && <ViewError error={query.error} subject="Finance" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No finance data yet"><p>QuickBooks responded, but no management report exists for this period.</p></EmptyState>}

@@ -7,6 +7,7 @@ import { BarRows, Divider, HalfColumns, Page, PageHeader, Panel } from "@/compon
 import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { homeLabel, type FulfillmentAnalytics } from "@/fixtures/operations";
 import { figure, minutesAgoLabel, reasonText } from "./format";
 import styles from "./Operations.module.css";
@@ -29,6 +30,7 @@ export function FulfillmentAnalyticsPage() {
         <FilterButton name="Period" bare title="Choose a period" options={PERIODS} value={String(days)} width={172} onChange={(v) => { const next = new URLSearchParams(search); if (v === "14") next.delete("days"); else next.set("days", v); setSearch(next); }} />
         <LinkButton to="/operations" style={{ minWidth: 200 }}>Open operations</LinkButton>
       </PageHeader>
+      <ReadState res={query.data} subject="Fulfillment analytics" only={["stale"]} />
       {query.isPending && <SkeletonCard label="Loading fulfillment analytics…" />}
       {query.isError && <ViewError error={query.error} subject="Fulfillment analytics" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && !data && <EmptyState state="Empty" title="No fulfillment data yet"><p>The source responded, but no shipments fall in this period.</p></EmptyState>}

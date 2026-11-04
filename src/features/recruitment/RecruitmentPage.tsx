@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -38,6 +39,7 @@ const draftChecks = (d: Draft) => ({
 
 /** Social Cat recruitment (Figma source 38:131, owner THO-298). A draft only: nothing here sends, approves or accepts. */
 export function RecruitmentPage() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const networks = allowed(NETWORKS, search.get("networks"), RECRUITMENT_DEFAULT.networks);
   const route = allowed(ROUTES, search.get("route"), RECRUITMENT_DEFAULT.route);
@@ -85,7 +87,7 @@ export function RecruitmentPage() {
         <FilterButton name="Route" title="Choose the recruitment route" options={ROUTES} value={route} onChange={(v) => setParam("route", v, "queue")} width={206} bare />
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 176 }}>Find Creators</LinkButton>
         <Badge tone="warning" width={252}>Browser access: to validate</Badge>
-        <span className={acquisition.small}>Illustrative queue</span>
+        {demo && <span className={acquisition.small}>Illustrative queue</span>}
       </div>
       <Pending query={query} subject="the recruitment queue">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? (

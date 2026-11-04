@@ -585,3 +585,58 @@ Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disa
 | Stale version is a conflict and keeps the typed reason; the same key replays; a changed payload under the same key is refused; identical content under a new key is recorded once | `demoEvidence.test.ts` |
 
 Two fixtures: `demo-evidence-2` has a saved review to dispute, and `demo-evidence-3` already has one override on file.
+
+## Contract states on every route
+
+Owner THO-330 (flows and states). The fixture families FX-01 to FX-15 and the state rows of the control contract, run against every route in the manifest. Fixture-complete: the demo adapter and a faulting wrapper stand in for the server; nothing here proves the live service (THO-283) behaves this way.
+
+**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 58 routes × 12 checks, 684 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
+
+| Case | Fixture | What every route must do |
+| -- | -- | -- |
+| Happy read | FX-01 | Never print NaN, undefined, null or Infinity as a value; the shell labels the data as demo |
+| Loading | (state row) | Say it is loading; no error; no table, definition list, metric or chart on the page |
+| Empty | FX-03 | Say the read returned nothing ("Empty", "Nothing to show", "No …"), in words, not as zeros |
+| Missing metric | FX-04 | **Unknown stays unknown:** every provenance value turned unknown never adds a zero on the page |
+| Known zero | FX-02 | **Zero stays zero:** every known number turned into 0 never loses a zero from the page |
+| Partial | FX-05 | Say some data is missing or how many rows were covered; no all-clear |
+| Stale | FX-06 | Say the view is out of date or behind, with the last successful read when known; no fresh-success claim |
+| Offline | FX-07 | Say the service couldn't be reached; offer a retry; show no data |
+| Forbidden (403) | FX-08 | Say there is no access; no table, metric or chart |
+| Unauthenticated (401) | FX-09 | Say to sign in; no protected data on the page |
+| Integration pending | (live adapter) | Say nothing is connected; no data; no demo banner; never a demo fallback |
+
+**Browser matrix** (\`e2e/states-matrix.spec.ts\`, 89 tests on desktop). A second build with \`VITE_FARDA_ADAPTER=sandbox\` is served beside the demo build, and all 57 routes are opened on it: each shows the "not connected" alert, no protected data, no demo banner and no console error. The seven routes whose demo handler reads \`?fixture=\` (Overview, attribution, paid media, customer journey, content monitor, watchlist) are opened with FX-03, 05, 06, 08 and 09 and must say so in words and, for 08 and 09, show no data and no stuck "Loading". Every route shows the demo banner.
+
+**Writes: conflict, validation and replay** (FX-10, 11, 14, 15) are service behaviors, so they are asserted where the service is:
+
+| Write | Validation / policy | Version conflict | Same key replays | Same key, changed payload |
+| -- | -- | -- | -- | -- |
+| Approval decide and send, run control and recovery | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` |
+| Evidence draft and reviewer dispute | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` |
+| Collaboration commands | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` |
+| Batch pause and cancel | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` |
+| Settlement match, ledger export | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` |
+| Stock transfer, shipping decision, return | \`demoOps.test.ts\` | \`demoOps.test.ts\` | \`demoOps.test.ts\` | \`demoOps.test.ts\` |
+| Offer draft | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` |
+| Email flow draft | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` |
+| Schedule draft, task request | \`settings.test.tsx\` | \`settings.test.tsx\` (schedule) | \`settings.test.tsx\` (task request) | \`settings.test.tsx\` (task request) |
+
+**Approved is not sent** (FX-12, 13) is checked in \`e2e/flows.spec.ts\` (approval journey: nothing offers to send before a decision, "Approved, not sent" shows no receipt, a labeled synthetic receipt follows the send) and \`e2e/approvals.spec.ts\`.
+
+### Defects the matrix found, and the fix
+
+| Route | Defect | Fix |
+| -- | -- | -- |
+| 20 pages: orders, shipments, returns, support, payables, settlements, close, approvals, runs, evidence, lifecycle (5 pages), consent, activation, team, automations, capabilities, discovery, finance, finance analytics, fulfillment | A stale, partial or empty read was not said on the page, or the page rendered blank | \`ReadState\` (\`src/components/ReadState.tsx\`): a warning that names the last successful read or the rows covered, or an empty state, added once per page. \`RecordShell\` carries it for the record pages |
+| \`/overview\` | Unknown contribution or receipts printed a "0.0% margin", a "0%" donut and a 0% bar | The margin is N/A unless both figures are known and receipts are above zero |
+| \`/finance/payables/:id\` | An unreported amount was written into a sentence as "$0 content fee" | The sentence says the amount isn't reported |
+| \`/creators/watchlist\` | After a 403 the header still said "Loading the watchlist…" | It says the watchlist could not be read |
+| Social Cat and TikTok boards, recruitment | "Demo data" and "Illustrative" labels showed on the live adapter beside the error | Shown in the demo environment only; the footnotes show only once data is on the page |
+
+### Known gaps
+
+- The recruitment composer's helper text ("Illustrative rate, not approved") still renders under the live "not connected" error, because the composer is a local draft form.
+- Only seven routes read \`?fixture=\` in a browser. The other routes are driven by the unit matrix, which injects the state, not by a named fixture.
+- FX-16 to FX-34 (unknown outcome, partial batch, quota, rate limit, takeover, refund replay, role change, account race and the rest) are outside this matrix. Several have service tests (recovery, batch, cancel); none is claimed here.
+- The matrix reads words with regular expressions, so a screen could say the right words and still be wrong. It proves a state is stated, not that the figures beside it are correct; the per-screen tests do that.

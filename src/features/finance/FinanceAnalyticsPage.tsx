@@ -5,6 +5,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi } from "@/components/Kpi";
 import { formatMoney } from "@/components/MetricValue";
 import { BarRows, Divider, FactList, FlatTable, HalfColumns, Meter, Page, PageHeader, Panel } from "@/components/Panels";
@@ -41,6 +42,7 @@ export function FinanceAnalyticsPage() {
         <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 180 }} onClick={() => setDialog(true)}>Last 30 days</Button>
         <LinkButton to="/finance" style={{ minWidth: 200 }}>View statements</LinkButton>
       </PageHeader>
+      <ReadState res={query.data} subject="Finance analytics" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading financial pulse…" />}
       {query.isError && <ViewError error={query.error} subject="Financial pulse" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No finance data yet"><p>QuickBooks responded, but no management report exists for this period.</p></EmptyState>}

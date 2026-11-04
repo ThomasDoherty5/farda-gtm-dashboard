@@ -1,6 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Badge } from "@/components/Badge";
 import { SkeletonCard } from "@/components/EmptyState";
@@ -74,10 +75,11 @@ export function CommissionContext() {
 
 /** Context above both boards: the snapshot is illustrative, and the full funnel is a separate cohort (Figma 107:583). */
 export function BoardContext() {
+  const demo = useScope().adapter.environment === "demo";
   return (
     <div className={acquisition.context}>
       <p className={acquisition.contextTitle}>Operational stages and acquisition conversion</p>
-      <p className={acquisition.small}>These cards show an illustrative operational snapshot. The full funnel follows a separate mature acquisition cohort. New offers are commission-only; accepted historical terms remain valid.</p>
+      <p className={acquisition.small}>These cards show {demo ? "an illustrative" : "a"} operational snapshot. The full funnel follows a separate mature acquisition cohort. New offers are commission-only; accepted historical terms remain valid.</p>
       <div className={styles.contextActions}>
         <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>

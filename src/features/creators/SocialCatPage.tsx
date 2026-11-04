@@ -1,5 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -32,6 +33,7 @@ const OWNER_OPTIONS = [{ value: "all", label: "All owners" }, ...OWNERS.map((o) 
 const LAYOUT_OPTIONS = [{ value: "board", label: "Board view" }, { value: "list", label: "List view" }];
 
 function Board() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const owner = OWNER_OPTIONS.some((o) => o.value === search.get("owner")) ? (search.get("owner") as string) : "all";
   const layout = search.get("layout") === "list" ? "list" : "board";
@@ -50,13 +52,13 @@ function Board() {
       </PageTitle>
       <BoardPlatforms current="Social Cat">
         <Badge tone="warning" width={246}>Browser access: to validate</Badge>
-        <span className={acquisition.small}>Demo data</span>
+        {demo && <span className={acquisition.small}>Demo data</span>}
       </BoardPlatforms>
       <BoardContext />
       <Pending query={query} subject="the Social Cat lifecycle">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? <BoardBody res={query.data as ReadResponse<SocialCatBoardData>} data={query.data.data} owner={owner} layout={layout} onOwner={(v) => setParam("owner", v, "all")} onLayout={(v) => setParam("layout", v, "board")} /> : <EmptyState state="Empty" title="No collaborations match"><p>The source responded, but no collaboration matches this owner.</p></EmptyState>)}
       </Pending>
-      <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>
+      {query.data && <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>}
     </section>
   );
 }
