@@ -68,6 +68,9 @@
 .table tbody th { font: var(--text-label); color: var(--color-ink); }
 .tableTight th, .tableTight td { padding-block: var(--space-8); height: 63px; }
 .tableTight thead th { height: auto; padding-block: var(--space-12); }
+.tableCell12 th, .tableCell12 td { padding: var(--space-12); }
+.tableCell12 tbody th, .tableCell12 tbody td { padding-left: 0; }
+.tableCell12 tbody th { height: 46px; }
 .tableNum { font-variant-numeric: tabular-nums; }
 
 .actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
