@@ -39,7 +39,7 @@ test.describe("creator boards and dashboards against Figma at 1440", () => {
     const tiles = page.getByTestId("tiktok-stages").getByRole("listitem");
     expect(await box(tiles.first())).toMatchObject({ x: 97, w: 128 });
     expect(await box(page.getByTestId("worklist"))).toMatchObject({ x: 97, w: 1248, h: 318 });
-    expect(await box(page.getByRole("searchbox", { name: "Search TikTok creators" }))).toMatchObject({ w: 320, h: 48 });
+    expect(await box(page.getByRole("searchbox", { name: "Search TikTok creators" }).locator(".."))).toMatchObject({ w: 320, h: 48 });
   });
 
   test("Social Cat dashboard (23:275): panels sit where the design puts them", async ({ page }) => {

@@ -6,6 +6,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Field, SelectField, TextField } from "@/components/Field";
 import { ContextLine, Page, PageHeader, Small, kit } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
@@ -13,6 +14,7 @@ import { ActionError, blockedReason, LeaveGuard } from "@/features/approvals/sha
 import { InfoDialog } from "@/features/settings/shared";
 import { TIMING_OPTIONS, type EmailFlowData, type FlowKey } from "@/fixtures/lifecycle";
 import { validateFlowDraft, type FlowDraft } from "./flowDraft";
+import { EventHandling } from "./EventHandling";
 import { FlowSteps, LockedPolicies } from "./shared";
 import styles from "./Lifecycle.module.css";
 
@@ -30,7 +32,7 @@ export function EmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
   const demo = adapter.kind === "demo";
   // `edit` is null until the user changes something. A draft that differs from the server's is kept, even when the server moves on.
   const [edit, setEdit] = useState<FlowDraft | null>(null);
-  const [dialog, setDialog] = useState<"provider" | "preview" | null>(null);
+  const [dialog, setDialog] = useState<"provider" | "preview" | "events" | null>(null);
   const [shown, setShown] = useState(false);
   const save = useSave<FlowDraft, FlowDraft>();
   const dirty = data !== null && edit !== null && JSON.stringify(edit) !== JSON.stringify(data.draft);
@@ -53,11 +55,12 @@ export function EmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
         <LinkButton variant="secondary" to="/customers/lifecycle" style={{ minWidth: 184 }}>Back to lifecycle</LinkButton>
         <Button style={{ minWidth: 160 }} loading={save.isPending} disabledReason={blocked} onClick={onSave}>Save draft</Button>
       </PageHeader>
+      <ReadState res={query.data} subject="This email flow" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading the flow…" />}
       {query.isError && <ViewError error={query.error} subject="This email flow" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && draft ? (
         <>
-          <ContextLine badge={data.context.badge} width={180} trailing={<button type="button" className={styles.inlineLink} aria-haspopup="dialog" onClick={() => setDialog("preview")}>Preview template</button>}>{data.context.text}</ContextLine>
+          <ContextLine badge={data.context.badge} width={180} trailing={<><button type="button" className={styles.inlineLink} aria-haspopup="dialog" onClick={() => setDialog("preview")}>Preview template</button> <button type="button" className={styles.inlineLink} aria-haspopup="dialog" onClick={() => setDialog("events")}>Event handling</button></>}>{data.context.text}</ContextLine>
           {(save.data || data.draftVersion !== "v1") && (
             <p role="status" className={kit.status} data-testid="save-status">
               {noChange ? "Nothing to save: the draft matches version " : "Saved as version "}{data.draftVersion.replace("v", "")}. A saved draft doesn't enable the flow, publish it or send anything.
@@ -69,6 +72,9 @@ export function EmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
           <InfoDialog open={dialog === "provider"} title="Provider setup" demo={demo} onClose={() => setDialog(null)}>
             <p>No email provider is selected. The provider owns contact records, consent, suppression and delivery, and an automation owner sets this flow up there.</p>
             <p>Nothing is connected, configured or sent from here. Enabling stays blocked until a provider is connected and the checks above pass.</p>
+          </InfoDialog>
+          <InfoDialog open={dialog === "events"} title="How events are handled" demo={demo} onClose={() => setDialog(null)}>
+            <EventHandling />
           </InfoDialog>
           <InfoDialog open={dialog === "preview"} title="Template preview" demo={demo} onClose={() => setDialog(null)}>
             <div className={styles.synthetic} data-testid="template-preview">

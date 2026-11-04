@@ -10,13 +10,16 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { SelectField, TextField } from "@/components/Field";
 import { Kpi } from "@/components/Kpi";
 import { DetailRows, Halves, Notice, Page, PageHeader, Panel, Row, kit } from "@/components/PageKit";
+import { SearchField } from "@/components/Search";
 import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { ActionError, blockedReason } from "@/features/approvals/shared";
 import { RUN_PLATFORMS, RUN_STATES, type AutomationData, type AutomationRun } from "@/fixtures/settings";
+import { ReconciliationPage } from "./ReconciliationPage";
 import { AutomationNav, CadenceNotice } from "./shared";
 
 type Tab = "runs" | "zaps" | "reporting";
@@ -25,6 +28,11 @@ const allowed = (options: readonly { value: string }[], raw: string | null) => (
 
 /** Automation runs, with the Zaps and Reporting subviews (Figma source 14:637, owner THO-305). Read work; Request task only proposes, and never dispatches. */
 export function AutomationsPage() {
+  const [search] = useSearchParams();
+  return search.get("tab") === "reconciliation" ? <ReconciliationPage /> : <RunsPage />;
+}
+
+function RunsPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab: Tab = (TABS as string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as Tab) : "runs";
@@ -47,6 +55,7 @@ export function AutomationsPage() {
       <Notice kind="plain" title={demo ? "Demo · execution access is not validated" : "Execution access is not validated"}>
         Run states below are examples. A human approves the exact outbound action; the browser works inside its source platform and saves the result.
       </Notice>
+      <ReadState res={query.data} subject="Automation runs" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading runs…" />}
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>The source responded, but no run has ever been recorded.</p></EmptyState>)}
@@ -91,7 +100,7 @@ function Runs({ data }: { data: AutomationData }) {
       </div>
 
       <Row>
-        <input id={searchId} type="search" className={kit.search} placeholder="Search run or collaboration" aria-label="Search run or collaboration" value={q} onChange={(e) => update({ q: e.target.value }, true)} />
+        <SearchField id={searchId} label="Search run or collaboration" placeholder="Search run or collaboration" value={q} onChange={(v) => update({ q: v }, true)} />
         <FilterButton name="Platform" title="Choose a platform" options={[...RUN_PLATFORMS]} value={platform} onChange={(v) => update({ platform: v })} width={176} bare />
         <FilterButton name="State" title="Choose a run state" options={[...RUN_STATES]} value={state} onChange={(v) => update({ state: v })} width={152} bare />
         <Button variant="secondary" aria-pressed={mine} style={{ minWidth: 184 }} onClick={() => update({ mine: mine ? null : "1" })}>Assigned to me</Button>

@@ -5,6 +5,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { ContextLine, Divider, DetailRows, Page, PageHeader, Panel, Small, kit } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
 import { InfoDialog } from "@/features/settings/shared";
@@ -29,6 +30,7 @@ export function ActivationPage() {
         <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 184 }} onClick={() => setDialog("contract")}>View source contract</Button>
         <Button aria-haspopup="dialog" style={{ minWidth: 160 }} onClick={() => setDialog("cohort")}>Demo cohort</Button>
       </PageHeader>
+      <ReadState res={query.data} subject="Activation and retention" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading activation…" />}
       {query.isError && <ViewError error={query.error} subject="Activation and retention" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<ActivationData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="No activation data yet"><p>The source responded, but no cohort has ever been exported. That isn't zero activation.</p></EmptyState>)}

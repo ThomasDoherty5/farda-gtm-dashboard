@@ -1,0 +1,8 @@
+/* Figma component set 6:687: 460px, 24px padding and radius, 20px between title, text and actions. */
+.modal { width: min(460px, calc(100vw - var(--space-32))); max-height: calc(100dvh - var(--space-32)); padding: 0; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-ink); }
+.modal::backdrop { background: color-mix(in srgb, var(--color-ink) 72%, transparent); }
+.body { display: flex; flex-direction: column; gap: var(--space-20); padding: var(--space-24); }
+.title { margin: 0; font: var(--text-h2); }
+.description { margin: 0; font: var(--text-body); color: var(--color-muted); }
+.actions { display: flex; gap: var(--space-12); }
+.actions > button { flex: 1; min-width: 0; }

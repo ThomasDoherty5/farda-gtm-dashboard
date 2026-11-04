@@ -1,11 +1,13 @@
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { EmptyState } from "@/components/EmptyState";
 import { Kpi, KpiRow } from "@/components/Kpi";
+import { SearchField } from "@/components/Search";
 import { formatCompact, formatCount, formatMoney } from "@/components/MetricValue";
 import type { TikTokBoardData, TikTokDashboardData } from "@/fixtures/creators";
 import { DEMO_ASSESSMENT_ID, DEMO_BATCH_ID, DEMO_CREATOR_ID, DEMO_SETTLEMENT_ID } from "@/fixtures/ids";
@@ -23,6 +25,7 @@ export function TikTokPage() {
 /* ---------------------------------- Board ---------------------------------- */
 
 function Board() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const q = search.get("q") ?? "";
   const query = useView<{ q: string }, TikTokBoardData>("tiktokBoard", { q }, null, { keepPrevious: true });
@@ -40,13 +43,13 @@ function Board() {
       </PageTitle>
       <BoardPlatforms current="TikTok Shop">
         <Badge tone="violet" width={246}>Approved API route preferred</Badge>
-        <span className={acquisition.small}>Demo data</span>
+        {demo && <span className={acquisition.small}>Demo data</span>}
       </BoardPlatforms>
       <BoardContext />
       <Pending query={query} subject="the TikTok funnel">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? <BoardBody res={query.data as ReadResponse<TikTokBoardData>} data={query.data.data} q={q} onQuery={setQuery} /> : <EmptyState state="Empty" title="No TikTok creators yet"><p>The source responded, but no creator is in this funnel.</p></EmptyState>)}
       </Pending>
-      <p className={styles.footnote}>Illustrative funnel · canonical stages from the creator-agent specification. Extended terminal states are proposed product coverage.</p>
+      {demo && query.data && <p className={styles.footnote}>Illustrative funnel · canonical stages from the creator-agent specification. Extended terminal states are proposed product coverage.</p>}
     </section>
   );
 }
@@ -76,7 +79,7 @@ function BoardBody({ res, data, q, onQuery }: { res: ReadResponse<TikTokBoardDat
         <div className={`${styles.sectionRow} ${styles.top}`}>
           <h2 id="tt-worklist-title" className={acquisition.h2}>Creator worklist</h2>
           <span className={styles.spacer} style={{ "--spacer": "490px" } as React.CSSProperties} aria-hidden="true" />
-          <input className={styles.search} type="search" aria-label="Search TikTok creators" placeholder="Search TikTok creators" value={q} onChange={(e) => onQuery(e.target.value)} />
+          <SearchField label="Search TikTok creators" value={q} onChange={onQuery} />
         </div>
         {data.rows.length === 0 ? (
           <p className={acquisition.small} role="status">No creator matches “{q}”. Clear the search to see the full worklist.</p>
@@ -128,7 +131,7 @@ function Dashboard() {
 function DashboardBody({ res, data }: { res: ReadResponse<TikTokDashboardData>; data: TikTokDashboardData }) {
   const { cohort } = data;
   const measurable = cohort.measurablePosts > 0;
-  const share = (100 * data.orders) / data.shopOrders;
+  const share = data.shopOrders > 0 ? (100 * data.orders) / data.shopOrders : null;
   return (
     <>
       <StaleNotice res={res} />
@@ -180,8 +183,8 @@ function DashboardBody({ res, data }: { res: ReadResponse<TikTokDashboardData>; 
           <h2 id="tt-trace-title" className={styles.h3}>Make the sales traceable.</h2>
           <p className={styles.big}>{data.orders}</p>
           <p className={acquisition.small}>Attributed orders in this measured creator cohort</p>
-          <div className={styles.meter} role="img" aria-label={`${data.orders} of ${data.shopOrders} TikTok Shop orders attributed`}><div className={styles.meterFill} style={{ width: `${share}%` }} /></div>
-          <p className={acquisition.small}>{Math.round(share)}% of the demo’s {data.shopOrders} TikTok Shop orders</p>
+          <div className={styles.meter} role="img" aria-label={`${data.orders} of ${data.shopOrders} TikTok Shop orders attributed`}><div className={styles.meterFill} style={{ width: `${share ?? 0}%` }} /></div>
+          <p className={acquisition.small}>{share === null ? "No TikTok Shop orders in the period to attribute" : `${Math.round(share)}% of the demo’s ${data.shopOrders} TikTok Shop orders`}</p>
           <LinkButton variant="secondary" to="/creators/tiktok?view=board" style={{ width: "100%" }}>Open TikTok lifecycle</LinkButton>
         </section>
       </div>

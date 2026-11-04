@@ -32,7 +32,7 @@ export function PayablePage() {
               <LinkButton to={`/approvals/${p.approvalRef}`} style={{ minWidth: 166 }}>Founder review</LinkButton>
             </PageHeader>
             <ContextCard title="Existing payable · accepted historical terms" actions={<><LinkButton variant="secondary" to="/offers/demo-offer" style={{ minWidth: 208.5 }}>Current affiliate terms</LinkButton><LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton></>}>
-              The agreed {formatMoney(p.amount.value ?? { minorUnits: 0, currency: "USD" })} content fee remains payable through its original approval and evidence controls. It is not a new acquisition offer or a second payment of provider-settled commission.
+              The agreed {p.amount.value ? formatMoney(p.amount.value) : "content fee amount is not reported, and the"} content fee remains payable through its original approval and evidence controls. It is not a new acquisition offer or a second payment of provider-settled commission.
             </ContextCard>
             <div className={styles.paymentRow}>
               <Badge tone="warning" width={166}>Approval pending</Badge>

@@ -1,0 +1,15 @@
+/* Reviewer disagreement and override (VE-08). Added below the existing evidence page, so nothing above it moves. */
+.log { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.entry { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-16); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.entry p { margin: 0; }
+.entryHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.label { font: var(--text-label); color: var(--color-ink); }
+.prior { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding: var(--space-12) var(--space-16); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-16); }
+.prior p { margin: 0; }
+.fields { display: flex; flex-direction: column; gap: var(--space-16); border: 0; margin: 0; padding: 0; min-width: 0; }
+.fields legend { font: var(--text-label); padding: 0; margin-bottom: var(--space-8); }
+.radio { display: flex; align-items: flex-start; gap: var(--space-12); font: var(--text-body); }
+.radio input { margin: 4px 0 0; }
+.readiness { margin: 0; padding: var(--space-16); border-radius: var(--space-24); background: var(--color-warningSoft); font: var(--text-small); color: var(--color-ink); }
+.readiness ul { margin: var(--space-4) 0 0; padding-left: var(--space-20); }
+.row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }

@@ -78,6 +78,8 @@ const batchDetail = z.object({
     if (new Set(items.map((i) => i.id)).size !== items.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Batch item ids must be unique" });
   }),
   held: z.array(z.object({ key: text, label: text, byOwner: countsByOwner })),
+  /** TikTok sample requests. A decision counts only with TikTok's receipt; a denied route is an owner handoff, never a decision. */
+  samples: z.array(z.object({ id: text, handle: text, product: text, units: count, route: z.enum(["api", "authorityDenied"]), state: z.enum(["pending", "approved", "declined", "handoff"]), receiptRef: text.nullable(), ownerRef: text.nullable() })),
   filters: z.object({ source: z.enum(["tiktok", "all"]), deal: z.enum(["affiliate", "all"]), owner: z.union([z.literal("all"), owner]) }),
   model: z.object({ label: text, status: z.literal("pending") }),
   capacity: z.object({
@@ -102,15 +104,20 @@ const sourceFacts = z.object({
   reached: z.array(count.nullable()).length(STAGES),
   /** Median days from the previous stage. Null when timestamps are missing. */
   medianDays: z.array(z.number().nonnegative().nullable()).length(STAGES),
-  current: z.object(Object.fromEntries(CURRENT_STAGE_KEYS.map((k) => [k, count])) as Record<(typeof CURRENT_STAGE_KEYS)[number], typeof count>),
-  dispatch: z.object({ queued: count, toReconcile: count }),
+  /** Null where the bucket does not exist for the route (inbound has no outbound dispatch): N/A, never zero. */
+  current: z.object(Object.fromEntries(CURRENT_STAGE_KEYS.map((k) => [k, count.nullable()])) as Record<(typeof CURRENT_STAGE_KEYS)[number], ReturnType<typeof count.nullable>>),
+  dispatch: z.object({ queued: count, toReconcile: count }).nullable(),
   closed: z.object({ waiting: count, declined: count, expired: count }),
-  sends: z.object({ approved: count, confirmed: count, uncertain: count, queued: count, replies: count, attempts: count, opportunities: count }),
+  sends: z.object({ approved: count, confirmed: count, uncertain: count, queued: count, replies: count, attempts: count, opportunities: count }).nullable(),
   nativeMilestone: z.enum(["matched", "accepted"]),
   outcomes: z.object({ posts: count, comparablePosts: count, views: count, engagements: count, orders: count, fullyRefundedOrders: count, merchandise: money, refunds: money }),
+}).superRefine((v, ctx) => {
+  // Outbound dispatch is N/A for the whole source or for none of it: a null bucket beside real send counts is a contradiction.
+  const na = [v.current.dispatch === null, v.dispatch === null, v.sends === null];
+  if (na.some((x) => x !== na[0])) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "current.dispatch, dispatch and sends must all be null (no outbound route) or all be present", path: ["current", "dispatch"] });
 });
 
-const pipelineFilterKeys = z.enum(["source", "network", "checkout", "window"]);
+const pipelineFilterKeys = z.enum(["source", "route", "network", "checkout", "window", "policy"]);
 const pipelineSummary = z.object({
   datasetKey: text,
   cohort: z.object({ label: text, asOf: z.string().datetime(), timezone: text, grain: text }),
@@ -119,11 +126,32 @@ const pipelineSummary = z.object({
     network: z.enum(["all", "instagram", "tiktok"]),
     checkout: z.enum(["all", "website", "tiktok-shop"]),
     window: z.enum(["sep-oct", "sep", "oct"]),
+    route: z.enum(["outbound", "inbound"]),
+    policy: z.enum(["all", "policy-2026-09", "policy-2026-10"]),
   }),
   /** Filters set to a value the dataset cannot split. The counts do not change for them. */
   unsplit: z.array(pipelineFilterKeys),
   scaleMax: count,
   sources: z.array(sourceFacts),
+});
+
+/* ---------- pipelineBranches ---------- */
+
+const source = z.enum(["social-cat", "tiktok-shop"]);
+const pipelineBranches = z.object({
+  datasetKey: text,
+  cohort: text,
+  sources: z.array(
+    z.object({
+      source,
+      label: text,
+      terminal: z.object({ declined: count, optOut: count, expired: count }),
+      /** Delivered is null where no carrier receipt exists for the source: unknown, never zero. */
+      sample: z.object({ accepted: count, requested: count, notRequested: count, stockCostApproved: count, shipped: count, delivered: count.nullable() }),
+      content: z.object({ terms: count, withObligation: count, withoutObligation: count, posted: count, due: count, overdue: count, postedVoluntarily: count, noneYet: count, trackingActive: count }),
+    }),
+  ),
+  repeatCases: z.array(z.object({ handle: text, prior: z.enum(["declined", "optOut", "expired"]), source, repeatAllowed: z.boolean(), suppression: z.enum(["preserved", "permanent"]) })),
 });
 
 /* ---------- discoverySummary ---------- */
@@ -141,6 +169,10 @@ const discoverySummary = z.object({
   currentPhase: count,
   capacityRows: z.array(z.object({ id: z.enum(["social-cat", "tiktok-shop", "shared"]), source: text, evidence: text, meaning: text, next: text })),
   batch: z.object({ batchId: text, selected: count, eligible: count, sampleUnits: count, sampleUnitCost: money, rateLabel: text }),
+  /** The plan's versions. An unread source account is unknown, never a made-up id. */
+  versions: z.object({ sourceAccount: provenanceValueSchema(text), icpVersion: text, policyVersion: text, accessStatus: text, scheduleStatus: z.enum(["draft", "active"]) }),
+  steps: z.array(z.object({ title: text, count: count.nullable(), countLabel: text, owner: text, evidence: text, next: text })).min(1),
+  identity: z.object({ surfaced: count, mergedDuplicates: count, suppressed: z.object({ optedOut: count, declinedRecently: count, existingRelationship: count }), selected: count }),
 }).superRefine((d, ctx) => {
   if (d.currentPhase >= d.phases.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["currentPhase"], message: "currentPhase must index a phase" });
   if (d.batch.eligible > d.batch.selected) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["batch", "eligible"], message: "Eligible cannot exceed selected" });
@@ -151,5 +183,6 @@ export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   invitationDraft,
   batchDetail,
   pipelineSummary,
+  pipelineBranches,
   discoverySummary,
 };

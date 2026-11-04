@@ -1,0 +1,8 @@
+/* Figma component set 6:710: 360px, 16px padding, 16px radius. Success is ink with white text; error is dangerSoft with danger text. */
+.toast { display: flex; align-items: flex-start; gap: var(--space-12); width: 360px; max-width: 100%; padding: var(--space-16); border-radius: var(--space-16); font: var(--text-label); }
+.toast p { flex: 1; margin: 0; }
+.success { background: var(--color-ink); color: var(--color-onDark); }
+.error { background: var(--color-dangerSoft); color: var(--color-danger); }
+.dismiss { flex: none; padding: 0; border: 0; background: none; font: var(--text-small); color: inherit; text-decoration: underline; cursor: pointer; }
+.region { position: fixed; z-index: 30; right: var(--space-16); bottom: var(--space-16); display: flex; flex-direction: column; gap: var(--space-8); max-width: calc(100vw - var(--space-32)); }
+.region:empty { display: none; }
