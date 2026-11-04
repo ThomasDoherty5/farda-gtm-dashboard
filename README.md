@@ -46,6 +46,8 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 
 - Scorecards and offer economics (THO-297): the Content quality (37:74), TikTok commerce (37:251) and Social Cat commerce (65:814) scorecards at `/creators/:creatorId/assessments/:assessmentId`, and Offer and economics (65:634) at `/offers/:offerId`. The scorecards are read-only historical v2 snapshots; a missing rating shows Needs data, never a rescaled total. The offer is a commission-only draft: a locked $0 upfront fee, fixed-per-sale gated, and a save through the adapter that shows only the acknowledged version. Demo data in `src/fixtures/scorecards.ts`.
 
+- Content monitor and watchlist (THO-299): Content monitor (`/content`, 23:73), Watchlist (`/creators/watchlist`, 25:166), Hourly run (a tabless `/runs/:runId`, 25:307) and Post performance (`/content/:postId`, 25:481). Monitoring is read-only. Views, engagement, attributed orders and net sales keep their window and denominator; a missing count is N/A, never zero; a retry never bypasses a login. The demo posts reconcile to the Overview's 240,000 views and 180 orders. Demo data in `src/fixtures/monitor.ts`.
+
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
 **Not done yet**
