@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
+import { useScope } from "@/adapter/scope";
 import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
@@ -355,6 +356,9 @@ function SamplesTab({ res, data }: { res: ReadResponse<BatchData>; data: BatchDa
   const action = useAction<{ batchId: string; sampleId: string; decision: "approve" | "decline" }>();
   const [last, setLast] = useState<{ sampleId: string; response: ActionResponse } | null>(null);
   const blocked = blockedReason(res, "decideTikTokSample");
+  // In the demo no request reaches TikTok, so a receipt here is synthetic. It is worded as recorded in the demo until a real source receipt exists.
+  const demo = useScope().adapter.kind === "demo";
+  const costApproval = discoveryDemo.capacityRows.find((x) => x.source === "Product and shipping")?.evidence ?? "Separate approval";
   const decide = (sampleId: string, decision: "approve" | "decline") =>
     action.mutate(
       { operation: "controlRun", actionKind: "decideTikTokSample", entityRefs: [], expectedVersion: data.version, approvalRef: null, manifestRef: null, payload: { batchId: data.batchId, sampleId, decision } },
@@ -364,14 +368,22 @@ function SamplesTab({ res, data }: { res: ReadResponse<BatchData>; data: BatchDa
   return (
     <section className={`${creators.panel} ${creators.panelWide}`} aria-labelledby="batch-samples-title" data-testid="samples-tab">
       <div className={acquisition.sectionTitle}>
-        <h2 id="batch-samples-title" className={acquisition.h2}>Sample requests, decided where TikTok allows it.</h2>
-        <p className={acquisition.small}>{pending} of {data.samples.length} waiting. A decision counts only when TikTok's API returns a receipt. If TikTok refuses this account's scope, the request goes to its owner and nothing is recorded as decided. This tab has no Figma source yet.</p>
+        <h2 id="batch-samples-title" className={acquisition.h2}>Sample requests, decided where TikTok allows it. {demo && <Badge tone="violet">Demo</Badge>}</h2>
+        <p className={acquisition.small}>
+          {pending} of {data.samples.length} waiting.{" "}
+          {demo
+            ? "Decisions are recorded in the demo only: no request reaches TikTok and the receipts are synthetic. A real decision counts only when TikTok's API returns a receipt."
+            : "A decision counts only when TikTok's API returns a receipt."}{" "}
+          If TikTok refuses this account's scope, the request goes to its owner and nothing is recorded as decided. A sample decision never approves its product and shipping cost, which is a {costApproval.toLowerCase()}. This tab has no Figma source yet.
+        </p>
       </div>
       {blocked && <p className={acquisition.small} role="status" data-testid="samples-blocked">{blocked}</p>}
       {action.error && <ActionError error={action.error} />}
       {last && last.response.state === "succeeded" && (
         <p className={styles.status} role="status" data-testid="sample-ack">
-          {last.response.receiptRefs.length > 0 ? `Decided in TikTok for ${last.sampleId}. Receipt ${last.response.receiptRefs.join(", ")}.` : `TikTok acknowledged ${last.sampleId} but returned no receipt yet, so it is not shown as decided.`}
+          {last.response.receiptRefs.length > 0
+            ? `${demo ? `Recorded in the demo for ${last.sampleId}. Demo receipt ${last.response.receiptRefs.join(", ")} is synthetic: TikTok was not contacted.` : `Decided in TikTok for ${last.sampleId}. Receipt ${last.response.receiptRefs.join(", ")}.`} Product and shipping cost still need a separate approval.`
+            : `TikTok acknowledged ${last.sampleId} but returned no receipt yet, so it is not shown as decided.`}
         </p>
       )}
       {last && last.response.state === "blocked" && (
@@ -381,12 +393,13 @@ function SamplesTab({ res, data }: { res: ReadResponse<BatchData>; data: BatchDa
       )}
       <DataTable
         caption="TikTok sample requests"
-        columns={[{ label: "Creator" }, { label: "Product" }, { label: "Units" }, { label: "Status" }, { label: "Decision" }]}
+        columns={[{ label: "Creator" }, { label: "Product" }, { label: "Units" }, { label: "Cost approval" }, { label: "Status" }, { label: "Decision" }]}
         rows={data.samples.map((s) => [
           s.handle,
           s.product,
           String(s.units),
-          s.state === "pending" ? "Waiting for a decision" : s.state === "approved" ? `Approved in TikTok · ${s.receiptRef}` : s.state === "declined" ? `Declined in TikTok · ${s.receiptRef}` : `Not decided · handed to ${s.ownerRef}`,
+          costApproval,
+          s.state === "pending" ? "Waiting for a decision" : s.state === "approved" ? `Approved in ${demo ? "the demo" : "TikTok"} · ${s.receiptRef}` : s.state === "declined" ? `Declined in ${demo ? "the demo" : "TikTok"} · ${s.receiptRef}` : `Not decided · handed to ${s.ownerRef}`,
           s.state === "pending" ? (
             <span key="d" style={{ display: "inline-flex", gap: 8 }}>
               <Button variant="secondary" loading={action.isPending && action.variables?.payload.sampleId === s.id && action.variables.payload.decision === "approve"} disabledReason={blocked ?? undefined} aria-label={`Approve sample ${s.id}`} onClick={() => decide(s.id, "approve")}>Approve</Button>

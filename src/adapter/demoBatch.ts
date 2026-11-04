@@ -20,7 +20,7 @@ export function createDemoBatch() {
   let samples: SampleRequest[] = seedSamples();
   let paused = false;
   let version = 1;
-  const results = new Map<string, ActionResponse>();
+  const results = new Map<string, { hash: string; response: ActionResponse }>();
 
   const versionLabel = () => `batch-v${version}`;
   const response = (request: ActionRequest<unknown>, state: ActionResponse["state"], reasonCodes: string[]): ActionResponse => ({
@@ -73,8 +73,11 @@ export function createDemoBatch() {
       });
     },
     async submit(request: ActionRequest<unknown>): Promise<ActionResponse> {
+      // A key names one logical action. Replaying it with a changed payload or version is a different request, never the first result.
+      const hash = JSON.stringify([request.actionKind, request.expectedVersion, request.payload ?? null]);
       const prior = results.get(request.idempotencyKey);
-      if (prior) return prior;
+      if (prior && prior.hash !== hash) fail("MANIFEST_CHANGED", "This request changed since the key was first used, so it needs a fresh review.", request.requestId);
+      if (prior) return prior.response;
       if (request.expectedVersion !== versionLabel()) fail("STALE_VERSION", "This batch changed since you opened it. Reload to see the current state.", request.requestId);
       let result: ActionResponse;
       if (request.actionKind === "pauseBatch") {
@@ -112,7 +115,7 @@ export function createDemoBatch() {
       } else {
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo behavior for ${request.actionKind}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       }
-      results.set(request.idempotencyKey, result);
+      results.set(request.idempotencyKey, { hash, response: result });
       return result;
     },
   };

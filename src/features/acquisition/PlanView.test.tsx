@@ -123,7 +123,7 @@ describe("DS-06 approval intent through the adapter", () => {
   it("the service refuses an upfront fee and an open-ended or oversized batch, and a stale plan", async () => {
     const adapter = createDemoAdapter();
     const base = { operation: "requestApproval" as const, actionKind: "requestBatchApproval", entityRefs: [], approvalRef: null, manifestRef: null, schemaVersion: "x", requestId: "r", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" as const } };
-    const payload = { batchId: "BATCH-TT-DEMO-024", recipients: 24, rateLabel: "12% standard-rate", sampleUnits: 12, sampleUnitCostMinor: 2500, upfrontFeeMinor: 0, policyVersion: "p" };
+    const payload = { batchId: "BATCH-TT-DEMO-024", recipients: 24, rateLabel: "12% standard-rate", sampleUnits: 12, sampleUnitCostMinor: 2500, upfrontFeeMinor: 0, policyVersion: discoveryDemo.versions.policyVersion };
     const send = (over: object, key: string, version = DISCOVERY_VERSION) => adapter.submitAction({ ...base, expectedVersion: version, idempotencyKey: key, payload: { ...payload, ...over } });
     await expect(send({ upfrontFeeMinor: 5000 }, "k1")).rejects.toMatchObject({ body: { code: "POLICY_VIOLATION", executionCertainty: "notApplied" } });
     await expect(send({ recipients: 25 }, "k2")).rejects.toMatchObject({ body: { code: "VALIDATION_FAILED" } });

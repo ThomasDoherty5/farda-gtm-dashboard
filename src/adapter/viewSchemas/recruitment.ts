@@ -78,6 +78,7 @@ const batchDetail = z.object({
     if (new Set(items.map((i) => i.id)).size !== items.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Batch item ids must be unique" });
   }),
   held: z.array(z.object({ key: text, label: text, byOwner: countsByOwner })),
+  samples: z.array(z.object({ id: text, handle: text, product: text, units: count, route: z.enum(["api", "authorityDenied"]), state: z.enum(["pending", "approved", "declined", "handoff"]), receiptRef: text.nullable(), ownerRef: text.nullable() })),
   filters: z.object({ source: z.enum(["tiktok", "all"]), deal: z.enum(["affiliate", "all"]), owner: z.union([z.literal("all"), owner]) }),
   model: z.object({ label: text, status: z.literal("pending") }),
   capacity: z.object({
@@ -140,6 +141,17 @@ const discoverySummary = z.object({
   phases: z.array(z.object({ title: text, note: text })).min(1),
   currentPhase: count,
   capacityRows: z.array(z.object({ id: z.enum(["social-cat", "tiktok-shop", "shared"]), source: text, evidence: text, meaning: text, next: text })),
+  versions: z.object({
+    /** Unknown until an authorized read. */
+    sourceAccount: provenanceValueSchema(text),
+    icpVersion: text,
+    policyVersion: text,
+    accessStatus: text,
+    scheduleStatus: z.enum(["draft", "active"]),
+  }),
+  /** A null count is unknown, never zero. */
+  steps: z.array(z.object({ title: text, count: count.nullable(), countLabel: text, owner: text, evidence: text, next: text })),
+  identity: z.object({ surfaced: count, mergedDuplicates: count, suppressed: z.object({ optedOut: count, declinedRecently: count, existingRelationship: count }), selected: count }),
   batch: z.object({ batchId: text, selected: count, eligible: count, sampleUnits: count, sampleUnitCost: money, rateLabel: text }),
 }).superRefine((d, ctx) => {
   if (d.currentPhase >= d.phases.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["currentPhase"], message: "currentPhase must index a phase" });

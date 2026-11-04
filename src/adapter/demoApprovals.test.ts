@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SCHEMA_VERSION, actionResponseSchema, readResponseSchema, type ActionRequest, type ReadRequest } from "./contract";
 import { createDemoApprovals } from "./demoApprovals";
 import { AdapterError } from "./errors";
+import { seedApprovals } from "@/fixtures/approvals";
 import type { ApprovalDetail, DecidePayload, ReconcilePayload, RunDetail } from "@/features/approvals/types";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
@@ -348,6 +349,32 @@ describe("FE04-04 founder authority for financial commitments", () => {
     const err = await errorFrom(decide("demo-approval-fee", { decision: "approved" }));
     expect(err.body.code).toBe("POLICY_VIOLATION");
     expect(data("demo-approval-fee").status).toBe("pending");
+  });
+
+  it("the upfront-fee exemption belongs to the record, not to the role: a founder cannot approve a new upfront fee even where a founder is required", async () => {
+    const seed = seedApprovals();
+    const fee = seed.find((a) => a.approvalRef === "demo-approval-fee")!;
+    fee.requiredRole = "founder";
+    const store = createDemoApprovals({ actorRole: "founder", approvals: seed });
+    const err = await errorFrom(store.submit(action("decideApproval", "demo-approval-fee", "v1", { decision: "approved" })));
+    expect(err.body.code).toBe("POLICY_VIOLATION");
+    expect(err.body.fieldErrors?.upfrontFee).toBeDefined();
+    expect((store.readApproval(read("approvalDetail", { approvalId: "demo-approval-fee" })).data as ApprovalDetail).status).toBe("pending");
+  });
+
+  it("the accepted historical fee stays approvable because the record is a historical liability", async () => {
+    const { decide, data } = founder();
+    await decide("demo-approval-founder", { decision: "approved" });
+    expect(data("demo-approval-founder").status).toBe("approved");
+  });
+
+  it("a founder-required record is not exempt just by being founder-only: relabeling a new fee as historical needs the record's own policy version", async () => {
+    const seed = seedApprovals();
+    const historical = seed.find((a) => a.approvalRef === "demo-approval-founder")!;
+    historical.versions = historical.versions.map((v) => ({ ...v, policyVersion: "commission-only@demo" }));
+    const store = createDemoApprovals({ actorRole: "founder", approvals: seed });
+    const err = await errorFrom(store.submit(action("decideApproval", "demo-approval-founder", "v1", { decision: "approved" })));
+    expect(err.body.code).toBe("POLICY_VIOLATION");
   });
 
   it("a founder also holds the reviewer role", async () => {

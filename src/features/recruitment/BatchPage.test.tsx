@@ -204,13 +204,32 @@ describe("FE06-05 TikTok sample decisions", () => {
     expect(within(row("SR-001")).getByText("Waiting for a decision")).toBeInTheDocument();
   });
 
+  it("the tab is labeled Demo and says the receipts are synthetic", async () => {
+    await openSamples();
+    const tab = screen.getByTestId("samples-tab");
+    expect(within(tab).getByText("Demo")).toBeInTheDocument();
+    expect(tab).toHaveTextContent(/recorded in the demo/i);
+    expect(tab).toHaveTextContent(/receipts are synthetic/);
+    expect(tab).not.toHaveTextContent(/Decided in TikTok/);
+  });
+
+  it("each sample names its separate cost approval, and a sample decision does not approve the cost", async () => {
+    const { user } = await openSamples();
+    expect(within(row("SR-001")).getByText("Separate approval")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve sample SR-001" }));
+    expect(await screen.findByTestId("sample-ack")).toHaveTextContent(/product and shipping cost still need a separate approval/i);
+  });
+
   it("an approval through the verified API route counts only with TikTok's receipt", async () => {
     const adapter = createDemoAdapter();
     const spy = vi.spyOn(adapter, "submitAction");
     const { user } = await openSamples(adapter);
     await user.click(screen.getByRole("button", { name: "Approve sample SR-001" }));
-    expect(await screen.findByTestId("sample-ack")).toHaveTextContent("Decided in TikTok for SR-001. Receipt demo-tiktok-sample-receipt-SR-001.");
-    await waitFor(() => expect(row("SR-001")).toHaveTextContent("Approved in TikTok · demo-tiktok-sample-receipt-SR-001"));
+    const ack = await screen.findByTestId("sample-ack");
+    expect(ack).toHaveTextContent("Recorded in the demo for SR-001. Demo receipt demo-tiktok-sample-receipt-SR-001 is synthetic: TikTok was not contacted.");
+    expect(ack).not.toHaveTextContent(/Decided in TikTok/);
+    await waitFor(() => expect(row("SR-001")).toHaveTextContent("Approved in the demo · demo-tiktok-sample-receipt-SR-001"));
+    expect(row("SR-001")).not.toHaveTextContent(/Approved in TikTok/);
     expect(spy.mock.calls[0]![0]).toMatchObject({ actionKind: "decideTikTokSample", payload: { batchId: "demo-batch-tt-024", sampleId: "SR-001", decision: "approve" } });
     expect(within(row("SR-001")).queryByRole("button")).not.toBeInTheDocument();
   });
@@ -218,7 +237,7 @@ describe("FE06-05 TikTok sample decisions", () => {
   it("a decline is recorded the same way", async () => {
     const { user } = await openSamples();
     await user.click(screen.getByRole("button", { name: "Decline sample SR-002" }));
-    await waitFor(() => expect(row("SR-002")).toHaveTextContent("Declined in TikTok · demo-tiktok-sample-receipt-SR-002"));
+    await waitFor(() => expect(row("SR-002")).toHaveTextContent("Declined in the demo · demo-tiktok-sample-receipt-SR-002"));
   });
 
   it("when TikTok denies the account's authority the owner takes over, and nothing is shown as decided", async () => {

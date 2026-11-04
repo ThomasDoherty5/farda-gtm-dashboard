@@ -21,11 +21,17 @@ const countItems = (items: RunItem[]): RunCounts => {
  * It enforces what the real server must (role, version, expiry, policy, idempotency), receives
  * nothing from the client as authority, and contacts no provider. State resets on reload.
  */
-export function createDemoApprovals(opts: { actorRole?: string } = {}) {
+/**
+ * The one exemption from the commission-only rule: paying a fee that was already accepted under the earlier workflow. It is a property of
+ * the record (its own policy version), never of the role asked to decide it, so a founder-only record for a new fee is still refused.
+ */
+const isHistoricalLiability = (v: { policyVersion: string }) => v.policyVersion.startsWith("historical-liability");
+
+export function createDemoApprovals(opts: { actorRole?: string; /** Test seam: replaces the seeded approvals. */ approvals?: ApprovalDetail[] } = {}) {
   const actorRole = opts.actorRole ?? DEMO_ACTOR_ROLE;
   /** A founder holds every role's authority. Nobody else can decide above their role. */
   const canDecide = (required: string) => actorRole === required || actorRole === "founder";
-  const approvals = new Map(seedApprovals().map((a) => [a.approvalRef, a]));
+  const approvals = new Map((opts.approvals ?? seedApprovals()).map((a) => [a.approvalRef, a]));
   const runs = new Map(seedRuns().map((r) => [r.runRef, r]));
   const results = new Map<string, { hash: string; result: Promise<ActionResponse> }>();
   const stats = { dispatches: 0 };
@@ -120,7 +126,7 @@ export function createDemoApprovals(opts: { actorRole?: string } = {}) {
     const current = a.versions[a.versions.length - 1]!;
     const { decision, reason, editedMessage } = request.payload;
     const reasonText = reason?.trim() ?? "";
-    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && a.requiredRole !== "founder")
+    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && !isHistoricalLiability(current))
       fail("POLICY_VIOLATION", "New acquisition is commission-only, so an upfront fee can't be approved.", request.requestId, { fieldErrors: { upfrontFee: "Upfront fee must be zero for new acquisition." } });
     if (decision === "rejected" && !reasonText) fail("VALIDATION_FAILED", "A reason is required to reject.", request.requestId, { fieldErrors: { reason: "Enter a reason for rejecting." } });
     if (decision === "editRequired") {

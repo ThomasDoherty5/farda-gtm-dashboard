@@ -2,7 +2,7 @@ import { recruitmentViewSchemas as schemas } from "./recruitment";
 import { REMOVE, expectAllParse, expectRejections, readRequest, readVariants, scope } from "./acquisitionTestKit";
 import { SCHEMA_VERSION, type ActionRequest } from "../contract";
 import { createDemoAdapter } from "../demoAdapter";
-import { BATCH_ID, seedItems, heldReasons } from "@/fixtures/batch";
+import { BATCH_ID, seedItems, seedSamples, heldReasons } from "@/fixtures/batch";
 import { OWNERS } from "@/fixtures/creators";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { PIPELINE_STAGES, pipelineDemo } from "@/fixtures/pipeline";
@@ -16,7 +16,7 @@ const control = (actionKind: string, key: string, expectedVersion: string, paylo
 });
 
 const batchBase: BatchData = {
-  datasetKey: "batch-demo", batchId: BATCH_ID, version: "batch-v1", paused: false, items: seedItems(), held: heldReasons,
+  datasetKey: "batch-demo", batchId: BATCH_ID, version: "batch-v1", paused: false, items: seedItems(), held: heldReasons, samples: seedSamples(),
   filters: { source: "tiktok", deal: "affiliate", owner: "all" }, model: { label: "current v3 pending", status: "pending" },
   capacity: { nativeInvitations: 24, sampleUnits: 12, sampleCostMinor: 30_000, collaborationSlots: null },
 };
