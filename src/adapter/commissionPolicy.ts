@@ -22,6 +22,9 @@ export type AcquisitionTerms = {
   sampleCostMinor: number;
 };
 
+/** Terms as they arrive off the wire: the relationship is any string until the rule has allowed it. */
+export type UntrustedTerms = Omit<AcquisitionTerms, "relationship"> & { relationship: string };
+
 export type PolicyConfig = {
   version: string;
   maxCommissionPct: number;
@@ -29,6 +32,13 @@ export type PolicyConfig = {
 };
 
 export const BASE_POLICY: PolicyConfig = { version: "commission-only@demo-1", maxCommissionPct: 20, sampleCapMinor: 5_000 };
+
+/**
+ * Hard limits. A policy change can't go past them, and one fixed amount per eligible sale can't either. 100,000 minor units
+ * is USD 1,000, the single-commitment size that already needs a founder (adapter decision D-5).
+ */
+export const MAX_PER_SALE_FIXED_MINOR = 100_000;
+export const POLICY_BOUNDS = { maxCommissionPct: 100, sampleCapMinor: 100_000 } as const;
 
 export type BlockerCode =
   | "UPFRONT_FEE_PROHIBITED"
@@ -38,6 +48,8 @@ export type BlockerCode =
   | "GIFTED_ONLY_PROHIBITED"
   | "COMMISSION_REQUIRED"
   | "COMMISSION_ABOVE_CAP"
+  | "PER_SALE_FIXED_ABOVE_CAP"
+  | "RELATIONSHIP_NOT_COMMISSION_ONLY"
   | "SAMPLE_ABOVE_CAP"
   | "INVALID_AMOUNT";
 
@@ -52,6 +64,8 @@ const MESSAGES: Record<BlockerCode, [string, string]> = {
   GIFTED_ONLY_PROHIBITED: ["relationship", "A gifted-only relationship can't start. Offer commission with a separately approved sample."],
   COMMISSION_REQUIRED: ["commission", "A per-sale commission is required."],
   COMMISSION_ABOVE_CAP: ["commission", "The commission is above what the current policy allows."],
+  PER_SALE_FIXED_ABOVE_CAP: ["commission", "The fixed amount per sale is above what the policy allows."],
+  RELATIONSHIP_NOT_COMMISSION_ONLY: ["relationship", "New acquisition must be commission-only. Any other relationship can't start."],
   SAMPLE_ABOVE_CAP: ["sample", "The sample cost is above the current policy cap."],
   INVALID_AMOUNT: ["amount", "Amounts must be whole, non-negative minor units."],
 };
@@ -61,18 +75,21 @@ const blocker = (code: BlockerCode, extra?: string): Blocker => ({ code, field: 
 const validAmount = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= 0;
 
 /** The single eligibility rule for a new acquisition offer. Never trusts a UI-computed flag. */
-export function evaluateTerms(terms: AcquisitionTerms, policy: PolicyConfig = BASE_POLICY): Eligibility {
+export function evaluateTerms(terms: UntrustedTerms, policy: PolicyConfig = BASE_POLICY): Eligibility {
   const blockers: Blocker[] = [];
   const amounts = [terms.upfrontFeeMinor, terms.guaranteedFeeMinor, terms.paidComponentMinor, terms.perSaleFixedMinor, terms.sampleCostMinor];
   if (!amounts.every(validAmount)) blockers.push(blocker("INVALID_AMOUNT"));
   if (terms.upfrontFeeMinor !== 0) blockers.push(blocker("UPFRONT_FEE_PROHIBITED"));
   if (terms.guaranteedFeeMinor !== 0) blockers.push(blocker("GUARANTEED_FEE_PROHIBITED"));
   if (terms.paidComponentMinor !== 0) blockers.push(blocker("PAID_COMPONENT_PROHIBITED"));
+  // An allowlist: only commissionOnly starts. The named codes explain the known cases; anything else is refused too.
   if (terms.relationship === "paid" || terms.relationship === "hybrid") blockers.push(blocker("PAID_OR_HYBRID_PROHIBITED"));
-  if (terms.relationship === "gifted") blockers.push(blocker("GIFTED_ONLY_PROHIBITED"));
+  else if (terms.relationship === "gifted") blockers.push(blocker("GIFTED_ONLY_PROHIBITED"));
+  else if (terms.relationship !== "commissionOnly") blockers.push(blocker("RELATIONSHIP_NOT_COMMISSION_ONLY"));
   const pctOk = Number.isFinite(terms.commissionPct) && terms.commissionPct > 0;
   if (!pctOk && !(terms.perSaleFixedMinor > 0)) blockers.push(blocker("COMMISSION_REQUIRED"));
   if (pctOk && terms.commissionPct > policy.maxCommissionPct) blockers.push(blocker("COMMISSION_ABOVE_CAP", `Maximum ${policy.maxCommissionPct}%.`));
+  if (validAmount(terms.perSaleFixedMinor) && terms.perSaleFixedMinor > MAX_PER_SALE_FIXED_MINOR) blockers.push(blocker("PER_SALE_FIXED_ABOVE_CAP", `Maximum $${(MAX_PER_SALE_FIXED_MINOR / 100).toFixed(2)} per sale.`));
   if (validAmount(terms.sampleCostMinor) && terms.sampleCostMinor > policy.sampleCapMinor) blockers.push(blocker("SAMPLE_ABOVE_CAP"));
   return { eligible: blockers.length === 0, blockers, policyVersion: policy.version };
 }
@@ -87,6 +104,22 @@ export function fieldErrorsOf(e: Eligibility, prefix = ""): Record<string, strin
 /** Terms from an approval payload (percentage commission, upfront fee, optional sample). */
 export function termsFromApproval(t: { commissionRatePct: number; upfrontFee: { minorUnits: number }; sampleCost: { minorUnits: number } | null }): AcquisitionTerms {
   return { relationship: "commissionOnly", upfrontFeeMinor: t.upfrontFee.minorUnits, guaranteedFeeMinor: 0, paidComponentMinor: 0, commissionPct: t.commissionRatePct, perSaleFixedMinor: 0, sampleCostMinor: t.sampleCost?.minorUnits ?? 0 };
+}
+
+/** The only policy version an accepted historical liability carries. Matched exactly, never by prefix. */
+export const HISTORICAL_LIABILITY_POLICY_VERSIONS: readonly string[] = ["historical-liability@demo"];
+
+type ApprovalTermsShape = Parameters<typeof termsFromApproval>[0];
+
+/**
+ * Terms the dispatch guard must evaluate for an approval, or null when the approval is an accepted historical liability
+ * that is paid as accepted. The exemption is deliberately narrow: an exact policy version, a founder-only approval, and a
+ * pure settlement with no commission and no sample. Anything that carries new terms is evaluated like a new offer, so a
+ * new fee can't ride on a historical label. (The real server must also match the amount to the accepted liability record.)
+ */
+export function guardTermsOf(record: { policyVersion: string; requiredRole: string; terms: ApprovalTermsShape }): AcquisitionTerms | null {
+  const settlement = HISTORICAL_LIABILITY_POLICY_VERSIONS.includes(record.policyVersion) && record.requiredRole === "founder" && record.terms.commissionRatePct === 0 && record.terms.sampleCost === null;
+  return settlement ? null : termsFromApproval(record.terms);
 }
 
 /**

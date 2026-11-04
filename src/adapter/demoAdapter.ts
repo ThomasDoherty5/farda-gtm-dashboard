@@ -3,8 +3,7 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { createDemoPolicy } from "./demoPolicy";
-import { termsFromApproval } from "./commissionPolicy";
-import type { ApprovalDetail } from "@/features/approvals/types";
+import { guardTermsOf } from "./commissionPolicy";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
@@ -27,18 +26,24 @@ import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey 
  * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
  * Overview capabilities report "unverified" so nothing can look sent or paid.
  */
-export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number } = {}): FardaAdapter {
+export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
-  const approvals = createDemoApprovals();
-  /** Terms of an approval for the policy guard. An accepted historical liability is paid as accepted, so it has none. */
+  /**
+   * The policy guard runs inside the approval service, after its stored-result replay, so a retry of a dispatch that
+   * already succeeded gets its original receipt even when the policy has since changed.
+   */
+  const approvals = createDemoApprovals({
+    beforeDispatch: (request) => policy.guardApprovedDispatch(request),
+    onApproved: (ref) => policy.recordApproval(ref),
+  });
+  /** Terms of an approval for the policy guard. Throws when it can't be read, and the guard then refuses. */
   const approvalTerms = (ref: string) => {
-    try {
-      const v = (approvals.readApproval({ filters: { approvalId: ref }, requestId: "policy-guard" } as never).data as ApprovalDetail).versions.at(-1)!;
-      return v.policyVersion.startsWith("historical-liability") ? null : termsFromApproval(v.payload.terms);
-    } catch { return null; }
+    const v = approvals.peekApproval(ref, "policy-guard");
+    const latest = v.versions.at(-1)!;
+    return guardTermsOf({ policyVersion: latest.policyVersion, requiredRole: v.requiredRole, terms: latest.payload.terms });
   };
-  const policy = createDemoPolicy({ termsOf: approvalTerms });
+  const policy = createDemoPolicy({ termsOf: approvalTerms, actorRole: opts.actorRole });
   const evidence = createDemoEvidence();
   const ops = createDemoOps();
   const finance = createDemoFinance();
@@ -95,7 +100,6 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       const financeResult = finance.submit(request);
       if (financeResult) return financeResult;
       if (policy.handles(request)) return policy.submit(request);
-      if (request.operation === "dispatchApprovedAction") policy.guardApprovedDispatch(request);
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
       if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);

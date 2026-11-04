@@ -111,12 +111,12 @@ describe("an approval made under an older policy (CP-06)", () => {
     adapter.submitAction(act("dispatchApprovedAction", {}, { approvalRef: "demo-approval-exact", operation: "dispatchApprovedAction" }));
 
   it("dispatches while the policy is unchanged", async () => {
-    const adapter = createDemoAdapter();
+    const adapter = createDemoAdapter({ actorRole: "founder" });
     await approveExact(adapter);
     expect((await send(adapter)).state).toBe("succeeded");
   });
   it("does not dispatch after a conflicting change, shows the changed terms and asks for a new preview", async () => {
-    const adapter = createDemoAdapter();
+    const adapter = createDemoAdapter({ actorRole: "founder" });
     await approveExact(adapter);
     await adapter.submitAction(act("changeAcquisitionPolicy", { version: "commission-only@demo-2", maxCommissionPct: 10 }));
     const err = await rejected(send(adapter));
@@ -126,7 +126,7 @@ describe("an approval made under an older policy (CP-06)", () => {
     expect(err.body.executionCertainty).toBe("notApplied");
   });
   it("still dispatches after a policy change that does not conflict", async () => {
-    const adapter = createDemoAdapter();
+    const adapter = createDemoAdapter({ actorRole: "founder" });
     await approveExact(adapter);
     await adapter.submitAction(act("changeAcquisitionPolicy", { version: "commission-only@demo-2", maxCommissionPct: 30 }));
     expect((await send(adapter)).state).toBe("succeeded");
@@ -141,7 +141,7 @@ describe("history stays readable and payable (CP-07)", () => {
   it("the policy guard does not intercept an accepted historical liability after a policy change", async () => {
     // The reviewer role can't decide this founder approval, so dispatch fails on approval, never on policy.
     // The pay-out path itself is covered where a founder can decide (open work in the daily-plan change).
-    const adapter = createDemoAdapter();
+    const adapter = createDemoAdapter({ actorRole: "founder" });
     await adapter.submitAction(act("changeAcquisitionPolicy", { version: "commission-only@demo-2", maxCommissionPct: 10 }));
     const err = await rejected(adapter.submitAction(act("dispatchApprovedAction", {}, { approvalRef: "demo-approval-founder", operation: "dispatchApprovedAction" })));
     expect(err.body.code).toBe("APPROVAL_REQUIRED");
