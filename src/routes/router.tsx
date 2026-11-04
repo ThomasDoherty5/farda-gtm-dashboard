@@ -2,6 +2,13 @@ import { Navigate, type RouteObject } from "react-router-dom";
 import { Shell } from "@/components/Shell";
 import { EvidencePage } from "@/features/acquisition/EvidencePage";
 import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
+import { PipelinePage } from "@/features/acquisition/PipelinePage";
+import { CollaborationPage } from "@/features/collaboration/CollaborationPage";
+import { BatchPage } from "@/features/recruitment/BatchPage";
+import { InvitationPage } from "@/features/recruitment/InvitationPage";
+import { RecruitmentPage } from "@/features/recruitment/RecruitmentPage";
+import { SocialCatPage } from "@/features/creators/SocialCatPage";
+import { TikTokPage } from "@/features/creators/TikTokPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
@@ -24,6 +31,13 @@ const implemented: Record<string, JSX.Element> = {
   "/campaigns/:campaignId": <CampaignFunnelPage />,
   "/analytics/customer-journey": <CustomerJourneyPage />,
   "/creators/discovery": <DiscoveryPage />,
+  "/creators/pipeline": <PipelinePage />,
+  "/creators/social-cat": <SocialCatPage />,
+  "/creators/tiktok": <TikTokPage />,
+  "/creators/social-cat/recruitment": <RecruitmentPage />,
+  "/creators/tiktok/invitations/new": <InvitationPage />,
+  "/batches/:batchId": <BatchPage />,
+  "/collaborations/:collaborationId": <CollaborationPage />,
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,
   "/runs/:runId": <RunPage />,

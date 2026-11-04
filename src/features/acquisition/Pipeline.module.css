@@ -1,0 +1,47 @@
+/* Full acquisition pipeline (Figma 102:74). Panels are 24px padded, with 22px on the right so content is the design's 1248px wide; below 1180 the columns stack (implementation adaptation). */
+.panel { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; padding: var(--space-24) 22px var(--space-24) var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.panelTight { gap: 14px; }
+.panel h2 { margin: 0; }
+.pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); }
+.stageRow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-16); }
+.notes { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-20); }
+.notes p { margin: 0; flex: 1 1 320px; max-width: 904px; }
+
+/* The funnel is a fixed 1248 x 450 drawing; narrower screens scroll it inside its labeled region. */
+.chartScroll { overflow-x: auto; }
+.chartScroll:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
+.chart { position: relative; width: 1248px; height: 450px; }
+.tick { position: absolute; left: 0; width: 30px; font: var(--text-micro); color: var(--color-muted); }
+.grid { position: absolute; left: 42px; width: 1206px; height: 1px; background: var(--color-border); }
+.columns { position: absolute; inset: 0; margin: 0; padding: 0; list-style: none; }
+.column { position: absolute; top: 0; width: 104px; height: 450px; }
+.column > * { position: absolute; left: 0; width: 104px; margin: 0; }
+.bar { border-radius: var(--space-8); }
+.early { background: var(--color-violetSoft); }
+.later { background: var(--color-violet); }
+.count { font: var(--text-h2); color: var(--color-ink); }
+.stage { top: 288px; font: var(--text-small); color: var(--color-ink); }
+.conversion { top: 344px; font: var(--text-label); color: var(--color-violet); }
+.fact { font: var(--text-micro); color: var(--color-muted); }
+
+/* Mutually exclusive send balances: widths follow the counts, so the bar adds up to the approvals. */
+.balance { display: flex; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.segment { display: flex; align-items: center; justify-content: center; height: 40px; min-width: 0; border-radius: var(--space-8); font: var(--text-label); color: var(--color-ink); overflow: hidden; }
+.confirmed { background: var(--color-violet); color: var(--color-onDark); }
+.uncertain { background: var(--color-warningSoft); }
+.queued { background: var(--color-violetSoft); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.cohortList { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; }
+.cohortList > div { display: grid; grid-template-columns: minmax(0, 140px) minmax(0, 1fr); gap: var(--space-12); }
+.cohortList dt { font: var(--text-small); color: var(--color-muted); }
+.cohortList dd { margin: 0; font: var(--text-label); }
+.dialogTable { width: 100%; }
+@media (max-width: 1179px) {
+  .pair { grid-template-columns: minmax(0, 1fr); }
+  .stageRow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 479px) {
+  .stageRow { grid-template-columns: minmax(0, 1fr); }
+  .panel { padding: var(--space-16); }
+  .cohortList > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
