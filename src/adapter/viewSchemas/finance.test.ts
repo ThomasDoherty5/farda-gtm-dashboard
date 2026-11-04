@@ -4,8 +4,9 @@ import type { z } from "zod";
 import { SCHEMA_VERSION, readResponseSchema, type ActionRequest, type ReadRequest } from "../contract";
 import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
-import { financeDashboardDemo, ledgerDemo, payableDemo, periodCloseDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
-import { commissionLedgerSchema, financeDashboardSchema, financeViewSchemas, payableDetailSchema, periodCloseSchema, settlementDetailSchema } from "./finance";
+import { financeDashboardDemo, ledgerDemo, payableDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
+import { CLOSE_PACKAGE_SCENARIOS, closePackageDemo, manifestDemo, monthsDemo, periodCloseDemo } from "@/fixtures/financeClose";
+import { closePackageSchema, commissionLedgerSchema, monthsHistorySchema, reportManifestSchema, financeDashboardSchema, financeViewSchemas, payableDetailSchema, periodCloseSchema, settlementDetailSchema } from "./finance";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 const request = (viewKey: string, filters: object = {}): ReadRequest<unknown> => ({
@@ -41,6 +42,15 @@ const variants: { viewKey: string; filters: object; throws?: string }[] = [
   { viewKey: "periodClose", filters: { period: "2026-10" } },
   { viewKey: "periodClose", filters: { period: "2026-10", scenario: "exportfailed" } },
   { viewKey: "periodClose", filters: { period: "2025-01" }, throws: "RECORD_NOT_FOUND" },
+  ...CLOSE_PACKAGE_SCENARIOS.flatMap((scenario) => [
+    { viewKey: "periodClose", filters: { period: "2026-10", scenario } },
+    { viewKey: "closePackage", filters: { period: "2026-10", scenario } },
+  ]),
+  { viewKey: "periodClose", filters: { period: "2026-10", scenario: "nonsense" }, throws: "VALIDATION_FAILED" },
+  { viewKey: "closePackage", filters: { period: "2026-10", scenario: "nonsense" }, throws: "VALIDATION_FAILED" },
+  { viewKey: "closePackage", filters: { period: "2025-01" }, throws: "RECORD_NOT_FOUND" },
+  { viewKey: "monthsHistory", filters: {} },
+  { viewKey: "reportManifest", filters: {} },
 ];
 
 describe("finance view schemas: every demo response parses", () => {
@@ -163,6 +173,35 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["negative expected payout", (d) => (d.exceptions[0].expected = -1)],
       ["fractional difference", (d) => (d.exceptions[0].difference = 12.5)],
       ["export flag as a string", (d) => (d.exportFailed = "false")],
+    ],
+  },
+  {
+    view: "closePackage", schema: closePackageSchema, valid: closePackageDemo("2026-10", "lateadjustment"),
+    cases: [
+      ["unknown status", (d) => (d.status = "locked")],
+      ["adjustment without a direction", (d) => delete d.adjustment.direction],
+      ["adjustment with an unknown direction", (d) => (d.adjustment.direction = "sideways")],
+      ["version without figures", (d) => delete d.versions[1].figures],
+      ["fractional figure", (d) => (d.versions[0].figures.accrual = 1.5)],
+      ["no commission cohort label", (d) => delete d.commissionCohort],
+      ["receipt not immutable", (d) => (d.paidReceipts[0].immutable = false)],
+      ["unknown export state", (d) => (d.exportState = "sent")],
+    ],
+  },
+  {
+    view: "monthsHistory", schema: monthsHistorySchema, valid: { datasetKey: "finance-months-demo", months: monthsDemo() },
+    cases: [
+      ["wrong dataset", (d) => (d.datasetKey = "finance-demo")],
+      ["unknown month status", (d) => (d.months[0].status = "locked")],
+      ["period not YYYY-MM", (d) => (d.months[0].period = "July")],
+    ],
+  },
+  {
+    view: "reportManifest", schema: reportManifestSchema, valid: manifestDemo(),
+    cases: [
+      ["a generated report", (d) => (d.rows[0].state = "Generated")],
+      ["an invented checksum", (d) => (d.rows[0].checksum = "abc")],
+      ["not marked synthetic", (d) => (d.synthetic = false)],
     ],
   },
 ];

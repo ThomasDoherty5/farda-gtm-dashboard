@@ -4,11 +4,10 @@ import { LinkButton } from "@/components/Button";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { FlatTable, Note, Notice, Page, PageHeader, Panel } from "@/components/Panels";
 import { ViewError } from "@/components/ViewError";
-import { cpaPolicyLabel, currentRevision, isLocked, supersededBy, type Manifest, type MonthRow, type MonthStatus } from "@/fixtures/financeClose";
+import { cpaPolicyLabel, currentRevision, isLocked, MONTH_STATUS_LABEL, supersededBy, type Manifest, type MonthRow, type MonthStatus } from "@/fixtures/financeClose";
 import { FinanceNav } from "./FinanceNav";
 
-const TONE: Record<MonthStatus, BadgeTone> = { open: "neutral", closed: "success", reopened: "warning", revised: "violet" };
-const WORDS: Record<MonthStatus, string> = { open: "Open", closed: "Closed", reopened: "Reopened", revised: "Revised" };
+const TONE: Record<MonthStatus, BadgeTone> = { open: "neutral", reconciling: "warning", blocked: "danger", awaitingCpa: "warning", readyToExport: "violet", exporting: "violet", failed: "danger", closed: "success", reopened: "warning", revised: "violet" };
 
 function Shell({ id, title, subtitle, children, query }: { id: string; title: string; subtitle: string; children: React.ReactNode; query: { isPending: boolean; isError: boolean; error: Error | null; refetch: () => unknown; data: unknown } }) {
   return (
@@ -26,7 +25,7 @@ function Shell({ id, title, subtitle, children, query }: { id: string; title: st
 
 /** Which months are open, closed, reopened or revised (FIN274-02/03). A revision keeps the one it replaced readable; a reopened month is not locked. */
 export function MonthsView() {
-  const query = useView<Record<string, never>, { months: MonthRow[] }>("monthsHistory", {});
+  const query = useView<Record<string, never>, { datasetKey: "finance-months-demo"; months: MonthRow[] }>("monthsHistory", {});
   const months = query.data?.data?.months ?? null;
   return (
     <Shell id="months-title" title="Months, closes and revisions." subtitle="Finance / Month-end · A close can be reopened or revised, and nothing is overwritten." query={query}>
@@ -43,7 +42,7 @@ export function MonthsView() {
                 key: m.period,
                 cells: [
                   m.label,
-                  <Badge key="s" tone={TONE[m.status]}>{WORDS[m.status]}</Badge>,
+                  <Badge key="s" tone={TONE[m.status]}>{MONTH_STATUS_LABEL[m.status]}</Badge>,
                   isLocked(m) ? `Locked at revision ${currentRevision(m)}` : m.status === "reopened" ? "Not locked: reopened, needs a new sign-off" : m.status === "open" ? "Not locked: still open" : "Not locked: current revision is not signed off",
                   m.revisions.length === 0 ? "None yet" : m.revisions.map((r) => `r${r.n} ${r.at}: ${r.reason}${supersededBy(m, r.n) ? ` (superseded by r${supersededBy(m, r.n)}, still readable)` : ""}`).join(" · "),
                 ],
@@ -74,8 +73,8 @@ export function ManifestView() {
             <FlatTable
               caption="Report manifest"
               testId="manifest-table"
-              columns={[{ label: "Report", width: 200 }, { label: "Period", width: 100 }, { label: "Basis", width: 260 }, { label: "State", width: 150 }, { label: "Tax-policy reference", width: 260 }]}
-              rows={m.rows.map((r) => ({ key: r.report, cells: [r.report, r.period, `${r.basis} · ${r.source}`, `${r.state} · no timestamp or checksum`, cpaPolicyLabel(r.policyRef)] }))}
+              columns={[{ label: "Report", width: 190 }, { label: "Period", width: 90 }, { label: "Expected files", width: 280 }, { label: "Basis", width: 240 }, { label: "State", width: 150 }, { label: "Tax-policy reference", width: 240 }]}
+              rows={m.rows.map((r) => ({ key: r.report, cells: [r.report, r.period, r.expectedFiles.join(", "), `${r.basis} · ${r.source}`, `${r.state} · no timestamp or checksum`, cpaPolicyLabel(r.policyRef)] }))}
             />
           </Panel>
         </>

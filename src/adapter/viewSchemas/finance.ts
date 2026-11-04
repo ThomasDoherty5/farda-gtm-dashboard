@@ -1,6 +1,6 @@
 /**
  * Runtime schemas for the finance view data: commissionLedger, settlementDetail, payableDetail, financeDashboard,
- * periodClose. They validate `ReadResponse.data` only; the envelope is `readResponseSchema(...)` in contract.ts.
+ * periodClose, closePackage, monthsHistory, reportManifest. They validate `ReadResponse.data` only; the envelope is `readResponseSchema(...)` in contract.ts.
  *
  * Choices:
  * - Amounts are whole minor units. Balances, sales and costs reject negatives; figures that can honestly be negative
@@ -108,6 +108,8 @@ export const financeDashboardSchema = z.object({
   payouts: z.array(z.object({ channel: z.string(), matched: count, needsReview: count })),
 });
 
+const periodStatus = z.enum(["open", "reconciling", "blocked", "awaitingCpa", "readyToExport", "exporting", "failed", "closed", "reopened"]);
+
 export const periodCloseSchema = z.object({
   datasetKey,
   version: z.string(),
@@ -116,10 +118,69 @@ export const periodCloseSchema = z.object({
   checks: z.array(z.object({ check: z.string(), owner: z.string(), state: z.enum(["complete", "unmatched", "waiting", "blocked"]), label: z.string() })),
   closeOwner: z.string(),
   cpaReview: z.string(),
-  status: z.enum(["open", "closed", "reopened", "revised"]),
+  status: periodStatus,
   exceptions: z.array(z.object({ payout: z.string(), expected: count, difference: signedMinor })),
   reports: z.array(z.object({ name: z.string(), state: z.string() })),
   exportFailed: z.boolean(),
+});
+
+const reportStatus = z.enum(["notGenerated", "queued", "exporting", "exported", "failed", "superseded"]);
+const difference = z.object({
+  payout: z.string(), expected: count, difference: signedMinor, owner: z.string().nullable(), reason: z.string().nullable(), correctionRef: z.string().nullable(), resolvedAt: z.string().nullable(), providerRef: z.string(), qboRef: z.string().nullable(),
+});
+const splitRow = z.object({
+  id: z.string(), provider: z.string(), kind: z.enum(["commission", "historical"]), currency: z.string(), period: z.string(),
+  accrual: provenanceValueSchema(signedMinor), reversals: provenanceValueSchema(signedMinor), processingFees: provenanceValueSchema(signedMinor), merchantBilled: provenanceValueSchema(signedMinor),
+  merchantPaid: provenanceValueSchema(signedMinor), creatorPayout: provenanceValueSchema(signedMinor), outstanding: provenanceValueSchema(signedMinor),
+  unresolved: z.array(z.object({ label: z.string(), amount: count })), note: z.string(),
+});
+
+/** The close package. A late adjustment carries a direction, and each version carries its own frozen ledger figures. */
+export const closePackageSchema = z.object({
+  datasetKey,
+  version: z.string(),
+  period: z.string().regex(/^\d{4}-\d{2}$/),
+  label: z.string(),
+  scenario: z.string(),
+  status: periodStatus,
+  blockers: z.array(z.object({ reason: z.string(), text: z.string() })),
+  cpa: z.object({ state: z.enum(["notRequested", "requested", "signedOff"]), signedAt: z.string().nullable() }),
+  exportState: z.enum(["none", "exporting", "failed", "exported"]),
+  commissionCohort: z.object({ label: z.string(), orders: count, note: z.string() }),
+  landedCost: z.object({ complete: z.boolean(), missingSkus: z.array(z.string()) }),
+  differences: z.array(difference),
+  versions: z.array(z.object({
+    version: z.string(),
+    figures: z.object({ accrual: count, reversals: count, netCommissionExpense: signedMinor, creatorPaid: count, outstandingLiability: count, pendingRecovery: count }),
+    frozen: z.boolean(),
+    closedAt: z.string().nullable(),
+    cpaSignOff: z.string().nullable(),
+    reports: z.array(z.object({ name: z.string(), expectedFiles: z.array(z.string()), status: reportStatus, version: z.string().nullable(), exportEvidence: z.string().nullable(), note: z.string().nullable() })),
+  })).min(1),
+  adjustment: z.object({
+    id: z.string(), postedAt: z.string(), amount: nonNegativeMoney, direction: z.enum(["reversal", "addition"]), reason: z.string(), sourceEvidence: z.string(), linkedReceipt: z.string(),
+    effect: z.literal("reopened"), priorVersion: z.string(), newVersion: z.string(), cpaSignOff: z.enum(["Requested", "Not requested"]),
+  }).nullable(),
+  paidReceipts: z.array(z.object({ receipt: z.string(), groupId: z.string(), amount: nonNegativeMoney, immutable: z.literal(true) })),
+  commissionSplit: z.array(splitRow),
+});
+
+const cpaPolicy = z.object({ reference: z.string().nullable() });
+export const monthsHistorySchema = z.object({
+  datasetKey: z.literal("finance-months-demo"),
+  months: z.array(z.object({
+    period: z.string().regex(/^\d{4}-\d{2}$/), label: z.string(), status: z.enum([...periodStatus.options, "revised"]), signedRevision: count.nullable(), signedAt: z.string().nullable(), reopenedAt: z.string().nullable(),
+    revisions: z.array(z.object({ n: count, at: z.string(), reason: z.string(), supersedes: count.nullable() })), taxNote: z.string(),
+  })),
+});
+export const reportManifestSchema = z.object({
+  datasetKey: z.literal("finance-manifest-demo"),
+  manifestId: z.string(),
+  period: z.string().regex(/^\d{4}-\d{2}$/),
+  label: z.string(),
+  synthetic: z.literal(true),
+  policy: cpaPolicy,
+  rows: z.array(z.object({ report: z.string(), period: z.string(), basis: z.string(), source: z.string(), expectedFiles: z.array(z.string()), state: z.literal("Not generated"), generatedAt: z.null(), checksum: z.null(), policyRef: cpaPolicy })),
 });
 
 /** View key to the schema of `ReadResponse.data` for that view. */
@@ -129,4 +190,7 @@ export const financeViewSchemas: Record<string, z.ZodTypeAny> = {
   payableDetail: payableDetailSchema,
   financeDashboard: financeDashboardSchema,
   periodClose: periodCloseSchema,
+  closePackage: closePackageSchema,
+  monthsHistory: monthsHistorySchema,
+  reportManifest: reportManifestSchema,
 };

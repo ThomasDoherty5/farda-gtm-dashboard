@@ -67,7 +67,7 @@ const rejects = (key: string, data: unknown) => expect(viewSchema(key).safeParse
 
 describe("the schema registry covers every operations view the demo serves", () => {
   it("has exactly these view keys", () => {
-    expect(Object.keys(opsViewSchemas).sort()).toEqual(["fulfillmentAnalytics", "inventoryOverview", "operationsOverview", "orderDetail", "returnDetail", "shippingException", "supportWorkspace"]);
+    expect(Object.keys(opsViewSchemas).sort()).toEqual(["fulfillmentAnalytics", "inventoryOverview", "operationsOverview", "operationsShipping", "orderCustomer", "orderDetail", "returnDetail", "shippingException", "supportWorkspace"]);
     expect(Object.keys(opsActionSchemas).sort()).toEqual(["prepareReturnTask", "recordShippingDecision", "requestStockTransfer"]);
   });
 });
@@ -509,3 +509,22 @@ const _accepts = [
   {} as SupportWorkspace satisfies z.infer<typeof supportWorkspaceSchema>,
 ];
 void _accepts;
+
+describe("operationsShipping and orderCustomer (additions)", () => {
+  it("parses the shipping view, and refuses an unknown carrier state", async () => {
+    const data = await expectParses(createDemoAdapter(), "operationsShipping");
+    const bad = clone(data);
+    bad.shipments[0].carrierState = "teleported";
+    rejects("operationsShipping", bad);
+  });
+
+  it("parses the customer view for a denied role and an allowed role, and never accepts details without an audited reveal", async () => {
+    const denied = await expectParses(createDemoAdapter(), "orderCustomer", { orderId: "TEST-SH-1042" });
+    expect(denied.revealed).toBeNull();
+    const allowed = await expectParses(createDemoAdapter({ actorRole: "operations" }), "orderCustomer", { orderId: "TEST-SH-1042" });
+    expect(allowed.access.state).toBe("allowed");
+    const leaked = clone(denied);
+    leaked.revealed = { name: "x", email: "x@example.test", city: "y" };
+    rejects("orderCustomer", leaked);
+  });
+});

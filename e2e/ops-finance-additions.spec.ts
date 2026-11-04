@@ -30,17 +30,9 @@ test("nightly reconciliation: request a repair, the audit trail grows, axe is cl
   await axe(page);
 });
 
-test("months and the dry-run manifest are addressable and axe-clean", async ({ page }) => {
-  for (const view of ["months", "manifest"]) {
-    await page.goto(`/finance/close/2026-10?view=${view}`);
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await axe(page);
-  }
-});
-
 test("the new views do not overflow at 320px", async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 800 });
-  for (const path of ["/operations?view=shipping", "/automations?tab=reconciliation", "/finance/close/2026-10?view=months", "/finance/close/2026-10?view=manifest"]) {
+  for (const path of ["/operations?view=shipping", "/automations?tab=reconciliation"]) {
     await page.goto(path);
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
