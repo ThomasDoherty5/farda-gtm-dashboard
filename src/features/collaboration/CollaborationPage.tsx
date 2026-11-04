@@ -14,7 +14,7 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { ActionError } from "@/features/approvals/shared";
 import { PageTitle, Pending, SourceButton, StaleNotice } from "@/features/creators/creatorsShared";
 import { BareTitle, ContextBox, acquisition, assessmentPath, creators } from "@/features/recruitment/recruitmentShared";
-import { approvalBlocker, reviewAfter, revisionsRemaining, type CollaborationData } from "@/fixtures/collaboration";
+import { approvalBlocker, postingTiming, revisionsRemaining, type CollaborationData } from "@/fixtures/collaboration";
 import { DEMO_OFFER_ID } from "@/fixtures/ids";
 import styles from "./Collaboration.module.css";
 
@@ -62,16 +62,20 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
   const contentView = tab === "content" || tab === "rights";
   const { content, terms } = data;
   const remaining = revisionsRemaining(terms.revisionRounds);
-  const specs: Record<string, Spec> = {
+  const baseSpecs: Record<string, Spec> = {
     next: { key: "next", title: "Queue next action", intro: `The server decides which actions are allowed for ${data.handle}. Choosing one queues a request for approval; it doesn't send anything.`, submit: "Queue for approval", actionKind: "queueNextAction", notes: ["Applicable obligations and suppression are checked before this is queued.", "Nothing is sent until a person approves the exact action."], fields: [{ key: "actionKey", label: "Next action", kind: "select", required: true, initial: data.allowedActions[0]?.key ?? "", options: data.allowedActions.map((a) => ({ value: a.key, label: a.label })) }], payload: (v) => ({ actionKey: v.actionKey! }) },
-    feedback: { key: "feedback", title: "Queue feedback", intro: `Feedback on ${content.version} of ${content.title.split(" / ")[0]}. It becomes a new approval payload version; a changed message needs a new human decision.`, submit: "Queue feedback", actionKind: "queueFeedback", notes: ["Queued feedback is not a confirmed message. Only a source receipt confirms it was sent."], fields: [{ key: "text", label: "Feedback", kind: "textarea", required: true, initial: content.proposedFeedback }], payload: (v) => ({ text: v.text!, submissionVersion: content.version }) },
-    revision: { key: "revision", title: "Request revision", intro: `Targets ${content.version}. ${remaining} revision ${remaining === 1 ? "round remains" : "rounds remain"} under the accepted terms.`, submit: "Request revision", actionKind: "requestRevision", notes: ["This queues an approval-bound request. Only a source receipt confirms delivery to the creator."], blocked: remaining === 0 ? "The agreed revision rounds are used. Another round needs new terms." : null, fields: [{ key: "text", label: "What should change", kind: "textarea", required: true, initial: "", help: "Be specific about the opening, claims or license." }], payload: (v) => ({ text: v.text!, submissionVersion: content.version }) },
-    reject: { key: "reject", title: "Reject with reason", intro: `Rejects ${content.version}. The draft and its evidence are kept; nothing is deleted.`, submit: "Request rejection", actionKind: "rejectContent", notes: ["Rejecting doesn't end the collaboration or remove its accepted obligations."], fields: [{ key: "reason", label: "Reason", kind: "textarea", required: true, initial: "" }], payload: (v) => ({ reason: v.reason!, submissionVersion: content.version }) },
     close: { key: "close", title: "Close collaboration", intro: "Choose the outcome and say why. This requests the terminal transition; history and outstanding costs stay.", submit: "Request closure", actionKind: "closeCollaboration", notes: ["Opt-out blocks future outreach. Reopening needs an explicit reason, and a new brief starts a new collaboration.", "The retained sample cost stays on record."], list: { title: "Unresolved obligations", items: data.unresolved }, fields: [{ key: "outcome", label: "Outcome", kind: "select", required: true, initial: "", options: [{ value: "", label: "Choose an outcome" }, ...data.closureOutcomes.map((o) => ({ value: o, label: o }))] }, { key: "reason", label: "Reason", kind: "textarea", required: true, initial: "" }], payload: (v) => ({ outcome: v.outcome!, reason: v.reason! }) },
     suppress: { key: "suppress", title: "Suppress outreach", intro: `Stops outreach to ${data.handle} on this identity. Historical collaboration facts are kept.`, submit: "Request suppression", actionKind: "suppressOutreach", notes: ["Browser tasks are canceled or paused before another outbound action is allowed."], fields: [{ key: "reason", label: "Reason", kind: "textarea", required: true, initial: "" }], payload: (v) => ({ reason: v.reason! }) },
     create: { key: "create", title: "Create new collaboration", intro: `A new opportunity linked to ${data.handle}. It needs fresh commission-only terms and approval; the earlier acceptance, fee and rights are not copied.`, submit: "Propose new collaboration", actionKind: "createCollaboration", notes: ["Suppression is preserved. Nothing is offered until the new terms are approved."], fields: [{ key: "reason", label: "Why a new collaboration", kind: "textarea", required: true, initial: "" }], payload: (v) => ({ reason: v.reason! }) },
   };
-  const open = (key: keyof typeof specs) => { setAck(null); setSpec(specs[key]!); };
+  // Feedback, revision and rejection act on a submission. With none, they do not exist rather than being disabled copies.
+  const contentSpecs: Record<string, Spec> = content ? {
+    feedback: { key: "feedback", title: "Queue feedback", intro: `Feedback on ${content.version} of ${content.title.split(" / ")[0]}. It becomes a new approval payload version; a changed message needs a new human decision.`, submit: "Queue feedback", actionKind: "queueFeedback", notes: ["Queued feedback is not a confirmed message. Only a source receipt confirms it was sent."], fields: [{ key: "text", label: "Feedback", kind: "textarea", required: true, initial: content.proposedFeedback }], payload: (v) => ({ text: v.text!, submissionVersion: content.version }) },
+    revision: { key: "revision", title: "Request revision", intro: `Targets ${content.version}. ${remaining} revision ${remaining === 1 ? "round remains" : "rounds remain"} under the accepted terms.`, submit: "Request revision", actionKind: "requestRevision", notes: ["This queues an approval-bound request. Only a source receipt confirms delivery to the creator."], blocked: remaining === 0 ? "The agreed revision rounds are used. Another round needs new terms." : null, fields: [{ key: "text", label: "What should change", kind: "textarea", required: true, initial: "", help: "Be specific about the opening, claims or license." }], payload: (v) => ({ text: v.text!, submissionVersion: content.version }) },
+    reject: { key: "reject", title: "Reject with reason", intro: `Rejects ${content.version}. The draft and its evidence are kept; nothing is deleted.`, submit: "Request rejection", actionKind: "rejectContent", notes: ["Rejecting doesn't end the collaboration or remove its accepted obligations."], fields: [{ key: "reason", label: "Reason", kind: "textarea", required: true, initial: "" }], payload: (v) => ({ reason: v.reason!, submissionVersion: content.version }) },
+  } : {};
+  const specs: Record<string, Spec> = { ...baseSpecs, ...contentSpecs };
+  const open = (key: string) => { setAck(null); setSpec(specs[key]!); };
   const tabs = contentView
     ? [{ label: "Collaboration", to: `/collaborations/${data.collaborationId}?tab=overview` }, { label: "Content review", to: `/collaborations/${data.collaborationId}?tab=content` }, { label: "Rights", to: `/collaborations/${data.collaborationId}?tab=rights` }, { label: "Payments", to: `/collaborations/${data.collaborationId}?tab=payments` }]
     : [{ label: "Overview", to: `/collaborations/${data.collaborationId}?tab=overview` }, { label: "Brief", to: `/collaborations/${data.collaborationId}?tab=brief` }, { label: "Content", to: `/collaborations/${data.collaborationId}?tab=content` }, { label: "Messages", to: `/collaborations/${data.collaborationId}?tab=messages` }, { label: "Payments", to: `/collaborations/${data.collaborationId}?tab=payments` }];
@@ -80,9 +84,9 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
   return (
     <>
       {contentView ? (
-        <PageTitle id="collab-title" title="A draft becomes a usable asset." subtitle={`${data.handle} · ${data.ref} · content ${content.version} · rights and review stay attached to the source`}>
+        <PageTitle id="collab-title" title="A draft becomes a usable asset." subtitle={`${data.handle} · ${data.ref} · ${content ? `content ${content.version}` : "no content submitted"} · rights and review stay attached to the source`}>
           <SourceButton label="Open original draft" title="Open original draft" width={172} />
-          <Button aria-haspopup="dialog" style={{ minWidth: 166 }} onClick={() => open("feedback")}>Queue feedback</Button>
+          <Button aria-haspopup="dialog" style={{ minWidth: 166 }} disabledReason={content ? null : "Nothing has been submitted to give feedback on."} onClick={() => open("feedback")}>Queue feedback</Button>
         </PageTitle>
       ) : (
         <PageTitle id="collab-title" title="One collaboration. The whole story." subtitle={`${data.ref} · ${data.handle} · ${data.channel} · live creator record in Notion`}>
@@ -93,9 +97,9 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
       <div className={creators.row}>
         <SectionTabs label="Collaboration views" gap={12} tabs={tabs.map((t) => ({ ...t, width: 146, current: t.label === currentLabel || (t.label === "Content" && tab === "content") }))} />
         <span className={creators.spacer} style={{ "--spacer": contentView ? "330px" : "210px" } as React.CSSProperties} aria-hidden="true" />
-        <Badge tone="violet" width={contentView ? 182 : 116}>{contentView ? `Draft ${content.version} · in review` : data.stage}</Badge>
+        <Badge tone="violet" width={contentView ? 182 : 116}>{contentView ? (content ? `Draft ${content.version} · in review` : "No submission") : data.stage}</Badge>
       </div>
-      <ContextBox title={contentView ? "Existing content and rights obligations" : "Existing collaboration · accepted historical terms"} text={contentView ? `This ${data.ref} review fulfills an earlier accepted agreement. New commission-only acquisition does not erase its revisions, usage limits, fee or settlement obligations.` : `${data.ref} retains its agreed ${formatMoney(terms.agreedFee)} content fee and original obligations. Repeating or recruiting again creates a new commission-only offer, with a fresh assessment and approval.`}>
+      <ContextBox title={contentView ? "Existing content and rights obligations" : terms.posting.kind === "voluntary" ? "Existing collaboration · gifted sample, no posting obligation" : "Existing collaboration · accepted historical terms"} text={terms.agreedFee === null ? `${data.ref} is a gifted sample. Its accepted terms commit the creator to no post and no fee, so any content that appears is voluntary and is observed, never chased. New commission-only acquisition does not change it.` : contentView ? `This ${data.ref} review fulfills an earlier accepted agreement. New commission-only acquisition does not erase its revisions, usage limits, fee or settlement obligations.` : `${data.ref} retains its agreed ${formatMoney(terms.agreedFee)} content fee and original obligations. Repeating or recruiting again creates a new commission-only offer, with a fresh assessment and approval.`}>
         <div className={creators.contextActions}>
           <LinkButton variant="secondary" to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 208.5 }}>Current affiliate terms</LinkButton>
           <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
@@ -112,11 +116,11 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
       )}
 
       {tab === "overview" && <Overview data={data} onOpen={open} onGifted={() => setGifted(true)} />}
-      {tab === "content" && <ContentReview data={data} onOpen={open} blocker={approvalBlocker(data)} remaining={remaining} />}
+      {tab === "content" && (content ? <ContentReview data={data} content={content} onOpen={open} blocker={approvalBlocker(data)} remaining={remaining} /> : <NoSubmission data={data} />)}
       {tab === "rights" && <RightsPanel data={data} />}
       {tab === "brief" && <BriefPanel data={data} />}
       {tab === "messages" && <NoSource title="Messages" text="Provider-scoped message history and pending drafts belong here. Reading never sends. This demo has no message history, and this tab has no Figma source yet." />}
-      {tab === "payments" && <NoSource title="Payments" text={`The agreed ${formatMoney(terms.agreedFee)} fee is a historical, accepted liability. It settles in its own record, and no new upfront fee can be created from here. This tab has no Figma source yet.`}><LinkButton variant="secondary" to="/finance/payables/demo-payable-1" style={{ alignSelf: "flex-start" }}>Open the payable</LinkButton></NoSource>}
+      {tab === "payments" && <NoSource title="Payments" text={terms.agreedFee === null ? `${data.ref} has no agreed fee and no payable. The retained sample cost is an economic cost on record, not a payment owed to the creator. This tab has no Figma source yet.` : `The agreed ${formatMoney(terms.agreedFee)} fee is a historical, accepted liability. It settles in its own record, and no new upfront fee can be created from here. This tab has no Figma source yet.`}>{terms.agreedFee !== null && <LinkButton variant="secondary" to="/finance/payables/demo-payable-1" style={{ alignSelf: "flex-start" }}>Open the payable</LinkButton>}</NoSource>}
 
       <CommandDialog spec={spec} data={data} version={res.dataVersion} onClose={() => setSpec(null)} onDone={(r) => { setAck(r); setSpec(null); }} />
       <Dialog open={gifted} title="Gifted closure · history" onClose={() => setGifted(false)}>
@@ -129,26 +133,37 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
 
 function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen: (k: string) => void; onGifted: () => void }) {
   const { terms, eligibility } = data;
-  const due = terms.postingDue;
+  const timing = postingTiming(terms, data.asOf);
+  const sampleCost = terms.posting.kind === "voluntary" ? terms.posting.sampleCost : null;
   return (
     <>
       <div className={creators.pairWide}>
         <section className={creators.panel} aria-labelledby="rel-title" style={{ gap: 20 }}>
           <h2 id="rel-title" className={acquisition.h2}>{data.handle}</h2>
-          <p style={{ margin: 0, color: "var(--color-muted)" }}>Paid UGC collaboration · 1 original video · {terms.revisionRounds.used} revision round</p>
+          <p style={{ margin: 0, color: "var(--color-muted)" }}>{timing.obligation === "voluntary" ? "Gifted sample · no posting obligation · any post is voluntary" : `Paid UGC collaboration · 1 original video · ${terms.revisionRounds.used} revision round`}</p>
           <div className={styles.props}>
             <dl className={styles.kvList}>
               <div className={styles.kv}><dt>Channel</dt><dd>{data.channel}</dd></div>
               <div className={styles.kv}><dt>Owner</dt><dd>{data.owner}</dd></div>
               <div className={styles.kv}><dt>Deliverable</dt><dd>{terms.deliverable}</dd></div>
-              <div className={styles.kv}><dt>Agreed fee</dt><dd data-testid="agreed-fee">{terms.agreedFee.currency} {terms.agreedFee.minorUnits / 100}</dd></div>
+              <div className={styles.kv}><dt>Agreed fee</dt><dd data-testid="agreed-fee">{terms.agreedFee === null ? "None · gifted sample" : `${terms.agreedFee.currency} ${terms.agreedFee.minorUnits / 100}`}</dd></div>
             </dl>
-            <dl className={styles.kvList}>
-              <div className={styles.kv}><dt>Posting due</dt><dd>{longDate(due)}</dd></div>
-              <div className={styles.kv}><dt>Grace period</dt><dd>{terms.graceDays} days</dd></div>
-              <div className={styles.kv}><dt>Review after</dt><dd data-testid="review-after">{longDate(reviewAfter(due, terms.graceDays))}</dd></div>
-              <div className={styles.kv}><dt>Source record</dt><dd>{terms.sourceRecord}</dd></div>
-            </dl>
+            {timing.obligation === "committed" && terms.posting.kind === "committed" ? (
+              <dl className={styles.kvList} data-testid="posting-terms" data-obligation="committed">
+                <div className={styles.kv}><dt>Posting due</dt><dd>{longDate(timing.due)} <span data-testid="posting-status" data-phase={timing.phase} title={timing.label}>· {timing.short}</span></dd></div>
+                <div className={styles.kv}><dt>Grace period</dt><dd>{terms.posting.graceDays} days</dd></div>
+                <div className={styles.kv}><dt>Review after</dt><dd data-testid="review-after">{longDate(timing.reviewAfter)}</dd></div>
+                <div className={styles.kv}><dt>Source record</dt><dd>{terms.sourceRecord}</dd></div>
+              </dl>
+            ) : timing.obligation === "voluntary" ? (
+              <dl className={styles.kvList} data-testid="posting-terms" data-obligation="voluntary">
+                <div className={styles.kv}><dt>Posting obligation</dt><dd data-testid="posting-obligation">None under the accepted terms</dd></div>
+                <div className={styles.kv}><dt>Observation window</dt><dd data-testid="observation-window">Until {longDate(timing.observeUntil)}</dd></div>
+                <div className={styles.kv}><dt>Timing status</dt><dd data-testid="posting-status">{timing.label}</dd></div>
+                <div className={styles.kv}><dt>Retained sample cost</dt><dd data-testid="sample-cost">{sampleCost ? `${formatMoney(sampleCost)} · retained, no clawback` : "Unknown"}</dd></div>
+                <div className={styles.kv}><dt>Source record</dt><dd>{terms.sourceRecord}</dd></div>
+              </dl>
+            ) : null}
           </div>
           <div className={styles.rule} />
           <h2 className={acquisition.h2} style={{ margin: 0 }}>Relationship timeline</h2>
@@ -163,9 +178,19 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
         </section>
         <div className={styles.column}>
           <section className={`${creators.panel} ${creators.panelViolet}`} aria-labelledby="next-title">
-            <h2 id="next-title" className={acquisition.h2}>Review draft v2</h2>
-            <p style={{ margin: 0, font: "var(--text-body)" }}>Check the draft, capture a decision, and queue any feedback for Slack approval.</p>
-            <LinkButton to={`/collaborations/${data.collaborationId}?tab=content`} style={{ width: "100%" }}>Open content review</LinkButton>
+            {data.content ? (
+              <>
+                <h2 id="next-title" className={acquisition.h2}>Review draft {data.content.version}</h2>
+                <p style={{ margin: 0, font: "var(--text-body)" }}>Check the draft, capture a decision, and queue any feedback for Slack approval.</p>
+                <LinkButton to={`/collaborations/${data.collaborationId}?tab=content`} style={{ width: "100%" }}>Open content review</LinkButton>
+              </>
+            ) : (
+              <>
+                <h2 id="next-title" className={acquisition.h2}>{timing.phase === "window-ended" ? "Close this collaboration" : "Observe, then close"}</h2>
+                <p style={{ margin: 0, font: "var(--text-body)" }} data-testid="observe-branch">No draft has been submitted and none is owed. {timing.phase === "window-ended" ? "The observation window has ended, so this can be closed with its sample cost retained." : "The linked profile is only observed until the window ends; no reminder is sent."}</p>
+                <LinkButton to={`/collaborations/${data.collaborationId}?tab=content`} variant="secondary" style={{ width: "100%" }}>See content status</LinkButton>
+              </>
+            )}
           </section>
           <section className={creators.panel} aria-labelledby="life-title">
             <h2 id="life-title" className={creators.h3}>Keep the lifecycle explicit.</h2>
@@ -190,7 +215,7 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
       <section className={`${creators.panel} ${creators.panelWide}`} aria-labelledby="deal-title">
         <div className={acquisition.sectionTitle}>
           <h2 id="deal-title" className={acquisition.h2}>Close according to the accepted deal.</h2>
-          <p className={acquisition.small}>The selected collaboration is a Paid {formatMoney(terms.agreedFee)} content example; Gifted closure is a separate outcome.</p>
+          <p className={acquisition.small}>{terms.agreedFee === null ? "The selected collaboration is a gifted sample with no committed post. Closing it keeps the sample cost; content that appears later is voluntary." : `The selected collaboration is a Paid ${formatMoney(terms.agreedFee)} content example; Gifted closure is a separate outcome.`}</p>
         </div>
         <ul className={creators.settle}>
           <li><Badge width={140}>Closed without content</Badge><p className={creators.settleName}>Gifted · no content published</p><p className={acquisition.small}>Retain sample cost; no automatic clawback. Record reliability and suppression</p></li>
@@ -208,6 +233,7 @@ function Overview({ data, onOpen, onGifted }: { data: CollaborationData; onOpen:
 }
 
 function RightsRegister({ data, withLink }: { data: CollaborationData; withLink: boolean }) {
+  if (!data.content) return <NoSubmission data={data} />;
   const blocked = !data.content.licenseSigned;
   return (
     <section className={`${creators.panel} ${creators.panelSubtle}`} aria-labelledby="rights-title" data-testid="rights-register">
@@ -222,8 +248,7 @@ function RightsRegister({ data, withLink }: { data: CollaborationData; withLink:
   );
 }
 
-function ContentReview({ data, onOpen, blocker, remaining }: { data: CollaborationData; onOpen: (k: string) => void; blocker: string | null; remaining: number }) {
-  const { content } = data;
+function ContentReview({ data, content, onOpen, blocker, remaining }: { data: CollaborationData; content: NonNullable<CollaborationData["content"]>; onOpen: (k: string) => void; blocker: string | null; remaining: number }) {
   return (
     <>
       <div className={styles.split}>
@@ -284,12 +309,24 @@ function BriefPanel({ data }: { data: CollaborationData }) {
       <h2 id="brief-title" className={acquisition.h2}>Brief and accepted terms</h2>
       <dl className={styles.kvList}>
         <div className={styles.kv}><dt>Deliverable</dt><dd>{terms.deliverable}</dd></div>
-        <div className={styles.kv}><dt>Agreed fee</dt><dd>{formatMoney(terms.agreedFee)} · historical, read-only</dd></div>
-        <div className={styles.kv}><dt>Posting due</dt><dd>{longDate(terms.postingDue)}</dd></div>
+        <div className={styles.kv}><dt>Agreed fee</dt><dd>{terms.agreedFee === null ? "None · gifted sample" : `${formatMoney(terms.agreedFee)} · historical, read-only`}</dd></div>
+        <div className={styles.kv}><dt>Posting</dt><dd>{terms.posting.kind === "committed" ? `Due ${longDate(terms.posting.due)}` : "Not required · a post would be voluntary"}</dd></div>
         <div className={styles.kv}><dt>Revision rounds</dt><dd>{terms.revisionRounds.used} of {terms.revisionRounds.allowed} used</dd></div>
       </dl>
       <p className={acquisition.small}>Approved brief accepted in Social Cat. This tab has no Figma source yet, and a brief here can't create a new fee.</p>
       <LinkButton variant="secondary" to={assessmentPath()} style={{ alignSelf: "flex-start" }}>Prior content score</LinkButton>
+    </section>
+  );
+}
+
+/** A voluntary collaboration may never produce content. That is a branch of the deal, not a failed or missing review. */
+function NoSubmission({ data }: { data: CollaborationData }) {
+  const timing = postingTiming(data.terms, data.asOf);
+  return (
+    <section className={creators.panel} aria-labelledby="nosub-title" data-testid="no-submission">
+      <h2 id="nosub-title" className={acquisition.h2}>No content submitted</h2>
+      <p className={acquisition.small}>{timing.obligation === "voluntary" ? "The accepted terms ask for no post, so there is no draft to review, no revision round and no usage license to chase. Rights and reuse actions apply only if content appears." : "Nothing has been submitted yet."}</p>
+      <p className={acquisition.small}>{timing.label}</p>
     </section>
   );
 }
