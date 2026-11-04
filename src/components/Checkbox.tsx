@@ -14,7 +14,7 @@ export function Checkbox({ label, checked, mixed = false, disabled = false, read
   useEffect(() => { if (ref.current) ref.current.indeterminate = mixed; }, [mixed]);
   const on = checked || mixed;
   return (
-    <div className={`${styles.checkbox} ${disabled ? styles.disabled : ""}`}>
+    <div className={`${styles.checkbox} ${disabled ? styles.disabled : ""} ${readOnly ? styles.readonly : ""}`} data-readonly={readOnly || undefined}>
       <input
         ref={ref}
         id={inputId}

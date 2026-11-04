@@ -8,3 +8,6 @@
 .disabled .box { background: var(--color-surface); border-color: var(--color-border); }
 .disabled .on { background: var(--color-subtle); color: var(--color-muted); }
 .disabled .label, .disabled .input { color: var(--color-muted); cursor: not-allowed; }
+.readonly .input, .readonly .label { cursor: default; }
+.readonly .box { border-style: dashed; border-color: var(--color-muted); }
+.readonly .on { background: var(--color-muted); }
