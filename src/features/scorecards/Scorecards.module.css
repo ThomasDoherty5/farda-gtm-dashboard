@@ -96,3 +96,7 @@
 
 /* The design fixes each tab's width; the text is centered in it, so the 12px padding must not widen a long label. */
 .tabsFixed a { padding-inline: 0; }
+/* Figma's three fields measure 400px with 24px gaps (1248px), two pixels wider than the panel's content box. */
+@media (min-width: 1180px) {
+  .fieldsRow { margin-right: -2px; }
+}
