@@ -2,6 +2,8 @@ import { createDemoAdapter } from "./demoAdapter";
 import { createLiveAdapter } from "./liveAdapter";
 import { claimsSentWithoutReceipt, deepStrict, provenanceNodes, runAdapterConformance, runContractSchemaConformance, type ConformanceTarget } from "./conformance";
 import { z } from "zod";
+import { TransportFailure } from "./transport";
+import { demoBackedTransport, failingTransport } from "./transportTestKit";
 
 runContractSchemaConformance();
 
@@ -45,7 +47,7 @@ const noTransport = "THO-283 has not published a transport. The stub rejects eve
 const noSessionScenario = "No transport, so the stub cannot produce a 401 or 403 to check.";
 const liveScope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
 const live: ConformanceTarget = {
-  name: "live adapter stub (sandbox)",
+  name: "live adapter, default (pending) transport (sandbox)",
   kind: "live",
   environment: "sandbox",
   create: () => createLiveAdapter("sandbox"),
@@ -84,8 +86,41 @@ const live: ConformanceTarget = {
   },
 };
 
+/**
+ * The live adapter over an injected transport that round-trips the demo adapter's answers as JSON (THO-283, front-end half).
+ * The failure scenarios use failing transports under the adapter's own error mapping; nothing about it is stubbed.
+ * This proves the front end only. It says nothing about a real backend, which does not exist yet.
+ */
+const sandboxScope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
+const viaDemo = (fixture?: Parameters<typeof createDemoAdapter>[0] extends infer O ? (O extends { fixture?: infer F } ? F : never) : never) =>
+  createLiveAdapter("sandbox", { transport: demoBackedTransport(createDemoAdapter({ fixture })), retryDelayMs: 0 });
+const failing = (make: () => TransportFailure) => () => createLiveAdapter("sandbox", { transport: failingTransport(make), retryDelayMs: 0 });
+const http = (status: number) => () => new TransportFailure("http", { status });
+const liveOverTransport: ConformanceTarget = {
+  name: "live adapter over an injected transport (sandbox)",
+  kind: "live",
+  environment: "sandbox",
+  create: () => viaDemo(),
+  scope: sandboxScope,
+  read: { viewKey: "overviewSummary" },
+  canServeData: true,
+  unauthenticated: failing(http(401)),
+  forbidden: failing(http(403)),
+  unavailable: failing(() => new TransportFailure("network")),
+  // A refused connection never put the request on the wire, so nothing was applied.
+  unavailableWrites: failing(() => new TransportFailure("network", { requestSent: false })),
+  valueStates: {
+    knownZero: { create: () => viaDemo("FX-02-known-zero"), read: { viewKey: "overviewSummary" } },
+    unknown: { create: () => viaDemo("FX-04-missing-metric"), read: { viewKey: "customerJourney" } },
+    notApplicable: { create: () => viaDemo(), read: { viewKey: "orderDetail", filters: { orderId: "TEST-SC-0081" } } },
+  },
+  actions: demo.actions,
+  saves: demo.saves,
+};
+
 runAdapterConformance(demo);
 runAdapterConformance(live);
+runAdapterConformance(liveOverTransport);
 
 describe("conformance helpers", () => {
   it("claimsSentWithoutReceipt flags a success with no receipt only", () => {

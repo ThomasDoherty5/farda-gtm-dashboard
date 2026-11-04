@@ -36,7 +36,7 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | Name | Purpose |
 | -- | -- |
 | `VITE_FARDA_ADAPTER` | `demo` (default), `sandbox` or `production`. Anything else is a startup error |
-| `VITE_FARDA_ADAPTER_BASE_URL` | Reserved for the THO-283 adapter. Unused until its transport is published |
+| `VITE_FARDA_ADAPTER_BASE_URL` | Reserved for the THO-283 adapter. Passed untouched to a host-supplied transport factory; unused while no transport is published (see `live-adapter.md`) |
 
 `VITE_` values ship to the browser, so they never hold secrets.
 
@@ -49,7 +49,7 @@ Approval history has no proposed path, so it uses query values on the approval r
 ## Open inputs
 
 - Figma: a copy works; the original still refuses this account. See `figma-access-gap.md`.
-- THO-283 has not published a transport, so the contract in `src/adapter/contract.ts` stays proposed.
+- THO-283 has not published a transport, so the contract in `src/adapter/contract.ts` stays proposed. The live adapter's front-end half is in `live-adapter.md`; with no transport it still answers `INTEGRATION_PENDING`.
 - Approval and run view models in `src/features/approvals/types.ts` are proposals. THO-283 and THO-321 freeze the real schemas.
 
 ## Questions for the THO-283 freeze
