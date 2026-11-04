@@ -295,7 +295,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
-| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding about 50px | CTRL-154 requires a visible reason. This is why the page is 2261 tall, not 2211 |
+| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding 56px | CTRL-154 requires a visible reason. This is why the page is 2267 tall, not 2211 |
 | Video URL field | Placeholder text "Awaiting validated source URL" shown as if populated | A real input, empty at first, with that text as the placeholder | The field has to accept an address |
 | Checkout route | Fixed select appearance | Native select | Keyboard and screen reader behavior come for free |
 | Observation rows | No way to undo | A Remove link on each recorded observation | Drafts need correcting before they are saved |
