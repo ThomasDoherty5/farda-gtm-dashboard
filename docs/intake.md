@@ -54,6 +54,8 @@ Approval history has no proposed path, so it uses query values on the approval r
 
 ## Questions for the THO-283 freeze
 
+The full register of view keys, action kinds, error codes and open questions is `docs/adapter-freeze-register.md`; a test keeps it in step with the source. The questions below are the ones the approval flow raised first.
+
 Raised by the approval flow:
 
 - `ActionResponse.state` has no value for "approved, awaiting dispatch". The demo returns `blocked` with `AWAITING_DISPATCH`.
