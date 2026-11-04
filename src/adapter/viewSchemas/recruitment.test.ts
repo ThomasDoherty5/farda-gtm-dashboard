@@ -1,3 +1,4 @@
+import { branchesDemo } from "@/fixtures/pipelineBranches";
 import { recruitmentViewSchemas as schemas } from "./recruitment";
 import { REMOVE, expectAllParse, expectRejections, readRequest, readVariants, scope } from "./acquisitionTestKit";
 import { SCHEMA_VERSION, type ActionRequest } from "../contract";
@@ -22,8 +23,8 @@ const batchBase: BatchData = {
 };
 
 describe("recruitment view schemas", () => {
-  it("covers exactly the five recruitment, invitation, batch, pipeline and discovery view keys", () => {
-    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineSummary", "recruitmentQueue"]);
+  it("covers exactly the recruitment, invitation, batch, pipeline, pipeline branches and discovery view keys", () => {
+    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineBranches", "pipelineSummary", "recruitmentQueue"]);
   });
 
   describe("every demo variant parses unchanged", () => {
@@ -148,8 +149,22 @@ describe("recruitment view schemas", () => {
     });
   });
 
+  describe("pipelineBranches and the inbound pipeline", () => {
+    it("parses the branches demo, keeping an unknown delivered count null", () => {
+      const parsed = schemas.pipelineBranches!.parse(branchesDemo) as typeof branchesDemo;
+      expect(parsed.sources.length).toBe(branchesDemo.sources.length);
+      expect(() => schemas.pipelineBranches!.parse({ ...branchesDemo, sources: [{ ...branchesDemo.sources[0], terminal: { declined: -1, optOut: 0, expired: 0 } }] })).toThrow();
+    });
+    it("parses the inbound pipeline, whose send and dispatch data are null (N/A), not zero", () => {
+      const inbound = filterPipeline({ source: "both", route: "inbound", network: "all", checkout: "all", window: "sep-oct", policy: "all" });
+      const parsed = schemas.pipelineSummary!.parse(inbound) as typeof inbound;
+      expect(parsed.sources[0]!.sends).toBeNull();
+      expect(parsed.sources[0]!.dispatch).toBeNull();
+    });
+  });
+
   describe("pipelineSummary rejects", () => {
-    const data = filterPipeline({ source: "both", network: "tiktok", checkout: "all", window: "oct" });
+    const data = filterPipeline({ source: "both", route: "outbound", network: "tiktok", checkout: "all", window: "oct", policy: "all" });
     expectRejections(schemas.pipelineSummary!, data, [
       ["missing sources", "sources", REMOVE],
       ["an unknown source", "sources.0.source", "instagram"],

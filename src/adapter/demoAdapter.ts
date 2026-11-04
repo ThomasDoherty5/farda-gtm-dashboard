@@ -17,6 +17,7 @@ import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
 import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
+import { branchesDemo } from "@/fixtures/pipelineBranches";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
@@ -83,7 +84,15 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
       if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
-      if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
+      if (request.viewKey === "pipelineSummary") {
+        const data = filterPipeline(pipelineFilters(request.filters, request.requestId));
+        return respondWith(request, data, { dataVersion: "pipeline-demo@2", dataState: data.sources.length ? "ready" : "empty" }) as ReadResponse<T>;
+      }
+      if (request.viewKey === "pipelineBranches") {
+        const source = (request.filters as { source?: string } | null)?.source ?? "both";
+        if (!["both", "social-cat", "tiktok-shop"].includes(source)) err("VALIDATION_FAILED", "source must be one of both, social-cat, tiktok-shop.", request.requestId);
+        return respondWith(request, { ...branchesDemo, sources: branchesDemo.sources.filter((s) => source === "both" || s.source === source) }, { dataVersion: "pipeline-branches-demo@1" }) as ReadResponse<T>;
+      }
       if (request.viewKey === "collaborationDetail") return collaboration.read(request) as ReadResponse<T>;
       if (request.viewKey === "batchDetail") return batch.read(request) as ReadResponse<T>;
       if (request.viewKey === "recruitmentQueue") return respondWith(request, filterRecruitment(recruitmentFilters(request.filters, request.requestId)), { dataVersion: "recruitment-demo@1" }) as ReadResponse<T>;
@@ -156,9 +165,11 @@ function recruitmentFilters(raw: unknown, requestId: string): RecruitmentData["f
 
 const PIPELINE_FACETS: { [K in keyof PipelineFilters]: readonly string[] } = {
   source: ["both", "social-cat", "tiktok-shop"],
+  route: ["outbound", "inbound"],
   network: ["all", "instagram", "tiktok"],
   checkout: ["all", "website", "tiktok-shop"],
   window: ["sep-oct", "sep", "oct"],
+  policy: ["all", "policy-2026-09", "policy-2026-10"],
 };
 
 /** Only allowed facet values are accepted; an unknown one is a validation error, not a silent default. */
