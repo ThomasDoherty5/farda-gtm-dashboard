@@ -7,6 +7,7 @@ import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, LeaveGuard, SourceDialog, TermsView, blockedReason, dateTime, payloadChanges } from "./shared";
 import type { ApprovalDetail, ApprovalStatus, ApprovalVersion, DecidePayload } from "./types";
@@ -49,6 +50,7 @@ export function ApprovalPage() {
         {data && <LinkButton variant="secondary" to="?view=history" style={{ minWidth: 172 }}>Approval history</LinkButton>}
         {data && <LinkButton to={`?version=${prior}`} className={styles.tight} style={{ minWidth: 166 }}>View historical approval</LinkButton>}
       </div>
+      <ReadState res={query.data} subject="This approval" />
       {query.isPending && <p role="status">Loading approval…</p>}
       {query.isError && (
         <ViewError error={query.error} subject="This approval" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} parent={<p><Link to="/approvals">Back to approvals</Link></p>} />

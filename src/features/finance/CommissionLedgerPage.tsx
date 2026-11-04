@@ -94,7 +94,7 @@ function Body({ res, data, setDialog }: { res: ReadResponse<CommissionLedger>; d
         <Kpi label="Net eligible sales" context={`${dollars(t.grossSales)} gross less ${dollars(t.refunds)} refunds`} testId="metric-Net eligible sales">{dollars(t.netSales)}</Kpi>
         <Kpi label="Net accrued commission" context={`${dollars(t.earned)} earned less ${dollars(t.reversed)} reversals`} testId="metric-Net accrued commission">{dollars(t.accrued)}</Kpi>
         <Kpi label="Cash commission paid" context="Cash is not deducted again from contribution" testId="metric-Cash commission paid">{dollars(t.paid)}</Kpi>
-        <Kpi label="Estimated contribution" context={`${t.contributionPct.toFixed(2)}% · before shared overhead`} testId="metric-Estimated contribution">{cents(t.contribution)}</Kpi>
+        <Kpi label="Estimated contribution" context={`${t.contributionPct === null ? "N/A" : `${t.contributionPct.toFixed(2)}%`} · before shared overhead`} testId="metric-Estimated contribution">{cents(t.contribution)}</Kpi>
       </KpiRow>
       <Panel
         id="accrued-title"
