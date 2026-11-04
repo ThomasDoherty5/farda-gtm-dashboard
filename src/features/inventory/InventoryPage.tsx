@@ -5,6 +5,7 @@ import { AdapterError } from "@/adapter/errors";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
 import { Alert } from "@/components/Alert";
+import { ReadState } from "@/components/ReadState";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
@@ -17,7 +18,8 @@ import { FilterButton } from "@/features/acquisition/FilterButton";
 import { ActionError, blockedReason, SourceDialog } from "@/features/approvals/shared";
 import { OpsTabs } from "@/features/operations/OpsTabs";
 import { figure, minutesAgoLabel, reasonText } from "@/features/operations/format";
-import { availableOf, STAGES, type InventoryOverview, type Movement, type StockRow } from "@/fixtures/inventory";
+import { DEMO_NOW } from "@/fixtures/overview";
+import { availableOf, isLate, STAGES, type InventoryOverview, type Movement, type StockRow } from "@/fixtures/inventory";
 import { HOMES, homeLabel, type Home } from "@/fixtures/operations";
 import styles from "./Inventory.module.css";
 
@@ -63,6 +65,8 @@ export function InventoryPage() {
         <Button aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSource("Open inventory")}>Open inventory</Button>
       </PageHeader>
       <OpsTabs current="stock" />
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="Inventory" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading stock…" />}
       {query.isError && <ViewError error={query.error} subject="Stock" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No stock yet"><p>The inventory mirror responded, but holds no locations.</p></EmptyState>}
@@ -96,6 +100,11 @@ function Body({ res, data, home, onSource }: { res: ReadResponse<InventoryOvervi
           <p>Shopify observed {figure(r.shopifyObserved, String)}; the movements give {r.onHand} on hand. The ledger balance is shown. Review both in the source before moving stock.</p>
         </Alert>
       ))}
+      {isLate(data.transfer, DEMO_NOW) && (
+        <Alert state="warning" title={`Transfer ${data.transfer.key} is late`} testId="transfer-late">
+          <p>It was expected by {data.transfer.expectedBy} and {homeLabel(data.transfer.to)} has not confirmed receipt. On hand at the destination is unchanged, and the {data.transfer.expectedUnits} units are not counted until the source records the receipt.</p>
+        </Alert>
+      )}
       {data.pendingRequests.length > 0 && (
         <Alert state="info" title={`${data.pendingRequests.length} transfer request${data.pendingRequests.length === 1 ? "" : "s"} waiting for approval`} testId="pending-requests">
           {data.pendingRequests.map((r) => <p key={r.key}>{r.units} units · {homeLabel(r.from)} → {homeLabel(r.to)}. {r.state}</p>)}

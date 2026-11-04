@@ -11,12 +11,21 @@
 import { z } from "zod";
 import { calendarDate, count, money, text } from "./acquisitionPrimitives";
 
+/**
+ * Whether the accepted terms create a posting obligation. A committed post has a due date and a grace period; a voluntary
+ * post has neither, only an observation window and the sample cost that is retained. The two never share fields, so a
+ * voluntary record cannot carry a due date by accident.
+ */
+const posting = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("committed"), due: calendarDate, graceDays: count }).strict(),
+  z.object({ kind: z.literal("voluntary"), sampleDelivered: calendarDate, observeDays: count, sampleCost: money }).strict(),
+]);
+
 const terms = z.object({
   deliverable: text,
-  /** The accepted historical fee. Read-only. */
-  agreedFee: money,
-  postingDue: calendarDate,
-  graceDays: count,
+  /** The accepted historical fee, read-only. Null means there is no fee at all (a gifted sample), which is not a zero fee. */
+  agreedFee: money.nullable(),
+  posting,
   sourceRecord: text,
   revisionRounds: z.object({ allowed: count, used: count }),
 }).strict();
@@ -34,6 +43,8 @@ const content = z.object({
 
 const collaborationDetail = z.object({
   datasetKey: text,
+  /** The server's date for timing rules. The screen never reads the browser clock for an obligation. */
+  asOf: calendarDate,
   collaborationId: text,
   ref: text,
   handle: text,
@@ -47,7 +58,8 @@ const collaborationDetail = z.object({
   allowedActions: z.array(z.object({ key: text, label: text })),
   closureOutcomes: z.array(text).min(1),
   unresolved: z.array(text),
-  content,
+  /** Null when nothing has been submitted, which a voluntary collaboration may never do. */
+  content: content.nullable(),
   requests: z.array(z.object({ id: text, kind: text, summary: text, version: text, state: z.literal("approvalPending") })),
 });
 

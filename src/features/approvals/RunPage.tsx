@@ -7,6 +7,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { HourlyRunPage } from "@/features/monitor/HourlyRunPage";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, SourceDialog, blockedReason, dateTime } from "./shared";
@@ -72,6 +73,7 @@ function Run({ tab }: { tab: Tab }) {
         <LinkButton to="/settings/connections" variant="ghost" style={{ minWidth: 124 }}>Connections</LinkButton>
         <LinkButton to="/automations?tab=reporting" variant="ghost" style={{ minWidth: 112 }}>Reporting</LinkButton>
       </nav>
+      <ReadState res={query.data} subject="This run" />
       {query.isPending && <p role="status">Loading run…</p>}
       {query.isError && <ViewError error={query.error} subject="This run" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} parent={<p><Link to="/runs">Back to runs</Link></p>} />}
       {data && (

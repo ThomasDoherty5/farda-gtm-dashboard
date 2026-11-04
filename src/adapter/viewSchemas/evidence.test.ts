@@ -70,6 +70,11 @@ describe("evidence view schemas", () => {
       ["a score state outside the contract", "assessments", withScore({ state: "pending" })],
       ["a missing commerce score", "assessments.commerce", REMOVE],
       ["a missing model publication note", "modelPublication.note", REMOVE],
+      ["a missing dispute list", "disputes", REMOVE],
+      ["a missing readiness", "readiness", REMOVE],
+      ["readiness that claims ready", "readiness.state", "ready"],
+      ["a first review with an unknown route", "firstReview", { version: "v1", recordedAt: "2026-10-30T00:00:00.000Z", reviewerRole: "reviewer", mediaUrl: null, checkoutRoute: "amazon", observations: [] }],
+      ["a dispute with no recorded route", "disputes", [{ id: "d", observationId: "o", stance: "disagree", reason: "r", proposed: null, prior: { id: "o", category: "hook", startSec: 0, endSec: 1, text: "t", recordedAgainst: "https://www.instagram.com/reel/A/" }, reviewerRole: "x", recordedAt: "2026-10-30T00:00:00.000Z", recordedAgainst: null }]],
     ]);
 
     it("accepts a known zero score and an unknown or not-applicable score with a reason", () => {

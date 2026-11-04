@@ -10,6 +10,7 @@ import { SourceDialog } from "@/features/approvals/shared";
 import type { OrderDetail } from "@/fixtures/operations";
 import { homeLabel } from "@/fixtures/operations";
 import { figure, reasonText } from "./format";
+import { CustomerReveal } from "./CustomerReveal";
 import { RecordShell } from "./RecordShell";
 import styles from "./Operations.module.css";
 
@@ -43,7 +44,7 @@ export function OrderPage() {
               <Panel id="lifecycle-title" title="Fulfillment lifecycle" subtitle="Every event retains its source record key" roomy>
                 <Steps label="Fulfillment lifecycle" steps={o.milestones} />
                 <Divider />
-                <SectionHeading title="Line items" subtitle="No customer details are mirrored" />
+                <SectionHeading title="Line items" subtitle={<CustomerReveal orderRef={o.orderRef} />} />
                 <FlatTable
                   caption="Line items"
                   columns={[{ label: "Item", width: 416 }, { label: "Units", width: 80 }, { label: "Unit price", width: 140 }, { label: "Total", width: 140 }]}

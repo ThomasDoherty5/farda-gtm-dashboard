@@ -8,6 +8,7 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { SkeletonCard, EmptyState } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { formatMoney } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
@@ -16,6 +17,7 @@ import type { DiscoveryData } from "@/fixtures/discovery";
 import { DEMO_BATCH_ID, DEMO_CREATOR_ID, DEMO_EVIDENCE_ID, DEMO_HOURLY_RUN_ID } from "@/fixtures/ids";
 import { AcquisitionTabs } from "./AcquisitionTabs";
 import { FilterButton } from "./FilterButton";
+import { PlanView } from "./PlanView";
 import styles from "./Acquisition.module.css";
 
 const SOURCES = [
@@ -49,6 +51,7 @@ export function DiscoveryPage() {
         <LinkButton to="/settings/capabilities" style={{ minWidth: 162 }}>Validate access</LinkButton>
       </div>
       <AcquisitionTabs current="Daily sourcing" />
+      <ReadState res={query.data} subject="Daily sourcing" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading daily sourcing…" />}
       {query.isError && <ViewError error={query.error} subject="Daily sourcing" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&
@@ -59,6 +62,11 @@ export function DiscoveryPage() {
 
 function Body({ res, data, demo }: { res: ReadResponse<DiscoveryData>; data: DiscoveryData; demo: boolean }) {
   const [search, setSearch] = useSearchParams();
+  if (search.get("view") === "plan") return <PlanView res={res} data={data} />;
+  return <PlanSummary res={res} data={data} demo={demo} search={search} setSearch={setSearch} />;
+}
+
+function PlanSummary({ res, data, demo, search, setSearch }: { res: ReadResponse<DiscoveryData>; data: DiscoveryData; demo: boolean; search: URLSearchParams; setSearch: (next: URLSearchParams) => void }) {
   const sources = allowed(SOURCES, search.get("sources"));
   const publishing = allowed(PUBLISHING, search.get("publishing"));
   const [dialog, setDialog] = useState<"batch" | "scope" | null>(null);
@@ -122,7 +130,10 @@ function Body({ res, data, demo }: { res: ReadResponse<DiscoveryData>; data: Dis
             <h2 id="limits-title" className={styles.h2}>Respect each source's limits.</h2>
             <p className={styles.small}>Invitation quota, collaboration capacity, source rate limits, stock and budget use different units.</p>
           </div>
-          <LinkButton variant="secondary" to="/settings/capabilities" style={{ minWidth: 172 }}>Open capabilities</LinkButton>
+          <div className={styles.actions}>
+            <LinkButton variant="secondary" to="/creators/discovery?view=plan" style={{ minWidth: 172 }}>Plan detail</LinkButton>
+            <LinkButton variant="secondary" to="/settings/capabilities" style={{ minWidth: 172 }}>Open capabilities</LinkButton>
+          </div>
         </div>
         <DataTable
           caption="Source capacity and permissions"

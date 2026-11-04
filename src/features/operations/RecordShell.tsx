@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReadResponse } from "@/adapter/contract";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Page, PageHeader } from "@/components/Panels";
 import { ViewError } from "@/components/ViewError";
 
@@ -15,6 +16,7 @@ export function RecordShell<T>({ query, id, title, subject, figma, children }: {
   return (
     <Page aria-labelledby={id} data-figma-source={figma}>
       {!(res && data) && <PageHeader id={id} title={title} />}
+      <ReadState res={query.data} subject={`This ${subject}`} only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label={`Loading ${subject}…`} />}
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title={`No ${subject} yet`}><p>The source responded, but holds no record for this address.</p></EmptyState>}

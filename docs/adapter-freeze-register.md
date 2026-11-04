@@ -72,18 +72,29 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `inventoryOverview` | `scenario?` | InventoryOverview | `inventory/InventoryPage` | `demoOps` | proposed + conflict | C-06. |
 | `invitationDraft` | none | InvitationData | `recruitment/InvitationPage` | `demoAdapter` | proposed |  |
 | `launchControl` | none | LaunchControlData | `analytics/LaunchControlPage` | `demoAnalytics` | proposed |  |
+| `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
+| `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
+| `offerRewards` | `offerId`, `scenario` | RewardsRecord | `scorecards/RewardsPage` | `demoScorecards` | proposed + conflict | C-06. Typed `scenario: string`; an unknown scenario is `RECORD_NOT_FOUND`. |
 | `operationsOverview` | `scenario?` | OperationsOverview | `operations/OperationsPage` | `demoOps` | proposed + conflict | C-06. |
+| `nightlyReconciliation` | none | ReconciliationData | `settings/ReconciliationPage` | `demoReconciliation` | proposed | Nightly pairs, conflicts that name the authoritative side, and an append-only audit trail. Distinct from `launchReconciliation`. |
+| `operationsShipping` | none | shipments, exceptions, chain | `operations/ShippingPanels` | `demoOps` | proposed | In transit is counted on the screen from carrier states. |
+| `orderCustomer` | `orderId` | OrderCustomerData | `operations/CustomerReveal` | `demoOps` | proposed | Restricted. Details appear only for an allowed role after an audited reveal. |
+| `opsHealth` | none | OpsHealth | `operations/OpsHealthPage` (route `/analytics/fulfillment?view=health`) | `demoOps` | proposed | No Figma source. Derived in `adapter/opsHealth.ts` from the shipment ledger. |
 | `orderDetail` | `orderId` | OrderDetail | `operations/OrderPage` | `demoOps` | proposed |  |
 | `overviewSummary` | none | OverviewData | `overview/OverviewPage` | `demoAdapter` | proposed | Nine demo fixture switches are chosen by an adapter option, not by the request. |
 | `paidMedia` | `rights`, `platform` | PaidMediaData | `analytics/PaidMediaPage` | `demoAnalytics` | proposed | Uses `keepPrevious`. |
 | `payableDetail` | `payableId` | PayableDetail | `finance/PayablePage` | `demoFinance` | proposed |  |
+| `closePackage` | `period`, `scenario?` | ClosePackage | `finance/ClosePackagePage` | `demoFinance` | proposed + conflict | C-05, C-06. Read from the same fixture evidence as `periodClose`, so the two cannot disagree. An unknown `scenario` is refused with `VALIDATION_FAILED`. |
+| `monthsHistory` | none | months list | `finance/CloseViews` | `demoFinance` | proposed | Synthetic months. October's status is read from the close package. |
 | `periodClose` | `period`, `scenario?` | PeriodClose | `finance/CloseReconciliationPage` | `demoFinance` | proposed + conflict | C-05 (period is a filter, `period` request field is `null`), C-06. |
-| `pipelineSummary` | `source`, `network`, `checkout`, `window` | PipelineData | `acquisition/PipelinePage` | `demoAdapter` | proposed + conflict | C-05. Demo refuses unknown facet values with `VALIDATION_FAILED`. |
+| `pipelineBranches` | `source` | BranchesData | `acquisition/BranchesView` | `demoAdapter` | proposed | Splits by source only; the page shows the other pipeline filters it was opened with and says they do not change these counts. |
+| `pipelineSummary` | `source`, `route`, `network`, `checkout`, `window`, `policy` | PipelineData | `acquisition/PipelinePage` | `demoAdapter` | proposed + conflict | C-05. Demo refuses unknown facet values with `VALIDATION_FAILED`. |
 | `postPerformance` | `postId` | PostPerformanceData | `monitor/PostPage` | `demoMonitor` | proposed |  |
 | `recruitmentQueue` | `networks`, `route` | RecruitmentData | `recruitment/RecruitmentPage` | `demoAdapter` | proposed + conflict | C-05. Uses `keepPrevious`. Demo refuses unknown facet values. |
+| `reportManifest` | none | Manifest | `finance/CloseViews` | `demoFinance` | proposed | Synthetic dry-run manifest of the seven package reports. Nothing is generated. |
 | `returnDetail` | `returnId`, `scenario?` | ReturnDetail | `operations/ReturnPage` | `demoOps` | proposed + conflict | C-06, C-07. |
 | `runDetail` | `runId` | RunDetail | `approvals/RunPage` | `demoAdapter` | proposed + conflict | Same PROPOSED shapes. The contract's `inspectRun` operation is not used; runs are read as a view (C-14). |
 | `scheduleDetail` | `jobId` | ScheduleData | `settings/SchedulePage` | `demoSettings` | proposed |  |
@@ -105,11 +116,15 @@ Sent by a screen through `useAction`. Payload shapes are the TypeScript types at
 | -- | -- | -- | -- | -- | -- | -- |
 | `decideApproval` | `decideApproval` | `{ decision: approved \| rejected \| editRequired, reason?, editedMessage? }`; `entityRefs: [creator]` | approved: `approved` (`AWAITING_DISPATCH`, next `dispatchApprovedAction`; nothing sent). rejected: `canceled` with receipt. editRequired: `approvalPending` (`EDIT_NEEDS_FRESH_APPROVAL`) with a new payload version | `RECORD_NOT_FOUND`, `APPROVAL_INVALID` (archived or already decided), `SOURCE_AUTHORITY_DENIED` (wrong role), `APPROVAL_EXPIRED`, `STALE_VERSION` (with `currentVersion`), `POLICY_VIOLATION` (upfront fee; `fieldErrors.upfrontFee`), `VALIDATION_FAILED` (`fieldErrors.reason`, `fieldErrors.editedMessage`) | `approvals/ApprovalPage` | proposed + conflict (C-04, C-09, C-10, C-12) |
 | `dispatchApprovedAction` | `dispatchApprovedAction` | `{}`; `entityRefs: [creator]` | `succeeded` with `runRef` and receipt; or `outcomeUncertain` (`TIMEOUT_AFTER_SUBMIT`, next `reconcileRun`). A repeat returns the stored execution | `RECORD_NOT_FOUND`, `APPROVAL_REQUIRED` (not approved), `STALE_VERSION` | `approvals/ApprovalPage` | proposed |
+| `requestConflictRepair` | `requestApproval` | `{ conflictId }`; `entityRefs: []` | `approvalPending` (`AWAITING_APPROVAL`, next `decideApproval`). Neither system is changed | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` | `settings/ReconciliationPage` | proposed |
+| `revealCustomerDetails` | `controlRun` | `{ orderRef, reason }`; `entityRefs: []` | `succeeded` with an audit entry as `actionRef` (values are synthetic placeholders) | `SOURCE_AUTHORITY_DENIED`, `RECORD_NOT_FOUND`, `VALIDATION_FAILED` | `operations/CustomerReveal` | proposed (the operation `controlRun` is borrowed; THO-283 should name a reveal operation) |
 | `pauseRun` | `controlRun` | `{ control: "pause" }` and top-level `runRef` | the run's own state (`paused`, or unchanged `outcomeUncertain`) | `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | conflict (C-01, C-03) |
 | `lookup` | `reconcileRun` | `{ request: "lookup" }` and top-level `runRef` | the run's current state, reason code carries the lookup result (`sourceReceiptFound`, `confirmedNotExecuted`, `stillUnknown`) | `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | conflict (C-03) |
 | `recordConfirmedSent` | `reconcileRun` | `{ request: "recordConfirmedSent" }` and top-level `runRef` | `succeeded` with the source receipt | `OUTCOME_UNCERTAIN` (no verified receipt; `executionCertainty: uncertain`), `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | proposed |
 | `freshAttempt` | `reconcileRun` | `{ request: "freshAttempt" }` and top-level `runRef` | `queued` | `OUTCOME_UNCERTAIN` (not proven failed), `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | conflict (C-03) |
 | `retryMonitorProfile` | `controlRun` | `{ profile }` | `blocked` (`SOURCE_LOGIN_REQUIRED`, next `reconnectSource`) | `STALE_VERSION`, `VALIDATION_FAILED` | `monitor/HourlyRunPage` | conflict (C-01) |
+| `requestBatchApproval` | `requestApproval` | `{ batchId, recipients, rateLabel, sampleUnits, sampleUnitCostMinor, upfrontFeeMinor, policyVersion }`; `expectedVersion` is the read's `dataVersion` | `approvalPending` (`AWAITING_DECISION`, next `decideApproval`); `approvalRef` and `manifestRef` are derived from the request, and a new key is a new approval | `MANIFEST_CHANGED`, `STALE_VERSION` (stale plan or stale policy, with the current terms in the message), `POLICY_VIOLATION` (upfront fee, flat or wrong commission, oversized sample), `RECORD_NOT_FOUND`, `VALIDATION_FAILED` (malformed manifest, finite recipients) | `acquisition/PlanView` | proposed |
+| `decideTikTokSample` | `controlRun` | `{ batchId, sampleId, decision: approve \| decline }` | `succeeded` with a demo receipt, or `blocked` (`SOURCE_AUTHORITY_DENIED`, next `ownerHandoff`) | `MANIFEST_CHANGED` (same key, changed payload), `STALE_VERSION`, `RECORD_NOT_FOUND`, `VALIDATION_FAILED` | `recruitment/BatchPage` | proposed |
 | `pauseBatch` | `controlRun` | `{ batchId }` | `paused` (`IN_FLIGHT_DRAINS`) | `STALE_VERSION`, `VALIDATION_FAILED` (already paused) | `recruitment/BatchPage` | conflict (C-01, C-09) |
 | `cancelUnsent` | `controlRun` | `{ batchId, itemIds? }` | `canceled`, or `partiallySucceeded` (`SENT_OR_RUNNING_EXCLUDED`) | `STALE_VERSION`, `VALIDATION_FAILED` (nothing unsent) | `recruitment/BatchPage` | conflict (C-01) |
 | `reconcileSettlement` | `requestApproval` | `{ settlementId, matches: { statementRef, groupId }[] }` | `approvalPending` (`AWAITING_REVIEW`, next `reconciliationReview`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors.matches`, already submitted) | `finance/SettlementPage` | conflict (C-02, C-09) |
@@ -133,7 +148,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | -- | -- | -- | -- | -- |
 | `activateOffer` | `unverified` (`APPROVAL_REQUIRED`, `PROVIDER_ACCESS_UNVERIFIED`) | `offerDraft` | none | proposed |
 | `checkConnections` | `available` | `connectionsOverview` | none | proposed |
-| `closePeriod` | `held` (`CPA_SIGN_OFF_REQUIRED`, `RECONCILIATION_OPEN`) | `periodClose` | `finance/CloseReconciliationPage` | proposed |
+| `closePeriod` | `held` (the blockers of the period, for example `UNRESOLVED_DIFFERENCE`, `CPA_SIGN_OFF_PENDING`, `EXPORT_INCOMPLETE`; `CLOSE_OWNER_ACTION_REQUIRED` if none is named) or `unsupported` (`ALREADY_CLOSED`) | `periodClose`, `closePackage` | `finance/CloseReconciliationPage` | proposed |
 | `closeReturn` | `held` (`RECEIPTS_MISSING`) | `returnDetail` | `operations/ReturnPage` | proposed |
 | `enableFlow` | `held` (`PROVIDER_NOT_SELECTED`) | `emailFlow` | none | proposed |
 | `enableSchedule` | `held` (`CONNECTION_UNVERIFIED`) | `scheduleDetail` | none | proposed |
@@ -143,7 +158,9 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `markWatched` | `unverified` (`PLAYBACK_UNVERIFIED`) | `evidenceRecord` | `acquisition/EvidencePage` | proposed |
 | `openEmailTool` | `unverified` (`PROVIDER_NOT_SELECTED`) | `lifecycleOverview` | none | proposed |
 | `payCommission` | `unsupported` (`PROVIDER_OWNS_PAYOUT`) | `settlementDetail` | none | proposed |
+| `purchaseReward` | `unverified` (`OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`) | `offerRewards` | none | proposed |
 | `recordDecision` | `unverified` (`DEMO_NO_DISPATCH`) | every analytics view | none | proposed |
+| `recordDisagreement` | `held` (`NO_REVIEW_ON_FILE`) until a first review exists, then `available` | `evidenceRecord` | `acquisition/EvidenceDisputes` | proposed |
 | `recordPermissionEvidence` | `available` | `channelCapabilities` | `settings/CapabilitiesPage` | conflict (C-15) |
 | `reopenCase` | `unsupported` (`INTERCOM_OWNS_CASES`) | `supportWorkspace` | none | proposed |
 | `requestFreshAttempt` | only while the outcome is uncertain: `available`, or `held` (`EVIDENCE_REQUIRED`) until a not-executed result is confirmed | `runDetail` | `approvals/RunPage` | conflict (C-03) |
@@ -187,6 +204,7 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
+| `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |
 | `OUTCOME_UNCERTAIN` | outcomeUncertain | `demoApprovals` |
 | `POLICY_VIOLATION` | validation | `demoApprovals`, `demoCollaboration`, `demoScorecards` |
 | `QUOTA_OR_STOCK_HOLD` | resourceHold | `demoOps` |
@@ -217,6 +235,7 @@ Error body (`AdapterErrorBody`, in `errors.ts`, not in `contract.ts`): `code`, `
 | `approval` | `demoOps` |
 | `decideApproval` | `demoCollaboration`, `demoSettings` |
 | `dispatchApprovedAction` | `demoApprovals` |
+| `ownerHandoff` | `demoBatch` |
 | `reconcileRun` | `demoApprovals` |
 | `reconciliationReview` | `demoFinance` |
 | `reconnectSource` | `demoMonitor` |
@@ -228,6 +247,7 @@ Free strings on `ActionResponse.reasonCodes`, capability `reasonCodes` and `cove
 
 | Reason code | Used in (under `src/adapter/`) |
 | -- | -- |
+| `ALREADY_CLOSED` | `demoFinance` |
 | `ALREADY_PAUSED` | `demoBatch` |
 | `ALREADY_RECONCILED` | `demoApprovals` |
 | `ALREADY_SUBMITTED` | `demoFinance` |
@@ -237,8 +257,8 @@ Free strings on `ActionResponse.reasonCodes`, capability `reasonCodes` and `cove
 | `AWAITING_DISPATCH` | `demoApprovals` |
 | `AWAITING_REVIEW` | `demoFinance` |
 | `AWAITING_SOURCE_RECEIPT` | `demoOps` |
+| `CLOSE_OWNER_ACTION_REQUIRED` | `demoFinance` |
 | `CONNECTION_UNVERIFIED` | `demoSettings` |
-| `CPA_SIGN_OFF_REQUIRED` | `demoFinance` |
 | `DECISION_ALREADY_RECORDED` | `demoOps` |
 | `DEMO_NO_DISPATCH` | `demoAdapter`, `demoAnalytics` |
 | `EDIT_NEEDS_FRESH_APPROVAL` | `demoApprovals` |
@@ -257,7 +277,6 @@ Free strings on `ActionResponse.reasonCodes`, capability `reasonCodes` and `cove
 | `PROVIDER_NOT_SELECTED` | `demoLifecycle` |
 | `PROVIDER_OWNS_PAYOUT` | `demoFinance` |
 | `RECEIPTS_MISSING` | `demoOps` |
-| `RECONCILIATION_OPEN` | `demoFinance` |
 | `ROLE_REQUIRED` | `demoApprovals` |
 | `SOURCE_ACCESS_UNVERIFIED` | `demoAdapter` |
 | `SOURCE_LOGIN_REQUIRED` | `demoMonitor` |
@@ -336,12 +355,12 @@ Not on `main`. Read from each PR's diff against `main` on 2026-11-04. This secti
 | #26 | View `offerRewards` | Filters `{ offerId, scenario }` (typed `scenario: string`, required here, optional elsewhere). Data `RewardsRecord`. Screen `scorecards/RewardsPage`. Handler in `demoScorecards.ts`. Capability `purchaseReward` (`unverified`; `OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`). Errors `RECORD_NOT_FOUND` for an unknown offer or scenario. Also changes `assessmentRecord`: an assessment id `<id>--media`, `--terms` or `--policy` returns the same snapshot with that part of its basis changed. | C-06 (`scenario`) || #26 | View `offerRewards` | Filters `{ offerId, scenario }` (typed `scenario: string`, required here, optional elsewhere). Data `RewardsRecord`. Screen `scorecards/RewardsPage`. Handler in `demoScorecards.ts`. Capability `purchaseReward` (`unverified`; `OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`). Errors `RECORD_NOT_FOUND` for an unknown offer or scenario. Also changes `assessmentRecord`: an assessment id `<id>--media`, `--terms` or `--policy` returns the same snapshot with that part of its basis changed. | C-06 (`scenario`) |
 | #28 | View `pipelineBranches` | Filters `{ source }` (`both`, `social-cat`, `tiktok-shop`; the demo answers `VALIDATION_FAILED` otherwise). Data `BranchesData`. Screen `acquisition/BranchesView`, shown from the pipeline page. Handler in `demoAdapter.ts`. | C-05 (`both` as the no-filter value) |
 | #29 | none of its own | Stacked on #25 and #22. Adds, through a test-only fault adapter, the reason codes `SOURCE_ROWS_INACCESSIBLE`, `SOURCE_BEHIND` and `NOT_REPORTED`, and a `ReadState` notice on 20 pages. No new view key, action kind or error code beyond #25. | none |
-| #30 | Action kinds `requestBatchApproval`, `decideTikTokSample`; capability `requestBatchApproval` on `discoverySummary` | `requestBatchApproval`: operation `requestApproval`, payload `{ batchId, recipients, rateLabel, sampleUnits, sampleUnitCostMinor, upfrontFeeMinor, policyVersion }`, `expectedVersion` is `res.dataVersion`; answers `approvalPending` with reason `AWAITING_DECISION` (a fourth wording, C-02), `approvalRef` `demo-approval-batch-024`, `manifestRef`, next `decideApproval` for `Thomas`. Errors `MANIFEST_CHANGED`, `STALE_VERSION`, `POLICY_VIOLATION` (upfront fee), `RECORD_NOT_FOUND`, `VALIDATION_FAILED` (finite recipients). `decideTikTokSample`: operation `controlRun`, payload `{ batchId, sampleId, decision: approve \| decline }`; answers `succeeded` with a receipt, or `blocked` with `SOURCE_AUTHORITY_DENIED` and next `ownerHandoff`. Errors `RECORD_NOT_FOUND`, `VALIDATION_FAILED`, and `STALE_VERSION` (batch version). Also adds an `actorRole` option to the demo adapter, so a founder can decide what a reviewer is refused (`SOURCE_AUTHORITY_DENIED`). New `nextAction.kind`: `ownerHandoff`. | C-01 (a decision under `controlRun`), C-02, C-10 |
+| #30 | Action kinds `requestBatchApproval`, `decideTikTokSample`; capability `requestBatchApproval` on `discoverySummary` | `requestBatchApproval`: operation `requestApproval`, payload `{ batchId, recipients, rateLabel, sampleUnits, sampleUnitCostMinor, upfrontFeeMinor, policyVersion }`, `expectedVersion` is `res.dataVersion`; answers `approvalPending` with reason `AWAITING_DECISION` (a fourth wording, C-02), `approvalRef` and `manifestRef` derived from the request, next `decideApproval` for `Thomas`. Errors `MANIFEST_CHANGED`, `STALE_VERSION`, `POLICY_VIOLATION` (upfront fee), `RECORD_NOT_FOUND`, `VALIDATION_FAILED` (finite recipients). `decideTikTokSample`: operation `controlRun`, payload `{ batchId, sampleId, decision: approve \| decline }`; answers `succeeded` with a receipt, or `blocked` with `SOURCE_AUTHORITY_DENIED` and next `ownerHandoff`. Errors `RECORD_NOT_FOUND`, `VALIDATION_FAILED`, and `STALE_VERSION` (batch version). Also adds an `actorRole` option to the demo adapter, so a founder can decide what a reviewer is refused (`SOURCE_AUTHORITY_DENIED`). New `nextAction.kind`: `ownerHandoff`. | C-01 (a decision under `controlRun`), C-02, C-10 |
 | #32 | View `launchReconciliation` | Filters none. Data `ReconciliationData`. Screen `analytics/ReconciliationPage` (route `/launch?view=reconciliation`). Handler in `demoAnalytics.ts`. Also lets `collaborationDetail` return an affiliate record whose capabilities are all `held` with `DEMO_RECORD_READ_ONLY`. | none |
 | #33 | No new key | Makes `collaborationDetail` and the seven collaboration commands work per `collaborationId` (a fixtures table instead of one record). Adds demo rules: `POLICY_VIOLATION` for `queueNextAction` with action key `remindCreator` when the accepted posting terms are voluntary; `VALIDATION_FAILED` for feedback, revision or rejection when nothing has been submitted; `STALE_VERSION` against the record's own submission version. | C-02, C-11 |
 | #35 | View `opsHealth` | Filters none. Data `OpsHealth`. Screen `operations/OpsHealthPage`. Handler in `demoOps.ts`, derived in `adapter/opsHealth.ts`. | none |
 | #36 | View `metricDictionary` | Filters none. Data `MetricDictionaryData`. Read by `analytics/AttributionPage`. Handler in `demoAnalytics.ts`. | none |
-| #37 | Action kinds `createOffer`, `editOffer`, `importOffers`, `dispatchOffer`, `recordCreatorReply`, `changeAcquisitionPolicy` | Demo service `demoPolicy.ts`, handled by `actionKind`; no screen sends them yet (tests only, with `operation` set to the action kind). Payloads `{ offerId?, terms }`, `{ offers[] }`, `{ creatorRef, sourceRef, text }`, a partial policy with `version`. Answers `draft`, `succeeded` (`POLICY_VERSION_CHANGED`) or `blocked` (`TERMS_MISMATCH`, `CREATOR_FEE_REQUEST`; next `reviewTermsMismatch`). Errors `POLICY_VIOLATION` (`fieldErrors`, dotted per-row keys), and `MANIFEST_CHANGED` when an approval was made under an older policy and is dispatched after a conflicting change. Eligibility blocker codes inside `fieldErrors` messages: `UPFRONT_FEE_PROHIBITED`, `GUARANTEED_FEE_PROHIBITED`, `PAID_COMPONENT_PROHIBITED`, `PAID_OR_HYBRID_PROHIBITED`, `GIFTED_ONLY_PROHIBITED`, `COMMISSION_REQUIRED`, `COMMISSION_ABOVE_CAP`, `SAMPLE_ABOVE_CAP`, `INVALID_AMOUNT` (not error codes). | C-08 (a second meaning of `MANIFEST_CHANGED`), C-11 |
+| #37 | Action kinds `createOffer`, `editOffer`, `importOffers`, `dispatchOffer`, `recordCreatorReply`, `changeAcquisitionPolicy` | Demo service `demoPolicy.ts`, handled by `actionKind`; no screen sends them yet (tests only, with `operation` set to the action kind). Payloads `{ offerId?, terms }`, `{ offers[] }`, `{ creatorRef, sourceRef, text }`, a partial policy with `version`. Answers `draft`, `succeeded` (`POLICY_VERSION_CHANGED`) or `blocked` (`TERMS_MISMATCH`, `CREATOR_FEE_REQUEST`; next `reviewTermsMismatch`). Errors `POLICY_VIOLATION` (`fieldErrors`, dotted per-row keys; also an approved dispatch whose terms never passed the policy in force, or whose terms can't be read, which fails closed), `VALIDATION_FAILED` (bad payload shape or policy value), `STALE_VERSION` (offer actions check `expectedVersion`; an unstored offer is `v1`, an edit moves it), `FORBIDDEN` (`changeAcquisitionPolicy` is founder-only; the message carries `AUTHORITY_REQUIRED` because the error body has no reason field), and `MANIFEST_CHANGED` when an approval was made under an older policy and is dispatched after a conflicting change, or when a key is reused with a changed payload. A replay of a dispatch that already ran returns its stored result, not a policy error. Eligibility blocker codes inside `fieldErrors` messages: `UPFRONT_FEE_PROHIBITED`, `GUARANTEED_FEE_PROHIBITED`, `PAID_COMPONENT_PROHIBITED`, `PAID_OR_HYBRID_PROHIBITED`, `GIFTED_ONLY_PROHIBITED`, `COMMISSION_REQUIRED`, `COMMISSION_ABOVE_CAP`, `PER_SALE_FIXED_ABOVE_CAP`, `RELATIONSHIP_NOT_COMMISSION_ONLY`, `SAMPLE_ABOVE_CAP`, `INVALID_AMOUNT` (not error codes). | C-08 (a second meaning of `MANIFEST_CHANGED`), C-11 |
 | #38 | View `closePackage` | Filters `{ period, scenario? }`. Data `ClosePackage`. Screen `finance/ClosePackagePage`. Handler in `demoFinance.ts`. Capability `closePeriod` is `held` with the package's blocker codes as reasons (`ADJUSTMENT_REVIEW_OPEN`, `UNRESOLVED_DIFFERENCE`, `LANDED_COST_INCOMPLETE`, `CPA_SIGN_OFF_PENDING`, `EXPORT_INCOMPLETE`), or `unsupported` with `ALREADY_CLOSED`. Error `RECORD_NOT_FOUND`. | C-05, C-06 |
 | #39 | none | Only changes copy and layout on the creator pages. No view key, action kind or error code. | none |
 PRs #22, #23, #27, #31 and #34 add no view key, action kind, resource kind or error code that this register tracks. The task named #26, #29, #30, #32 and #35 to #39; #25, #28 and #33 are listed too because their diffs also change what the demo adapter answers.

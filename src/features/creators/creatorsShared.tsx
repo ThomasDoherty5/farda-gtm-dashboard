@@ -1,6 +1,7 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Badge } from "@/components/Badge";
 import { SkeletonCard } from "@/components/EmptyState";
@@ -8,13 +9,15 @@ import { ViewError } from "@/components/ViewError";
 import { Button, LinkButton } from "@/components/Button";
 import { SectionTabs } from "@/components/SectionTabs";
 import { SourceDialog } from "@/features/approvals/shared";
-import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
+import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID, DEMO_HOURLY_RUN_ID } from "@/fixtures/ids";
 import { CUMULATIVE_DAYS } from "@/fixtures/creators";
 import { pipelineSources } from "@/fixtures/pipeline";
 import acquisition from "@/features/acquisition/Acquisition.module.css";
 import styles from "./Creators.module.css";
 
 export const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`;
+/** Hourly monitoring is a read-only run; daily acquisition is sourcing. They are different destinations and neither stands in for the other. */
+export const hourlyPath = `/runs/${DEMO_HOURLY_RUN_ID}`;
 
 /** Heading, subtitle and the two title actions (Figma "Title and actions"). */
 export function PageTitle({ id, title, subtitle, children }: { id: string; title: string; subtitle: string; children: ReactNode }) {
@@ -66,6 +69,7 @@ export function CommissionContext() {
       <div className={styles.contextActions}>
         <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
+        <LinkButton variant="secondary" to={hourlyPath} style={{ minWidth: 200 }}>Hourly monitoring</LinkButton>
         <LinkButton variant="secondary" to={evidencePath} style={{ minWidth: 223.5 }}>Review lifestyle evidence</LinkButton>
       </div>
     </div>
@@ -74,13 +78,15 @@ export function CommissionContext() {
 
 /** Context above both boards: the snapshot is illustrative, and the full funnel is a separate cohort (Figma 107:583). */
 export function BoardContext() {
+  const demo = useScope().adapter.environment === "demo";
   return (
     <div className={acquisition.context}>
       <p className={acquisition.contextTitle}>Operational stages and acquisition conversion</p>
-      <p className={acquisition.small}>These cards show an illustrative operational snapshot. The full funnel follows a separate mature acquisition cohort. New offers are commission-only; accepted historical terms remain valid.</p>
+      <p className={acquisition.small}>These cards show {demo ? "an illustrative" : "a"} operational snapshot. The full funnel follows a separate mature acquisition cohort. New offers are commission-only; accepted historical terms remain valid.</p>
       <div className={styles.contextActions}>
         <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
+        <LinkButton variant="secondary" to={hourlyPath} style={{ minWidth: 200 }}>Hourly monitoring</LinkButton>
       </div>
     </div>
   );

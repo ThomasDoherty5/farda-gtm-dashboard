@@ -1,10 +1,12 @@
 import { SCHEMA_VERSION, certaintyOfState, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
+import { opsExceptionsDemo, sandboxChain, shipmentsDemo } from "@/fixtures/opsShipping";
 import { respondWith } from "./demoViews";
 import { DEMO_NOW } from "@/fixtures/overview";
 import { availableOf, inventoryDemo, type TransferRequest } from "@/fixtures/inventory";
 import { HOMES, type Home } from "@/fixtures/operations";
 import { supportDemo } from "@/fixtures/support";
+import { buildOpsHealth } from "./opsHealth";
 import { fulfillmentDemo, heldRows, operationsDemo, orderDemo, returnDemo, shippingExceptionDemo, type OperationsOverview, type ReturnDetail, type ReturnDisposition, type ReturnResolution, type ShippingExceptionDetail } from "@/fixtures/operations";
 
 type Capability = ReadResponse<unknown>["capabilities"][number];
@@ -24,7 +26,21 @@ const minutesBefore = (iso: string, minutes: number) => new Date(new Date(iso).g
  * `scenario` is a demo-only filter that selects a labeled fixture; the live adapter never reads it.
  * Nothing here contacts Shopify, Shippo or a carrier. An accepted intent is queued for approval, not done.
  */
-export function createDemoOps() {
+/** Roles that may see a customer's details. Anyone else is shown the reason. The check lives here because a hidden button is not authorization. */
+export const CUSTOMER_ROLES = ["operations", "founder"] as const;
+export type CustomerAuditEntry = { id: string; at: string; role: string; orderRef: string; reason: string };
+export type OrderCustomerData = {
+  datasetKey: "operations-customer-demo";
+  orderRef: string;
+  access: { state: "allowed" | "denied"; reason: string | null };
+  /** Synthetic placeholders. Present only after an authorized, audited reveal. */
+  revealed: { name: string; email: string; city: string } | null;
+  audit: CustomerAuditEntry[];
+};
+
+export function createDemoOps(opts: { actorRole?: string } = {}) {
+  const actorRole = opts.actorRole ?? "reviewer";
+  const customerAudit: CustomerAuditEntry[] = [];
   const decisions = new Map<string, NonNullable<ShippingExceptionDetail["decision"]>>();
   const versions = new Map<string, number>();
   const results = new Map<string, { hash: string; result: ActionResponse }>();
@@ -62,6 +78,35 @@ export function createDemoOps() {
       },
     ];
     return res;
+  }
+
+  /** An audited reveal. It needs an authorized role and a stated reason, and it records who looked. It never leaves the page. */
+  function revealCustomer(request: ActionRequest<{ orderRef: string; reason: string }>): ActionResponse {
+    const rid = request.requestId;
+    if (!(CUSTOMER_ROLES as readonly string[]).includes(actorRole)) fail("SOURCE_AUTHORITY_DENIED", "Your role can't see customer details.", rid);
+    if (!orderDemo(request.payload.orderRef)) fail("RECORD_NOT_FOUND", "This order does not exist or was removed.", rid);
+    if ((request.payload.reason?.trim().length ?? 0) < 10) fail("VALIDATION_FAILED", "Say why you need to see these details, in at least 10 characters.", rid, { fieldErrors: { reason: "Say why in at least 10 characters." } });
+    const entry: CustomerAuditEntry = { id: `CUST-AUD-${customerAudit.length + 1}`, at: DEMO_NOW, role: actorRole, orderRef: request.payload.orderRef, reason: request.payload.reason.trim() };
+    customerAudit.push(entry);
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      requestId: rid,
+      scope: { ...request.requestedScope, authorizationScopeVersion: "demo-1" },
+      actionRef: entry.id,
+      state: "succeeded",
+      runRef: null,
+      approvalRef: null,
+      manifestRef: null,
+      payloadVersion: `customer-${entry.orderRef}@${customerAudit.length}`,
+      policyVersion: "customer-data@demo",
+      modelVersion: null,
+      offerVersion: null,
+      reasonCodes: [],
+      executionCertainty: certaintyOfState("succeeded"),
+      receiptRefs: [entry.id],
+      nextAction: null,
+      nextPollAfterMs: null,
+    };
   }
 
   function order(request: ReadRequest<{ orderId: string }>) {
@@ -207,6 +252,24 @@ export function createDemoOps() {
           return support(request as ReadRequest<{ caseId: string; scenario?: string }>);
         case "returnDetail":
           return returnDetail(request as ReadRequest<{ returnId: string; scenario?: string }>);
+        case "orderCustomer": {
+          const { orderId } = request.filters as { orderId: string };
+          if (!orderDemo(orderId)) return fail("RECORD_NOT_FOUND", "This order does not exist or was removed.", request.requestId);
+          const allowed = (CUSTOMER_ROLES as readonly string[]).includes(actorRole);
+          const audit = customerAudit.filter((a) => a.orderRef === orderId);
+          const data: OrderCustomerData = {
+            datasetKey: "operations-customer-demo",
+            orderRef: orderId,
+            access: allowed ? { state: "allowed", reason: null } : { state: "denied", reason: "ROLE_REQUIRED" },
+            revealed: allowed && audit.length ? { name: `Test Customer ${orderId.slice(-4)}`, email: `test-${orderId.slice(-4)}@example.test`, city: "Testville" } : null,
+            audit,
+          };
+          return respondWith(request, data, { dataVersion: `customer-${orderId}@${audit.length}`, capabilities: [{ actionKind: "revealCustomerDetails", state: allowed ? "available" : "denied", reasonCodes: allowed ? [] : ["ROLE_REQUIRED"] }] });
+        }
+        case "operationsShipping":
+          return respondWith(request, { datasetKey: "operations-shipping-demo" as const, shipments: shipmentsDemo, exceptions: opsExceptionsDemo, chain: sandboxChain }, { dataVersion: "operations-shipping-demo@1" });
+        case "opsHealth":
+          return respondWith(request, buildOpsHealth(), { dataVersion: "ops-health@1" });
         case "fulfillmentAnalytics":
           return fulfillment(request as ReadRequest<{ days?: number }>);
         default:
@@ -215,6 +278,7 @@ export function createDemoOps() {
     },
     /** Same key and payload returns the original result; the same key with a changed payload is refused. */
     submit(request: ActionRequest<unknown>): ActionResponse | null {
+      if (request.actionKind === "revealCustomerDetails") return revealCustomer(request as ActionRequest<{ orderRef: string; reason: string }>);
       if (!["recordShippingDecision", "prepareReturnTask", "requestStockTransfer"].includes(request.actionKind)) return null;
       const hash = JSON.stringify([request.operation, request.actionKind, request.expectedVersion, request.payload]);
       const prior = results.get(request.idempotencyKey);

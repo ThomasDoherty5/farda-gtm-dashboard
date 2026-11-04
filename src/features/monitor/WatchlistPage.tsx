@@ -49,7 +49,7 @@ export function WatchlistPage() {
       </section>
       <div className={m.ctx}>
         <Badge tone="violet" width={200}>Demo watchlist</Badge>
-        <p className={a.small}>{data ? `${data.totals.tracked} profiles across linked accounts · illustrative records · ${data.scheduleLabel}` : "Loading the watchlist…"}</p>
+        <p className={a.small}>{data ? `${data.totals.tracked} profiles across linked accounts · illustrative records · ${data.scheduleLabel}` : query.isError ? "The watchlist could not be read." : "Loading the watchlist…"}</p>
       </div>
       <ViewShell query={query} subject="The watchlist" emptyTitle="Nothing is on the watchlist yet" emptyBody="The source responded, but no profiles are tracked. That is not zero profiles.">
         {(d) => (

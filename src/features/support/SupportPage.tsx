@@ -16,7 +16,7 @@ import styles from "./Support.module.css";
 
 const TONE: Record<SupportState, BadgeTone> = { "Needs reply": "danger", Waiting: "warning", "In review": "violet", Resolved: "success" };
 const OWNER: Record<string, string> = { Ops: "Operations" };
-const pct = (n: number, d: number) => `${Math.round((100 * n) / d)}%`;
+const pct = (n: number, d: number) => (d > 0 ? `${Math.round((100 * n) / d)}%` : "N/A");
 
 /**
  * Support workspace (Figma source 7:317, owner THO-302). The case lives in Intercom. This page mirrors only safe operational
@@ -35,7 +35,7 @@ export function SupportPage() {
         const total = d.cohort.tickets.reduce((n, t) => n + t.count, 0);
         const stale = res.dataState === "stale";
         const c = d.case;
-        const finPct = Math.round((100 * d.fin.cost.minorUnits) / d.fin.cap.minorUnits);
+        const finPct = d.fin.cap.minorUnits > 0 ? Math.round((100 * d.fin.cost.minorUnits) / d.fin.cap.minorUnits) : null;
         const link = (to: string, label: string) => <Link className={styles.link} to={to}>{label}</Link>;
         return (
           <>
@@ -50,8 +50,8 @@ export function SupportPage() {
             <KpiRow>
               <Kpi label="All-time open queue" context={`${d.cohort.open} open in the ${d.cohort.days}-day cohort`} testId="metric-All-time open queue">{figure(d.allTimeOpen, String)}</Kpi>
               <Kpi label="First contact resolution" context={`${d.cohort.resolvedFirstContact} of ${total} cohort tickets`} testId="metric-First contact resolution">{pct(d.cohort.resolvedFirstContact, total)}</Kpi>
-              <Kpi label="Returns" context={`${d.cohort.returns} / ${d.cohort.deliveredUnits} delivered units · same cohort`} testId="metric-Returns">{((100 * d.cohort.returns) / d.cohort.deliveredUnits).toFixed(1)}%</Kpi>
-              <Kpi label="Fin cost" context={`Demo monthly cap · ${finPct}% used`} testId="metric-Fin cost">{formatMoney(d.fin.cost)} / {formatMoney(d.fin.cap)}</Kpi>
+              <Kpi label="Returns" context={`${d.cohort.returns} / ${d.cohort.deliveredUnits} delivered units · same cohort`} testId="metric-Returns">{d.cohort.deliveredUnits > 0 ? `${((100 * d.cohort.returns) / d.cohort.deliveredUnits).toFixed(1)}%` : "N/A"}</Kpi>
+              <Kpi label="Fin cost" context={`Demo monthly cap · ${finPct === null ? "usage N/A" : `${finPct}% used`}`} testId="metric-Fin cost">{formatMoney(d.fin.cost)} / {formatMoney(d.fin.cap)}</Kpi>
             </KpiRow>
             <TwoColumns>
               <Panel title="Handoffs that need an owner" subtitle="All-time queue · source remains Intercom" testId="handoff-queue">
@@ -100,7 +100,7 @@ export function SupportPage() {
                     ["Refunded", `${formatMoney(d.outcomes.refundedAmount)} · ${d.outcomes.refundedOrders} orders`],
                     ["Replacement sent", `${d.outcomes.replacementShipments} shipments`],
                     ["Reviews received", `${d.cohort.reviews} rated reviews · same cohort`],
-                    ["Support load", `${Math.round((100 * total) / d.cohort.deliveredUnits)} tickets / 100 delivered`],
+                    ["Support load", d.cohort.deliveredUnits > 0 ? `${Math.round((100 * total) / d.cohort.deliveredUnits)} tickets / 100 delivered` : "N/A"],
                   ]}
                 />
               </Panel>
