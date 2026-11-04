@@ -5,8 +5,9 @@ import { SCHEMA_VERSION, readResponseSchema, type ReadRequest } from "../contrac
 import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
 import { overviewFixtureKeys, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
+import { metricDictionaryDemo, type MetricDictionaryData } from "@/fixtures/headlineMetrics";
 import { attributionDemo, campaignFunnelDemo, customerJourneyDemo, launchControlDemo, launchSnapshotDemo, paidMediaDemo, type AttributionData, type CampaignFunnelData, type CustomerJourneyData, type LaunchControlData, type LaunchSnapshotData, type PaidMediaData } from "@/fixtures/analytics";
-import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, launchSnapshotSchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
+import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, metricDictionarySchema, launchSnapshotSchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 const request = (viewKey: string, filters: object = {}): ReadRequest<unknown> => ({
@@ -23,7 +24,8 @@ const typeChecks: [
   Fits<z.infer<typeof paidMediaSchema>, PaidMediaData>,
   Fits<z.infer<typeof campaignFunnelSchema>, CampaignFunnelData>,
   Fits<z.infer<typeof customerJourneySchema>, CustomerJourneyData>,
-] = [true, true, true, true, true, true, true];
+  Fits<z.infer<typeof metricDictionarySchema>, MetricDictionaryData>,
+] = [true, true, true, true, true, true, true, true];
 
 const REJECTED: Partial<Record<OverviewFixtureKey, string>> = {
   "FX-07-offline-read": "SOURCE_UNAVAILABLE",
@@ -41,12 +43,13 @@ const variants: Record<string, object[]> = {
   paidMedia: [{}, ...paidMediaFilters],
   campaignFunnel: [{ cohort: "first-wave" }, { cohort: "launch-a" }, {}],
   customerJourney: [{}],
+  metricDictionary: [{}],
 };
 
 describe("analytics view schemas: every demo response parses", () => {
   it("covers the view keys the demo adapter serves", () => {
     expect(Object.keys(analyticsViewSchemas).sort()).toEqual(Object.keys(variants).sort());
-    expect(typeChecks).toHaveLength(7);
+    expect(typeChecks).toHaveLength(8);
   });
 
   for (const [viewKey, filterSets] of Object.entries(variants)) {
@@ -194,6 +197,18 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["negative AOV", (d) => (d.globalAov.minorUnits = -1)],
       ["fractional AOV", (d) => (d.globalAov.minorUnits = 3149.5)],
       ["negative ticket count", (d) => (d.tickets[0].count = -1)],
+    ],
+  },
+  {
+    view: "metricDictionary", schema: metricDictionarySchema, valid: metricDictionaryDemo,
+    cases: [
+      ["missing required field", (d) => delete d.entries[0].refundTreatment],
+      ["another dataset", (d) => (d.datasetKey = "overview-original")],
+      ["unknown metric key", (d) => (d.entries[0].key = "roi")],
+      ["negative bucket", (d) => (d.buckets[0].minorUnits = -1)],
+      ["fractional bucket", (d) => (d.buckets[0].minorUnits = 1.5)],
+      ["unknown caveat", (d) => (d.cases[0].input.caveat = "WHATEVER")],
+      ["NaN-like input as a string", (d) => (d.cases[0].input.validOrders = "400")],
     ],
   },
 ];
