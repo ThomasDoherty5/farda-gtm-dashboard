@@ -12,6 +12,13 @@ import { TikTokPage } from "@/features/creators/TikTokPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
+import { AttributionPage } from "@/features/analytics/AttributionPage";
+import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
+import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
+import { LaunchPage } from "@/features/analytics/LaunchPage";
+import { PaidMediaPage } from "@/features/analytics/PaidMediaPage";
+import { AssessmentPage } from "@/features/scorecards/AssessmentPage";
+import { OfferPage } from "@/features/scorecards/OfferPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { AutomationsPage } from "@/features/settings/AutomationsPage";
 import { CapabilitiesPage } from "@/features/settings/CapabilitiesPage";
@@ -25,6 +32,13 @@ import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
 /** Screens implemented so far. Every other manifest path renders a labeled placeholder. */
 const implemented: Record<string, JSX.Element> = {
   "/overview": <OverviewPage />,
+  "/launch": <LaunchPage />,
+  "/analytics/attribution": <AttributionPage />,
+  "/analytics/paid-media": <PaidMediaPage />,
+  "/campaigns/:campaignId": <CampaignFunnelPage />,
+  "/analytics/customer-journey": <CustomerJourneyPage />,
+  "/creators/:creatorId/assessments/:assessmentId": <AssessmentPage />,
+  "/offers/:offerId": <OfferPage />,
   "/creators/discovery": <DiscoveryPage />,
   "/creators/pipeline": <PipelinePage />,
   "/creators/social-cat": <SocialCatPage />,
