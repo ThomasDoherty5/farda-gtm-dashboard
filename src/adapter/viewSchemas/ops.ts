@@ -263,6 +263,43 @@ export const fulfillmentAnalyticsSchema = z.object({
   exceptions: z.object({ lost: count, returned: count }),
 });
 
+/** Shipments, exception kinds and the sandbox chain. "In transit" is computed from carrier states on the screen, never stored here. */
+export const operationsShippingSchema = z.object({
+  datasetKey: z.literal("operations-shipping-demo"),
+  shipments: z.array(z.object({ ref: z.string(), orderRef: z.string(), carrierState: z.enum(["labelCreated", "inTransit", "outForDelivery", "deliveredUnconfirmed", "delivered", "lost", "returned"]), lastScan: z.string().nullable() })),
+  exceptions: z.array(z.object({ id: z.string(), kind: z.enum(["aging", "failedLabel", "failedScan", "duplicateShipment", "stockShortage", "uncertainRefund"]), ref: z.string(), ageHours: z.number().nonnegative(), detail: z.string(), next: z.string(), to: z.string() })),
+  chain: z.array(z.object({ key: z.enum(["order", "sample", "shortage", "transfer"]), label: z.string(), ref: z.string(), state: z.string(), to: z.string() })),
+});
+
+/** Restricted customer details. They are present only when access is allowed and a reveal has been audited. */
+export const orderCustomerSchema = z
+  .object({
+    datasetKey: z.literal("operations-customer-demo"),
+    orderRef: z.string(),
+    access: z.object({ state: z.enum(["allowed", "denied"]), reason: z.string().nullable() }),
+    revealed: z.object({ name: z.string(), email: z.string(), city: z.string() }).nullable(),
+    audit: z.array(z.object({ id: z.string(), at: z.string(), role: z.string(), orderRef: z.string(), reason: z.string() })),
+  })
+  .refine((d) => d.revealed === null || (d.access.state === "allowed" && d.audit.length > 0), { message: "Details are never shown without allowed access and an audit entry" });
+
+/* ---------- issues and fulfillment health (opsHealth) ---------- */
+
+const healthAverage = z.object({ days: pvDays, sample: count });
+const healthGroup = z.object({ key: nonBlank, orderToShipped: healthAverage, shippedToDelivered: healthAverage, costPerOrder: pvMoney, orders: count, costUnread: count, deliveredWithoutAcceptance: count });
+const shipmentState = z.enum(["Delivered", "In transit", "Lost", "Returned", "Label uncertain"]);
+
+export const opsHealthSchema = z.object({
+  datasetKey,
+  issues: z.object({
+    tags: z.array(z.object({ tag: nonBlank, thisWeek: count, lastWeek: count })),
+    refunds: z.object({ total: nonNegativeMoneySchema, orders: count, pending: z.array(z.object({ orderRef: nonBlank, amount: nonNegativeMoneySchema })) }),
+    fin: z.object({ periodLabel: z.string(), resolutions: count, cost: nonNegativeMoneySchema, cap: nonNegativeMoneySchema }),
+  }),
+  fulfillment: z.object({ all: healthGroup, byHome: z.array(healthGroup), byCarrier: z.array(healthGroup) }),
+  orders: z.array(z.object({ orderRef: nonBlank, reservationRef: nonBlank, shipmentRef: nonBlank.nullable(), home: homeSchema.nullable(), state: z.union([shipmentState, z.literal("Canceled"), z.literal("Partially fulfilled")]), unitsOrdered: count, unitsShipped: count, note: z.string() })),
+  integrity: z.object({ shipments: count, duplicatesIgnored: count, outOfOrder: count, stockDecrements: count }),
+});
+
 export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
   operationsOverview: operationsOverviewSchema,
   orderDetail: orderDetailSchema,
@@ -271,6 +308,9 @@ export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
   supportWorkspace: supportWorkspaceSchema,
   returnDetail: returnDetailSchema,
   fulfillmentAnalytics: fulfillmentAnalyticsSchema,
+  operationsShipping: operationsShippingSchema,
+  orderCustomer: orderCustomerSchema,
+  opsHealth: opsHealthSchema,
 };
 
 /* ---------- actions ---------- */

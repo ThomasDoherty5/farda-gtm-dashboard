@@ -87,7 +87,7 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
               <div className={styles.axis} aria-hidden="true" style={{ gridTemplateColumns: "192px repeat(3, minmax(0, 1fr)) 72px" }}><span /><span>0%</span><span>1%</span><span>2%</span><span>3%</span></div>
             </>
           )}
-          <p className={styles.small}>Clicks are a leading signal. They are not attributed orders, customer count or paid-media revenue.</p>
+          <p className={styles.small}>Clicks are a leading signal. They are not attributed orders, customer count or paid-media revenue. Paid media is not a creator fee.</p>
         </Card>
       </div>
       <Card labelledBy="costs-title">

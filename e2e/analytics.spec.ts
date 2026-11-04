@@ -108,3 +108,21 @@ test("the analytics pages show their demo label", async ({ page }) => {
     await expect(page.getByTestId("demo-banner")).toBeVisible();
   }
 });
+
+test.describe("source freshness and reconciliation", () => {
+  test("shows each source's state and a matching matrix, with no axe violations", async ({ page }) => {
+    await page.goto("/launch?view=reconciliation");
+    await expect(page.getByTestId("freshness")).toBeVisible();
+    await expect(page.getByTestId("matrix")).toContainText("Every shared figure matches");
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  });
+
+  test("the snapshot links to it, and it has no page overflow at 320px", async ({ page }) => {
+    await page.goto("/launch");
+    await page.getByRole("link", { name: "Source freshness and reconciliation" }).click();
+    await expect(page).toHaveURL(/view=reconciliation/);
+    await page.setViewportSize({ width: 320, height: 800 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+});
