@@ -3,6 +3,7 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { createDemoBatch } from "./demoBatch";
+import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
@@ -22,6 +23,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
   const batch = createDemoBatch();
+  const collaboration = createDemoCollaboration();
 
   return {
     environment: "demo",
@@ -36,6 +38,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
+      if (request.viewKey === "collaborationDetail") return collaboration.read(request) as ReadResponse<T>;
       if (request.viewKey === "batchDetail") return batch.read(request) as ReadResponse<T>;
       if (request.viewKey === "recruitmentQueue") return respondWith(request, filterRecruitment(recruitmentFilters(request.filters, request.requestId)), { dataVersion: "recruitment-demo@1" }) as ReadResponse<T>;
       if (request.viewKey === "invitationDraft") return respondWith(request, invitationDemo, { dataVersion: "invitation-demo@1", capabilities: [{ actionKind: "sendInvitation", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
@@ -49,6 +52,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
       if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
       return approvals.submit(request);
     },
