@@ -2,6 +2,9 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoPolicy } from "./demoPolicy";
+import { termsFromApproval } from "./commissionPolicy";
+import type { ApprovalDetail } from "@/features/approvals/types";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
@@ -28,6 +31,14 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
+  /** Terms of an approval for the policy guard. An accepted historical liability is paid as accepted, so it has none. */
+  const approvalTerms = (ref: string) => {
+    try {
+      const v = (approvals.readApproval({ filters: { approvalId: ref }, requestId: "policy-guard" } as never).data as ApprovalDetail).versions.at(-1)!;
+      return v.policyVersion.startsWith("historical-liability") ? null : termsFromApproval(v.payload.terms);
+    } catch { return null; }
+  };
+  const policy = createDemoPolicy({ termsOf: approvalTerms });
   const evidence = createDemoEvidence();
   const ops = createDemoOps();
   const finance = createDemoFinance();
@@ -82,6 +93,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (opsResult) return opsResult;
       const financeResult = finance.submit(request);
       if (financeResult) return financeResult;
+      if (policy.handles(request)) return policy.submit(request);
+      if (request.operation === "dispatchApprovedAction") policy.guardApprovedDispatch(request);
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
       if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
