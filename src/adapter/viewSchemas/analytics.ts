@@ -188,7 +188,20 @@ export const customerJourneySchema = z.object({
 });
 
 /** View key to the schema of `ReadResponse.data` for that view. */
+/* ---------- Source freshness and reconciliation (GTM275) ---------- */
+
+/** One place a figure appears. A null value is a figure the page does not state, which makes its row "unknown", never a match. */
+const matrixCell = z.object({ page: z.string(), route: z.string(), value: z.number().int().nullable(), note: z.string().optional() });
+const launchReconciliationSchema = z.object({
+  datasetKey: z.literal("reconciliation-demo"),
+  asOf: z.string(),
+  freshness: z.array(z.object({ sourceId: z.string(), label: z.string(), feeds: z.string(), lastSourceSuccessAt: z.string().nullable(), staleReasonCode: z.string().nullable() })),
+  matrix: z.array(z.object({ metric: z.string(), unit: z.enum(["usd", "count"]), cells: z.array(matrixCell).min(2), status: z.enum(["matches", "differs", "unknown"]), reason: z.string().nullable() })),
+  provenance: provenanceDisclosure,
+});
+
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
+  launchReconciliation: launchReconciliationSchema,
   overviewSummary: overviewSummarySchema,
   launchSnapshot: launchSnapshotSchema,
   launchControl: launchControlSchema,

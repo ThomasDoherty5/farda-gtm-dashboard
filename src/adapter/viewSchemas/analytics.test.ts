@@ -41,6 +41,7 @@ const variants: Record<string, object[]> = {
   paidMedia: [{}, ...paidMediaFilters],
   campaignFunnel: [{ cohort: "first-wave" }, { cohort: "launch-a" }, {}],
   customerJourney: [{}],
+  launchReconciliation: [{}],
 };
 
 describe("analytics view schemas: every demo response parses", () => {
