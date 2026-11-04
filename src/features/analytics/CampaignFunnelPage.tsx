@@ -61,7 +61,7 @@ function Body({ data }: { data: CampaignFunnelData }) {
         <SectionHeading id="reference-title" title={allBelow ? "All three cohorts are below historical contact assumptions" : "Contacts against historical contact assumptions"} note="Solid = illustrative recorded cohort · light track = historical reference" />
         <BarList large label="Contacts against historical reference" cols="200px minmax(0, 1fr) 160px 138px" gap={20}
           rows={data.campaigns.map((c) => ({ key: c.key, label: c.label, value: `${count(c.steps.contacted)} / ${count(c.contactReference)}`, note: percent(c.steps.contacted, c.contactReference), share: ratio(c.steps.contacted, c.contactReference) }))} />
-        <p className={styles.small}>Source reference: {data.historicalSource}. Rebaseline before interpreting a target gap or releasing media. No upfront creator fee is created here.</p>
+        <p className={styles.small}>Source reference: {data.historicalSource}. Rebaseline before interpreting a target gap or releasing media. New acquisition is commission-only; no upfront creator fee is created here.</p>
       </Card>
       <Card labelledBy="progression-title">
         <SectionHeading id="progression-title" title="One cohort, six evidence-based steps" note="Counts are cumulative progression within each campaign, not mutually exclusive current-stage bins." />

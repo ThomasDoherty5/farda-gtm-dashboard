@@ -392,7 +392,7 @@ describe("FE01-03 the $12,596 / 400-order example is never mixed with the pilot 
 describe("FE01-05 no new upfront fee, and paid media is not a creator fee", () => {
   it("the campaign funnel says no upfront creator fee is created", async () => {
     open("/campaigns/demo-campaign-first-wave?tab=funnel");
-    expect(await screen.findByText(/No upfront creator fee is created here/)).toBeInTheDocument();
+    expect(await screen.findByText(/commission-only; no upfront creator fee is created here/)).toBeInTheDocument();
   });
 
   it("the paid media page says paid media is not a creator fee, and keeps media apart from creator and sample economics", async () => {

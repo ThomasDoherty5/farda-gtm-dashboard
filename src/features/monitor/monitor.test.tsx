@@ -227,17 +227,40 @@ describe("post performance (25:481)", () => {
     expect(screen.getByRole("img", { name: /Daily views gained: Oct 19 1k/ })).toBeInTheDocument();
   });
 
-  it("FE07-05: TikTok-reported GMV is labeled as GMV in the attribution evidence, and net sales is defined as after discounts and refunds", async () => {
+  it("FE07-05: a reported TikTok GMV is its own labeled figure, larger than and never merged into net sales", async () => {
+    open("/content/P-001");
+    const netSales = await metric("net-sales");
+    const card = netSales.closest("dl")!;
+    expect(netSales).toHaveTextContent("$2,015");
+    expect(card).toHaveTextContent("not GMV");
+    expect(card).not.toHaveTextContent("$3,100");
+    const note = await screen.findByTestId("gmv-note");
+    expect(note).toHaveTextContent("TikTok-reported GMV $3,100");
+    expect(note).toHaveTextContent("before discounts and refunds");
+    expect(note).toHaveTextContent("Sep 30–Oct 29, 2026");
+    expect(note).toHaveTextContent("never relabeled as net sales");
+    expect(postPerformanceDemo.gmv.state === "reported" && postPerformanceDemo.gmv.amount.minorUnits).toBeGreaterThan(postPerformanceDemo.netSales!.minorUnits);
+  });
+
+  it("FE07-05: a TikTok post with no reported GMV says unknown, not $0; an Instagram post says GMV does not apply", async () => {
+    open("/content/P-003");
+    expect(await screen.findByTestId("gmv-note")).toHaveTextContent(/has not reported GMV.*unknown, not \$0/);
+    expect(await metric("net-sales")).toHaveTextContent("$995");
+  });
+
+  it("FE07-05: GMV does not apply to an Instagram post, and net sales is unchanged", async () => {
+    open("/content/P-002");
+    expect(await screen.findByTestId("gmv-note")).toHaveTextContent("does not apply to an Instagram post");
+    expect(await metric("net-sales")).toHaveTextContent("$1,440");
+  });
+
+  it("FE07-05: the attribution evidence dialog repeats the separation and never calls GMV net sales", async () => {
     const user = userEvent.setup();
     open("/content/P-001");
-    expect(await metric("net-sales")).toHaveTextContent("$2,015");
-    expect(screen.getByText("After discounts and refunds; USD")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "View attribution evidence" }));
+    await user.click(await screen.findByRole("button", { name: "View attribution evidence" }));
     const dialog = await openDialog();
-    expect(within(dialog).getByText("GMV")).toBeInTheDocument();
-    expect(within(dialog).getByText("TikTok-reported GMV is kept apart and is never net sales")).toBeInTheDocument();
+    expect(within(dialog).getByText(/TikTok-reported GMV \$3,100.*Never net sales/)).toBeInTheDocument();
     expect(within(dialog).getByText(/\$2,015 after discounts and refunds/)).toBeInTheDocument();
-    expect(screen.getByText(/TikTok-reported GMV is retained separately with its source definition and window/)).toBeInTheDocument();
   });
 
   it("a post with no consecutive snapshots says so instead of drawing a flat chart", async () => {

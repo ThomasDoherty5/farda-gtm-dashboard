@@ -4,7 +4,7 @@ import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { respondWith } from "@/adapter/demoViews";
 import { AdapterError } from "@/adapter/errors";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
-import { collaborationAffiliate, collaborationDemo, reviewAfter } from "@/fixtures/collaboration";
+import { collaborationDemo } from "@/fixtures/collaboration";
 import { renderRoute, scriptedAdapter } from "@/test/renderWithAdapter";
 
 const OVERVIEW = "/collaborations/demo-collaboration-1?tab=overview";
@@ -192,7 +192,7 @@ describe("content review and rights (9:436)", () => {
     expect(screen.getByText("Draft only · not sent")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Queue feedback" }));
     const composer = dialog("Queue feedback");
-    expect(composer.getByLabelText("Feedback")).toHaveValue(collaborationDemo.content.proposedFeedback);
+    expect(composer.getByLabelText("Feedback")).toHaveValue(collaborationDemo.content!.proposedFeedback);
     await user.clear(composer.getByLabelText("Feedback"));
     await user.click(composer.getByRole("button", { name: "Queue feedback", hidden: true }));
     expect(composer.getByText("Feedback is required.")).toBeInTheDocument();
@@ -238,50 +238,79 @@ describe("content review and rights (9:436)", () => {
   });
 });
 
-describe("FE03-04 posting timing only where the terms create the obligation", () => {
-  const AFFILIATE = "/collaborations/demo-collaboration-affiliate?tab=overview";
+const VOLUNTARY = "/collaborations/demo-collaboration-2?tab=overview";
 
-  it("a paid collaboration shows its posting due date, grace period and a derived review date", async () => {
+describe("posting timing follows the accepted terms (FE03-04)", () => {
+  it("a committed post shows its due date, grace period, review date and where today falls", async () => {
     await open(OVERVIEW);
-    expect(screen.getByTestId("posting-due")).toHaveTextContent("04 Nov 2026");
-    expect(screen.getByText("3 days")).toBeInTheDocument();
-    expect(screen.getByTestId("review-after")).toHaveTextContent("07 Nov 2026");
+    const terms = within(screen.getByTestId("posting-terms"));
+    expect(screen.getByTestId("posting-terms")).toHaveAttribute("data-obligation", "committed");
+    expect(terms.getByText("Posting due")).toBeInTheDocument();
+    expect(terms.getByText("Grace period")).toBeInTheDocument();
+    expect(screen.getByTestId("posting-status")).toHaveTextContent("· Due today");
+    expect(screen.getByTestId("posting-status")).toHaveAttribute("data-phase", "due-today");
+    expect(screen.getByTestId("posting-status")).toHaveAttribute("title", "Due today · 3 grace days follow");
   });
 
-  it("an affiliate-only collaboration has no posting date, no grace period and no review date", async () => {
-    await open(AFFILIATE);
-    expect(screen.getByTestId("posting-due")).toHaveTextContent("No posting obligation");
-    expect(screen.getByText("Not applicable")).toBeInTheDocument();
-    expect(screen.getByTestId("review-after")).toHaveTextContent("N/A · no posting date was agreed");
-    expect(screen.getByText(/A missing post is not a violation, and no posting reminder applies/)).toBeInTheDocument();
-    expect(screen.getByText(/Optional\. No posting date was agreed\./)).toBeInTheDocument();
+  it("a voluntary collaboration has no due date, grace period or review date, and says nothing is owed", async () => {
+    await open(VOLUNTARY);
+    const terms = within(screen.getByTestId("posting-terms"));
+    expect(screen.getByTestId("posting-terms")).toHaveAttribute("data-obligation", "voluntary");
+    expect(screen.getByTestId("posting-obligation")).toHaveTextContent("None under the accepted terms");
+    for (const label of ["Posting due", "Grace period", "Review after"]) expect(terms.queryByText(label)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-after")).not.toBeInTheDocument();
+    expect(screen.getByTestId("agreed-fee")).toHaveTextContent("None · gifted sample");
+    expect(screen.getByText("COL-SC-051 · @quiet.mornings.ivy · Social Cat · live creator record in Notion")).toBeInTheDocument();
   });
 
-  it("never invents an overdue, late or violation state for uncommitted content", async () => {
-    await open(AFFILIATE);
-    const page = screen.getByRole("main");
-    expect(within(page).queryByText(/overdue|late post|no-post violation|breach/i)).not.toBeInTheDocument();
+  it("a voluntary collaboration shows its observation window and the sample cost it retains", async () => {
+    await open(VOLUNTARY);
+    expect(screen.getByTestId("observation-window")).toHaveTextContent("Until 13 Nov 2026");
+    expect(screen.getByTestId("posting-status")).toHaveTextContent("Observing until 2026-11-13 · 9 days left");
+    expect(screen.getByTestId("sample-cost")).toHaveTextContent("$18.40 · retained, no clawback");
+    expect(screen.getByTestId("observe-branch")).toHaveTextContent(/No draft has been submitted and none is owed.*no reminder is sent/);
+    expect(screen.getByRole("heading", { name: "Observe, then close" })).toBeInTheDocument();
   });
 
-  it("offers no posting reminder for an affiliate-only collaboration, and the content tab says there is nothing owed", async () => {
-    expect(collaborationDemo.allowedActions.some((a) => a.key === "remindCreator")).toBe(true);
-    await open(AFFILIATE);
-    renderRoute("/collaborations/demo-collaboration-affiliate?tab=content", createDemoAdapter());
-    expect(await screen.findByRole("heading", { name: "No content obligation" })).toBeInTheDocument();
-    expect(screen.getByText(/Any post that appears is welcome, not owed/)).toBeInTheDocument();
+  it("a voluntary collaboration offers no posting reminder in the next-action list", async () => {
+    const { user } = await open(VOLUNTARY);
+    await user.click(screen.getByRole("button", { name: "Queue next action" }));
+    const form = dialog("Queue next action");
+    const options = within(form.getByLabelText("Next action")).getAllByRole("option", { hidden: true }).map((o) => o.textContent);
+    expect(options).toEqual(["Record a note in the source"]);
+    expect(options.join(" ")).not.toMatch(/posting due date/);
   });
 
-  it("the review date is null when there is no posting date", () => {
-    expect(reviewAfter(null, null)).toBeNull();
-    expect(reviewAfter("2026-11-04", null)).toBeNull();
-    expect(collaborationAffiliate.allowedActions.map((a) => a.key)).toEqual(["recordNote"]);
-    expect(collaborationAffiliate.terms.agreedFee.minorUnits).toBe(0);
+  it("a voluntary collaboration closes through the observation branch, queued and not closed", async () => {
+    const { user } = await open(VOLUNTARY);
+    await user.click(screen.getByRole("button", { name: "Close collaboration" }));
+    const form = dialog("Close collaboration");
+    expect(form.getByText("The sample cost is retained")).toBeInTheDocument();
+    expect(form.getByText("No posting is owed under the accepted terms")).toBeInTheDocument();
+    expect(within(form.getByLabelText("Outcome")).getAllByRole("option", { hidden: true }).map((o) => o.textContent)).toEqual(["Choose an outcome", "No response", "Opted out", "Canceled", "Completed"]);
+    await user.selectOptions(form.getByLabelText("Outcome"), "No response");
+    await user.type(form.getByLabelText("Reason"), "Window ended with no post");
+    await user.click(form.getByRole("button", { name: "Request closure", hidden: true }));
+    await waitFor(() => expect(screen.getByTestId("action-ack")).toHaveTextContent("Nothing has been sent, closed or suppressed"));
+    expect(screen.getByTestId("queued-requests")).toHaveTextContent("Close as No response");
   });
 
-  it("commands on the read-only affiliate record are held with a reason, so nothing can be queued", async () => {
-    const adapter = createDemoAdapter();
-    const spy = vi.spyOn(adapter, "submitAction");
-    await open(AFFILIATE, adapter);
-    expect(spy).not.toHaveBeenCalled();
+  it("the content tab says nothing was submitted instead of showing an empty review", async () => {
+    renderRoute("/collaborations/demo-collaboration-2?tab=content", createDemoAdapter());
+    const none = await screen.findByTestId("no-submission");
+    expect(none).toHaveTextContent("No content submitted");
+    expect(none).toHaveTextContent(/no draft to review, no revision round and no usage license to chase/);
+    expect(none).toHaveTextContent("Observing until 2026-11-13");
+    expect(screen.queryByTestId("checklist")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve content" })).not.toBeInTheDocument();
+    const feedback = screen.getByRole("button", { name: "Queue feedback" });
+    expect(feedback).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Nothing has been submitted to give feedback on.")).toBeInTheDocument();
+  });
+
+  it("the payments tab has no payable for a collaboration with no fee", async () => {
+    renderRoute("/collaborations/demo-collaboration-2?tab=payments", createDemoAdapter());
+    expect(await screen.findByText(/has no agreed fee and no payable/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Open the payable" })).not.toBeInTheDocument();
   });
 });
