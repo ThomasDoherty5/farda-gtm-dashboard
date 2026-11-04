@@ -37,21 +37,43 @@ export function AttributionPage() {
   );
 }
 
-const OTHER_DEFS: [string, string][] = [
+/** Static definitions: always available, whatever the dictionary read does. */
+const STATIC_DEFS: [string, string][] = [
   ["Net receipts", "Order receipts after refunds, before fees. Valid orders in the reporting period."],
   ["Contribution before marketing", "Net receipts less product, shipping, transaction and variable fulfilment costs. Proposed formula; not final."],
+  ["Blended CAC", "Acquisition cost divided by new retained customers in the period. New acquisition is commission-only; historical accepted fees stay read-only and labeled historical."],
+  ["MER", "Net receipts divided by marketing cost. Separate from platform ROAS."],
+  ["Platform ROAS", "Platform-reported purchase value divided by platform spend. Never added to storefront orders."],
   ["Attribution", "One winning method per order: discount code, then UTM, then platform-reported. Orders with none are unattributed, not assigned."],
 ];
 
-/** The versioned dictionary, cost allocation and hand-checked cases behind the four headline metrics. Read through the adapter. */
 function Definitions() {
+  return (
+    <div>
+      <dl className={styles.defs} data-testid="static-definitions">
+        {STATIC_DEFS.map(([t, d]) => <div key={t}><dt>{t}</dt><dd>{d}</dd></div>)}
+      </dl>
+      <DictionaryRead />
+    </div>
+  );
+}
+
+/** The versioned dictionary, cost allocation and hand-checked cases behind the headline metrics. Read through the adapter; the read's state never hides the static definitions. */
+function DictionaryRead() {
   const query = useView<Record<string, never>, MetricDictionaryData>("metricDictionary", {});
-  const dict = query.data?.data ?? null;
-  if (!dict) return <p className={styles.small} role="status">{query.isError ? "Definitions are unavailable." : "Loading definitions…"}</p>;
+  return (
+    <ViewShell query={query} subject="Metric dictionary" emptyTitle="No metric dictionary" emptyBody="The source responded, but it returned no versioned dictionary. The definitions above still apply.">
+      {(dict) => <Dictionary dict={dict} />}
+    </ViewShell>
+  );
+}
+
+function Dictionary({ dict }: { dict: MetricDictionaryData }) {
+  const demo = useIsDemo();
   const alloc = allocateCosts(dict.buckets);
   return (
     <div data-testid="metric-dictionary">
-      <p className={styles.small}>Dictionary {dict.version} · effective {dict.effective} · {dict.stage}. Demo fixture, not connected sources.</p>
+      <p className={styles.small}>Dictionary {dict.version} · effective {dict.effective} · {dict.stage}.{demo ? " Demo fixture, not connected sources." : ""}</p>
       <dl className={styles.defs}>
         {dict.entries.map((e) => (
           <div key={e.key} data-testid={`definition-${e.key}`}>
@@ -62,7 +84,6 @@ function Definitions() {
           </div>
         ))}
         {dict.related.map((r) => <div key={r.label}><dt>{r.label}</dt><dd>{r.basis}</dd></div>)}
-        {OTHER_DEFS.map(([t, d]) => <div key={t}><dt>{t}</dt><dd>{d}</dd></div>)}
       </dl>
       <h3 className={styles.label}>Cost allocation · {usd({ minorUnits: alloc.totalMinor, currency: "USD" })}, each bucket once</h3>
       <ul className={styles.small} data-testid="cost-buckets">
@@ -152,9 +173,9 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
         <Card labelledBy="cost-title">
           <SectionHeading id="cost-title" title="What does a customer cost?" note="Compare acquisition with contribution." />
           <DetailRow label="Blended CAC" value={cacMinor === null ? "N/A" : usdExact({ minorUnits: cacMinor, currency: "USD" })} />
-          <div className={styles.track} aria-hidden="true"><span className={styles.fill} style={{ width: "100%" }} /></div>
+          <div className={styles.track} aria-hidden="true">{cacMinor !== null && <span className={styles.fill} data-testid="cac-bar" style={{ width: "100%" }} />}</div>
           <DetailRow label="Contribution / order¹" value={perOrderMinor === null ? "N/A" : usdExact({ minorUnits: perOrderMinor, currency: "USD" })} />
-          <div className={styles.track} aria-hidden="true"><span className={styles.fill} style={{ width: `${(ratio(perOrderMinor ?? 0, cacMinor ?? 0) * 100).toFixed(2)}%` }} /></div>
+          <div className={styles.track} aria-hidden="true">{perOrderMinor !== null && cacMinor !== null && <span className={styles.fill} data-testid="contribution-bar" style={{ width: `${(ratio(perOrderMinor, cacMinor) * 100).toFixed(2)}%` }} />}</div>
           {cacMinor !== null && perOrderMinor !== null && <div className={styles.btnRow}><Badge tone="warning" width={160}>Different bases</Badge></div>}
           <p className={styles.small} data-testid="cac-basis-note">¹ Before marketing. CAC is per new retained customer; contribution is per valid order, so the two are not a profit per customer.</p>
           <hr className={styles.divider} />
@@ -204,7 +225,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
           <DetailRow label="Open accounting month" value="Provisional" />
           <DetailRow label="Forecast" value="Pending rebaseline" />
           <hr className={styles.divider} />
-          <p className={styles.small}>Anonymous customer aggregates supply CAC. Weekly snapshots are versioned; late refunds create a correction. No customer identities enter this dashboard.</p>
+          <p className={styles.small}>Anonymous customer aggregates supply CAC. Weekly snapshots are versioned; a late refund revises the figure for the period it lands in. No customer identities enter this dashboard.</p>
         </Card>
       </div>
       <HandoffDialog

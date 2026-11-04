@@ -45,12 +45,12 @@ export const metricDictionaryDemo: MetricDictionaryData = {
     {
       key: "aov", label: "AOV", numerator: "Net receipts", denominator: "Valid orders in the cohort",
       source: "Reconciled orders and receipts (Shopify and TikTok Shop)", currency: "USD", window: SCOPE,
-      costBuckets: "None", refundTreatment: "Refunds are deducted from net receipts. A late refund revises the figure and creates a correction record.",
+      costBuckets: "None", refundTreatment: "Refunds are deducted from net receipts. A late refund revises the figure for the period it is reported in; no separate record of the change is created in this fixture.",
     },
     {
       key: "blendedCac", label: "Blended CAC", numerator: "Included acquisition cost", denominator: "New retained customers",
       source: "Cost buckets below; anonymous retained-customer counts", currency: "USD", window: `${SCOPE}; retention window must be mature, otherwise provisional`,
-      costBuckets: "Media, creator fees, sample shipping, gifted-product economic cost, applicable commissions. Each counted once.",
+      costBuckets: "Media, sample shipping, gifted-product economic cost and commission, each counted once. Historical accepted fees, where an older offer carried one, are read-only, labeled historical and kept separate from commission. New acquisition is commission-only: no upfront creator fee.",
       refundTreatment: "Customers whose only order is fully refunded are not retained. Cost is not reduced by refunds.",
     },
     {
@@ -70,7 +70,7 @@ export const metricDictionaryDemo: MetricDictionaryData = {
   ],
   buckets: [
     { key: "media", label: "Media (Meta and TikTok)", basis: "paid", minorUnits: 500_000, alsoInCash: true, note: "Cash paid to the platforms" },
-    { key: "creator-sample", label: "Creator fees, sample shipping and gifted product", basis: "estimated", minorUnits: 200_000, alsoInCash: false, note: "Gifted product is counted once, as economic cost, and not added again as cash" },
+    { key: "creator-sample", label: "Sample shipping, gifted product and historical accepted fees", basis: "estimated", minorUnits: 200_000, alsoInCash: false, note: "Historical accepted fees are read-only and separate from commission; new acquisition has no upfront fee. Gifted product is counted once, as economic cost, and not added again as cash. Commission is not part of this fixture total" },
   ],
   cases: [
     {
@@ -108,6 +108,12 @@ export const metricDictionaryDemo: MetricDictionaryData = {
       input: { netReceiptsMinor: 1_259_600, validOrders: 400, acquisitionCostMinor: 700_000, newRetainedCustomers: 280, marketingSpendMinor: 700_000, caveat: "RETENTION_IMMATURE" },
       expected: { aov: "$31.49", cac: "$25.00 · Provisional · retention window not yet mature", mer: "1.80×" },
       handCalculation: "Same arithmetic as the normal case; CAC carries a provisional label until the retention window closes",
+    },
+    {
+      id: "landed-cost-incomplete", label: "Incomplete landed cost",
+      input: { netReceiptsMinor: 1_259_600, validOrders: 400, acquisitionCostMinor: 700_000, newRetainedCustomers: 280, marketingSpendMinor: 700_000, caveat: "LANDED_COST_INCOMPLETE" },
+      expected: { aov: "$31.49", cac: "$25.00 · Provisional · landed cost incomplete", mer: "1.80× · Provisional · landed cost incomplete" },
+      handCalculation: "Same arithmetic as the normal case; CAC and MER both depend on cost, so both are provisional until landed cost is complete. AOV needs no cost",
     },
   ],
   sourceNote: "Synthetic fixture. Real inputs wait for the reconciled order source and cost buckets (THO-283, THO-285, THO-166, THO-195).",
