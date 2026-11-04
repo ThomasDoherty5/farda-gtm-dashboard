@@ -17,6 +17,11 @@ import { ConsentPage } from "@/features/lifecycle/ConsentPage";
 import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
 import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
 import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
+import { FulfillmentAnalyticsPage } from "@/features/operations/FulfillmentAnalyticsPage";
+import { OperationsPage } from "@/features/operations/OperationsPage";
+import { OrderPage } from "@/features/operations/OrderPage";
+import { ReturnPage } from "@/features/operations/ReturnPage";
+import { ShippingExceptionPage } from "@/features/operations/ShippingExceptionPage";
 import { AttributionPage } from "@/features/analytics/AttributionPage";
 import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
 import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
@@ -73,6 +78,11 @@ const implemented: Record<string, JSX.Element> = {
   "/customers/flows/review-request": <EmailFlowPage flow="review-request" />,
   "/customers/consent": <ConsentPage />,
   "/customers/activation": <ActivationPage />,
+  "/operations": <OperationsPage />,
+  "/orders/:orderId": <OrderPage />,
+  "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,
+  "/returns/:returnId": <ReturnPage />,
+  "/analytics/fulfillment": <FulfillmentAnalyticsPage />,
 };
 
 /** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */
