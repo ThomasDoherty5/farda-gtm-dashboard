@@ -14,6 +14,7 @@ import { FilterButton } from "@/features/acquisition/FilterButton";
 import { SourceDialog } from "@/features/approvals/shared";
 import { HOMES, homeLabel, type Home, type OperationsOverview, type QueueRow } from "@/fixtures/operations";
 import { OpsTabs } from "./OpsTabs";
+import { ShippingPanels } from "./ShippingPanels";
 import { MobileOperations, TabletOperations } from "./OperationsCompact";
 import { useLayout, type Layout } from "./useLayout";
 import { figure, minutesAgoLabel, minutesBetween, reasonText, waitingLabel } from "./format";
@@ -179,7 +180,7 @@ function Body({ res, data, layout, home, demo }: { res: ReadResponse<OperationsO
           ]} />
         </Panel>
       </HalfColumns>
-
+      {view === "shipping" && <ShippingPanels />}
     </>
   );
 }

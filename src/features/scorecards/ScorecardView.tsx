@@ -5,6 +5,7 @@ import { Card, HandoffDialog, SectionHeading } from "@/features/analytics/parts"
 import { DEMO_ASSESSMENT_CONTENT_ID, DEMO_ASSESSMENT_SC_ID, DEMO_ASSESSMENT_TIKTOK_ID, DEMO_EVIDENCE_ID, type ScorecardRecord } from "@/fixtures/scorecards";
 import { bandOf, pointsOf, scoreOf } from "./scorecardMath";
 import { HistoryDialog, RatingAnchorsDialog } from "./dialogs";
+import { ReadinessNote, changedBasis, invalidationText } from "./readiness";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
 
@@ -42,6 +43,7 @@ export function ScorecardView({ record }: { record: ScorecardRecord }) {
         <LinkButton variant="secondary" to="/creators/tiktok/invitations/new" style={{ minWidth: 206 }}>Prepare invitation</LinkButton>
       </nav>
       <HistoricalContext note={record.historicalNote} creatorId={record.creatorId} />
+      <ReadinessNote record={record} />
       <div className={s.ctxRow}>
         <Badge tone="warning" width={268}>Synthetic example · not vetted</Badge>
         <Badge width={196}>{record.modelId}</Badge>
@@ -64,7 +66,7 @@ export function ScorecardView({ record }: { record: ScorecardRecord }) {
           <dl className={s.darkDetails} style={{ gap: 16 }}>
             <div><dt>Evidence coverage</dt><dd>{record.coveragePct === null ? "Unknown" : `${record.coveragePct}% · synthetic`}</dd></div>
             <div><dt>Confidence</dt><dd>Demo only</dd></div>
-            <div><dt>Decision</dt><dd>Not approved to send</dd></div>
+            <div><dt>Decision</dt><dd>{changedBasis(record).changed.length ? invalidationText(changedBasis(record).changed) : "Not approved to send"}</dd></div>
           </dl>
         </section>
         <Card labelledBy="weighted-title" className={a.gap18}>

@@ -12,8 +12,8 @@ const ids = [DEMO_ASSESSMENT_CONTENT_ID, DEMO_ASSESSMENT_TIKTOK_ID, DEMO_ASSESSM
 const offer = { offerId: DEMO_OFFER_DRAFT_ID };
 
 describe("scorecards view schemas", () => {
-  it("covers exactly assessmentRecord and offerDraft", () => {
-    expect(Object.keys(schemas).sort()).toEqual(["assessmentRecord", "offerDraft"]);
+  it("covers exactly assessmentRecord, offerDraft and offerRewards", () => {
+    expect(Object.keys(schemas).sort()).toEqual(["assessmentRecord", "offerDraft", "offerRewards"]);
   });
 
   describe("every demo variant parses unchanged", () => {

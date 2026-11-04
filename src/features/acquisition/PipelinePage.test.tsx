@@ -5,6 +5,8 @@ import { AdapterError } from "@/adapter/errors";
 import { respondWith } from "@/adapter/demoViews";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { pipelineDemo, pipelineSources } from "@/fixtures/pipeline";
+import { branchesDemo } from "@/fixtures/pipelineBranches";
+import { sampleTotals, terminalTotals, violationsPossible } from "./branchMetrics";
 import { renderRoute, scriptedAdapter } from "@/test/renderWithAdapter";
 
 const open = async (path = "/creators/pipeline", adapter = createDemoAdapter()) => {
@@ -112,11 +114,67 @@ describe("full acquisition pipeline", () => {
     expect(metric("Confirmed invitations")).toHaveTextContent("27");
   });
 
-  it("is honest that the demo can't split the other facets (CTRL-150–152)", async () => {
-    await open("/creators/pipeline?network=tiktok&window=oct");
-    expect(await screen.findByRole("status", { name: "" })).toHaveTextContent("Filtered by publishing network, cohort window. This demo cohort isn't split by those, so its counts don't change.");
-    expect(metric("Confirmed invitations")).toHaveTextContent("54");
-    expect(screen.getByRole("button", { name: "Cohort window: Oct 01–Oct 30" })).toHaveTextContent("Oct 01–Oct 30");
+  it("CF-01 (CTRL-150–152): network, checkout, window and policy recompute the counts and live in the URL", async () => {
+    const { user, router } = await open();
+    const pick = async (button: string, title: string, option: string) => {
+      await user.click(screen.getByRole("button", { name: button }));
+      await user.click(dialog(title).getByRole("radio", { name: option, hidden: true }));
+    };
+    await pick("Network: All", "Choose publishing network", "TikTok");
+    await waitFor(() => expect(metric("Confirmed invitations")).toHaveTextContent("22"));
+    await pick("Checkout: All", "Choose checkout destination", "Website");
+    await waitFor(() => expect(metric("Confirmed invitations")).toHaveTextContent("16"));
+    await pick("Policy: All", "Choose policy version", "2026-10");
+    await waitFor(() => expect(metric("Confirmed invitations")).toHaveTextContent("16"));
+    expect(router.state.location.search).toBe("?network=tiktok&checkout=website&policy=policy-2026-10");
+    expect(screen.queryByRole("status", { name: "" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /shared 120 scale/ })).toBeInTheDocument();
+  });
+
+  it("CF-01: the inbound route is a separate cohort where the outbound send stage is N/A, not zero", async () => {
+    const { user, router } = await open();
+    await user.click(screen.getByRole("button", { name: "Route: Outbound" }));
+    await user.click(dialog("Choose inbound or outbound route").getByRole("radio", { name: "Inbound", hidden: true }));
+    await waitFor(() => expect(metric("Confirmed invitations")).toHaveTextContent("N/A"));
+    expect(router.state.location.search).toBe("?route=inbound");
+    expect(screen.getByText(/applicants are never sent an outbound invitation/)).toBeInTheDocument();
+    expect(within(funnel("confirmedSent")).getAllByText("N/A").length).toBeGreaterThan(0);
+    expect(within(funnel("confirmedSent")).queryByText("0")).not.toBeInTheDocument();
+    expect(screen.getByTestId("stage-Dispatch")).toHaveTextContent("N/A");
+    expect(screen.getByText(/applicants are never invited by us/)).toBeInTheDocument();
+  });
+
+  it("CF-01: the inbound route prints N/A, with a reason, wherever there is no send data", async () => {
+    await open("/creators/pipeline?route=inbound");
+    const reason = /inbound application has no outbound send/;
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/approvals resolve to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/attempts across/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("send-balance")).not.toBeInTheDocument();
+    expect(screen.getByText("Uncertain · N/A")).toBeInTheDocument();
+    expect(screen.getByText("Queued · N/A")).toBeInTheDocument();
+    expect(screen.getByText("Replies · N/A")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-Dispatch")).not.toHaveTextContent(/\b0 queued/);
+    expect(screen.getByText("N/A · no outbound dispatch")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-Confirmed invitations")).not.toHaveTextContent(/\b0 attempts/);
+    const reconcile = screen.getByRole("button", { name: "Reconcile uncertain sends" });
+    expect(reconcile).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("CF-01: a selection with no cells is an empty state, not a zero funnel", async () => {
+    await open("/creators/pipeline?route=inbound");
+    const { user } = { user: userEvent.setup() };
+    await user.click(screen.getByRole("button", { name: "Source: Both" }));
+    await user.click(dialog("Choose acquisition source").getByRole("radio", { name: "TikTok Shop", hidden: true }));
+    expect(await screen.findByRole("heading", { name: "No opportunities match" })).toBeInTheDocument();
+    expect(screen.getByText(/not a count of zero/)).toBeInTheDocument();
+    expect(screen.queryByTestId("funnel")).not.toBeInTheDocument();
+  });
+
+  it("CF-01: the cohort start and policy version are named in the cohort definition", async () => {
+    const { user } = await open("/creators/pipeline?window=oct&policy=policy-2026-09");
+    await user.click(screen.getByRole("button", { name: "Inspect cohort" }));
+    expect(dialog("Inspect cohort").getByText(/cohort window: Oct 01–Oct 30 · policy version: 2026-09/)).toBeInTheDocument();
   });
 
   it("opens the cohort definition with a table that reconciles with the chart (CTRL-153)", async () => {
@@ -187,5 +245,145 @@ describe("full acquisition pipeline", () => {
     renderRoute("/creators/pipeline", adapter);
     expect(await screen.findByRole("heading", { name: "No access to this account" })).toBeInTheDocument();
     expect(screen.queryByTestId("metric-Confirmed invitations")).not.toBeInTheDocument();
+  });
+});
+
+describe("terminal paths and optional branches (CF-05, CF-07)", () => {
+  const BRANCHES = "/creators/pipeline?view=branches";
+  const openBranches = async (path = BRANCHES) => {
+    const router = renderRoute(path, createDemoAdapter());
+    await screen.findByTestId("terminal-paths");
+    return { router, user: userEvent.setup() };
+  };
+  const text = (id: string) => screen.getByTestId(id).textContent ?? "";
+
+  it("CF-05: decline, opt-out and expiry are terminal and keep their suppression", async () => {
+    await openBranches();
+    expect(text("terminal-declined")).toContain("4");
+    expect(text("terminal-optOut")).toContain("2");
+    expect(text("terminal-expired")).toContain("4");
+    expect(screen.getByText(/Suppression is kept/)).toBeInTheDocument();
+    expect(screen.getByText(/An earlier approval is never reused|an earlier approval is never reused/i)).toBeInTheDocument();
+  });
+
+  it("CF-05: a repeat contact is a new opportunity that needs fresh approval, and an opt-out can never repeat", async () => {
+    await openBranches();
+    const rows = within(screen.getByTestId("repeat-cases")).getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent("Declined");
+    expect(rows[0]).toHaveTextContent("New opportunity after a fresh suppression check");
+    expect(rows[0]).toHaveTextContent("Fresh approval required · none on file");
+    expect(rows[1]).toHaveTextContent("Expired");
+    expect(rows[2]).toHaveTextContent("Opt-outPermanentNot allowed");
+    expect(rows[2]).not.toHaveTextContent("Fresh approval required");
+  });
+
+  it("CF-05: terminal counts reconcile with the funnel's closed paths", () => {
+    const closed = pipelineSources.reduce((a, s) => ({ declined: a.declined + s.closed.declined, expired: a.expired + s.closed.expired }), { declined: 0, expired: 0 });
+    expect(terminalTotals(branchesDemo.sources)).toMatchObject(closed);
+  });
+
+  it("CF-07: a sample is optional; acceptance gates shipment, approved stock and cost gate reservation, tracking gates commerce", async () => {
+    await openBranches();
+    expect(text("sample-accepted")).toContain("36");
+    expect(text("sample-requested")).toContain("21");
+    expect(screen.getByText("15 continue without a sample")).toBeInTheDocument();
+    expect(screen.getByText(/Acceptance gates shipment\. Approved stock and cost gate reservation\. Tracking gates commerce activation\./)).toBeInTheDocument();
+  });
+
+  it("CF-07: delivered is N/A, not zero, when a source has no carrier receipt", async () => {
+    await openBranches();
+    expect(text("sample-shipped")).toContain("11 / N/A");
+    expect(sampleTotals(branchesDemo.sources).delivered).toBeNull();
+  });
+
+  it("CF-07: sample and content counts reconcile with the funnel and with each other", () => {
+    for (const s of branchesDemo.sources) {
+      const funnel = pipelineSources.find((p) => p.source === s.source)!;
+      expect(s.sample.accepted).toBe(funnel.reached[5]);
+      expect(s.sample.requested + s.sample.notRequested).toBe(s.sample.accepted);
+      expect(s.content.terms).toBe(funnel.reached[6]);
+      expect(s.content.trackingActive).toBe(funnel.reached[7]);
+      expect(s.content.withObligation + s.content.withoutObligation).toBe(s.content.terms);
+      expect(s.content.posted + s.content.due + s.content.overdue).toBe(s.content.withObligation);
+      expect(s.content.postedVoluntarily + s.content.noneYet).toBe(s.content.withoutObligation);
+    }
+  });
+
+  it("CF-07: only a committed obligation can be overdue; uncommitted content is never a violation", async () => {
+    await openBranches();
+    expect(screen.getByText(/A missing post is a violation only where the accepted terms create the obligation/)).toBeInTheDocument();
+    expect(screen.getByText(/no violation possible/)).toBeInTheDocument();
+    expect(screen.getByText(/3 overdue/)).toBeInTheDocument();
+    expect(violationsPossible(branchesDemo.sources[0]!.content)).toBe(branchesDemo.sources[0]!.content.withObligation);
+  });
+
+  it("CF-10: the drilldowns reach the sample, content, approval and recovery contexts", async () => {
+    await openBranches();
+    expect(screen.getByRole("link", { name: "Open a sample context" })).toHaveAttribute("href", "/collaborations/demo-collaboration-1");
+    expect(screen.getByRole("link", { name: "Open the content monitor" })).toHaveAttribute("href", "/content");
+    expect(screen.getByRole("link", { name: "Open an approval" })).toHaveAttribute("href", "/approvals/demo-approval-exact");
+    expect(screen.getByRole("link", { name: "Open run recovery" })).toHaveAttribute("href", "/runs/demo-run-uncertain?tab=recovery");
+  });
+
+  it("the source filter narrows the branches too, and the pipeline links here", async () => {
+    await openBranches(`${BRANCHES}&source=tiktok-shop`);
+    expect(text("sample-accepted")).toContain("18");
+    expect(text("sample-shipped")).toContain("5 / N/A");
+  });
+
+  it("a pending backend shows no branch numbers", async () => {
+    renderRoute(BRANCHES, createLiveAdapter("sandbox"));
+    expect(await screen.findByRole("heading", { name: "Data unavailable" })).toBeInTheDocument();
+    expect(screen.queryByTestId("terminal-paths")).not.toBeInTheDocument();
+  });
+});
+
+describe("CF-08 and CF-10 across pipeline and monitor", () => {
+  it("CF-08: the pipeline's commerce figures are the acquisition cohort's, and the monitor keeps its own coverage and cohort", async () => {
+    await open();
+    expect(screen.getByText(/Daily acquisition cohort; hourly monitoring keeps its own coverage and cohort/)).toBeInTheDocument();
+    expect(screen.getByText(/Independent demo cohort/)).toBeInTheDocument();
+    for (const name of ["Views", "Engagement rate", "Attributed orders", "Attributed net sales"]) expect(metric(name)).toBeInTheDocument();
+  });
+
+  it("CF-08: the monitor shows the same four metrics beside its own hourly cohort and coverage labels", async () => {
+    renderRoute("/content", createDemoAdapter());
+    expect(await screen.findByTestId("metric-engagement")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-orders")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-net-sales")).toBeInTheDocument();
+    expect(screen.getByText(/Launch cohort A/)).toBeInTheDocument();
+    expect(screen.getByText(/Hourly monitoring/)).toBeInTheDocument();
+    expect(screen.getByText(/New-creator discovery and lifestyle evidence review are separate daily workflows/)).toBeInTheDocument();
+    expect(screen.queryByText(/Independent demo cohort/)).not.toBeInTheDocument();
+  });
+
+  it("carries the source, route and network filters through Paths and branches and back, and says which apply", async () => {
+    const q = "?source=social-cat&route=inbound&network=instagram";
+    const { user, router } = await (async () => {
+      const r = renderRoute(`/creators/pipeline${q}`, createDemoAdapter());
+      await screen.findByTestId("metric-Confirmed invitations");
+      return { router: r, user: userEvent.setup() };
+    })();
+    const link = screen.getByRole("link", { name: "Paths and branches" });
+    expect(link).toHaveAttribute("href", "/creators/pipeline?view=branches&source=social-cat&route=inbound&network=instagram");
+    await user.click(link);
+    await screen.findByTestId("terminal-paths");
+    const note = screen.getByTestId("branches-filters");
+    expect(note).toHaveTextContent(/source: Social Cat/);
+    expect(note).toHaveTextContent(/route: Inbound/);
+    expect(note).toHaveTextContent(/split by source only, so route, publishing network do not change them/);
+    const back = screen.getByRole("link", { name: "Back to pipeline" });
+    expect(back).toHaveAttribute("href", "/creators/pipeline?source=social-cat&route=inbound&network=instagram");
+    await user.click(back);
+    await screen.findByTestId("metric-Confirmed invitations");
+    expect(router.state.location.search).toBe(q);
+  });
+
+  it("CF-10: the pipeline's drilldowns reach the run recovery, work queue, evidence and branches", async () => {
+    await open();
+    expect(screen.getByRole("link", { name: "Reconcile uncertain sends" })).toHaveAttribute("href", "/runs/demo-run-uncertain?tab=recovery");
+    expect(screen.getByRole("link", { name: "Open work queue" })).toHaveAttribute("href", "/creators/social-cat?view=board");
+    expect(screen.getByRole("link", { name: "Review evidence" })).toHaveAttribute("href", "/creators/demo-creator-1/evidence/demo-evidence-1");
+    expect(screen.getByRole("link", { name: "Paths and branches" })).toHaveAttribute("href", "/creators/pipeline?view=branches");
   });
 });
