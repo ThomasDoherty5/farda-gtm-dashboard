@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { ProvenanceValue, ReadResponse } from "@/adapter/contract";
+import { staleReasonText } from "@/adapter/freshness";
 import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Alert } from "@/components/Alert";
@@ -63,7 +64,7 @@ function Body({ res, demo }: { res: ReadResponse<OverviewData>; demo: boolean })
     <>
       {res.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
-          <p>{freshness?.staleReasonCode ?? "Reason unknown"}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
+          <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
         </Alert>
       )}
       {res.dataState === "partial" && (

@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
+import { certaintyOfState, SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
 import { AdapterError } from "./errors";
 import { discoveryDemo } from "@/fixtures/discovery";
 
@@ -97,6 +97,7 @@ export function createDemoDiscovery() {
         modelVersion: null,
         offerVersion: null,
         reasonCodes: ["AWAITING_DECISION"],
+        executionCertainty: certaintyOfState("approvalPending"),
         receiptRefs: [],
         nextAction: { kind: "decideApproval", ownerRef: "Thomas", dueAt: null, available: false },
         nextPollAfterMs: null,

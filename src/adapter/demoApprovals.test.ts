@@ -8,7 +8,7 @@ import type { ApprovalDetail, DecidePayload, ReconcilePayload, RunDetail } from 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 let keySeq = 0;
 
-const action = <P>(operation: ActionRequest<P>["operation"], approvalRef: string | null, expectedVersion: string, payload: P, idempotencyKey = `key-${++keySeq}`): ActionRequest<P> => ({
+const action = <P>(operation: ActionRequest<P>["operation"], approvalRef: string | null, expectedVersion: string, payload: P, idempotencyKey = `key-${++keySeq}`, runRef?: string): ActionRequest<P> => ({
   schemaVersion: SCHEMA_VERSION,
   operation,
   requestedScope: scope,
@@ -17,6 +17,7 @@ const action = <P>(operation: ActionRequest<P>["operation"], approvalRef: string
   expectedVersion,
   approvalRef,
   manifestRef: null,
+  ...(runRef === undefined ? {} : { runRef }),
   idempotencyKey,
   payload,
   requestId: `req-${keySeq}`,
@@ -45,7 +46,7 @@ function setup() {
   const send = (id: string, version = "v1", key?: string) => store.submit(action("dispatchApprovedAction", id, version, {}, key));
   const reconcile = (id: string, request: ReconcilePayload["request"]) => {
     const r = run(id).data as RunDetail;
-    return store.submit(action<ReconcilePayload>("reconcileRun", r.approvalRef, r.version, { runRef: id, request }));
+    return store.submit(action<ReconcilePayload>("reconcileRun", r.approvalRef, r.version, { request }, undefined, id));
   };
   return { store, approval, data, run, decide, send, reconcile };
 }
@@ -130,7 +131,7 @@ describe("version conflict (FX-11)", () => {
     expect(error.category).toBe("conflict");
     expect(error.body.currentVersion).toBe("v2");
     expect(data("demo-approval-conflict").status).toBe("pending");
-    await expect(decide("demo-approval-conflict", "v2", { decision: "approved" })).resolves.toMatchObject({ state: "blocked" });
+    await expect(decide("demo-approval-conflict", "v2", { decision: "approved" })).resolves.toMatchObject({ state: "approved", reasonCodes: ["AWAITING_DISPATCH"], executionCertainty: "applied" });
   });
 });
 
@@ -251,7 +252,7 @@ describe("partial batch (FX-18)", () => {
     expect(Object.values(before.counts).reduce((s, n) => s + n, 0)).toBe(before.items.length);
     expect(before.counts).toMatchObject({ confirmed: 1, failed: 1, held: 1, unsent: 2 });
 
-    const paused = await store.submit(action("controlRun", before.approvalRef, before.version, { runRef: "demo-run-batch", control: "pause" }));
+    const paused = await store.submit(action("controlRun", before.approvalRef, before.version, { control: "pause" }, undefined, "demo-run-batch"));
     expect(paused.state).toBe("paused");
     const after = run("demo-run-batch").data as RunDetail;
     expect(after.counts).toMatchObject({ confirmed: 1, failed: 1, held: 1, unsent: 0, paused: 2 });

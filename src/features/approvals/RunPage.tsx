@@ -39,7 +39,7 @@ function Run({ tab }: { tab: Tab }) {
   const uncertain = data?.state === "outcomeUncertain";
   const control = useAction<ControlPayload>();
   const [dialog, setDialog] = useState<"source" | "slack" | "takeover" | null>(null);
-  const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, payload: { runRef: data.runRef, control: "pause" } });
+  const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { control: "pause" } });
 
   return (
     <section aria-labelledby="run-title" data-figma-source={tab === "approval" ? "5:13" : "5:156"} className={styles.page}>
@@ -182,7 +182,7 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
   const { adapter } = useScope();
   const reconcile = useAction<ReconcilePayload>();
   const send = (request: ReconcilePayload["request"]) =>
-    reconcile.mutate({ operation: "reconcileRun", actionKind: request, entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, payload: { runRef: data.runRef, request } });
+    reconcile.mutate({ operation: "reconcileRun", actionKind: request, entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { request } });
   const pending = (request: ReconcilePayload["request"]) => reconcile.isPending && reconcile.variables?.payload.request === request;
   const uncertain = data.state === "outcomeUncertain";
   const { result, evidence } = data.reconciliation;

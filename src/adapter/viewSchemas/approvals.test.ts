@@ -28,7 +28,7 @@ const readRequest = (viewKey: string, filters: unknown): ReadRequest<unknown> =>
   requestId: `r-${++seq}`,
 });
 
-const actionRequest = <P>(operation: ActionRequest<P>["operation"], actionKind: string, approvalRef: string | null, expectedVersion: string, payload: P): ActionRequest<P> => ({
+const actionRequest = <P>(operation: ActionRequest<P>["operation"], actionKind: string, approvalRef: string | null, expectedVersion: string, payload: P, runRef?: string): ActionRequest<P> => ({
   schemaVersion: SCHEMA_VERSION,
   operation,
   requestedScope: scope,
@@ -37,6 +37,7 @@ const actionRequest = <P>(operation: ActionRequest<P>["operation"], actionKind: 
   expectedVersion,
   approvalRef,
   manifestRef: null,
+  ...(runRef === undefined ? {} : { runRef }),
   idempotencyKey: `key-${++seq}`,
   payload,
   requestId: `req-${++seq}`,
@@ -76,7 +77,7 @@ const decide = (adapter: Adapter, id: string, version: string, payload: Record<s
 const dispatch = (adapter: Adapter, id: string, version = "v1") => act(adapter, "dispatchApprovedAction", actionRequest("dispatchApprovedAction", "dispatchApprovedAction", id, version, {}));
 const reconcileRun = async (adapter: Adapter, runRef: string, request: "lookup" | "recordConfirmedSent" | "freshAttempt") => {
   const r = await run(adapter, runRef);
-  return act(adapter, request, actionRequest("reconcileRun", request, r.approvalRef, r.version, { runRef, request }));
+  return act(adapter, request, actionRequest("reconcileRun", request, r.approvalRef, r.version, { request }, runRef));
 };
 const expectError = async (p: Promise<unknown>, code: string) => {
   const e = await p.then(() => null, (x: unknown) => x as AdapterError);
@@ -257,7 +258,7 @@ describe("runDetail", () => {
       await reconcileRun(adapter, "demo-run-noevidence", "lookup");
       expect((await run(adapter, "demo-run-noevidence")).reconciliation).toEqual({ result: "stillUnknown", evidence: null });
       const r = await run(adapter, "demo-run-noevidence");
-      await expectError(adapter.submitAction(actionRequest("reconcileRun", "recordConfirmedSent", r.approvalRef, r.version, { runRef: r.runRef, request: "recordConfirmedSent" })), "OUTCOME_UNCERTAIN");
+      await expectError(adapter.submitAction(actionRequest("reconcileRun", "recordConfirmedSent", r.approvalRef, r.version, { request: "recordConfirmedSent" }, r.runRef)), "OUTCOME_UNCERTAIN");
       expect((await run(adapter, "demo-run-noevidence")).state).toBe("outcomeUncertain");
     });
   });
@@ -266,7 +267,7 @@ describe("runDetail", () => {
     const adapter = createDemoAdapter();
     for (const runRef of ["demo-run-uncertain", "demo-run-batch"]) {
       const r = await run(adapter, runRef);
-      const paused = await act(adapter, "pauseRun", actionRequest("controlRun", "pauseRun", r.approvalRef, r.version, { runRef, control: "pause" }));
+      const paused = await act(adapter, "pauseRun", actionRequest("controlRun", "pauseRun", r.approvalRef, r.version, { control: "pause" }, runRef));
       expect(paused.runRef).toBe(runRef);
       const after = await run(adapter, runRef);
       expect(after.pausedAt).not.toBeNull();
@@ -335,8 +336,8 @@ describe("action payloads", () => {
     ok("decideApproval", { decision: "rejected", reason: "Wrong creator" });
     ok("decideApproval", { decision: "editRequired", editedMessage: "New text", reason: "" });
     ok("dispatchApprovedAction", {});
-    ok("pauseRun", { runRef: "demo-run-batch", control: "pause" });
-    for (const request of ["lookup", "recordConfirmedSent", "freshAttempt"]) ok(request, { runRef: "demo-run-uncertain", request });
+    ok("pauseRun", { control: "pause" });
+    for (const request of ["lookup", "recordConfirmedSent", "freshAttempt"]) ok(request, { request });
   });
 
   it("rejects a decision with no reason where one is required", () => {
@@ -351,18 +352,18 @@ describe("action payloads", () => {
   it("rejects a wrong type and a missing field", () => {
     bad("decideApproval", { decision: 1 });
     bad("decideApproval", {});
-    bad("pauseRun", { control: "pause" });
-    bad("pauseRun", { runRef: 7, control: "pause" });
+    bad("pauseRun", {});
+    bad("pauseRun", { runRef: "demo-run-batch", control: "pause" }); // Q-03: the run is not in the payload
   });
   it("rejects an extra key no approver saw, such as a new message on a dispatch or a different recipient", () => {
     bad("dispatchApprovedAction", { message: "Send this instead" });
     bad("decideApproval", { decision: "approved", editedMessage: "Smuggled text" });
-    bad("pauseRun", { runRef: "r", control: "pause", force: true });
+    bad("pauseRun", { control: "pause", force: true });
   });
   it("rejects a control other than pause, and a reconcile request that disagrees with its kind", () => {
-    bad("pauseRun", { runRef: "r", control: "cancel" });
-    bad("lookup", { runRef: "r", request: "recordConfirmedSent" });
-    bad("freshAttempt", { runRef: "r", request: "retry" });
+    bad("pauseRun", { control: "cancel" });
+    bad("lookup", { request: "recordConfirmedSent" });
+    bad("freshAttempt", { request: "retry" });
   });
 });
 
@@ -371,7 +372,7 @@ describe("action responses", () => {
     const adapter = createDemoAdapter();
     const decided = await decide(adapter, "demo-approval-exact", "v1", { decision: "approved" });
     expect(decideApprovalResponseSchema.safeParse(decided).success).toBe(true);
-    expect(decided).toMatchObject({ state: "blocked", reasonCodes: ["AWAITING_DISPATCH"], receiptRefs: [] });
+    expect(decided).toMatchObject({ state: "approved", reasonCodes: ["AWAITING_DISPATCH"], receiptRefs: [], executionCertainty: "applied" });
     const sent = await dispatch(adapter, "demo-approval-exact");
     expect(sent).toMatchObject({ state: "succeeded" });
     expect(sent.receiptRefs.length).toBeGreaterThan(0);
@@ -393,7 +394,8 @@ describe("action responses", () => {
     const missing = omit(decided, "requestId");
     expect(receiptBackedResponse.safeParse(missing).success).toBe(false);
     expect(receiptBackedResponse.safeParse({ ...decided, receiptRefs: "none" }).success).toBe(false);
-    expect(receiptBackedResponse.safeParse({ ...decided, state: "approved" }).success).toBe(false);
+    expect(receiptBackedResponse.safeParse({ ...decided, state: "sent" }).success).toBe(false);
+    expect(receiptBackedResponse.safeParse(omit(decided, "executionCertainty")).success).toBe(false);
     expect(receiptBackedResponse.safeParse({ ...decided, nextPollAfterMs: "soon" }).success).toBe(false);
   });
 });

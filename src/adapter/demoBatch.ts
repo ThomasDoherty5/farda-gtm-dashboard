@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, certaintyOfState, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError } from "./errors";
 import { respondWith } from "./demoViews";
 import { BATCH_ID, DEFAULT_BATCH_FILTERS, heldReasons, isUnsent, seedItems, seedSamples, type BatchData, type BatchItem, type SampleRequest } from "@/fixtures/batch";
@@ -40,6 +40,7 @@ export function createDemoBatch() {
     receiptRefs: [],
     nextAction: null,
     nextPollAfterMs: null,
+    executionCertainty: certaintyOfState(state),
   });
 
   return {

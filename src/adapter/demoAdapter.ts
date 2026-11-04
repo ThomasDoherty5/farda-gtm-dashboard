@@ -204,6 +204,7 @@ function overviewResponse<F>(request: ReadRequest<F>, fixture: OverviewFixtureKe
         observedAt: DEMO_NOW,
         mirroredAt: DEMO_NOW,
         staleReasonCode: null,
+        freshnessState: "current",
       },
     ],
     coverage: { expectedCount: 5, observedCount: 5, missingCount: 0, complete: true, reasonCodes: [] },
@@ -224,7 +225,7 @@ function overviewResponse<F>(request: ReadRequest<F>, fixture: OverviewFixtureKe
     case "FX-05-partial-coverage":
       return { ...base, dataState: "partial", data: { ...d, posts: d.posts.slice(0, 3) }, coverage: { expectedCount: 5, observedCount: 3, missingCount: 2, complete: false, reasonCodes: ["SOURCE_ROWS_DEFERRED"] } };
     case "FX-06-stale-source":
-      return { ...base, dataState: "stale", sourceFreshness: base.sourceFreshness.map((f) => ({ ...f, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED" })) };
+      return { ...base, dataState: "stale", sourceFreshness: base.sourceFreshness.map((f) => ({ ...f, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED", freshnessState: "error" })) };
     case "FX-07-offline-read":
       return err("SOURCE_UNAVAILABLE", "The data service could not be reached.", request.requestId);
     case "FX-08-forbidden-account":

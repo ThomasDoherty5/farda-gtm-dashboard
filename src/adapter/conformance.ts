@@ -18,6 +18,8 @@ import type { FardaAdapter } from "./adapter";
 import {
   SCHEMA_VERSION,
   actionResponseSchema,
+  actionStateSchema,
+  executionCertaintySchema,
   provenanceValueSchema,
   readResponseSchema,
   verifiedScopeSchema,
@@ -159,6 +161,7 @@ const saveResponseSchema = z.object({
   persistedByRef: z.string(),
   record: z.unknown(),
   reasonCodes: z.array(z.string()),
+  executionCertainty: executionCertaintySchema,
 });
 
 /**
@@ -270,6 +273,7 @@ const validAction = () => ({
   receiptRefs: [],
   nextAction: null,
   nextPollAfterMs: null,
+  executionCertainty: "notApplied",
 });
 
 /** Rules about the contract's own schemas. Call once; they do not depend on an adapter. */
@@ -339,12 +343,30 @@ export function runContractSchemaConformance() {
       ];
       for (const [label, value] of bad) expect(read.safeParse(value).success, label).toBe(false);
       const badActions: [string, unknown][] = [
-        ["'approved' is not an action state", { ...validAction(), state: "approved" }],
+        ["missing executionCertainty (Q-04)", { ...validAction(), executionCertainty: undefined }],
+        ["unknown executionCertainty (Q-04)", { ...validAction(), executionCertainty: "maybe" }],
         ["'sent' is not an action state", { ...validAction(), state: "sent" }],
         ["receiptRefs not a list", { ...validAction(), receiptRefs: "r-1" }],
         ["missing actionRef", { ...validAction(), actionRef: undefined }],
       ];
       for (const [label, value] of badActions) expect(actionResponseSchema.safeParse(value).success, label).toBe(false);
+    });
+    it("SCHEMA-4 `approved` is an action state (Q-01) and is not a success state", () => {
+      expect(actionResponseSchema.safeParse({ ...validAction(), state: "approved", executionCertainty: "applied" }).success).toBe(true);
+      expect(actionStateSchema.options).toContain("approved");
+    });
+    it("SCHEMA-5 executionCertainty is notApplied, uncertain or applied (Q-04)", () => {
+      for (const executionCertainty of ["notApplied", "uncertain", "applied"]) expect(actionResponseSchema.safeParse({ ...validAction(), executionCertainty }).success, executionCertainty).toBe(true);
+    });
+    it("SCHEMA-6 a source's freshnessState is optional, and one of five values when present (D-13)", () => {
+      const entry = (over: Record<string, unknown>) => {
+        const body = validRead();
+        body.sourceFreshness = [{ sourceRef: { source: "s", accountId: "a", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: "p" }, lastSourceSuccessAt: null, observedAt: null, mirroredAt: null, staleReasonCode: null, ...over }] as never;
+        return body;
+      };
+      expect(read.safeParse(entry({})).success).toBe(true);
+      for (const freshnessState of ["current", "noChange", "partial", "error", "neverSynced"]) expect(read.safeParse(entry({ freshnessState })).success, freshnessState).toBe(true);
+      expect(read.safeParse(entry({ freshnessState: "stale" })).success).toBe(false);
     });
     // The shipped schemas are plain z.object, which strips unknown keys instead of rejecting them. Adapters are held to the
     // strict copy above. THO-283 should decide whether the contract itself becomes strict; remove `fails` when it does.

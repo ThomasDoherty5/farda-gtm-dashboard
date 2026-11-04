@@ -1,6 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
+import { staleReasonText } from "@/adapter/freshness";
 import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Button, LinkButton } from "@/components/Button";
@@ -158,7 +159,7 @@ export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res?.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
-          <p>{freshness?.staleReasonCode ?? "Reason unknown"}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
+          <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
         </Alert>
       )}
       {res?.dataState === "partial" && (

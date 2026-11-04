@@ -72,6 +72,6 @@ export function createDemoLifecycle() {
       current.draft = next;
       current.version = `v${Number(current.version.slice(1)) + 1}`;
     }
-    return { schemaVersion: SCHEMA_VERSION, requestId: rid, scope: { ...request.requestedScope, authorizationScopeVersion: "demo-1" }, resourceRef: request.resourceRef!, resourceVersion: current.version, persistedAt: DEMO_NOW, persistedByRef: "demo-owner", record: { ...current.draft }, reasonCodes: same ? ["NO_CHANGE"] : [] };
+    return { schemaVersion: SCHEMA_VERSION, requestId: rid, scope: { ...request.requestedScope, authorizationScopeVersion: "demo-1" }, resourceRef: request.resourceRef!, resourceVersion: current.version, persistedAt: DEMO_NOW, persistedByRef: "demo-owner", record: { ...current.draft }, reasonCodes: same ? ["NO_CHANGE"] : [], executionCertainty: "applied" };
   }
 }
