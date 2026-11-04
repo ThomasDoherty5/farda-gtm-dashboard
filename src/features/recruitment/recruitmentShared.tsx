@@ -21,7 +21,7 @@ export function NavButtons({ current, items }: { current: string; items: { label
 }
 
 /** The violet context box (Figma "Context / Commission-only acquisition"). */
-export function ContextBox({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
+export function ContextBox({ title, text, children }: { title: string; text: ReactNode; children?: ReactNode }) {
   return (
     <div className={acquisition.context}>
       <p className={acquisition.contextTitle}>{title}</p>

@@ -196,7 +196,7 @@ function DashboardBody({ res, data, network, onNetwork }: { res: ReadResponse<So
       <div className={styles.row}>
         <div className={`${styles.row} ${styles.network}`} role="group" aria-label="Publishing network">
           {NETWORK_BUTTONS.map((b) => (
-            <Button key={b.value} variant="secondary" aria-pressed={network === b.value} style={{ minWidth: b.width }} onClick={() => onNetwork(b.value)}>{b.label}</Button>
+            <Button key={b.value} variant="secondary" aria-pressed={network === b.value} style={{ width: b.width, minWidth: 0, paddingInline: 8 }} onClick={() => onNetwork(b.value)}>{b.label}</Button>
           ))}
         </div>
         <Badge width={168}>Website destination</Badge>
@@ -274,10 +274,13 @@ function DashboardBody({ res, data, network, onNetwork }: { res: ReadResponse<So
           { label: "Hybrid · history", to: "#", width: 165, disabled: true, reasonId: "history-reason" },
         ]} />
         <p className={acquisition.small}>
-          Social Cat source · Instagram + TikTok publishing · Shopify website checkout · illustrative Collabs provider. Hybrid is separately negotiated, with fee and commission tracked independently.{" "}
+          <span data-testid="channel-route">
+            <span data-field="acquisition-source">Source: Social Cat</span> · <span data-field="publishing-network">Publishing: Instagram + TikTok</span> · <span data-field="checkout">Checkout: Shopify website</span> · <span data-field="payout-owner">Payout: Collabs provider (illustrative)</span>.
+          </span>{" "}
+          <span data-testid="route-note">A TikTok post is not a TikTok Shop order.</span> Hybrid is negotiated separately.{" "}
           <span id="history-reason">History tabs are read-only: accepted obligations stay readable, and no new gifted-only, paid or hybrid acquisition can start here.</span>
         </p>
-        <div className={styles.contextActions}>
+        <div className={styles.contextActions} style={{ gap: 16 }}>
           <LinkButton to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 204 }}>Configure offer</LinkButton>
           <LinkButton variant="secondary" to="/analytics/customer-journey" style={{ minWidth: 218 }}>Website commerce</LinkButton>
           <LinkButton variant="secondary" to="/finance/commissions" style={{ minWidth: 218 }}>Commission ledger</LinkButton>

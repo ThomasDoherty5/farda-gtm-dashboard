@@ -138,3 +138,26 @@ for (const url of [BOARD, DASH, TT_BOARD, TT_DASH]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   });
 }
+
+test("each dashboard names its source, publishing network, checkout and payout owner as four separate things", async ({ page }) => {
+  for (const [url, expected] of [
+    ["/creators/social-cat?view=dashboard", ["Source: Social Cat", "Publishing: Instagram + TikTok", "Checkout: Shopify website", "Payout: Collabs provider (illustrative)"]],
+    ["/creators/tiktok?view=dashboard", ["Source: Affiliate Center", "Publishing: TikTok", "Checkout: TikTok Shop", "Payout: TikTok native settlement"]],
+  ] as const) {
+    await page.goto(url);
+    const route = page.getByTestId("channel-route");
+    await expect(route).toBeVisible();
+    for (const name of ["acquisition-source", "publishing-network", "checkout", "payout-owner"]) await expect(route.locator(`[data-field="${name}"]`)).toHaveCount(1);
+    await expect(route.locator("[data-field]")).toHaveText(expected as unknown as string[]);
+  }
+});
+
+test("daily sourcing and hourly monitoring are different destinations, reached from the dashboard", async ({ page }) => {
+  await page.goto("/creators/tiktok?view=dashboard");
+  await expect(page.getByRole("link", { name: "Daily sourcing" })).toHaveAttribute("href", "/creators/discovery");
+  await page.getByRole("link", { name: "Hourly monitoring" }).click();
+  await expect(page).toHaveURL(/\/runs\/demo-run-hourly$/);
+  await page.goBack();
+  await page.getByRole("link", { name: "Daily sourcing" }).click();
+  await expect(page).toHaveURL(/\/creators\/discovery$/);
+});

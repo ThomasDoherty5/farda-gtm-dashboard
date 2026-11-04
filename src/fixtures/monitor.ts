@@ -170,6 +170,11 @@ export const hourlyRunDemo: HourlyRunData = {
 
 /* ---------- Post performance (Figma 25:481) ---------- */
 
+export type PostGmv =
+  | { state: "reported"; amount: Money; window: string; definition: string }
+  | { state: "not-reported" }
+  | { state: "not-applicable" };
+
 export type PostPerformanceData = {
   datasetKey: "post-demo";
   postId: string;
@@ -182,6 +187,8 @@ export type PostPerformanceData = {
   interactions: (Interactions & { saves: null; uniqueReach: null }) | null;
   orders: number | null;
   netSales: Money | null;
+  /** TikTok-reported GMV is a platform figure before discounts and refunds. It is never retained net sales and is never summed into it. */
+  gmv: PostGmv;
   dailyDeltas: { label: string; thousands: number }[];
   details: { creatorId: string; contentId: string; intake: string; metricSource: string; salesSource: string };
   collaborationId: string;
@@ -200,6 +207,7 @@ export const postPerformanceDemo: PostPerformanceData = {
   interactions: { likes: 4200, comments: 420, shares: 420, saves: null, uniqueReach: null },
   orders: 62,
   netSales: usd(2015),
+  gmv: { state: "reported", amount: usd(3100), window: "Sep 30–Oct 29, 2026", definition: "TikTok Shop order value before discounts and refunds" },
   dailyDeltas: deltas.map((d, i) => ({ label: String(19 + i), thousands: d })),
   details: { creatorId: "CR-010", contentId: "TT-DEMO-001", intake: "TikTok affiliate", metricSource: "Linked post snapshot", salesSource: "Reconciled orders" },
   collaborationId: "COL-010",

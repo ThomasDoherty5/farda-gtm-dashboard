@@ -9,13 +9,15 @@ import { ViewError } from "@/components/ViewError";
 import { Button, LinkButton } from "@/components/Button";
 import { SectionTabs } from "@/components/SectionTabs";
 import { SourceDialog } from "@/features/approvals/shared";
-import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
+import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID, DEMO_HOURLY_RUN_ID } from "@/fixtures/ids";
 import { CUMULATIVE_DAYS } from "@/fixtures/creators";
 import { pipelineSources } from "@/fixtures/pipeline";
 import acquisition from "@/features/acquisition/Acquisition.module.css";
 import styles from "./Creators.module.css";
 
 export const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`;
+/** Hourly monitoring is a read-only run; daily acquisition is sourcing. They are different destinations and neither stands in for the other. */
+export const hourlyPath = `/runs/${DEMO_HOURLY_RUN_ID}`;
 
 /** Heading, subtitle and the two title actions (Figma "Title and actions"). */
 export function PageTitle({ id, title, subtitle, children }: { id: string; title: string; subtitle: string; children: ReactNode }) {
@@ -67,6 +69,7 @@ export function CommissionContext() {
       <div className={styles.contextActions}>
         <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
+        <LinkButton variant="secondary" to={hourlyPath} style={{ minWidth: 200 }}>Hourly monitoring</LinkButton>
         <LinkButton variant="secondary" to={evidencePath} style={{ minWidth: 223.5 }}>Review lifestyle evidence</LinkButton>
       </div>
     </div>
@@ -83,6 +86,7 @@ export function BoardContext() {
       <div className={styles.contextActions}>
         <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
+        <LinkButton variant="secondary" to={hourlyPath} style={{ minWidth: 200 }}>Hourly monitoring</LinkButton>
       </div>
     </div>
   );
