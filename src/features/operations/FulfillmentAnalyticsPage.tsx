@@ -3,7 +3,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
 import { Kpi } from "@/components/Kpi";
-import { Divider, HalfColumns, Meter, Page, PageHeader, Panel } from "@/components/Panels";
+import { BarRows, Divider, HalfColumns, Page, PageHeader, Panel } from "@/components/Panels";
 import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
@@ -101,15 +101,7 @@ function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean 
         <Panel title="Delivery experience" subtitle={`Share of delivered orders (%) · last ${data.periodDays} days`} roomy testId="delivery">
           <div className={styles.deliveryMetric}><p data-testid="metric-Average transit">{figure(data.avgTransitDays, (d) => `${d} days`)}</p><p>average transit</p></div>
           {data.transit ? (
-            <ul className={styles.homeList} style={{ gap: "var(--space-20)" }} aria-label="Share of delivered orders by transit time">
-              {data.transit.map((t) => (
-                <li key={t.label} className={styles.transitRow}>
-                  <span>{t.label}</span>
-                  <span><Meter percent={(100 * t.share) / 60} tone={t.warn ? "warning" : undefined} label={`${t.label}: ${t.share}% of delivered orders`} /></span>
-                  <span>{t.share}</span>
-                </li>
-              ))}
-            </ul>
+            <BarRows label="Share of delivered orders by transit time" max={60} gap={20} rows={data.transit.map((t) => ({ label: t.label, value: t.share, warn: t.warn }))} />
           ) : (
             <p className={styles.meta}>N/A. The demo holds no delivery mix for this period.</p>
           )}

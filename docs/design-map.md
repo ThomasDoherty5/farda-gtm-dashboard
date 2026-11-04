@@ -408,6 +408,99 @@ Pending Kevon Baha's confirmation.
 | Fulfillment chart | Picture of bars | Bars plus an accessible name and a hidden data table | FE09-08 requires a chart alternative |
 | Source dialogs | "Open Shopify", "Open Shippo", "Open source row" and similar | Handoff dialogs saying no verified link exists | The links are fictional. FE09-06 and the SOURCE profile forbid guessing a destination |
 
+## Stock and support comparison (sources 7:129, 7:317)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. Both match the page size and are under the proposed 0.5%.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 7:129 Stock per home and transfer | `/inventory` | Matches (1440×1454) | 0.347% |
+| 7:317 Support workspace | `/support/cases/TEST-ISS-021` | Matches (1440×1389) | 0.236% |
+
+## Stock and support: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Stock title row | "All homes" and "Open inventory" | A third button, "Request transfer", opens a dialog. "All homes" is a URL-backed home filter | The transfer form isn't drawn; the control contract says to implement it, not fake a finished one. It asks for a transfer and moves nothing |
+| Health | Healthy or Low stock | Also "Needs review" when Shopify's count disagrees with the movement ledger, with an alert naming both numbers. The ledger balance stays | FE10-02 and FE10-05: observed and movement-derived counts are different facts, and a conflict must show |
+| Movement log | Three complete rows | A movement without its receipt reads "Not counted · Receipt not recorded" and a note says it is excluded from balances. Appears only with `?scenario=delayed` | The log's own subtitle says incomplete rows are excluded; the page now shows when that happens |
+| Transfer, received units | "Not confirmed" | The same, and the value is an unknown, never a zero | A known zero and an unconfirmed receipt are different states |
+| Transfer requests | None | A waiting request shows in an alert: "Waiting for approval. No stock has moved." The request is refused for more than the available units (reserved can't move), a duplicate, the same home or a stale ledger version | A submitted request is not a verified receipt or a depletion |
+| Stock fixtures | Typed per screen | Operations, fulfillment analytics and stock all read one set of home balances | OPS270-STOCK-02: the stock and dispatch views must reconcile |
+| Support order reference | SH-1042 and TEST-SH-1042 | SH-1031 and TEST-SH-1031 | The lost-shipment case belongs to the order whose shipment is lost; in Figma 4:171, 1042 is still waiting for shipment |
+| "14-day cohort" button | A button | A dialog saying what the cohort covers and that the demo holds no other period | No period selector, since there is only one period to choose |
+| Case panel | One case, TEST-ISS-021 | The queue rows link to `/support/cases/:caseId`, and the panel shows that case, with a linked shipment or return link | The route has a case id. Next-step text for the other three cases is written for the demo |
+| Source buttons | Open source, Open Intercom, Open selected case, View conversation | Handoff dialogs saying no verified link exists | The links are fictional. Nothing replies to, reopens or reassigns a case: Intercom owns that, and the capability reads unsupported |
+| Linked shipment | Plain text | A link, in ink with an underline | It reaches the shipment exception |
+
+## Settlement comparison (sources 65:1037, 66:252, 66:447, 9:551)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All four match the page size. See the table.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 65:1037 Commission ledger | `/finance/commissions` | Matches (1440×2185) | 0.435% |
+| 66:252 Collabs payout reconciliation | `/finance/settlements/COMM-DEMO-D` | Matches (1440×2111) | 0.576% |
+| 66:447 TikTok native settlement | `/finance/settlements/TT-NATIVE-DEMO` | Matches (1440×2194) | 1.037% |
+| 9:551 Historical manual fee settlement | `/finance/payables/PAY-0012` | Matches (1440×1506) | 0.601% |
+
+Only the ledger meets the proposed 0.5% mark. The other three are within about 1% and the remaining difference is text and row offsets of a few pixels, plus the items below. Layout was calibrated against each frame's node geometry (`get_metadata`), so panel sizes match exactly. The waterfall's bar heights are computed from the data at Figma's scale (224px for net sales) and match.
+
+## Settlement: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Export ledger | A button | A dialog that states the scope (rows, currency, as-of, revision) and builds a UTF-8 CSV in the browser from the loaded snapshot. It is blocked, and never called complete, while the snapshot is partial. Formula-like cells are neutralized | CTRL-117 asks for a server-side snapshot export. With no server, the demo builds the same file from the data it holds and says so. No customer data is in it |
+| Review hold, dispute, eligibility | Ghost buttons | Open a read-only evidence dialog | CTRL-119: viewing evidence confirms and changes nothing |
+| View receipt, source buttons | Buttons | Handoff dialogs saying no verified link exists | The links are fictional. A paid receipt is immutable |
+| Reconcile payout, View payout | Buttons | Links to the Collabs settlement | They lead to the reconciliation screen |
+| Match statement | A button | A preview of candidate statement lines. A duplicate or conflicting line can't be selected and stays unresolved. Submitting asks for a review and reports "Approval required"; nothing is marked reconciled | CTRL-118: a versioned submission, and the paid receipt stays immutable |
+| Open crosswalk, Review identity | Buttons | Read-only dialogs | CTRL-120 and CTRL-121: no automatic merge, no mapping edit |
+| Tabs | Commissions, Payouts, Economics, Provider access | Payouts goes to the Collabs settlement, Economics to the contribution section of the ledger, Provider access to capabilities | There is no separate route for Economics |
+| TikTok tabs | Rates & terms, Samples, Native settlement, Exceptions | A tab is `?tab=`. Samples, Native settlement and Exceptions show a labeled panel with no records | Only Rates & terms has a Figma source. Switching never mutates (CTRL-122, CTRL-124) |
+| Historical offer models | Three tabs | Three disabled tabs whose accessible description is the section's "read only" sentence | CTRL-127 and CTRL-128: no selection can create an offer |
+| Native rate | Unverified | The value is an unknown (never a number) | A rate not read from the source is not 0% |
+| Review historical terms, Review adjustment | Buttons | Read-only dialogs | CTRL-126 and CTRL-129 |
+| Shell navigation | Creators highlighted on the TikTok settlement | Finance. The fee settlement highlights Creators, as in Figma | The route is shared with the Collabs settlement, which highlights Finance |
+| Title-row buttons on the fee settlement | 60px in from the right edge | Right-aligned | Figma's heading is a fixed 850px |
+| Founder review | A button | A link to the archived fee approval sample | CTRL-041: navigation only; it neither approves nor pays |
+| Execution | "Execution blocked" badge | The same, with the Pay capability unsupported in the adapter | The provider owns payout. No screen offers a manual Pay action |
+
+## Finance comparison (sources 7:510, 7:683, 12:1006)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All three match the page size.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 7:510 Finance dashboard | `/finance` | Matches (1440×1707) | 0.283% |
+| 7:683 Close and reconciliation | `/finance/close/2026-10` | Matches (1440×1471) | 0.695% |
+| 12:1006 Finance analytics | `/analytics/finance` | Matches (1440×1313) | 0.721% |
+
+The dashboard meets the proposed 0.5% mark; the other two are within about 0.7%, from text and row offsets of a few pixels.
+
+## Finance: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Cash chart | An exported static vector (20:409) | An SVG drawn from the plotted source points at the same geometry (gridlines at $70k, $35k and $0; 120px months; 5px solid line, 4px dashed projection, 7px dot). Labels, the table alternative and the accessible name come from the same numbers | FIN272-06: plotted points, axes and labels must agree. A picture can't be checked against the data |
+| Projection | Always dashed to January | Drawn only when burn has three months of history and is above zero; otherwise omitted, and runway reads N/A with the reason | FIN272-04 and 05: disclose insufficient history; explain N/A for zero or negative burn |
+| Runway and gross margin | Typed text | Derived from cash, burn and the P&L rows (8.0 months, 65.0%) | The numbers can't drift from their sources |
+| Year to date | "Awaiting data" | An unknown value shown as "Awaiting data", never zero | A missing report is not a zero |
+| The $70,000 raised | Beside cash | Shown as context only; runway uses verified current cash | FIN272-05: never hardcode the historical raise as current cash |
+| Last 30 days, View metric definitions | Buttons | Dialogs: the window is fixed, and definitions are read only | Only one window exists in the demo |
+| Open QuickBooks, View report folder, Open close checklist | Buttons | Handoff dialogs saying no verified link exists | The links are fictional |
+| Open reconciliation | A button | A read-only dialog listing unmatched payouts, posting owner, difference evidence and the CPA policy reference ("Not set") | CTRL-171: navigation never closes the books, and no tax rule is invented |
+| Close | Checklist and "4 / 7" | Progress is derived from the checks. There is no close, sign-off or approve control; the capability is held for CPA sign-off and open reconciliation | FE11-03: a count is not a completed close |
+| Reports | "Awaiting close" | The same, and "Export failed: rerun pending" with an incomplete-month notice under `?scenario=exportfailed` | FIN274-06: a failed export never reads as a finished package |
+| Section navigation | Buttons | Month-end and Reports go to the October close, Unit economics to Financial pulse | The manifest has no separate routes for them |
+| Where $12,596 goes | Values typed | The five parts sum to the 30-day receipts, with a test | The breakdown has to reconcile |
+
 ## Shared page components
 
 `src/components/Panels.tsx` holds the page furniture the operations, support and finance screens share: PageHeader, Panel, Notice, FactList, Steps, FlatTable and Meter. Measurements come from Figma frames such as 4:6, 4:171 and 4:317. Panels keep a 24px padding and a 1px border. Figma's content width ignores the border, but using 23px padding made the pixel difference worse, so it is left at 24.

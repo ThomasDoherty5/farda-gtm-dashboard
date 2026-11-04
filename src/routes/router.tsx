@@ -18,6 +18,14 @@ import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
 import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
 import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
 import { StateGalleryPage } from "@/features/states/StateGalleryPage";
+import { InventoryPage } from "@/features/inventory/InventoryPage";
+import { CloseReconciliationPage } from "@/features/finance/CloseReconciliationPage";
+import { FinanceAnalyticsPage } from "@/features/finance/FinanceAnalyticsPage";
+import { FinanceDashboardPage } from "@/features/finance/FinanceDashboardPage";
+import { PayablePage } from "@/features/finance/PayablePage";
+import { SettlementPage } from "@/features/finance/SettlementPage";
+import { CommissionLedgerPage } from "@/features/finance/CommissionLedgerPage";
+import { SupportPage } from "@/features/support/SupportPage";
 import { FulfillmentAnalyticsPage } from "@/features/operations/FulfillmentAnalyticsPage";
 import { OperationsPage } from "@/features/operations/OperationsPage";
 import { OrderPage } from "@/features/operations/OrderPage";
@@ -84,6 +92,14 @@ const implemented: Record<string, JSX.Element> = {
   "/orders/:orderId": <OrderPage />,
   "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,
   "/returns/:returnId": <ReturnPage />,
+  "/inventory": <InventoryPage />,
+  "/finance": <FinanceDashboardPage />,
+  "/analytics/finance": <FinanceAnalyticsPage />,
+  "/finance/close/:period": <CloseReconciliationPage />,
+  "/finance/commissions": <CommissionLedgerPage />,
+  "/finance/settlements/:settlementId": <SettlementPage />,
+  "/finance/payables/:payableId": <PayablePage />,
+  "/support/cases/:caseId": <SupportPage />,
   "/analytics/fulfillment": <FulfillmentAnalyticsPage />,
 };
 

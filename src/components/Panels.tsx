@@ -20,18 +20,18 @@ export const Page = ({ children, ...rest }: { children: ReactNode; "aria-labelle
 );
 
 /** Card with a section heading (Figma frames such as 4:67: 24px padding, 24px radius). */
-export function Panel({ title, subtitle, id, roomy = false, testId, header, children }: { title?: ReactNode; subtitle?: ReactNode; id?: string; roomy?: boolean; testId?: string; /** Replaces the standard heading when the design puts something beside the title. It must contain the h2 with `id`. */ header?: ReactNode; children?: ReactNode }) {
+export function Panel({ title, subtitle, id, roomy = false, spacious = false, large = false, testId, header, children }: { title?: ReactNode; /** The 22px section title used on the finance screens. */ large?: boolean; subtitle?: ReactNode; id?: string; roomy?: boolean; /** 24px between children, as in Figma 66:485. */ spacious?: boolean; testId?: string; /** Replaces the standard heading when the design puts something beside the title. It must contain the h2 with `id`. */ header?: ReactNode; children?: ReactNode }) {
   return (
-    <section className={roomy ? `${styles.panel} ${styles.panelRoomy}` : styles.panel} aria-labelledby={id} data-testid={testId}>
-      {header ?? <SectionHeading id={id} title={title} subtitle={subtitle} />}
+    <section className={spacious ? `${styles.panel} ${styles.panelSpacious}` : roomy ? `${styles.panel} ${styles.panelRoomy}` : styles.panel} aria-labelledby={id} data-testid={testId}>
+      {header ?? <SectionHeading id={id} title={title} subtitle={subtitle} large={large} />}
       {children}
     </section>
   );
 }
 
-export function SectionHeading({ id, title, subtitle }: { id?: string; title: ReactNode; subtitle?: ReactNode }) {
+export function SectionHeading({ id, title, subtitle, large = false }: { id?: string; title: ReactNode; subtitle?: ReactNode; large?: boolean }) {
   return (
-    <div className={styles.sectionHeading}>
+    <div className={large ? `${styles.sectionHeading} ${styles.sectionLarge}` : styles.sectionHeading}>
       <h2 id={id}>{title}</h2>
       {subtitle && <p>{subtitle}</p>}
     </div>
@@ -53,10 +53,10 @@ export function Notice({ tone, label, title, children, role, testId }: { tone: "
 }
 
 /** Label and value rows (Figma "Detail / …": a 168px label and 216px value). */
-export function FactList({ rows, tight = false, wide = false, label }: { rows: [string, ReactNode][]; tight?: boolean; wide?: boolean; label?: string }) {
+export function FactList({ rows, tight = false, wide = false, labelWidth, gap, label }: { rows: [string, ReactNode][]; tight?: boolean; wide?: boolean; /** Label column width in px, where a design sets one other than 168 or 247. */ labelWidth?: number; /** Row gap in px where a design sets one other than 16. */ gap?: number; label?: string }) {
   const className = [styles.facts, tight && styles.factsTight, wide && styles.factsWide].filter(Boolean).join(" ");
   return (
-    <dl className={className} aria-label={label}>
+    <dl className={className} aria-label={label} style={labelWidth || gap ? ({ ...(labelWidth ? { "--fact-label": `${labelWidth}px` } : {}), ...(gap ? { gap } : {}) } as React.CSSProperties) : undefined}>
       {rows.map(([name, value]) => <div key={name}><dt>{name}</dt><dd>{value}</dd></div>)}
     </dl>
   );
@@ -117,5 +117,46 @@ export function Meter({ percent, tone, label }: { percent: number; tone?: "warni
     <div className={styles.progress} data-tone={tone} role="img" aria-label={label}>
       <span style={{ width: `${Math.max(0, Math.min(100, percent))}%` }} />
     </div>
+  );
+}
+
+/** Labeled bars (Figma "Chart row / …": a 110px label, a 390px track, a 56px value). `max` is the value a full track stands for. */
+export function BarRows({ label, rows, max, gap = 16, widths }: { label: string; rows: { label: string; value: number; display?: string; warn?: boolean }[]; max: number; gap?: 16 | 20; /** Label, track and value column widths in px where a design sets them other than 110, 390 and 56. */ widths?: [number, number, number] }) {
+  return (
+    <ul className={styles.barRows} style={{ gap, ...(widths ? ({ "--bar-cols": widths.map((w) => `minmax(0, ${w}px)`).join(" ") } as React.CSSProperties) : {}) }} aria-label={label}>
+      {rows.map((r) => (
+        <li key={r.label} className={styles.barRow}>
+          <span>{r.label}</span>
+          <span><Meter percent={(100 * r.value) / max} tone={r.warn ? "warning" : undefined} label={`${r.label}: ${r.display ?? r.value}`} /></span>
+          <span>{r.display ?? r.value}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** A tinted box with a title, a sentence and optional actions (Figma "Historical acquisition context", "Context / …"). */
+export function ContextCard({ title, tone = "violet", children, actions }: { title: string; tone?: "violet" | "subtle"; children: ReactNode; actions?: ReactNode }) {
+  return (
+    <aside className={styles.context} data-tone={tone} aria-label={title}>
+      <p className={styles.contextTitle}>{title}</p>
+      <p className={styles.contextText}>{children}</p>
+      {actions && <div className={styles.contextActions}>{actions}</div>}
+    </aside>
+  );
+}
+
+/** Rows of a status badge, a title and an explanation (Figma "Execution gates"). */
+export function GateRows({ rows, label }: { rows: { badge: ReactNode; title: string; text: string }[]; label: string }) {
+  return (
+    <ul className={styles.gates} aria-label={label}>
+      {rows.map((r) => (
+        <li key={r.title} className={styles.gate}>
+          <span className={styles.gateBadge}>{r.badge}</span>
+          <span className={styles.gateTitle}>{r.title}</span>
+          <span className={styles.gateText}>{r.text}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
