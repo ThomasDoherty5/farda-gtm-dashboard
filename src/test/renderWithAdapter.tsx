@@ -29,7 +29,7 @@ export function renderRoute(path: string, adapter: FardaAdapter, client = testCl
   render(
     <QueryClientProvider client={client}>
       <ScopeProvider adapter={adapter} scope={scopeFor(adapter.environment)} principal="tester">
-        <RouterProvider router={router} />
+        <RouterProvider router={router} useTransitions={false} />
       </ScopeProvider>
     </QueryClientProvider>,
   );

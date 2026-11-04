@@ -39,7 +39,7 @@ function renderTree(routes: RouteObject[], entries: string[], initialIndex?: num
   render(
     <QueryClientProvider client={testClient()}>
       <ScopeProvider adapter={adapter} scope={scopeFor(adapter.environment)} principal="tester">
-        <RouterProvider router={router} />
+        <RouterProvider router={router} useTransitions={false} />
       </ScopeProvider>
     </QueryClientProvider>,
   );
