@@ -8,7 +8,7 @@ import { discoveryDemo } from "@/fixtures/discovery";
 import { PIPELINE_STAGES, pipelineDemo } from "@/fixtures/pipeline";
 import { invitationDemo, recruitmentDemo } from "@/fixtures/recruitment";
 import { filterPipeline } from "@/fixtures/pipeline";
-import type { BatchData } from "@/fixtures/batch";
+import { seedSamples, type BatchData } from "@/fixtures/batch";
 
 const combos = <A extends string, B extends string>(a: readonly A[], b: readonly B[]) => a.flatMap((x) => b.map((y) => [x, y] as const));
 const control = (actionKind: string, key: string, expectedVersion: string, payload: object): ActionRequest<unknown> => ({
