@@ -7,6 +7,7 @@ import { guardTermsOf } from "./commissionPolicy";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
+import { createDemoReconciliation } from "./demoReconciliation";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
 import { createDemoOffers, readAssessment } from "./demoScorecards";
@@ -46,13 +47,14 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   };
   const policy = createDemoPolicy({ termsOf: approvalTerms, actorRole: opts.actorRole });
   const evidence = createDemoEvidence();
-  const ops = createDemoOps();
+  const ops = createDemoOps({ actorRole: opts.actorRole });
   const finance = createDemoFinance();
   const offers = createDemoOffers();
   const batch = createDemoBatch();
   const collaboration = createDemoCollaboration();
   const settings = createDemoSettings();
   const lifecycle = createDemoLifecycle();
+  const reconciliation = createDemoReconciliation();
 
   return {
     environment: "demo",
@@ -61,6 +63,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "nightlyReconciliation") return reconciliation.read(request) as ReadResponse<T>;
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
       const lifecycleView = lifecycle.read(request);
@@ -102,6 +105,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (reconciliation.handles(request)) return reconciliation.submit(request as ActionRequest<never>);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
       const opsResult = ops.submit(request);

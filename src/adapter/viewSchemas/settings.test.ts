@@ -33,6 +33,7 @@ const variants: { viewKey: string; filters: object; throws?: string }[] = [
   { viewKey: "scheduleDetail", filters: { jobId: DEMO_JOB_ID } },
   { viewKey: "scheduleDetail", filters: { jobId: "other" }, throws: "RECORD_NOT_FOUND" },
   { viewKey: "channelCapabilities", filters: {} },
+  { viewKey: "nightlyReconciliation", filters: {} },
 ];
 
 describe("settings view schemas: every demo response parses", () => {
