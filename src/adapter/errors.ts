@@ -36,6 +36,7 @@ const CODE_TO_CATEGORY: Record<string, ErrorCategory> = {
   BUDGET_HOLD: "resourceHold",
   RATE_LIMITED: "rateLimited",
   SOURCE_UNAVAILABLE: "unavailable",
+  BROWSER_OFFLINE: "unavailable",
   TIMEOUT: "unavailable",
   INTEGRATION_PENDING: "unavailable",
   OUTCOME_UNCERTAIN: "outcomeUncertain",

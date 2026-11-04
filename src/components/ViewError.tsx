@@ -13,7 +13,7 @@ export function ViewError({ error, subject, hasPriorData = false, onRetry, paren
     unauthenticated: { state: "Denied", title: "Sign in again", body: "Your session ended. No data from the previous session is shown.", retry: false },
     forbidden: { state: "Denied", title: "No access to this account", body: "You don't have permission to view this account's data.", retry: false },
     notFound: { state: "Error", title: "Record not found", body: error.message, retry: false },
-    unavailable: { state: "Error", title: "Data unavailable", body: error.message, retry: true },
+    unavailable: error instanceof AdapterError && error.body.code === "BROWSER_OFFLINE" ? { state: "Error", title: "You're offline", body: error.message, retry: true } : { state: "Error", title: "Data unavailable", body: error.message, retry: true },
     unknown: { state: "Error", title: "Something went wrong", body: `${subject} could not be loaded.`, retry: true },
   };
   const c = copy[category] ?? copy.unknown!;

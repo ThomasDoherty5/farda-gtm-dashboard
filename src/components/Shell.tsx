@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { useOnline } from "@/adapter/online";
 import { useScope } from "@/adapter/scope";
+import { breadcrumbsFor } from "@/routes/breadcrumbs";
 import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
 import { Badge } from "./Badge";
 import { Button, LinkButton } from "./Button";
@@ -10,10 +12,12 @@ import styles from "./Shell.module.css";
 /** Application shell (Figma 10:218): skip link, horizontal navigation, workspace menu and main landmark. */
 export function Shell() {
   const { adapter } = useScope();
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const section = sectionOf(pathname);
   const demo = adapter.environment === "demo";
+  const crumbs = breadcrumbsFor(pathname, search);
+  const online = useOnline();
 
   return (
     <div className={styles.canvas}>
@@ -37,8 +41,22 @@ export function Shell() {
           <span className={styles.spacer} />
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
           <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : "Menu"}</button>
+          <nav aria-label="Breadcrumb" className={styles.crumbs}>
+            <ol>
+              {crumbs.map((c, i) => (
+                <li key={`${c.label}-${i}`}>
+                  <span aria-current={i === crumbs.length - 1 ? "page" : undefined}>{c.label}</span>
+                </li>
+              ))}
+            </ol>
+          </nav>
         </header>
         <main id="main" tabIndex={-1} className={styles.main}>
+          {!online && (
+            <p role="status" className={styles.offline} data-testid="offline-banner">
+              You're offline. What you see may be out of date, and nothing can be sent until you reconnect.
+            </p>
+          )}
           <Outlet />
         </main>
       </div>

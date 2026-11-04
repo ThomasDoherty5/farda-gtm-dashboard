@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
 import { AdapterError } from "./errors";
+import { isOnline, offlineError } from "./online";
 import { scopeKey, useScope } from "./scope";
 import { dropProtectedData } from "./useView";
 
@@ -21,7 +22,9 @@ export function useAction<P>() {
   const client = useQueryClient();
   const keys = useRef(new Map<string, string>());
   return useMutation<ActionResponse, Error, ActionInput<P>>({
+    networkMode: "always",
     mutationFn: (input) => {
+      if (!isOnline()) throw offlineError();
       const logical = JSON.stringify([input.operation, input.actionKind, input.approvalRef, input.expectedVersion, input.payload]);
       const idempotencyKey = keys.current.get(logical) ?? crypto.randomUUID();
       keys.current.set(logical, idempotencyKey);
