@@ -24,7 +24,7 @@ test("flow 5 · approval: pending, approved is not sent, sent only with a source
   // Nothing offers to send before the approval is decided.
   await expect(page.getByRole("button", { name: "Send approved action" })).toHaveCount(0);
   await page.getByRole("button", { name: "Approve this version" }).click();
-  await expect(status).toContainText("Approved, not sent");
+  await expect(status).toContainText("Approved, awaiting dispatch");
   await expect(page.getByTestId("source-receipt")).toHaveCount(0);
   await page.getByRole("button", { name: "Send approved action" }).click();
   await expect(page.getByTestId("source-receipt")).toContainText("synthetic demo receipt");
