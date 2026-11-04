@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { SCHEMA_VERSION, type Period, type ReadResponse } from "./contract";
 import { AdapterError, mustClearProtectedData } from "./errors";
 import { scopeKey, useScope } from "./scope";
@@ -10,11 +10,14 @@ let requestCounter = 0;
  * workspace, accounts, schema, view, filters and period. Obsolete requests are aborted, and a
  * response whose verified scope differs from the requested scope is rejected (late-response guard).
  * A 401/403 drops everything cached for the scope, so prior data can't render beside the denial.
+ * With `keepPrevious`, a changed filter keeps showing the last acknowledged data (`isPlaceholderData`) until the new answer
+ * arrives, so a control that lives beside the data isn't torn down by its own change.
  */
 export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean } = {}) {
   const ctx = useScope();
   const client = useQueryClient();
   return useQuery<ReadResponse<T>, Error>({
+    ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     queryKey: [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period],
     // Opt-in: while a changed filter loads, keep the last data from the same scope on screen (flagged by isPlaceholderData).
     // Data from a different principal, environment, workspace or account set is never carried over.

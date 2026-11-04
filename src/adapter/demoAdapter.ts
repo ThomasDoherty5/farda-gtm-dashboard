@@ -2,6 +2,7 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { createDemoBatch } from "./demoBatch";
 import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
@@ -37,6 +38,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+      if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
       if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
       if (request.viewKey === "collaborationDetail") return collaboration.read(request) as ReadResponse<T>;
       if (request.viewKey === "batchDetail") return batch.read(request) as ReadResponse<T>;
