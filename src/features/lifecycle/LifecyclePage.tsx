@@ -63,7 +63,8 @@ function Body({ data, demo }: { res: ReadResponse<LifecycleData>; data: Lifecycl
           caption="Customer communication flows"
           columns={[{ label: "FLOW", width: "17.628%" }, { label: "ENTRY & EXIT", width: "37.981%" }, { label: "DELIVERY GATE", width: "31.25%" }, { label: "STATE" }]}
           rows={data.flows.map((f) => [
-            <Link key="n" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.name}</Link>,
+            // One action per row: where the state column already links to the flow, the name is text, not a second link to the same place.
+            f.state.endsWith("→") ? f.name : <Link key="n" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.name}</Link>,
             f.entryExit,
             f.gate,
             f.state.endsWith("→") ? <Link key="s" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.state}</Link> : f.state,
