@@ -60,3 +60,32 @@
   .stages { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 767px) { .stages, .rateKpis { grid-template-columns: minmax(0, 1fr); } }
+.pills { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.ledgerRows { display: flex; flex-direction: column; gap: var(--space-16); margin: 0; }
+.ledgerRows > div { display: grid; grid-template-columns: minmax(0, 476fr) minmax(0, 100fr); gap: var(--space-12); }
+.ledgerRows dt { font: var(--text-body); color: var(--color-muted); }
+.ledgerRows dd { margin: 0; font: var(--text-label); }
+.sub { margin: 0; font: var(--text-label); }
+.warnText { margin: 0; font: var(--text-small); color: var(--color-warning); }
+.h3 { margin: 0; font: var(--text-h3); }
+.progressValue { margin: 0; font: var(--text-metric); }
+
+/* Finance analytics (Figma 12:1006). */
+.metaLine { margin: 0; font: var(--text-small); color: var(--color-muted); white-space: pre-wrap; }
+.analytics { display: grid; grid-template-columns: minmax(0, 380fr) minmax(0, 892fr); gap: var(--space-24); align-items: start; }
+.analytics > * { min-width: 0; }
+.kpiStack { display: flex; flex-direction: column; gap: var(--space-16); }
+.kpiStack dl { margin: 0; }
+.chartHead { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-20); }
+.chartGap { flex: 0 1 230px; }
+.badgeRow { display: flex; gap: var(--space-20); }
+.cashChart { position: relative; width: 844px; max-width: none; height: 292px; }
+.cashSvg { position: absolute; left: 0; top: 0; display: block; }
+.cashLabel { position: absolute; width: 90px; margin: 0; text-align: center; font: var(--text-small); color: var(--color-muted); }
+.cashLabel[data-solid="true"] { color: var(--color-ink); }
+.cashAxis { position: absolute; left: 0; width: 44px; font: var(--text-micro); color: var(--color-muted); }
+.months { position: absolute; top: 276px; left: 0; display: flex; width: 844px; font: var(--text-micro); color: var(--color-muted); text-align: center; }
+.months span { width: 120px; }
+.bigValue { margin: 0; font: var(--text-metric); }
+@media (max-width: 1179px) { .analytics { grid-template-columns: minmax(0, 1fr); } .kpiStack { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); } }
+@media (max-width: 767px) { .chartGap { display: none; } .badgeRow { flex-wrap: wrap; } }
