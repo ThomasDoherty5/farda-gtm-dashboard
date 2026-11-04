@@ -48,7 +48,7 @@ No Code Connect mappings exist. Mappings below are by hand.
 
 Measured 2026-11-03 against the copy `z9knjMdQ3kxL6Fblvu1tKc` (see `figma-access-gap.md`), at threshold 0.1, DPR 1, the design's exact width of 1440, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, demo fixtures. Run `npm run build`, then `npx vite preview --port 4181` and `BASE_URL=http://localhost:4181 node scripts/compare-figma.mjs <route> .handoff/figma/<capture>.png 0.1`. Use a production build: `vite dev` can't serve the `@fontsource` files through the shared `node_modules` link, falls back to a system font and reads about 5%.
 
-Every row meets the proposed pass mark (0.5% of pixels) except where "judged over" says why the page height differs. For those, the percentage is over the top of the page, above the first intentional change, and the screen is judged on its geometry tests. These are measurements against a proposal Kevon hasn't agreed, so none of this is a pass. The agent that wrote the code looked at the diff images of the screens it changed (text and edge antialiasing, the copy differences listed below). The design owner hasn't.
+Every row meets the pass mark (0.5% of pixels) except where "judged over" says why the page height differs. For those, the percentage is over the top of the page, above the first intentional change, and the screen is judged on its geometry tests. These are fixture-complete measurements against a copy of the design; the mark is agreed by Thomas but not yet by Kevon, so this is not a release pass. The agent that wrote the code looked at the diff images of the screens it changed (text and edge antialiasing, the copy differences listed below). The design owner hasn't.
 
 | Source | Route | Size | Pixels different |
 | -- | -- | -- | -- |
@@ -100,9 +100,9 @@ The lowest pages sit at 0.15 to 0.2% even where every box matches, which looks l
 
 The Linux CI runner lays text out slightly narrower than macOS, so a line that overflows its box by a few pixels on macOS can fit on Linux and make a page 18px shorter. The cause is deterministic and was found by comparing each text block's single-line width with its box. Three notes overflowed by a word (0.2% to 1.4%): the invitation's route note, the batch's illustrative-batch note and the evidence page's denominator note. Each now has a line break (`wide-break`, 1180px and wider) before its last word, so the line count is the same on every platform, and the invitation, batch and evidence height checks are exact again. Paid media's note already has a 36px minimum height. Not changed: Automation runs' height check in `e2e/settings.spec.ts` still allows one 18px line (second fidelity sweep's screen).
 
-## Proposed pass mark
+## Pass mark
 
-Proposed for THO-330, not yet agreed. At threshold 0.1, DPR 1 and the design's exact width:
+For THO-330. Thomas Doherty agreed this mark on 2026-11-04 and confirmed the copy of the Figma file is current; Kevon Baha hasn't confirmed either. At threshold 0.1, DPR 1 and the design's exact width:
 
 - Page size matches exactly, unless a listed intentional difference changes it.
 - At most 0.5% of pixels differ, checked with `scripts/compare-figma.mjs <path> <capture> 0.1 0.5`.
