@@ -5,6 +5,7 @@ import { AdapterError } from "@/adapter/errors";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
 import { Alert } from "@/components/Alert";
+import { ReadState } from "@/components/ReadState";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
@@ -63,6 +64,8 @@ export function InventoryPage() {
         <Button aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSource("Open inventory")}>Open inventory</Button>
       </PageHeader>
       <OpsTabs current="stock" />
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="Inventory" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading stock…" />}
       {query.isError && <ViewError error={query.error} subject="Stock" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No stock yet"><p>The inventory mirror responded, but holds no locations.</p></EmptyState>}

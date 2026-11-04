@@ -11,6 +11,7 @@ import { DataTable } from "@/components/DataTable";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { Divider, DetailRows, Halves, Notice, Page, PageHeader, Panel, Small, Split, Steps, kit } from "@/components/PageKit";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, blockedReason, LeaveGuard } from "@/features/approvals/shared";
 import { CADENCES, TIMEZONES, type Cadence, type ScheduleData, type ScheduleDraft } from "@/fixtures/settings";
@@ -41,6 +42,8 @@ export function SchedulePage() {
       <Notice kind="plain" title="Proposed configuration · currently paused" descriptionId="enable-reason">
         Source connections, sandbox proof and owner approval are required before enabling live delivery. Zapier is the runner.
       </Notice>
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="This schedule" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading schedule…" />}
       {query.isError && <ViewError error={query.error} subject="This schedule" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<ScheduleData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="No schedule yet"><p>The source responded, but this automation has no schedule.</p></EmptyState>)}

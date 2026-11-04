@@ -49,7 +49,7 @@ export function AutomationsPage() {
       <Notice kind="plain" title={demo ? "Demo · execution access is not validated" : "Execution access is not validated"}>
         Run states below are examples. A human approves the exact outbound action; the browser works inside its source platform and saves the result.
       </Notice>
-      <ReadState res={query.data} subject="Automation runs" only={["stale"]} />
+      <ReadState res={query.data} subject="Automation runs" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading runs…" />}
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>The source responded, but no run has ever been recorded.</p></EmptyState>)}

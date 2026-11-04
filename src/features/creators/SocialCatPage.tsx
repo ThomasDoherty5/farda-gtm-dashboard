@@ -58,7 +58,7 @@ function Board() {
       <Pending query={query} subject="the Social Cat lifecycle">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? <BoardBody res={query.data as ReadResponse<SocialCatBoardData>} data={query.data.data} owner={owner} layout={layout} onOwner={(v) => setParam("owner", v, "all")} onLayout={(v) => setParam("layout", v, "board")} /> : <EmptyState state="Empty" title="No collaborations match"><p>The source responded, but no collaboration matches this owner.</p></EmptyState>)}
       </Pending>
-      {query.data && <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>}
+      {demo && query.data && <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>}
     </section>
   );
 }

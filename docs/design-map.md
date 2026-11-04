@@ -614,7 +614,11 @@ Two fixtures: `demo-evidence-2` has a saved review to dispute, and `demo-evidenc
 
 Owner THO-330 (flows and states). The fixture families FX-01 to FX-15 and the state rows of the control contract, run against every route in the manifest. Fixture-complete: the demo adapter and a faulting wrapper stand in for the server; nothing here proves the live service (THO-283) behaves this way.
 
-**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 57 routes × 12 checks, 684 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
+**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 57 routes × 14 checks, 798 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
+
+**How a state is judged.** Every state check reads the *state region* only: alerts, status lines, the read-state notices (\`view-stale\`, \`view-partial\`) and empty, denied or error states (the \`data-empty-state\` marker). It never reads the whole page, so a word in a table header or running copy cannot satisfy a state the screen doesn't state. The phrases are the screens' own wording ("Sign in again", "No access to this account", "not connected yet"), and Empty is the marker, not a phrase. **The control runs first:** one test per route renders the demo with no fault and requires that its state region states none of the six faults; where it does, the route is listed in \`DEMO_ALREADY_STATES\` with the reason (the demo activation and connections lists are themselves partial), the control must really say it, and the injected fault must change what the region says. Before this change, the loose whole-page patterns already matched with no fault on 28 routes (partial), 21 (forbidden), 15 (pending), 8 (stale) and 8 (empty), so those checks could pass for the wrong reason. Pages are judged after their lazy route has loaded, not while it still says "Loading page…".
+
+**What the zero checks see.** The unknown and known-zero checks rewrite provenance-shaped values. A third check (\`all-zero-plain\`) sets every plain numeric field to 0 and requires no NaN, Infinity or undefined and no vanished zero. It cannot make a plain field *unknown*, because a plain number has no unknown representation, so the unknown check covers only fields the contract types as provenance values. A plain field that should be unknown is a contract gap, not something this matrix can detect.
 
 | Case | Fixture | What every route must do |
 | -- | -- | -- |
@@ -656,7 +660,9 @@ Owner THO-330 (flows and states). The fixture families FX-01 to FX-15 and the st
 | \`/overview\` | Unknown contribution or receipts printed a "0.0% margin", a "0%" donut and a 0% bar | The margin is N/A unless both figures are known and receipts are above zero |
 | \`/finance/payables/:id\` | An unreported amount was written into a sentence as "$0 content fee" | The sentence says the amount isn't reported |
 | \`/creators/watchlist\` | After a 403 the header still said "Loading the watchlist…" | It says the watchlist could not be read |
-| Social Cat and TikTok boards, recruitment | "Demo data" and "Illustrative" labels showed on the live adapter beside the error | Shown in the demo environment only; the footnotes show only once data is on the page |
+| Social Cat and TikTok boards, recruitment | "Demo data" and "Illustrative" labels showed on the live adapter beside the error | Shown in the demo environment only. The Illustrative footnotes on the two boards were gated on data but not on demo; they now need both (\`illustrativeFootnote.test.tsx\` drives a non-demo environment that returns data) |
+| Discovery, capabilities, operations, inventory, connections, schedule, setup flow, automations, fulfillment | A partial read (and on connections, schedule and setup flow a stale read) was not said in a state region, or only by a badge or a "Showing 14 of 14" line | \`ReadState\` added or widened to say it; fulfillment's note now says data is missing |
+| Attribution, paid media, funnel, finance, finance analytics, commissions, support, TikTok dashboard | With plain numbers at 0 the pages printed "NaN%", "$NaN" or "0 / 0 NaN%" for a share over a zero total | A share over a zero total is N/A (\`percent\` returns N/A; the other divisions are guarded) |
 
 ### Known gaps
 

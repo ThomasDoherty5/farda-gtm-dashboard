@@ -49,7 +49,7 @@ export function CapabilitiesPage() {
       <Notice title={demo ? "No integration is connected in this demo" : "No integration is verified"}>
         Documented support is not account readiness. A browser route is an execution option after capability and provider authorization are verified; it is never a permission bypass.
       </Notice>
-      <ReadState res={query.data} subject="Channel capabilities" only={["stale"]} />
+      <ReadState res={query.data} subject="Channel capabilities" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading capabilities…" />}
       {query.isError && <ViewError error={query.error} subject="Channel capabilities" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<CapabilityData>} data={data} tab={tab} demo={demo} planOpen={planOpen} closePlan={() => setPlanOpen(false)} /> : <EmptyState state="Empty" title="No capabilities listed"><p>The source responded, but no channel action is registered.</p></EmptyState>)}

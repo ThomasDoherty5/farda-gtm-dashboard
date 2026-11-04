@@ -61,7 +61,7 @@ export function ledgerTotals(l: CommissionLedger) {
   const byState = (s: CommissionState) => l.groups.filter((g) => g.state === s).reduce((n, g) => n + netAccrued(g), 0);
   const fee = Math.round((accrued * l.economics.processingFeePct) / 100);
   const contribution = netSales - l.economics.commerceCosts - l.economics.historicalFixedFee - l.economics.samples - accrued - fee;
-  return { grossSales, netSales, refunds: grossSales - netSales, earned, reversed, accrued, held: byState("held"), disputed: byState("disputed"), awaiting: byState("awaitingProvider"), paid: byState("paid"), fee, contribution, contributionPct: (100 * contribution) / netSales };
+  return { grossSales, netSales, refunds: grossSales - netSales, earned, reversed, accrued, held: byState("held"), disputed: byState("disputed"), awaiting: byState("awaitingProvider"), paid: byState("paid"), fee, contribution, contributionPct: netSales > 0 ? (100 * contribution) / netSales : null };
 }
 
 export type MatchCandidate = { statementRef: string; groupId: string; amount: Money; period: string; evidence: string; problem: "duplicate" | "conflict" | null };

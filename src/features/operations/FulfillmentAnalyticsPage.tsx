@@ -50,7 +50,7 @@ function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean 
   return (
     <>
       <p className={styles.meta}>{`Demo data  ·  ${data.source}  ·  Synced ${minutesAgoLabel(data.syncedMinutesAgo)}  ·  ${data.homes} shipping homes`}</p>
-      {partial && <p className={styles.meta} role="status">Showing {data.periodDays} of 14 days the demo holds. The delivery mix and the prior period aren't available for this period.</p>}
+      {partial && <p className={styles.meta} role="status">Some data is missing: this shows {data.periodDays} of the 14 days the demo holds, and the delivery mix and the prior period weren't read for this period.</p>}
       <div className={styles.analytics}>
         <div className={styles.kpiStack}>
           <Kpi label="Orders shipped" context={change ?? reasonText(prior) ?? ""} testId="metric-Orders shipped">{shipped}</Kpi>

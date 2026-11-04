@@ -68,7 +68,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
       )}
       <KpiGrid>
         <KpiCard label="Net receipts" context={`${orders === null ? "Orders unknown" : `${count(orders)} orders`} · AOV ${net && orders ? usdExact({ minorUnits: Math.round(net.minorUnits / orders), currency: "USD" }) : "N/A"}`} testId="metric-net-receipts"><MetricText value={data.netReceipts} format={usd} /></KpiCard>
-        <KpiCard label="Contribution before marketing" context={contribution && net ? `${((100 * contribution.minorUnits) / net.minorUnits).toFixed(2)}% · proposed definition` : "Proposed definition · cost incomplete"} testId="metric-contribution"><MetricText value={data.contribution} format={usd} /></KpiCard>
+        <KpiCard label="Contribution before marketing" context={contribution && net && net.minorUnits > 0 ? `${((100 * contribution.minorUnits) / net.minorUnits).toFixed(2)}% · proposed definition` : "Proposed definition · cost incomplete"} testId="metric-contribution"><MetricText value={data.contribution} format={usd} /></KpiCard>
         <KpiCard label="Blended CAC" context={`${usd(spend)} ÷ ${count(data.newRetainedCustomers)} new retained customers`} testId="metric-cac">{cacMinor === null ? "N/A" : usdExact({ minorUnits: cacMinor, currency: "USD" })}</KpiCard>
         <KpiCard label="MER" context="Net receipts ÷ marketing cost" testId="metric-mer">{net && spend.minorUnits > 0 ? multiple(net.minorUnits / spend.minorUnits) : "N/A"}</KpiCard>
       </KpiGrid>
