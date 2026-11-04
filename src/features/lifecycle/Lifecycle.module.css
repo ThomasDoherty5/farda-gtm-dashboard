@@ -1,0 +1,70 @@
+/* Customer lifecycle screens: Figma 5:289, 5:404, 11:372, 11:498, 11:624, 11:750 and 11:852. Shared page parts live in PageKit.module.css. */
+.pill { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+
+/* "Lifecycle/Step" (5:3): a violet number, the step, and its kind. */
+.steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.step { display: grid; grid-template-columns: 30px minmax(0, 580px) minmax(0, 100px); justify-content: start; gap: 16px; align-items: start; padding: 16px 0; }
+.stepNumber { font: var(--text-label); color: var(--color-violet); }
+.stepBody { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.stepBody p, .stepKind { margin: 0; }
+.stepTitle { font: var(--text-label); color: var(--color-ink); }
+.stepKind { font: var(--text-small); color: var(--color-muted); }
+.hold { color: var(--color-warning); }
+
+.bullets { margin: 0; padding: 0; list-style: none; font: var(--text-body); color: var(--color-ink); }
+.bullets li::before { content: "• "; }
+.bodyInk { margin: 0; font: var(--text-body); color: var(--color-ink); }
+.details392 > div { grid-template-columns: minmax(0, 165px) minmax(0, 1fr); }
+
+/* Input, with the read-only look Figma gives an event owned by the provider. */
+.policy { display: flex; align-items: center; gap: var(--space-12); }
+.policy input { appearance: none; flex: none; width: 20px; height: 20px; margin: 0; display: grid; place-content: center; background: var(--color-violet); border: 1px solid var(--color-violet); border-radius: var(--space-4); cursor: default; }
+.policy input::after { content: "✓"; font: var(--text-small); color: var(--color-onDark); }
+.policy label { font: var(--text-body); color: var(--color-ink); }
+.policies { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; padding: 0; border: 0; min-width: 0; }
+.policies legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.inlineLink { min-height: 24px; padding: 0 var(--space-4); background: none; border: 0; font: var(--text-small); color: var(--color-violet); text-decoration: underline; cursor: pointer; }
+
+.tests { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-16); margin: 0; padding: 0; list-style: none; }
+.test { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-20); background: var(--color-subtle); border-radius: var(--space-16); }
+.test p { margin: 0; font: var(--text-label); color: var(--color-ink); }
+.test .result { align-self: stretch; text-align: center; font: var(--text-small); color: var(--color-muted); }
+
+/* Consent distribution (11:799): one bar, one mutually exclusive category per record. */
+.bar { display: flex; height: 72px; overflow: hidden; }
+.bar > span { display: block; height: 72px; }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-24); margin: 0; padding: 0; list-style: none; }
+.legend li { flex: 1 1 200px; max-width: 288px; }
+.legend li > span { width: 100%; }
+
+/* Funnel and retention (11:887, 11:915). */
+.funnel { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }
+.funnel p { margin: 0; font: var(--text-label); color: var(--color-ink); white-space: pre-wrap; }
+.track { height: 8px; background: var(--color-violetSoft); border-radius: var(--space-999); overflow: hidden; }
+.fill { height: 8px; background: var(--color-violet); border-radius: var(--space-999); }
+.summary { background: var(--color-violetSoft); gap: var(--space-20); }
+.summaryLabel { margin: 0; font: var(--text-label); color: var(--color-muted); }
+.summaryValue { margin: 0; font: var(--text-display); color: var(--color-ink); }
+.horizons { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-24); margin: 0; padding: 0; list-style: none; }
+.horizon { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-20); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.horizon.defined { background: var(--color-violetSoft); }
+.horizon h3, .horizon p { margin: 0; }
+.horizon h3 { font: var(--text-h2); }
+.horizon p { font: var(--text-body); color: var(--color-ink); }
+
+.split832 { display: grid; grid-template-columns: minmax(0, 832fr) minmax(0, 440fr); gap: var(--space-24); align-items: start; }
+.split832 > .stepsCard { gap: 0; }
+.stepsCard h2 { margin: 0; }
+.synthetic { padding: var(--space-16); background: var(--color-subtle); border-radius: var(--space-16); }
+.synthetic p { margin: 0 0 var(--space-8); color: var(--color-ink); }
+
+@media (max-width: 1179px) {
+  .split832 { grid-template-columns: minmax(0, 1fr); }
+  .tests, .horizons { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 479px) {
+  .tests, .horizons { grid-template-columns: minmax(0, 1fr); }
+  .step { grid-template-columns: 30px minmax(0, 1fr); }
+  .stepKind { grid-column: 2; }
+  .details392 > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}

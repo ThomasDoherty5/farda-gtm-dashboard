@@ -12,6 +12,11 @@ import { TikTokPage } from "@/features/creators/TikTokPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
+import { ActivationPage } from "@/features/lifecycle/ActivationPage";
+import { ConsentPage } from "@/features/lifecycle/ConsentPage";
+import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
+import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
+import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
 import { CloseReconciliationPage } from "@/features/finance/CloseReconciliationPage";
 import { FinanceAnalyticsPage } from "@/features/finance/FinanceAnalyticsPage";
@@ -74,6 +79,13 @@ const implemented: Record<string, JSX.Element> = {
   "/automations": <AutomationsPage />,
   "/automations/:jobId/schedule": <SchedulePage />,
   "/settings/capabilities": <CapabilitiesPage />,
+  "/customers/lifecycle": <LifecyclePage />,
+  "/customers/flows/setup": <SetupFlowPage />,
+  "/customers/flows/early-access": <EmailFlowPage flow="early-access" />,
+  "/customers/flows/abandoned-checkout": <EmailFlowPage flow="abandoned-checkout" />,
+  "/customers/flows/review-request": <EmailFlowPage flow="review-request" />,
+  "/customers/consent": <ConsentPage />,
+  "/customers/activation": <ActivationPage />,
   "/operations": <OperationsPage />,
   "/orders/:orderId": <OrderPage />,
   "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,

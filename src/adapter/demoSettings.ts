@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { respondWith } from "./demoViews";
+import { createOnce } from "./demoOnce";
 import { AdapterError } from "./errors";
 import { validateSchedule } from "@/features/settings/schedule";
 import { automationDemo, capabilityDemo, connectionsDemo, DEMO_JOB_ID, scheduleDemo, teamDemo, type CapabilityData, type ScheduleData, type ScheduleDraft } from "@/fixtures/settings";
@@ -26,17 +27,7 @@ export function createDemoSettings() {
   let draftVersion = scheduleDemo.draftVersion;
   const permissions = new Map<string, PermissionRecord>();
   let tasks = 0;
-  const seen = new Map<string, { hash: string; result: unknown }>();
-
-  /** Same key and payload returns the first result; the same key with a changed payload is refused. */
-  const once = <T>(key: string, hash: string, requestId: string, run: () => T): T => {
-    const prior = seen.get(key);
-    if (prior && prior.hash !== hash) return fail("MANIFEST_CHANGED", "This request changed, so it needs a fresh review.", requestId);
-    if (prior) return prior.result as T;
-    const result = run();
-    seen.set(key, { hash, result });
-    return result;
-  };
+  const once = createOnce();
 
   return {
     read(request: ReadRequest<unknown>): ReadResponse<unknown> | null {
@@ -100,7 +91,7 @@ export function createDemoSettings() {
     },
 
     handlesSave(request: SaveResourceRequest<unknown>) {
-      return request.resourceKind === "configurationDraft" || (request.resourceKind === "evidenceDraft" && Boolean(request.resourceRef?.startsWith("permission-")));
+      return (request.resourceKind === "configurationDraft" && Boolean(request.resourceRef?.startsWith("schedule-"))) || (request.resourceKind === "evidenceDraft" && Boolean(request.resourceRef?.startsWith("permission-")));
     },
 
     save(request: SaveResourceRequest<unknown>): Promise<SaveResourceResponse<unknown>> {

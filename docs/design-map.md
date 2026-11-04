@@ -136,6 +136,53 @@ The schedule's lower half is checked by eye, with an offset, because the added f
 | Zaps and Reporting tabs | Reporting is the schedule screen | `/automations?tab=zaps` and `?tab=reporting` are small tables; the schedule is at `/automations/:jobId/schedule` | CTRL-015, CTRL-016 |
 | Access evidence, Attribution tests, Exceptions tabs | Selected state only | Small tables reading unknown, not run, and nothing recorded | CTRL-131 to CTRL-133 |
 
+## Customer lifecycle comparison (sources 5:289, 5:404, 11:372, 11:498, 11:624, 11:750, 11:852)
+
+Owner THO-304. Same capture settings and method as the settings comparison above (copy `z9knjMdQ3kxL6Fblvu1tKc`, threshold 0.1, DPR 1, production build, 2026-11-03).
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 11:750 | `/customers/consent` | 1318 tall, not 1276 (demo footnote) | 0.098%, over the top 1230px |
+| 5:289 | `/customers/lifecycle` | 1411 tall, not 1369 (demo footnote) | 0.235%, over the top 1320px |
+| 11:372 | `/customers/flows/early-access` | 1378 tall, not 1302 (see below) | 0.47%, over the top 840px |
+| 11:498 | `/customers/flows/abandoned-checkout` | 1378 tall, not 1302 | 0.469%, over the top 840px |
+| 11:624 | `/customers/flows/review-request` | 1378 tall, not 1302 | 0.467%, over the top 840px |
+| 11:852 | `/customers/activation` | 1148 tall, not 1106 (demo footnote) | 0.611%, over the top 1070px. **Not met** |
+| 5:404 | `/customers/flows/setup` | 1365 tall, not 1323 (demo footnote) | 0.68%, over the top 1290px. **Not met** |
+
+Activation and Setup sit just over the proposed 0.5% mark, from sub-pixel text positions; the diffs show only text and edge antialiasing. The three flow pages are checked over their top 840px only, because the added policy note moves the lower half. These are measurements against a proposal, not a pass.
+
+## Customer lifecycle mapping
+
+| Figma | Code | Notes |
+| -- | -- | -- |
+| Context (5:322), Flow context (11:398) | `ContextLine` in `PageKit` | A badge and one line |
+| Secondary navigation (5:315) | `PillNav` | Pills as links; the current one has `aria-current` |
+| Lifecycle/Step (5:3) | `FlowSteps` in `features/lifecycle/shared.tsx` | An ordered list; a hold is a word as well as a color |
+| Input (6:404) and Checkbox (6:443) in Flow settings | `Field`, `SelectField`, `TextField`, and `LockedPolicies` | The checkbox set is read-only and checked, with no way to change it |
+| Consent distribution (11:799) | `.bar` with a text alternative | Segment widths are the counts over the total |
+| Progress (5:387, 11:889) | `role="progressbar"` | Each is named, with a value |
+| Table with 16px rows (5:353) | `DataTable variant="ledger"` | |
+
+## Customer lifecycle differences from Figma
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Demo labeling | None | A footnote on every page: the figures are illustrative aggregates | Demo data is always labeled |
+| Open email tool, Open provider, View source contract, Demo cohort | Buttons with no target | Dialogs saying there is no provider, verified link or other cohort | The demo has no verified URL, and no provider is selected |
+| Metric definitions | Button | A dialog of definitions written from the screen's own labels | The definitions are mine, to confirm |
+| Flow names on the lifecycle | Plain text | Links to each flow, drawn the same | FE12-05: flows must be reachable from the entry route |
+| Entry event | Input that looks editable | Read-only (`aria-readonly`) | Owned by the selected provider; CTRL-179 needs a provider schema that doesn't exist yet |
+| Timing | Input | A select of the timings approved for that flow | A draft outside the list is refused, so source text never sets a delay (CTRL-180) |
+| Message template | Input | An editable template name, plus a Preview template link in the context line with synthetic content | CTRL-181. A preview can't send |
+| Mandatory policies | Checked checkboxes | The same, read-only, with a visible reason beneath (about 36px) | CTRL-182 and its eight siblings; the explanation must be visible |
+| Sandbox tests | Four outcome badges | The same, with a sentence saying they are expected outcomes and no test has run | Nothing here has been tested |
+| Save draft | A button | Saves a new version through the adapter; says it doesn't enable, publish or send | FHC-04 |
+| Review exclusions | Button | Moves focus to the exclusions table | CTRL has no target, so the section is the target |
+| Support queue | Button | Links to `/support/cases/demo-case-1`, a placeholder owned by THO-302 | No queue route exists in the manifest |
+| Overview in the primary nav | Highlighted on every lifecycle screen | The same: the `customers` section now belongs to Overview, not Operations | Matches Figma |
+| Three flow pages' height | 1302 | 1378 | The policy note, plus the demo footnote |
+
 ## Launch and analytics comparison (sources 3:6, 14:74, 14:377, 30:349, 30:550, 30:721)
 
 Same capture settings as Overview, from Thomas's copy of the file (see `figma-access-gap.md`), measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly.
