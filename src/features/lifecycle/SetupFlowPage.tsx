@@ -6,6 +6,7 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { ContextLine, Divider, DetailRows, Page, PageHeader, Small, kit } from "@/components/PageKit";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { InfoDialog } from "@/features/settings/shared";
 import type { EmailFlowData } from "@/fixtures/lifecycle";
@@ -29,6 +30,8 @@ export function SetupFlowPage() {
         <LinkButton variant="secondary" to="/customers/lifecycle" style={{ minWidth: 184 }}>Back to lifecycle</LinkButton>
         <Button aria-haspopup="dialog" style={{ minWidth: 160 }} onClick={() => setProviderOpen(true)}>Open provider</Button>
       </PageHeader>
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="The setup flow" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading the setup flow…" />}
       {query.isError && <ViewError error={query.error} subject="The setup flow" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<EmailFlowData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="No setup flow yet"><p>The source responded, but this flow is not configured.</p></EmptyState>)}

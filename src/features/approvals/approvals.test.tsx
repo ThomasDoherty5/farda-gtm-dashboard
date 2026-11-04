@@ -51,7 +51,7 @@ describe("approval detail", () => {
     await adapter.submitAction({ schemaVersion: "x", operation: "decideApproval", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" }, actionKind: "decideApproval", entityRefs: [], expectedVersion: "v1", approvalRef: "demo-approval-exact", manifestRef: null, idempotencyKey: "from-slack", payload: { decision: "approved" }, requestId: "r" });
     await user.click(button("Approve this version"));
     expect(await screen.findByTestId("action-error")).toHaveTextContent("already decided");
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
   });
 
   it("marks the selected queue item, and links to the others", async () => {
@@ -69,7 +69,7 @@ describe("approval detail", () => {
   it("goes approved, then sent only with a receipt", async () => {
     const { user } = await open("/approvals/demo-approval-exact");
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     expect(status()).not.toHaveTextContent(/Sent,/);
     expect(screen.queryByTestId("source-receipt")).not.toBeInTheDocument();
 
@@ -77,6 +77,24 @@ describe("approval detail", () => {
     expect(await screen.findByTestId("source-receipt")).toHaveTextContent("synthetic demo receipt");
     expect(status()).toHaveTextContent("Sent, source receipt on file");
     expect(screen.queryByRole("button", { name: "Send approved action" })).not.toBeInTheDocument();
+  });
+
+  it("FE04-02: the page shows the same approval, run and receipt refs end to end", async () => {
+    const { user } = await open("/approvals/demo-approval-exact");
+    await user.click(button("Approve this version"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
+    await user.click(button("Send approved action"));
+    expect(await screen.findByTestId("source-receipt")).toHaveTextContent("demo-source-receipt-demo-approval-exact");
+    expect(screen.getByRole("link", { name: "Open run" })).toHaveAttribute("href", "/runs/demo-run-exact?tab=approval");
+  });
+
+  it("FE04-04: a founder can decide the founder-only commitment, and approving it still sends and pays nothing", async () => {
+    const { user } = await open("/approvals/demo-approval-founder", createDemoAdapter({ actorRole: "founder" }));
+    await user.click(button("Approve this version"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
+    expect(status()).not.toHaveTextContent(/Paid|Sent,/);
+    expect(screen.queryByTestId("source-receipt")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();
   });
 
   it("explains a policy block, stays pending, and sends nothing", async () => {
@@ -133,7 +151,7 @@ describe("approval detail", () => {
     expect(screen.getByTestId("approval-version")).toHaveTextContent("Version 2");
     expect(status()).toHaveTextContent("Pending");
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
   });
 
   it("explains an expired approval and blocks decisions, while keeping the button focusable", async () => {
@@ -158,7 +176,7 @@ describe("approval detail", () => {
     const spy = vi.spyOn(adapter, "submitAction");
     const { user } = await open("/approvals/demo-approval-exact", adapter);
     await user.dblClick(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     expect(spy).toHaveBeenCalledTimes(1);
   });
 

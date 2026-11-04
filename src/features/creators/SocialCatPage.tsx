@@ -1,5 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -32,6 +33,7 @@ const OWNER_OPTIONS = [{ value: "all", label: "All owners" }, ...OWNERS.map((o) 
 const LAYOUT_OPTIONS = [{ value: "board", label: "Board view" }, { value: "list", label: "List view" }];
 
 function Board() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const owner = OWNER_OPTIONS.some((o) => o.value === search.get("owner")) ? (search.get("owner") as string) : "all";
   const layout = search.get("layout") === "list" ? "list" : "board";
@@ -50,13 +52,13 @@ function Board() {
       </PageTitle>
       <BoardPlatforms current="Social Cat">
         <Badge tone="warning" width={246}>Browser access: to validate</Badge>
-        <span className={acquisition.small}>Demo data</span>
+        {demo && <span className={acquisition.small}>Demo data</span>}
       </BoardPlatforms>
       <BoardContext />
       <Pending query={query} subject="the Social Cat lifecycle">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? <BoardBody res={query.data as ReadResponse<SocialCatBoardData>} data={query.data.data} owner={owner} layout={layout} onOwner={(v) => setParam("owner", v, "all")} onLayout={(v) => setParam("layout", v, "board")} /> : <EmptyState state="Empty" title="No collaborations match"><p>The source responded, but no collaboration matches this owner.</p></EmptyState>)}
       </Pending>
-      <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>
+      {demo && query.data && <p className={styles.footnote}>Illustrative creator handles and counts · stage changes remain tied to source records and verified actions.</p>}
     </section>
   );
 }
@@ -194,7 +196,7 @@ function DashboardBody({ res, data, network, onNetwork }: { res: ReadResponse<So
       <div className={styles.row}>
         <div className={`${styles.row} ${styles.network}`} role="group" aria-label="Publishing network">
           {NETWORK_BUTTONS.map((b) => (
-            <Button key={b.value} variant="secondary" aria-pressed={network === b.value} style={{ minWidth: b.width }} onClick={() => onNetwork(b.value)}>{b.label}</Button>
+            <Button key={b.value} variant="secondary" aria-pressed={network === b.value} style={{ width: b.width, minWidth: 0, paddingInline: 8 }} onClick={() => onNetwork(b.value)}>{b.label}</Button>
           ))}
         </div>
         <Badge width={168}>Website destination</Badge>
@@ -272,10 +274,13 @@ function DashboardBody({ res, data, network, onNetwork }: { res: ReadResponse<So
           { label: "Hybrid · history", to: "#", width: 165, disabled: true, reasonId: "history-reason" },
         ]} />
         <p className={acquisition.small}>
-          Social Cat source · Instagram + TikTok publishing · Shopify website checkout · illustrative Collabs provider. Hybrid is separately negotiated, with fee and commission tracked independently.{" "}
+          <span data-testid="channel-route">
+            <span data-field="acquisition-source">Source: Social Cat</span> · <span data-field="publishing-network">Publishing: Instagram + TikTok</span> · <span data-field="checkout">Checkout: Shopify website</span> · <span data-field="payout-owner">Payout: Collabs provider (illustrative)</span>.
+          </span>{" "}
+          <span data-testid="route-note">A TikTok post is not a TikTok Shop order.</span> Hybrid is negotiated separately.{" "}
           <span id="history-reason">History tabs are read-only: accepted obligations stay readable, and no new gifted-only, paid or hybrid acquisition can start here.</span>
         </p>
-        <div className={styles.contextActions}>
+        <div className={styles.contextActions} style={{ gap: 16 }}>
           <LinkButton to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 204 }}>Configure offer</LinkButton>
           <LinkButton variant="secondary" to="/analytics/customer-journey" style={{ minWidth: 218 }}>Website commerce</LinkButton>
           <LinkButton variant="secondary" to="/finance/commissions" style={{ minWidth: 218 }}>Commission ledger</LinkButton>

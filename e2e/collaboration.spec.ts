@@ -107,3 +107,43 @@ for (const url of [OVERVIEW, CONTENT]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   });
 }
+
+const VOLUNTARY = "/collaborations/demo-collaboration-2?tab=overview";
+
+test("a voluntary collaboration shows an observation window, not a posting due date, and offers no reminder", async ({ page }) => {
+  await page.goto(VOLUNTARY);
+  await expect(page.getByTestId("timeline")).toBeVisible();
+  await expect(page.getByTestId("posting-terms")).toHaveAttribute("data-obligation", "voluntary");
+  await expect(page.getByTestId("posting-obligation")).toHaveText("None under the accepted terms");
+  await expect(page.getByTestId("observation-window")).toHaveText("Until 13 Nov 2026");
+  await expect(page.getByTestId("sample-cost")).toContainText("$18.40");
+  await expect(page.getByText("Posting due", { exact: true })).toHaveCount(0);
+  await expect(page.getByTestId("review-after")).toHaveCount(0);
+  await page.getByRole("button", { name: "Queue next action" }).click();
+  const options = page.getByLabel("Next action").locator("option");
+  await expect(options).toHaveText(["Record a note in the source"]);
+});
+
+test("the committed collaboration still shows its posting due date and where today falls", async ({ page }) => {
+  await page.goto(OVERVIEW);
+  await expect(page.getByTestId("posting-terms")).toHaveAttribute("data-obligation", "committed");
+  await expect(page.getByTestId("review-after")).toHaveText("07 Nov 2026");
+  await expect(page.getByTestId("posting-status")).toHaveText("· Due today");
+});
+
+test("a voluntary collaboration has no content review, and its content tab says why", async ({ page }) => {
+  await page.goto("/collaborations/demo-collaboration-2?tab=content");
+  await expect(page.getByTestId("no-submission")).toContainText("No content submitted");
+  await expect(page.getByTestId("checklist")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve content" })).toHaveCount(0);
+});
+
+for (const [name, url] of [["voluntary overview", VOLUNTARY], ["voluntary content", "/collaborations/demo-collaboration-2?tab=content"]] as const) {
+  test(`no accessibility violations on the ${name}`, async ({ page }) => {
+    await page.goto(url);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // Cast: @axe-core/playwright resolves its own playwright-core, so the Page types differ by version.
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
+}

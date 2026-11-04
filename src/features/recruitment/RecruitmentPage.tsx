@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -38,6 +39,7 @@ const draftChecks = (d: Draft) => ({
 
 /** Social Cat recruitment (Figma source 38:131, owner THO-298). A draft only: nothing here sends, approves or accepts. */
 export function RecruitmentPage() {
+  const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const networks = allowed(NETWORKS, search.get("networks"), RECRUITMENT_DEFAULT.networks);
   const route = allowed(ROUTES, search.get("route"), RECRUITMENT_DEFAULT.route);
@@ -85,7 +87,7 @@ export function RecruitmentPage() {
         <FilterButton name="Route" title="Choose the recruitment route" options={ROUTES} value={route} onChange={(v) => setParam("route", v, "queue")} width={206} bare />
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 176 }}>Find Creators</LinkButton>
         <Badge tone="warning" width={252}>Browser access: to validate</Badge>
-        <span className={acquisition.small}>Illustrative queue</span>
+        {demo && <span className={acquisition.small}>Illustrative queue</span>}
       </div>
       <Pending query={query} subject="the recruitment queue">
         {query.data && (query.data.data && query.data.dataState !== "empty" ? (
@@ -158,7 +160,7 @@ export function RecruitmentPage() {
           <li><Badge tone="warning" width={140}>Permission missing</Badge><p className={creators.settleName}>Social Cat automated execution</p><p className={acquisition.small}>Record express provider authorization before automated reads or writes</p></li>
           <li><Badge width={140}>Terminal outcome</Badge><p className={creators.settleName}>No qualifying content</p><p className={acquisition.small}>Review agreed obligations, record the outcome and retain sample cost; no automatic clawback.</p></li>
         </ul>
-        <div className={creators.contextActions}>
+        <div className={creators.contextActions} style={{ gap: 16 }}>
           <LinkButton to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 204 }}>Configure offer</LinkButton>
           <LinkButton variant="secondary" to={assessmentPath()} style={{ minWidth: 218 }}>Prior commerce score</LinkButton>
           <LinkButton variant="secondary" to="/finance/commissions" style={{ minWidth: 218 }}>Commission ledger</LinkButton>

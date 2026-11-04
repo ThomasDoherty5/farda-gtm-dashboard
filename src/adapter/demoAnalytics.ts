@@ -8,6 +8,7 @@ import {
   launchControlDemo,
   launchSnapshotDemo,
   paidMediaDemo,
+  sourceFreshnessDemo,
   unknown,
   type AttributionData,
   type CampaignFunnelData,
@@ -15,11 +16,15 @@ import {
   type LaunchControlData,
   type LaunchSnapshotData,
   type PaidMediaData,
+  type ReconciliationData,
   type RightsState,
 } from "@/fixtures/analytics";
-import type { OverviewFixtureKey } from "@/fixtures/overview";
+import { DEMO_NOW, overviewOriginal, type OverviewFixtureKey } from "@/fixtures/overview";
+import { metricDictionaryDemo, type MetricDictionaryData } from "@/fixtures/headlineMetrics";
+import { monitorPosts } from "@/fixtures/monitor";
+import { buildMatrix } from "@/features/analytics/reconciliation";
 
-export const analyticsViewKeys = ["launchSnapshot", "launchControl", "attribution", "paidMedia", "campaignFunnel", "customerJourney"] as const;
+export const analyticsViewKeys = ["launchReconciliation", "launchSnapshot", "launchControl", "attribution", "paidMedia", "campaignFunnel", "customerJourney", "metricDictionary"] as const;
 export type AnalyticsViewKey = (typeof analyticsViewKeys)[number];
 export const isAnalyticsView = (key: string): key is AnalyticsViewKey => (analyticsViewKeys as readonly string[]).includes(key);
 
@@ -52,7 +57,7 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
         return {
           ...base,
           dataState: "stale",
-          sourceFreshness: [{ sourceRef: { source: "demo", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: `demo:${key}` }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED" }],
+          sourceFreshness: [{ sourceRef: { source: "demo", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: `demo:${key}` }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED", freshnessState: "error" }],
         };
       default:
         return base;
@@ -60,6 +65,17 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
   };
 
   switch (key) {
+    case "launchReconciliation":
+      return make<ReconciliationData>(
+        {
+          datasetKey: "reconciliation-demo",
+          asOf: DEMO_NOW,
+          freshness: sourceFreshnessDemo,
+          matrix: buildMatrix({ overview: overviewOriginal, attribution: attributionDemo, paidMedia: paidMediaDemo, journey: customerJourneyDemo, posts: monitorPosts }),
+          provenance: { source: "Datasets behind each page", observedAt: DEMO_NOW, timezone: "America/Los_Angeles", coverage: "Six demo sources, eight metrics", stale: false },
+        },
+        "reconciliation-demo@1",
+      ) as ReadResponse<T>;
     case "launchSnapshot":
       return make<LaunchSnapshotData>(launchSnapshotDemo, "launch-snapshot-demo@1", (d) => ({ ...d, conversations: unknown("SOURCE_ROWS_MISSING") })) as ReadResponse<T>;
     case "launchControl":
@@ -79,6 +95,8 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
       }
       return make<CampaignFunnelData>(campaignFunnelDemo, "campaign-funnel-demo@1") as ReadResponse<T>;
     }
+    case "metricDictionary":
+      return make<MetricDictionaryData>(metricDictionaryDemo, `${metricDictionaryDemo.version}`) as ReadResponse<T>;
     case "customerJourney":
       return make<CustomerJourneyData>(customerJourneyDemo, "customer-journey-demo@1", (d) => ({ ...d, sessions: unknown("SESSIONS_SOURCE_UNSELECTED"), deliveredUnits: unknown("NO_DELIVERED_COHORT"), reviews: { ...d.reviews, ratedCount: unknown("RATINGS_FEED_UNAVAILABLE") } })) as ReadResponse<T>;
   }

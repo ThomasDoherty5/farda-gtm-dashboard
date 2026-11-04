@@ -68,7 +68,7 @@ test("the funnel scrolls inside a focusable region on a phone", async ({ page })
   expect(await region.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
 });
 
-for (const url of ["/creators/pipeline", "/creators/pipeline?source=tiktok-shop&network=instagram"]) {
+for (const url of ["/creators/pipeline", "/creators/pipeline?source=tiktok-shop&network=instagram", "/creators/pipeline?route=inbound&policy=policy-2026-10"]) {
   test(`no accessibility violations on ${url}`, async ({ page }) => {
     await page.goto(url);
     await expect(page.getByTestId("metric-Confirmed invitations")).toBeVisible();
@@ -91,4 +91,21 @@ test("no horizontal overflow at 320px", async ({ page }) => {
   await page.goto("/creators/pipeline");
   await expect(page.getByTestId("metric-Confirmed invitations")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+});
+
+test("terminal paths and branches: deep link, axe, and no 320px overflow", async ({ page }) => {
+  await page.goto("/creators/pipeline?view=branches");
+  await expect(page.getByRole("heading", { name: "Closed paths and optional branches." })).toBeVisible();
+  const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  await page.setViewportSize({ width: 320, height: 800 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test("the pipeline links to its paths and back", async ({ page }) => {
+  await page.goto("/creators/pipeline");
+  await page.getByRole("link", { name: "Paths and branches" }).click();
+  await expect(page).toHaveURL(/view=branches/);
+  await page.getByRole("link", { name: "Back to pipeline" }).click();
+  await expect(page.getByTestId("metric-Confirmed invitations")).toBeVisible();
 });

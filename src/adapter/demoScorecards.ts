@@ -2,6 +2,7 @@ import { SCHEMA_VERSION, type ReadRequest, type ReadResponse, type SaveResourceR
 import { respondWith } from "./demoViews";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import {
+  ASSESSED_BASIS,
   DEMO_ASSESSMENT_CONTENT_ID,
   DEMO_ASSESSMENT_SC_ID,
   DEMO_ASSESSMENT_TIKTOK_ID,
@@ -15,6 +16,7 @@ import {
   type ScorecardRecord,
 } from "@/fixtures/scorecards";
 import { DEMO_NOW, type OverviewFixtureKey } from "@/fixtures/overview";
+import { DEFAULT_REWARD_SCENARIO, rewardsRecord, type RewardsRecord } from "@/fixtures/rewards";
 
 export type AssessmentData = ScorecardRecord | CommerceScorecardRecord;
 const ASSESSMENTS: Record<string, AssessmentData> = {
@@ -22,6 +24,16 @@ const ASSESSMENTS: Record<string, AssessmentData> = {
   [DEMO_ASSESSMENT_TIKTOK_ID]: tiktokScorecard,
   [DEMO_ASSESSMENT_SC_ID]: commerceScorecard,
 };
+
+/** `<assessment id>--media|terms|policy` is the same snapshot after that part of its basis changed (FE05-03). */
+const CHANGED = { media: "media-2026-11-02", terms: "AFF-C01@v2", policy: "policy-2026-11" } as const;
+function withBasis(id: string): AssessmentData | null {
+  const [baseId, change] = id.split("--") as [string, keyof typeof CHANGED | undefined];
+  const record = ASSESSMENTS[baseId];
+  if (!record || (change !== undefined && !(change in CHANGED))) return null;
+  const assessedBasis = ASSESSED_BASIS;
+  return { ...record, assessedBasis, currentBasis: change ? { ...ASSESSED_BASIS, [change]: CHANGED[change] } : ASSESSED_BASIS } as AssessmentData;
+}
 
 const fail = (code: string, message: string, requestId: string, extra: Partial<AdapterErrorBody> = {}): never => {
   throw new AdapterError({ code, message, requestId, correlationId: `demo-${requestId}`, retryable: code === "SOURCE_UNAVAILABLE", retryAfterMs: null, ...extra });
@@ -41,13 +53,25 @@ function dropRating(record: AssessmentData): AssessmentData {
 
 export function readAssessment<T>(request: ReadRequest<{ creatorId: string; assessmentId: string }>, fixture: OverviewFixtureKey): ReadResponse<T> {
   gate(fixture, request.requestId);
-  const record = ASSESSMENTS[request.filters.assessmentId] ?? fail("RECORD_NOT_FOUND", "This assessment does not exist or was removed.", request.requestId);
+  const record = withBasis(request.filters.assessmentId) ?? fail("RECORD_NOT_FOUND", "This assessment does not exist or was removed.", request.requestId);
   if (fixture === "FX-03-empty-filter") return { ...respondWith(request, null as unknown, { dataVersion: "assessment-demo@1", dataState: "empty" }) } as ReadResponse<T>;
   const data = fixture === "FX-04-missing-metric" ? dropRating(record) : record;
   return respondWith(request, structuredClone(data), {
     dataVersion: `${record.assessmentId}@v2`,
     dataState: fixture === "FX-06-stale-source" ? "stale" : "ready",
     capabilities: [{ actionKind: "holdCandidate", state: "held", reasonCodes: ["HISTORICAL_SNAPSHOT"] }],
+  }) as ReadResponse<T>;
+}
+
+/** Creator Offer Economics v1 reward ladder. Read-only: the fixture holds scenarios, and the demo has no purchase or payout path. */
+export function readRewards<T>(request: ReadRequest<{ offerId: string; scenario?: string }>, fixture: OverviewFixtureKey): ReadResponse<T> {
+  gate(fixture, request.requestId);
+  if (request.filters.offerId !== offerDraftSeed.offerId) fail("RECORD_NOT_FOUND", "This offer does not exist or was removed.", request.requestId);
+  const record: RewardsRecord = rewardsRecord(request.filters.scenario ?? DEFAULT_REWARD_SCENARIO) ?? fail("RECORD_NOT_FOUND", "This reward scenario does not exist.", request.requestId);
+  return respondWith(request, record, {
+    dataVersion: record.version,
+    dataState: fixture === "FX-06-stale-source" ? "stale" : "ready",
+    capabilities: [{ actionKind: "purchaseReward", state: "unverified", reasonCodes: ["OWNER_APPROVAL_PENDING", "PROVIDER_ACCESS_UNVERIFIED"] }],
   }) as ReadResponse<T>;
 }
 
@@ -80,6 +104,7 @@ export function createDemoOffers() {
       persistedByRef: "demo-offer-owner",
       record: structuredClone(next),
       reasonCodes: same ? ["NO_CHANGE"] : [],
+      executionCertainty: "applied",
     };
   };
 

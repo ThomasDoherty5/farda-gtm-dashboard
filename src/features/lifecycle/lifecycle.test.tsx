@@ -117,7 +117,7 @@ describe.each([
     const { user } = await go();
     const policies = screen.getByRole("group", { name: "Mandatory send policies, locked" });
     const boxes = within(policies).getAllByRole("checkbox");
-    expect(boxes.map((b) => b.nextElementSibling?.textContent)).toEqual(["Recheck consent before send", "Stop on opt-out or suppression", "Prevent duplicate enrollment"]);
+    expect(boxes.map((b) => (b as HTMLInputElement).labels?.[0]?.textContent)).toEqual(["Recheck consent before send", "Stop on opt-out or suppression", "Prevent duplicate enrollment"]);
     for (const box of boxes) {
       expect(box).toBeChecked();
       expect(box).toHaveAttribute("aria-readonly", "true");
@@ -290,5 +290,21 @@ describe("activation and retention (11:852)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("not connected");
     expect(screen.queryByTestId("cohort")).not.toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText("0.0%")).not.toBeInTheDocument());
+  });
+});
+
+describe("FE12-05 event handling on a flow", () => {
+  it("shows what the paused flow does with withdrawn consent, duplicate, replayed and missing events, claims and outages", async () => {
+    const user = userEvent.setup();
+    renderRoute("/customers/flows/early-access", createDemoAdapter());
+    await user.click(await screen.findByRole("button", { name: "Event handling" }));
+    const panel = await screen.findByTestId("event-handling");
+    expect(within(panel).getByTestId("scenario-withdrawn")).toHaveTextContent("Consent was withdrawn after enrollment. The flow stops and nothing more is sent.");
+    expect(within(panel).getByTestId("scenario-duplicate")).toHaveTextContent("Duplicate ignored");
+    expect(within(panel).getByTestId("scenario-replayed")).toHaveTextContent("Replay ignored");
+    expect(within(panel).getByTestId("scenario-replayed")).toHaveTextContent("1 send");
+    expect(within(panel).getByTestId("scenario-missing")).toHaveTextContent("held for review, not guessed");
+    expect(within(panel).getByTestId("scenario-claim")).toHaveTextContent("Blocked");
+    expect(within(panel).getByTestId("scenario-outage")).toHaveTextContent("Each held send went out once");
   });
 });

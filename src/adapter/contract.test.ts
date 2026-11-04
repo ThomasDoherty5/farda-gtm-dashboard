@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { moneySchema, provenanceValueSchema, readResponseSchema } from "./contract";
+import { actionResponseSchema, actionStateSchema, certaintyOfState, executionCertaintySchema, moneySchema, provenanceValueSchema, readResponseSchema, type ActionResponse } from "./contract";
 
 const base = { reasonCode: null, evidenceRefs: [], sourceRef: null, occurredAt: null, sourceUpdatedAt: null, observedAt: "2026-11-02T17:00:00.000Z" };
 const schema = provenanceValueSchema(z.number());
@@ -46,5 +46,28 @@ describe("readResponseSchema", () => {
     const parse = readResponseSchema(z.unknown());
     expect(parse.safeParse(res).success).toBe(true);
     expect(parse.safeParse({ ...res, dataState: "allGood" }).success).toBe(false);
+  });
+});
+
+const action: ActionResponse = {
+  schemaVersion: "x", requestId: "r", scope: { workspaceId: "w", accountIds: [], environment: "demo", authorizationScopeVersion: "1" }, actionRef: "a", state: "approved", runRef: null,
+  approvalRef: null, manifestRef: null, payloadVersion: "v1", policyVersion: "p", modelVersion: null, offerVersion: null, reasonCodes: [], receiptRefs: [], nextAction: null, nextPollAfterMs: null, executionCertainty: "applied",
+};
+
+describe("the adapter decisions", () => {
+  it("Q-01 `approved` is an action state", () => {
+    expect(actionStateSchema.options).toContain("approved");
+    expect(actionResponseSchema.safeParse(action).success).toBe(true);
+  });
+  it("Q-04 executionCertainty has exactly three values and is required on an action answer", () => {
+    expect(executionCertaintySchema.options).toEqual(["notApplied", "uncertain", "applied"]);
+    const without = Object.fromEntries(Object.entries(action).filter(([k]) => k !== "executionCertainty"));
+    expect(actionResponseSchema.safeParse(without).success).toBe(false);
+    expect(actionResponseSchema.safeParse({ ...action, executionCertainty: "maybe" }).success).toBe(false);
+  });
+  it("Q-04 certaintyOfState: nothing changed, unknown, or applied", () => {
+    expect(certaintyOfState("blocked")).toBe("notApplied");
+    expect(certaintyOfState("outcomeUncertain")).toBe("uncertain");
+    expect(certaintyOfState("approved")).toBe("applied");
   });
 });

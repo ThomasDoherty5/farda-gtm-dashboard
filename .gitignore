@@ -1,5 +1,6 @@
 node_modules
 dist
+dist-reference
 playwright-report
 test-results
 *.local
@@ -10,3 +11,4 @@ test-results
 
 # Local snapshot of the private Linear handoff. Never commit: this repo is public.
 .handoff/
+dist-live

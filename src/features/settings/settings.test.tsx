@@ -77,7 +77,9 @@ describe("connections (7:876)", () => {
     });
     const { user } = await open("/settings/connections", "Source systems", adapter);
     await user.click(screen.getByRole("button", { name: "Check connections" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("last successful read and may be out of date");
+    // The demo list is itself a partial read, so its own "Some data is missing" notice is also an alert; the failure is the other one.
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts.filter((a) => /last successful read and may be out of date/.test(a.textContent ?? ""))).toHaveLength(1);
     expect(screen.getByTestId("source-systems")).toHaveTextContent("Notion · creator records");
     expect(screen.queryByTestId("check-status")).not.toBeInTheDocument();
   });

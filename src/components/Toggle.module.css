@@ -1,0 +1,13 @@
+/* Figma component set 6:459: a 42 × 26 track with an 18px thumb, 4px inside the edge. Disabled-off is the Off drawing with a muted label; disabled-on keeps the thumb to the right on a soft track. */
+.toggle { display: flex; flex-direction: column; gap: var(--space-4); }
+.button { display: inline-flex; align-items: center; gap: var(--space-12); padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.button[aria-disabled="true"] { cursor: not-allowed; }
+.button:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 4px; border-radius: var(--space-999); }
+.track { position: relative; flex: none; width: 42px; height: 26px; border-radius: var(--space-999); background: var(--color-border); }
+.thumb { position: absolute; top: 4px; left: 4px; width: 18px; height: 18px; border-radius: 50%; background: var(--color-surface); transition: transform 120ms ease; }
+.on { background: var(--color-violet); }
+.onDisabled { background: var(--color-violetSoft); }
+.on .thumb, .onDisabled .thumb { transform: translateX(16px); }
+.label { font: var(--text-body); color: var(--color-ink); }
+.muted { color: var(--color-muted); }
+.reason { font: var(--text-small); color: var(--color-muted); }

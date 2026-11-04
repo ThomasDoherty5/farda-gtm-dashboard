@@ -26,44 +26,83 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Nav item | 2:85 | 2 | `Shell` nav links | Built |
 | Alert | 6:616 | 4 | `Alert` (`state`) | Built |
 | Empty state | 6:649 | 4 | `EmptyState` (`state`) | Built |
-| Skeleton | 6:659 | 2 | `SkeletonCard` | Card built; Row pending |
-| Modal | 6:687 | 3 | `Dialog` | Built from the Overview dialogs; set not read yet |
+| Skeleton | 6:659 | 2 | `Skeleton`, `SkeletonCard`, `SkeletonRow` (`src/components/EmptyState.tsx`, re-exported from `Skeleton.tsx`) | Built (Card is on every route's loading state; Row has no screen yet, since no list loads on its own) |
+| Modal | 6:687 | 3 | `Modal` (`state` confirm, access, reconcile; `busy`; `confirmDisabledReason`), a 460px compact confirmation. `Dialog` stays the 560px form dialog from 51:1945 | Built. Read from 6:687: Confirm and Access say "Continue", Reconcile says "Open source". No screen uses it yet; the existing two-button confirms put the primary action first, which is a different order |
 | Input | 6:404 | 5 | `Field`, `TextField`, `SelectField` (label, 48px field, help or error text) | Default, filled and error built; disabled and focus not checked |
-| Search | 6:414 | 3 | Not built | Pending |
+| Search | 6:414 | 3 | `SearchField` (`label`, `placeholder`, `fluid`). Default is the placeholder, Query is the value, Focus is the 2px violet border on `:focus-within` | Built; replaces the three local copies (Automation runs, TikTok worklist, Content monitor) |
 | Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked. The launch and performance pages use a primary-button variant of it (`WorkspaceTabs`, from 14:100) |
-| Checkbox | 6:443 | 4 | Not built | Pending |
-| Toggle | 6:459 | 3 | Not built | Pending |
-| Source freshness | 6:500 | 5 | `Notice` (violet or warning) for the Operations strip | Built for Operations; other states not checked |
+| Checkbox | 6:443 | 4 | `Checkbox` (`checked`, `mixed`, `disabled`, `readOnly`, `describedBy`) over a native input | Built; replaces the locked policy list. The settlement match list keeps its own multi-line rows |
+| Toggle | 6:459 | 3 | `Toggle` (`role="switch"`, `disabledReason`) | Built. No screen uses a switch: the design draws filters such as Assigned to me as pressed buttons |
+| Source freshness | 6:500 | 5 | `SourceFreshness` (`state` live, synced, stale, unknown, error). Unknown never shows a time. The page-level strip stays `Notice` (violet or warning) | Built; all five states unit-tested. No screen uses the card yet |
 | KPI card | 6:516 | 3 | `Kpi`, `KpiRow` | Built from ACQ03. Overview still uses its own cards |
 | Table cell | 6:528 | 3 | `DataTable` | Text cell built |
 | Table row | 6:557 | 4 | `DataTable` | Default built |
 | Table header | 6:564 | 1 | `DataTable` | Built |
-| Step | 6:595 | 5 | Not built | Pending |
+| Step | 6:595 | 5 | `StepCard` (`state` pending, approval, running, completed, failed) | Built. The row form is Lifecycle/Step 5:3 below; no screen uses the card |
 | Lifecycle/Step | 5:3 | Not counted in the 21 | `Step` in `RunPage` | Built from instances in 5:13 and 5:156 |
-| Drawer | 6:703 | 1 | Not built | Pending |
-| Toast | 6:710 | 2 | Not built | Pending |
-| Tooltip | 6:714 | 1 | Not built | Pending |
+| Drawer | 6:703 | 1 | `Drawer` (title, badge, detail rows, note, action) as a right-docked modal dialog | Built. No screen opens one yet |
+| Toast | 6:710 | 2 | `Toast`, `ToastProvider`, `useToast` (success polite and self-clearing; error alert, kept until dismissed) | Built. Screens keep their in-flow `role="status"` lines, which sit next to the control that acted |
+| Tooltip | 6:714 | 1 | `Tooltip` (hover, focus, Escape; describes its trigger) | Built. Disabled reasons stay visible text, never tooltip-only |
 
-## Acquisition comparison (source 102:555)
+## Measured comparison, first half of the screens (fidelity sweep 1, THO-330)
+
+Measured 2026-11-03 against the copy `z9knjMdQ3kxL6Fblvu1tKc` (see `figma-access-gap.md`), at threshold 0.1, DPR 1, the design's exact width of 1440, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, demo fixtures. Run `npm run build`, then `npx vite preview --port 4181` and `BASE_URL=http://localhost:4181 node scripts/compare-figma.mjs <route> .handoff/figma/<capture>.png 0.1`. Use a production build: `vite dev` can't serve the `@fontsource` files through the shared `node_modules` link, falls back to a system font and reads about 5%.
+
+Every row meets the pass mark (0.5% of pixels) except where "judged over" says why the page height differs. For those, the percentage is over the top of the page, above the first intentional change, and the screen is judged on its geometry tests. These are fixture-complete measurements against a copy of the design; the mark is agreed by Thomas but not yet by Kevon, so this is not a release pass. The agent that wrote the code looked at the diff images of the screens it changed (text and edge antialiasing, the copy differences listed below). The design owner hasn't.
 
 | Source | Route | Size | Pixels different |
 | -- | -- | -- | -- |
-| 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.432% |
-| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2261 tall, not 2211 (see below) | 0.218%, measured over the top 1450px |
+| 10:217 | `/overview` | Matches (1440×1381) | 0.219% |
+| 6:234 | `/approvals/demo-approval-042` | Matches (1440×1609) | 0.432% |
+| 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
+| 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (added evidence controls) | 0.162%, judged over the top 1030px |
+| 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.431% |
+| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (2267 before the disagreement section was added; see below) | 0.179%, measured over the top 1450px |
 | 102:74 | `/creators/pipeline` | Matches (1440×2552) | 0.264% |
 | 6:24 | `/creators/social-cat?view=board` | Matches (1440×1658) | 0.270% |
 | 9:143 | `/creators/tiktok?view=board` | Matches (1440×1712) | 0.270% |
-| 23:275 | `/creators/social-cat?view=dashboard` | 2601 tall, not 2583 (see below) | 0.266%, measured over the top 2380px; 1.592% over the shared height |
+| 23:275 | `/creators/social-cat?view=dashboard` | 2601 tall, not 2583 (read-only history reason wraps, +18) | 0.221%, judged over the top 2380px |
 | 23:440 | `/creators/tiktok?view=dashboard` | Matches (1440×2399) | 0.229% |
-| 38:131 | `/creators/social-cat/recruitment` | 2737 tall, not 2719 (see below) | 0.356%, measured over the top 2150px; 2.226% over the shared height |
+| 38:131 | `/creators/social-cat/recruitment` | 2737 tall, not 2719 (gate reason wraps, +18) | 0.356%, judged over the top 2150px |
 | 38:348 | `/creators/tiktok/invitations/new` | Matches (1440×2658) | 0.298% |
 | 66:821 | `/batches/demo-batch-tt-024` | Matches (1440×2298) | 0.230% |
 | 9:299 | `/collaborations/demo-collaboration-1?tab=overview` | Matches (1440×1675) | 0.228% |
 | 9:436 | `/collaborations/demo-collaboration-1?tab=content` | Matches (1440×1599) | 0.233% |
+| 3:6 | `/launch?view=snapshot` | Matches (1440×1282) | 0.434% |
+| 14:74 | `/launch?view=control` | Matches (1440×2028) | 0.174% |
+| 14:377 | `/analytics/attribution` | Matches (1440×2041) | 0.416% |
+| 30:349 | `/analytics/paid-media` | Matches (1440×1815) | 0.203% |
+| 30:550 | `/campaigns/demo-campaign-first-wave?tab=funnel` | Matches (1440×1777) | 0.208% |
+| 30:721 | `/analytics/customer-journey` | Matches (1440×1648) | 0.269% |
+| 37:74 | `/creators/demo-creator-1/assessments/demo-assessment-content` | Matches (1440×2125) | 0.375% |
+| 37:251 | `…/assessments/demo-assessment-tiktok` | Matches (1440×2143) | 0.386% |
+| 65:634 | `/offers/demo-offer-1` | Matches (1440×2080) | 0.407% |
+| 65:814 | `…/assessments/demo-assessment-sc-commerce` | Matches (1440×2284) | 0.210% |
+| 23:73 | `/content` | Matches (1440×1880) | 0.343% |
+| 25:166 | `/creators/watchlist` | Matches (1440×1671) | 0.233% |
+| 25:307 | `/runs/demo-run-hourly` (a tabless run path) | Matches (1440×1791) | 0.190% |
+| 25:481 | `/content/P-001` | Matches (1440×1364) | 0.364% |
 
-## Proposed pass mark
+What the sweep changed, found by reading the diff images against the capture:
 
-Proposed for THO-330, not yet agreed. At threshold 0.1, DPR 1 and the design's exact width:
+- The campaign funnel highlighted Overview in the navigation; Figma highlights Creators. The lifecycle merge had put `campaigns` back under Overview.
+- Figma lays tables and field rows out at the card's 1248px content width. A bordered card leaves 1246px, so every column sat 1px or 2px left. Analytics tables, the offer's field row, and the scorecard evidence and gate grids now extend the 2px at 1180px and wider.
+- The two commerce tables (`cell12`) had a semibold first cell, muted other cells and no left padding; Figma has regular ink text, 12px padding everywhere.
+- Evidence: "TikTok footage" is "TikTok Shop footage" as in Figma, and the observation columns are 260, 190 and 190px exactly.
+- Social Cat dashboard and recruitment: 16px between the offer buttons, not 10px, and the dashboard's network buttons are 224, 112 and 100px wide.
+- Scorecard context row text sits at the top of the row, as in Figma; the launch snapshot's "Open creator workspace" link too, and the decision ages sit in a 72px column.
+
+What stays above 0.4% is text and edge antialiasing plus copy differences (below), and the placement of figures inside bar charts, which a person should check.
+
+The lowest pages sit at 0.15 to 0.2% even where every box matches, which looks like the floor from text antialiasing between Figma's renderer and Chromium. That's an inference from the diff images, not something checked.
+
+### Page heights on other platforms
+
+The Linux CI runner lays text out slightly narrower than macOS, so a line that overflows its box by a few pixels on macOS can fit on Linux and make a page 18px shorter. The cause is deterministic and was found by comparing each text block's single-line width with its box. Three notes overflowed by a word (0.2% to 1.4%): the invitation's route note, the batch's illustrative-batch note and the evidence page's denominator note. Each now has a line break (`wide-break`, 1180px and wider) before its last word, so the line count is the same on every platform, and the invitation, batch and evidence height checks are exact again. Paid media's note already has a 36px minimum height. Not changed: Automation runs' height check in `e2e/settings.spec.ts` still allows one 18px line (second fidelity sweep's screen).
+
+## Pass mark
+
+For THO-330. Thomas Doherty agreed this mark on 2026-11-04 and confirmed the copy of the Figma file is current; Kevon Baha hasn't confirmed either. At threshold 0.1, DPR 1 and the design's exact width:
 
 - Page size matches exactly, unless a listed intentional difference changes it.
 - At most 0.5% of pixels differ, checked with `scripts/compare-figma.mjs <path> <capture> 0.1 0.5`.
@@ -80,13 +119,9 @@ Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America
 
 Same capture settings as Overview. The approval and run fixtures reproduce the Figma samples. The sample record is archived, so it shows no decision panel.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 6:234 | `/approvals/demo-approval-042` | Matches (1440×1609) | 0.432%, including the changed decision copy |
-| 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
-| 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (see below) | 4.182%, measured over the shared height |
+The measured table is in "Measured comparison, first half of the screens" above.
 
-The recovery figure is high because everything below the added evidence controls sits lower, not because those panels differ.
+The recovery page is 134px taller because of the added evidence controls, so below them every panel sits lower. The table above judges it over the top 1030px, above the first change.
 
 ## Settings and automation comparison (sources 7:876, 7:1085, 14:637, 14:911, 66:641)
 
@@ -191,40 +226,23 @@ The native 390 and 1024 Operations designs are built with `/operations` under TH
 
 Same capture settings as Overview, from Thomas's copy of the file (see `figma-access-gap.md`), measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 3:6 | `/launch?view=snapshot` | Matches (1440×1282) | 0.481% |
-| 14:74 | `/launch?view=control` | Matches (1440×2028) | 0.409% |
-| 14:377 | `/analytics/attribution` | Matches (1440×2041) | 0.416% |
-| 30:349 | `/analytics/paid-media` | Matches (1440×1815) | 0.368% |
-| 30:550 | `/campaigns/:campaignId?tab=funnel` | Matches (1440×1777) | 0.274% |
-| 30:721 | `/analytics/customer-journey` | Matches (1440×1648) | 0.269% |
+The measured table is in "Measured comparison, first half of the screens" above.
 
 What remains is text and edge antialiasing, plus the differences listed below. A person hasn't yet checked the diff images. Run the comparison with a dev server that can read the fonts: if the `node_modules` symlink points outside the worktree, Vite refuses to serve `@fontsource` files, the page falls back to a system font and every figure here doubles or worse. `e2e/analytics.spec.ts` checks each page's height, the KPI card size and the weekly chart's bar scale on every run.
 
 ## Scorecards and offer comparison (sources 37:74, 37:251, 65:634, 65:814)
 
-Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are above the proposed 0.5% mark and are reported as not met.
+Same capture settings as the analytics screens. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 37:74 | `/creators/:creatorId/assessments/demo-assessment-content` | Matches (1440×2125) | 0.457% |
-| 37:251 | `…/assessments/demo-assessment-tiktok` | Matches (1440×2143) | 0.479% |
-| 65:634 | `/offers/:offerId` | Matches (1440×2080) | 0.638%, not met |
-| 65:814 | `…/assessments/demo-assessment-sc-commerce` | Matches (1440×2284) | 0.534%, not met |
+The measured table is in "Measured comparison, first half of the screens" above.
 
-The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The pixel gap on the other two is text and form-control antialiasing, with native selects drawn slightly differently from Figma's text fields.
+The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The offer's remaining gap is text and form-control antialiasing, with native selects drawn with a chevron where Figma's text fields have none.
 
 ## Content monitor comparison (sources 23:73, 25:166, 25:307, 25:481)
 
-Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are just above the proposed 0.5% mark and are reported as not met.
+Same capture settings as the analytics screens. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 23:73 | `/content` | Matches (1440×1880) | 0.512%, not met |
-| 25:166 | `/creators/watchlist` | Matches (1440×1671) | 0.509%, not met |
-| 25:307 | `/runs/demo-run-hourly` (a tabless run path) | Matches (1440×1791) | 0.428% |
-| 25:481 | `/content/P-001` | Matches (1440×1364) | 0.364% |
+The measured table is in "Measured comparison, first half of the screens" above.
 
 The hourly run shares `/runs/:runId` with the approval and recovery views. A `tab` of `approval` or `recovery` selects those; no tab selects the hourly monitor, and a run that isn't an hourly monitoring run says so.
 
@@ -247,11 +265,12 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Source dialog copy | "This prototype previews the handoff and performs no external action." | Says whether a verified link exists | The source-link profile forbids invented destinations, and this isn't the prototype |
 | Lifestyle only | A button with no stated behavior | Opens a dialog explaining the locked research scope | CTRL-164 requires an explanation, and the scope must not be widenable |
 | Start live discovery | Disabled button | Disabled, with the reason beside it | CTRL-165 requires a visible reason |
+| Post performance GMV note (25:481) | One fixed sentence that GMV is retained separately | Reads the post's GMV state: a reported figure with its definition and window, unknown (not $0) for a TikTok post with none, or does not apply to an Instagram post. The net sales card says "not GMV" | FE07-05: TikTok GMV is never retained net sales, and a missing GMV must not read as zero. The demo GMV for P-001 is synthetic |
 | Publishing filter | A button | A radio dialog, and a note that the demo's counts don't split by network | The demo batch isn't split by network, so no result is faked |
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
-| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding about 50px | CTRL-154 requires a visible reason. This is why the page is 2261 tall, not 2211 |
+| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding 56px | CTRL-154 requires a visible reason. This is why the page is 2267 tall, not 2211, before the disagreement section (VE-08) is added |
 | Video URL field | Placeholder text "Awaiting validated source URL" shown as if populated | A real input, empty at first, with that text as the placeholder | The field has to accept an address |
 | Checkout route | Fixed select appearance | Native select | Keyboard and screen reader behavior come for free |
 | Observation rows | No way to undo | A Remove link on each recorded observation | Drafts need correcting before they are saved |
@@ -273,7 +292,10 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Metrics as of | A ghost button | Opens a read-only disclosure of source, observation time, timezone, coverage and freshness | CTRL-205 |
 | Campaign cohort | One button | Two named cohorts, First-wave and Launch A monitoring. The second shows an empty state | CTRL-207: the handoff says the cohorts are separate, and no figure is invented for Launch A |
 | Campaign tabs other than funnel | None | "This tab is not built" | Only the funnel has a design source |
-| Primary navigation on `/campaigns` | Overview section | Creators section | Figma's campaign pages are in the Creators group (found by the pixel diff) |
+| Primary navigation on `/campaigns` | Creators section | Creators section | Matches Figma (found by the pixel diff). The lifecycle merge had moved it to Overview; `nav.ts` has it under Creators again |
+| Social Cat history tabs | The note ends after "tracked independently." | A second sentence says the history tabs are read-only and no gifted-only, paid or hybrid acquisition can start | The disabled tabs' reason is visible and also the tabs' accessible description. Adds one 18px line |
+| Social Cat recruitment gates | The note ends after "observed performance." | A second sentence says sample, content and rights stay locked until each one's own gate is met | Same. Adds one 18px line |
+| Publishing network filter on the Social Cat dashboard | All three buttons look the same | The selected network is violet, and the buttons are `aria-pressed` | The current filter has to show. All publishing networks is selected at first |
 | Commerce bar values | Unformatted ("16000") | "16,000" | Readability |
 | Historical scorecard "Hold candidate" | Normal secondary button | Disabled look, with the reason in the note below it | CTRL-064: a historical snapshot has no current opportunity to hold |
 | Assessment model buttons | Buttons that look like model choices | Links between the read-only snapshots, with `aria-current` on the current one | The model follows verified checkout, not a client choice (FHC-04) |
@@ -301,6 +323,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Pipeline panel padding | 24px with 1px border | 24px, with 22px on the right | Gives the design's 1248px content width inside the 1296px panel |
 | Creator cost and sales cards | "—" for Cost per live video and Attributed sales | "N/A", with the same context text | An em dash doesn't say whether the value is unknown or not applicable; the context line gives the reason |
 | Lifecycle board "Paid UGC · $150 proposed" | A paid fee proposal card | "12% commission · proposed" | New acquisition is commission-only; a card must not propose an upfront fee |
+| Channel route on both dashboards (23:275, 23:440) | One line of source, network, checkout and provider (Social Cat); source and publishing badges (TikTok) | Labeled parts for Source, Publishing, Checkout and Payout owner on both, and "A TikTok post is not a TikTok Shop order" on Social Cat. A "Hourly monitoring" link beside "Daily sourcing" on both dashboards and boards | FE02-03 and FE02-05: the four are different facts, and daily acquisition and hourly monitoring are different destinations. The Social Cat provider is illustrative |
 | Lifecycle board pay approval | "Content approved · 1 video" | "Historical fee · 1 video", with the note "Founder decision required." unchanged | The only fee left is an accepted historical obligation, and the card says so |
 | Owner and layout buttons | "All owners" and "Board view" buttons with no stated behavior | Radio dialogs: owners (counts follow the owner) and Board or List layout, both in the URL | CTRL-024 and CTRL-025; the list layout holds the same records |
 | Social Cat network buttons | Three buttons with no selected state | The same buttons with a pressed state, in the URL | CTRL-052–054 need a visible selection that recomputes the figures |
@@ -332,6 +355,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Collaboration commands (Queue next action, Queue feedback, Request revision, Reject, Close, Suppress, Create new) | Buttons | Dialogs that validate (a reason, an allowed outcome, the current submission, revision rounds left) and queue a request for approval through the adapter, with an expected version and idempotency key. Nothing is sent, closed or suppressed | CTRL-029, 032–034, 036, 039, 040: a queued request is not an approved one, and approved is not sent |
 | Collaboration "Approve content" | Disabled button | Disabled, with the page's own sentence "Acceptance remains blocked while the required license is missing." as its description | CTRL-038; derived from the rights data, so it opens when a signed license exists |
 | Collaboration tabs | Overview, Brief, Content, Messages, Payments on one frame; Collaboration, Content review, Rights, Payments on the other | The same tabs, each in the URL (`?tab=`). Brief, Messages, Payments and Rights have no Figma frame: they show only data the record holds and say so | CTRL-030, 031, 037 need a target for each tab; nothing is invented beyond the data |
+| Posting timing on the overview | Posting due, grace period and review date for the one example | The same rows for a collaboration whose accepted terms commit a post, with a short "Due today" style suffix on the due date. A collaboration whose terms commit no post (`/collaborations/demo-collaboration-2`, no Figma frame) shows no due date, grace period or review date; it shows the observation window, the retained sample cost and an observe-then-close branch, offers no posting reminder, and has no content review | FE03-04: posting and no-post timing apply only when the accepted terms create the obligation. The demo date comes from the record (`asOf`), not the browser clock. The voluntary record is synthetic |
 | Review after | A typed date | Derived from the posting due date and the grace period | The two inputs can't disagree with the result |
 | Agreed fee on COL-SC-042 | "USD 150" | "USD 150", read-only, labeled as an accepted historical term in the page's own context box | The one place a fee may appear; no control can create or repeat it |
 | Queued requests | None | A short list "Requests awaiting approval" appears under the context box once something is queued | The queue must be visible, or a queued action looks like nothing happened |
@@ -436,7 +460,9 @@ Pending Kevon Baha's confirmation.
 | Open QuickBooks, View report folder, Open close checklist | Buttons | Handoff dialogs saying no verified link exists | The links are fictional |
 | Open reconciliation | A button | A read-only dialog listing unmatched payouts, posting owner, difference evidence and the CPA policy reference ("Not set") | CTRL-171: navigation never closes the books, and no tax rule is invented |
 | Close | Checklist and "4 / 7" | Progress is derived from the checks. There is no close, sign-off or approve control; the capability is held for CPA sign-off and open reconciliation | FE11-03: a count is not a completed close |
-| Reports | "Awaiting close" | The same, and "Export failed: rerun pending" with an incomplete-month notice under `?scenario=exportfailed` | FIN274-06: a failed export never reads as a finished package |
+| Reports | "Awaiting close" | The same, and "Export failed: rerun pending" with an incomplete-month notice under `?scenario=exportfailed`; a report that exported reads "Exported" with its receipt (`?scenario=partialexport`) | FIN274-06: a failed export never reads as a finished package |
+| Close wording and state | "Open month · 4 of 7 checks complete", Period status "Open" | Unchanged while the period really is open (the default). Every other state shows its own name: "Reconciling", "Blocked", "Awaiting CPA", "Ready to export", "Exporting", "Failed", "Closed", "Reopened". The status, CPA review, unmatched payouts, checks and report list are derived from the same evidence as the close package, under `?scenario=` | The summary and the package behind "Close package and corrections" can't disagree. Remaining differences: the checks, exceptions, CPA review and report rows change with the scenario, and the exceptions list is empty when no payout is unmatched |
+| Close package and corrections, Months and revisions, Dry-run manifest | Not drawn in 7:683 | Three links inside the reconciliation dialog to `?view=package`, `?view=months` and `?view=manifest`, built from shared components with no fidelity claim. The page stays 1471px because the links sit inside the dialog | FIN274-02/03, FIN-EVIDENCE and the month-end close acceptance. They are evidence views, not controls |
 | Section navigation | Buttons | Month-end and Reports go to the October close, Unit economics to Financial pulse | The manifest has no separate routes for them |
 | Where $12,596 goes | Values typed | The five parts sum to the 30-day receipts, with a test | The breakdown has to reconcile |
 
@@ -511,3 +537,141 @@ Assertions that are still loosened:
 ## Implementation adaptations
 
 Only Operations has native 390 and 1024 designs. For Overview and the shell, panels stack below 1180px, the header wraps, and the chart scrolls inside a labeled region. These are proposals to review under THO-306, not matches to a design.
+
+## Prototype flow coverage
+
+Owner THO-330 (flows and states). Read 2026-11-03 from the prototype page (07 · Interactive prototype) of the copy `z9knjMdQ3kxL6Fblvu1tKc` through the Plugin API, read-only. The page has 20 flows and 1,040 reactions on the 113 non-archived frames (the handoff counts 1,205 with the archived ones). The six primary-navigation items on every frame are one shared header, covered by `e2e/smoke.spec.ts`; that leaves **596 edges** on 93 screen frames and 20 overlay frames. Prototype clicks are navigation evidence, not saved data: the app is held to the control contract where the two disagree.
+
+`e2e/prototype-edges.spec.ts` opens each frame's route in the built app and checks every edge: a navigation needs a link to the target route (and, when a control carries the prototype's label, that clicking it goes there), an overlay needs a control that opens a dialog which Escape closes, and an overlay's own links and close are checked inside the open dialog. Anything that doesn't work must be recorded in `e2e/support/prototypeDifferences.ts`; an unrecorded failure fails the test, and so does a recorded difference that now works.
+
+Result: **391 of 596 edges work as drawn** (238 navigate by their label, 25 reach the target under another label, 92 open a dialog that closes, 20 close, 4 are overlay links under another name, 12 are responsive variants of `/operations`). **205 differ or are not built.** Each is one of these kinds; I read a sample of each kind, not every edge, and the full list is in `prototypeDifferences.ts`.
+
+| Kind | Edges | What it means | Why it isn't changed |
+| -- | -- | -- | -- |
+| acts-in-place | 32 | The control exists and works, but changes the page (scrolls to a section, filters, saves) instead of opening the frame the prototype names. | The page is the right place for the result. Example: Save draft saves a new version and says it doesn't enable or send (FHC-04). |
+| different-destination | 14 | The control exists and goes somewhere else. | Deliberate: `Open creator economics` opens the offer's economics (`/offers/:id`), not the historical fee settlement, because new acquisition is commission-only. Review proposals opens the approvals index, which lists the labeled scenarios. |
+| real-route-replaces-overlay | 18 | The prototype previews an outcome in an overlay; the app goes to the real screen that holds it. | Example: Reconcile unknown result opens the recovery tab, where the source check is the only way to a receipt. |
+| outcome-preview | 31 | The prototype's overlay shows a simulated success or hand-off (paused, canceled, confirmed receipt, statement matched, resolved). | Not built on purpose. A demo that shows "confirmed" or "canceled" without the server's acknowledgment breaks "approved is not sent". The app reaches the honest equivalent through its demo state machines (pause and cancel on the batch, recovery on the run). |
+| orphan-overlay | 48 | No prototype control opens this overlay, or only an overlay that is itself unreachable does. | Nothing to attach it to. The workspace menu (3 of them) is the Shell dialog, covered by `smoke.spec.ts`. |
+| dialog-is-filter-not-nav | 23 | The prototype's filter overlay lists destinations; the app's filter dialog filters in place, and the destinations are in the page navigation. | Filters live in the URL (CTRL-008 to CTRL-012) and keep Back working. |
+| label-not-control | 11 | The prototype hangs a reaction on a label or a chart row (`Shipping`, `TikTok Shop`, `Open accounting month`). | The app keeps data labels as text. A label that navigates would add a control with no accessible name or role. |
+| not-built | 28 | A control or dialog the prototype has and the app doesn't (for example Pause flow on the setup email, Founder review on Team, Close with evidence on Return). | Open. The Return close is shown disabled with its reason instead. These are the candidates for a later pass. |
+
+| # | Prototype flow | Start | Edges | Work in the app | Differ or not built | Journey tests |
+| -- | -- | -- | -- | -- | -- | -- |
+| 01 | GTM overview | `28:1127` | 11 | 11 | 0 | edge audit |
+| 02 | Social Cat dashboard | `41:2829` | 41 | 38 | 3 (3 acts-in-place) | flows.spec (acquisition journey) |
+| 03 | Social Cat recruitment | `41:4380` | 50 | 47 | 3 (1 different-destination, 1 real-route-replaces-overlay, 1 acts-in-place) | flows.spec (acquisition journey) |
+| 04 | TikTok invitations + browser fallback | `41:4597` | 55 | 41 | 14 (7 outcome-preview, 3 real-route-replaces-overlay, 3 dialog-is-filter-not-nav, 1 different-destination) | flows.spec (acquisition journey), recruitment.spec |
+| 05 | Hourly creator monitoring | `41:2627` | 27 | 20 | 7 (7 acts-in-place) | edge audit |
+| 06 | Operations and fulfillment | `28:1391` | 58 | 33 | 25 (9 not-built, 4 acts-in-place, 4 dialog-is-filter-not-nav, 3 different-destination, 3 label-not-control, 2 outcome-preview) | flows.spec (returns), operations.spec |
+| 07 | Finance and close | `28:2200` | 31 | 21 | 10 (4 not-built, 2 label-not-control, 1 different-destination, 1 acts-in-place, 1 real-route-replaces-overlay, 1 dialog-is-filter-not-nav) | flows.spec (finance close), finance.spec |
+| 08 | Customer lifecycle and email flows | `28:4103` | 38 | 20 | 18 (7 acts-in-place, 4 outcome-preview, 3 not-built, 3 dialog-is-filter-not-nav, 1 label-not-control) | edge audit |
+| 09 | Launch readiness | `28:4907` | 10 | 4 | 6 (3 acts-in-place, 2 outcome-preview, 1 not-built) | edge audit |
+| 10 | Performance and attribution | `28:5210` | 9 | 6 | 3 (2 label-not-control, 1 different-destination) | edge audit |
+| 11 | Automations and recovery | `28:5470` | 76 | 48 | 28 (6 different-destination, 6 dialog-is-filter-not-nav, 5 outcome-preview, 4 real-route-replaces-overlay, 3 acts-in-place, 3 not-built, 1 label-not-control) | flows.spec (approval, recovery), approvals.spec |
+| 12 | Paid media | `41:3471` | 5 | 5 | 0 | edge audit |
+| 13 | Campaign economics | `41:3677` | 4 | 0 | 4 (2 real-route-replaces-overlay, 1 not-built, 1 label-not-control) | edge audit |
+| 14 | Commerce and support | `41:3848` | 7 | 3 | 4 (2 real-route-replaces-overlay, 1 label-not-control, 1 not-built) | edge audit |
+| 15 | Mobile operations | `28:3676` | 4 | 4 | 0 | edge audit |
+| 16 | Tablet operations | `28:3731` | 12 | 8 | 4 (4 not-built) | edge audit |
+| 17 | Launch snapshot | `28:69` | 11 | 6 | 5 (5 outcome-preview) | edge audit |
+| 18 | Creator offers and score modes | `76:3659` | 6 | 6 | 0 | edge audit |
+| 19 | Commission ledger and provider settlement | `76:3940` | 49 | 37 | 12 (5 dialog-is-filter-not-nav, 3 real-route-replaces-overlay, 2 acts-in-place, 2 not-built) | edge audit |
+| 20 | Finite batch operations | `76:4517` | 42 | 33 | 9 (4 outcome-preview, 2 real-route-replaces-overlay, 1 acts-in-place, 1 dialog-is-filter-not-nav, 1 different-destination) | recruitment.spec |
+| — | Overlays no prototype control opens | | 50 | 0 | 50 (48 orphan-overlay, 2 outcome-preview) | edge audit |
+| | **All** | | **596** | **391** | **205** | |
+
+Frames were grouped into flows by area (Figma's flow starting points reach nearly the same set of frames through the shared header, so reachability can't separate them); an overlay counts with the flow of the first screen that opens it.
+
+### Journey tests (`e2e/flows.spec.ts`)
+
+| Journey | Steps checked |
+| -- | -- |
+| Approval (flow 5) | Pending; nothing offers to send; approve; "Approved, not sent" with no receipt; send; a labeled synthetic receipt |
+| Recovery (flow 11) | Approve and send an uncertain action; "Outcome unknown", no receipt; Open recovery; Record confirmed sent is disabled until Check the source returns evidence; then "Sent, source receipt on file" |
+| Acquisition (flow 3) | Pipeline, Review evidence, save a partial review (not a completed review, Mark watched still blocked, readiness says why), TikTok Shop, Prepare invitation, Social Cat dashboard, creator lifecycle, collaboration, content review |
+| Finance close (flow 7) | Finance, month-end close (open month, progress), the read-only reconciliation dialog ("does not close the books"), payout reconciliation, a statement match is queued and nothing is marked reconciled |
+| Operations returns (flow 6) | Operations, order detail, active return (Prepare browser task is "waiting for approval"; close is disabled), resolved return (the chain of receipts), reopen dialog, back to support |
+
+Gaps in the journeys, kept visible: order milestones (Refund requested, Return received) are text, so the order-to-return step is not a click in the app; and demo state is in memory, so a reload resets it, which the journeys avoid relying on.
+
+## Video evidence disagreement and override (VE-08)
+
+Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 250px taller than the 2267 pinned for the blocked-action reasons (2517). Reason for the new pin: VE-08 (reviewer disagreement and override) needs the first reviewer's record, the "not ready" reasons, the list of disagreements and the dispute dialog's entry points on the page, and the Figma source 102:364 has no frame for any of it. The e2e pin in `e2e/evidence.spec.ts` moves from 2267 to 2517 for that reason and no other; the cards above it keep the heights 102:364 gives them.
+
+| Rule | Where it is enforced |
+| -- | -- |
+| The first reviewer's record is frozen when the first observations are saved and never edited | `demoEvidence.ts` (`firstReview`); a later draft, disagreement or override leaves it as it was |
+| A disagreement or override needs a reason (12 to 500 characters) | `validateDispute` in the form and again in the service |
+| An override proposes a valid replacement or "remove"; a plain disagreement proposes nothing | `validateDispute` |
+| It disputes only an observation in the first record, never a draft observation | service: `observationId` field error |
+| It keeps a copy of what it disputes (`prior`), its reviewer role and time | `Dispute` type |
+| It does not change coverage, assessments or the watched state, and there is no watched state | service and `EvidenceDisputes.test.tsx` |
+| Material changes invalidate it: another video marks the first record and its disputes "Invalidated: different video", and a changed route says the model no longer applies | `readinessOf`, `MEDIA_CHANGED`, `ROUTE_CHANGED` |
+| Readiness is "Not ready" with the reasons in words (no completed review; contested; video changed; route changed); nothing here authorizes outreach | `READINESS_TEXT` |
+| Recording is its own save against the saved version; it is blocked, with the reason on the page, while the draft has unsaved edits | `EvidenceDisputes` |
+| Stale version is a conflict and keeps the typed reason; the same key replays; a changed payload under the same key is refused; identical content under a new key is recorded once | `demoEvidence.test.ts` |
+
+Two fixtures: `demo-evidence-2` has a saved review to dispute, and `demo-evidence-3` already has one override on file.
+
+## Contract states on every route
+
+Owner THO-330 (flows and states). The fixture families FX-01 to FX-15 and the state rows of the control contract, run against every route in the manifest. Fixture-complete: the demo adapter and a faulting wrapper stand in for the server; nothing here proves the live service (THO-283) behaves this way.
+
+**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 57 routes × 14 checks, 798 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
+
+**How a state is judged.** Every state check reads the *state region* only: alerts, status lines, the read-state notices (\`view-stale\`, \`view-partial\`) and empty, denied or error states (the \`data-empty-state\` marker). It never reads the whole page, so a word in a table header or running copy cannot satisfy a state the screen doesn't state. The phrases are the screens' own wording ("Sign in again", "No access to this account", "not connected yet"), and Empty is the marker, not a phrase. **The control runs first:** one test per route renders the demo with no fault and requires that its state region states none of the six faults; where it does, the route is listed in \`DEMO_ALREADY_STATES\` with the reason (the demo activation and connections lists are themselves partial), the control must really say it, and the injected fault must change what the region says. Before this change, the loose whole-page patterns already matched with no fault on 28 routes (partial), 21 (forbidden), 15 (pending), 8 (stale) and 8 (empty), so those checks could pass for the wrong reason. Pages are judged after their lazy route has loaded, not while it still says "Loading page…".
+
+**What the zero checks see.** The unknown and known-zero checks rewrite provenance-shaped values. A third check (\`all-zero-plain\`) sets every plain numeric field to 0 and requires no NaN, Infinity or undefined and no vanished zero. It cannot make a plain field *unknown*, because a plain number has no unknown representation, so the unknown check covers only fields the contract types as provenance values. A plain field that should be unknown is a contract gap, not something this matrix can detect.
+
+| Case | Fixture | What every route must do |
+| -- | -- | -- |
+| Happy read | FX-01 | Never print NaN, undefined, null or Infinity as a value; the shell labels the data as demo |
+| Loading | (state row) | Say it is loading; no error; no table, definition list, metric or chart on the page |
+| Empty | FX-03 | Say the read returned nothing ("Empty", "Nothing to show", "No …"), in words, not as zeros |
+| Missing metric | FX-04 | **Unknown stays unknown:** every provenance value turned unknown never adds a zero on the page |
+| Known zero | FX-02 | **Zero stays zero:** every known number turned into 0 never loses a zero from the page |
+| Partial | FX-05 | Say some data is missing or how many rows were covered; no all-clear |
+| Stale | FX-06 | Say the view is out of date or behind, with the last successful read when known; no fresh-success claim |
+| Offline | FX-07 | Say the service couldn't be reached; offer a retry; show no data |
+| Forbidden (403) | FX-08 | Say there is no access; no table, metric or chart |
+| Unauthenticated (401) | FX-09 | Say to sign in; no protected data on the page |
+| Integration pending | (live adapter) | Say nothing is connected; no data; no demo banner; never a demo fallback |
+
+**Browser matrix** (\`e2e/states-matrix.spec.ts\`, 89 tests on desktop). A second build with \`VITE_FARDA_ADAPTER=sandbox\` is served beside the demo build, and all 57 routes are opened on it: each shows the "not connected" alert, no protected data, no demo banner and no console error. The seven routes whose demo handler reads \`?fixture=\` (Overview, attribution, paid media, customer journey, content monitor, watchlist) are opened with FX-03, 05, 06, 08 and 09 and must say so in words and, for 08 and 09, show no data and no stuck "Loading". Every route shows the demo banner.
+
+**Writes: conflict, validation and replay** (FX-10, 11, 14, 15) are service behaviors, so they are asserted where the service is:
+
+| Write | Validation / policy | Version conflict | Same key replays | Same key, changed payload |
+| -- | -- | -- | -- | -- |
+| Approval decide and send, run control and recovery | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` | \`demoApprovals.test.ts\` |
+| Evidence draft and reviewer dispute | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` | \`demoEvidence.test.ts\` |
+| Collaboration commands | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` | \`demoCollaboration.test.ts\` |
+| Batch pause and cancel | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` | \`demoBatch.test.ts\` |
+| Settlement match, ledger export | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` | \`demoFinance.test.ts\` |
+| Stock transfer, shipping decision, return | \`demoOps.test.ts\` | \`demoOps.test.ts\` | \`demoOps.test.ts\` | \`demoOps.test.ts\` |
+| Offer draft | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` | \`scorecards.test.tsx\` |
+| Email flow draft | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` | \`lifecycle.test.tsx\` |
+| Schedule draft, task request | \`settings.test.tsx\` | \`settings.test.tsx\` (schedule) | \`settings.test.tsx\` (task request) | \`settings.test.tsx\` (task request) |
+
+**Approved is not sent** (FX-12, 13) is checked in \`e2e/flows.spec.ts\` (approval journey: nothing offers to send before a decision, "Approved, not sent" shows no receipt, a labeled synthetic receipt follows the send) and \`e2e/approvals.spec.ts\`.
+
+### Defects the matrix found, and the fix
+
+| Route | Defect | Fix |
+| -- | -- | -- |
+| 20 pages: orders, shipments, returns, support, payables, settlements, close, approvals, runs, evidence, lifecycle (5 pages), consent, activation, team, automations, capabilities, discovery, finance, finance analytics, fulfillment | A stale, partial or empty read was not said on the page, or the page rendered blank | \`ReadState\` (\`src/components/ReadState.tsx\`): a warning that names the last successful read or the rows covered, or an empty state, added once per page. \`RecordShell\` carries it for the record pages |
+| \`/overview\` | Unknown contribution or receipts printed a "0.0% margin", a "0%" donut and a 0% bar | The margin is N/A unless both figures are known and receipts are above zero |
+| \`/finance/payables/:id\` | An unreported amount was written into a sentence as "$0 content fee" | The sentence says the amount isn't reported |
+| \`/creators/watchlist\` | After a 403 the header still said "Loading the watchlist…" | It says the watchlist could not be read |
+| Social Cat and TikTok boards, recruitment | "Demo data" and "Illustrative" labels showed on the live adapter beside the error | Shown in the demo environment only. The Illustrative footnotes on the two boards were gated on data but not on demo; they now need both (\`illustrativeFootnote.test.tsx\` drives a non-demo environment that returns data) |
+| Discovery, capabilities, operations, inventory, connections, schedule, setup flow, automations, fulfillment | A partial read (and on connections, schedule and setup flow a stale read) was not said in a state region, or only by a badge or a "Showing 14 of 14" line | \`ReadState\` added or widened to say it; fulfillment's note now says data is missing |
+| Attribution, paid media, funnel, finance, finance analytics, commissions, support, TikTok dashboard | With plain numbers at 0 the pages printed "NaN%", "$NaN" or "0 / 0 NaN%" for a share over a zero total | A share over a zero total is N/A (\`percent\` returns N/A; the other divisions are guarded) |
+
+### Known gaps
+
+- The recruitment composer's helper text ("Illustrative rate, not approved") still renders under the live "not connected" error, because the composer is a local draft form.
+- Only seven routes read \`?fixture=\` in a browser. The other routes are driven by the unit matrix, which injects the state, not by a named fixture.
+- FX-16 to FX-34 (unknown outcome, partial batch, quota, rate limit, takeover, refund replay, role change, account race and the rest) are outside this matrix. Several have service tests (recovery, batch, cancel); none is claimed here.
+- The matrix reads words with regular expressions, so a screen could say the right words and still be wrong. It proves a state is stated, not that the figures beside it are correct; the per-screen tests do that.

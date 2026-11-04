@@ -66,7 +66,7 @@ function Body({ data }: { data: LaunchSnapshotData }) {
               </div>
             ))}
           </div>
-          <div className={styles.legend}>
+          <div className={styles.legend} style={{ alignItems: "flex-start" }}>
             <Badge width={144}>In conversation</Badge>
             <Badge tone="violet" width={164}>Ready for next step</Badge>
             <span style={{ flex: "0 1 104px" }} />
@@ -117,7 +117,7 @@ function Body({ data }: { data: LaunchSnapshotData }) {
       <footer className={styles.footer} style={{ justifyContent: "flex-start", gap: 16 }}>
         <p>{demo ? "Demo · sample figures and creator handles" : "Source figures and creator handles"}</p>
         <span style={{ flex: "0 1 320px" }} />
-        <p>Mirrored data is edited in its source tool.{demo ? " Source freshness isn't connected in the demo." : " Freshness is shown per source."}</p>
+        <p>Mirrored data is edited in its source tool. <Link to="/launch?view=reconciliation">Source freshness and reconciliation</Link></p>
       </footer>
     </>
   );

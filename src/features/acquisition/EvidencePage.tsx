@@ -11,11 +11,13 @@ import { Dialog } from "@/components/Dialog";
 import { SkeletonCard } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { Kpi } from "@/components/Kpi";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, LeaveGuard, blockedReason } from "@/features/approvals/shared";
 import { CATEGORY_LABEL, MODEL_FOR_ROUTE, ROUTE_LABEL, coveredSeconds, formatTime, parseTime, validateMediaUrl, validateObservation } from "./evidenceRules";
 import type { CheckoutRoute, EvidenceDraft, EvidenceRecord, Observation, ObservationCategory } from "./evidenceTypes";
 import { AcquisitionTabs } from "./AcquisitionTabs";
+import { EvidenceDisputes } from "./EvidenceDisputes";
 import styles from "./Acquisition.module.css";
 
 type Res = ReadResponse<EvidenceRecord>;
@@ -36,6 +38,7 @@ export function EvidencePage() {
   const record = query.data?.data ?? null;
   return (
     <section aria-labelledby="evidence-title" data-figma-source="102:364" className={styles.page}>
+      <ReadState res={query.data} subject="This evidence record" />
       {record ? (
         <Review key={record.evidenceRef} res={query.data as Res} record={record} />
       ) : (
@@ -103,7 +106,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
       <div className={styles.titleRow}>
         <div className={styles.heading}>
           <h1 id="evidence-title">Watch the routine. Keep the evidence.</h1>
-          <p>Selected review · lifestyle-only Instagram or TikTok footage · source access to validate</p>
+          <p>Selected review · lifestyle-only Instagram or TikTok Shop footage · source access to validate</p>
         </div>
         <Button variant="secondary" style={{ minWidth: 180 }} loading={save.isPending} disabledReason={saveBlocked} onClick={onSave}>Save partial review</Button>
         <Button style={{ minWidth: 164 }} disabledReason={watchedBlocked} reasonFor={watchedReasonId}>Mark watched</Button>
@@ -168,7 +171,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
         </div>
         <DataTable
           caption="Time-coded review evidence"
-          columns={[{ label: "Observation", width: "20.8%" }, { label: "Playback interval", width: "15.2%" }, { label: "Evidence status", width: "15.2%" }, { label: "Record" }]}
+          columns={[{ label: "Observation", width: "20.833%" }, { label: "Playback interval", width: "15.224%" }, { label: "Evidence status", width: "15.224%" }, { label: "Record" }]}
           testId="observation-table"
           rows={(Object.keys(CATEGORY_LABEL) as ObservationCategory[]).map((category) => {
             const here = observations.filter((o) => o.category === category);
@@ -216,9 +219,10 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
             </li>
           ))}
         </ul>
-        <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider evidence.</p>
+        <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider <br className="wide-break" />evidence.</p>
       </section>
       <p className={styles.small}>Evidence-review template · no source footage or metrics are fabricated · full, partial, captions-only and inaccessible states remain distinct.</p>
+      <EvidenceDisputes res={res} record={record} draftDirty={dirty} />
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>

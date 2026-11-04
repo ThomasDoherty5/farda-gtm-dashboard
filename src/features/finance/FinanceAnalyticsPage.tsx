@@ -5,6 +5,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi } from "@/components/Kpi";
 import { formatMoney } from "@/components/MetricValue";
 import { BarRows, Divider, FactList, FlatTable, HalfColumns, Meter, Page, PageHeader, Panel } from "@/components/Panels";
@@ -41,6 +42,7 @@ export function FinanceAnalyticsPage() {
         <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 180 }} onClick={() => setDialog(true)}>Last 30 days</Button>
         <LinkButton to="/finance" style={{ minWidth: 200 }}>View statements</LinkButton>
       </PageHeader>
+      <ReadState res={query.data} subject="Finance analytics" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading financial pulse…" />}
       {query.isError && <ViewError error={query.error} subject="Financial pulse" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No finance data yet"><p>QuickBooks responded, but no management report exists for this period.</p></EmptyState>}
@@ -63,7 +65,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
   const peak = Math.max(...data.costBreakdown.map((c) => c.minor));
   const matched = data.payouts.reduce((n, r) => n + r.matched, 0);
   const review = data.payouts.reduce((n, r) => n + r.needsReview, 0);
-  const matchedPct = Math.round((100 * matched) / (matched + review));
+  const matchedPct = matched + review > 0 ? Math.round((100 * matched) / (matched + review)) : null;
   const actual = data.cashHistory.map((c, i) => ({ ...c, x: xOf(i), y: yOf(c.minor) }));
   const line = actual.map((a) => `${a.x} ${a.y}`).join("L");
   const projected = [{ x: xOf(actual.length - 1), y: actual[actual.length - 1]!.y }, ...future.map((f, i) => ({ x: xOf(actual.length + i), y: yOf(f.minor) }))];
@@ -74,7 +76,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
       <div className={styles.analytics}>
         <div className={styles.kpiStack}>
           <Kpi label="Cash available" context={`${whole(data.historicalRaised)} total capital raised`} testId="metric-Cash available">{figure(data.cash, whole)}</Kpi>
-          <Kpi label="Gross margin" context={`${whole(gross)} gross profit / ${whole(p.revenue)} receipts`} testId="metric-Gross margin">{((100 * gross) / p.revenue).toFixed(1)}%</Kpi>
+          <Kpi label="Gross margin" context={`${whole(gross)} gross profit / ${whole(p.revenue)} receipts`} testId="metric-Gross margin">{p.revenue > 0 ? `${((100 * gross) / p.revenue).toFixed(1)}%` : "N/A"}</Kpi>
           <Kpi label="Runway" context={runway.reason ?? `At ${whole(burn!)} average monthly burn`} testId="metric-Runway">{runway.months === null ? "N/A" : `${runway.months.toFixed(1)} months`}</Kpi>
         </div>
         <Panel
@@ -121,8 +123,8 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
           {peak > 600000 && <p className="visually-hidden">A value exceeds the bar scale.</p>}
         </Panel>
         <Panel title="Payout reconciliation" subtitle="Match source payout → ledger → bank" testId="payouts">
-          <p className={styles.bigValue} data-testid="metric-Payouts matched">{matchedPct}% matched</p>
-          <Meter percent={matchedPct} label={`${matched} of ${matched + review} payouts matched`} />
+          <p className={styles.bigValue} data-testid="metric-Payouts matched">{matchedPct === null ? "No payouts to match" : `${matchedPct}% matched`}</p>
+          <Meter percent={matchedPct ?? 0} label={`${matched} of ${matched + review} payouts matched`} />
           <FlatTable
             caption="Payout reconciliation by channel"
             columns={[{ label: "Channel", width: 266 }, { label: "Matched", width: 160 }, { label: "Needs review", width: 162 }]}

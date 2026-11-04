@@ -2,6 +2,8 @@
  * Frontend-facing adapter contract, transcribed from sections 2–5 of
  * "Farda frontend — adapter contracts, fixtures and verification" (Linear, 2026-11-02).
  * Status: PROPOSED. THO-283 freezes it. Do not add fields that the document does not define.
+ * Exception: Q-01 to Q-04 and D-13 of docs/adapter-decisions.md (2026-11-04) are defaults decided for the build and are
+ * implemented below. They are not verified against any service, and the backend owner may change them.
  */
 import { z } from "zod";
 
@@ -101,6 +103,14 @@ export type ReadRequest<F> = {
 export const dataStateSchema = z.enum(["ready", "empty", "partial", "stale", "unavailable"]);
 export type DataState = z.infer<typeof dataStateSchema>;
 
+/** D-13: the server's own verdict on one source. A client that is told nothing falls back to the reason-code mapping. */
+export const freshnessStateSchema = z.enum(["current", "noChange", "partial", "error", "neverSynced"]);
+export type FreshnessState = z.infer<typeof freshnessStateSchema>;
+
+/** Q-04: whether a write reached the provider. `notApplied` only with proof that nothing did; a timeout after submission is `uncertain`. */
+export const executionCertaintySchema = z.enum(["notApplied", "uncertain", "applied"]);
+export type ExecutionCertainty = z.infer<typeof executionCertaintySchema>;
+
 export const capabilityStateSchema = z.enum(["available", "unverified", "unsupported", "denied", "held"]);
 
 export const readResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
@@ -118,6 +128,8 @@ export const readResponseSchema = <T extends z.ZodTypeAny>(data: T) =>
         observedAt: z.string().nullable(),
         mirroredAt: z.string().nullable(),
         staleReasonCode: z.string().nullable(),
+        /** D-13. Computed by the server. Optional so a server that predates it still validates; see `freshnessStateOf`. */
+        freshnessState: freshnessStateSchema.optional(),
       }),
     ),
     coverage: z.object({
@@ -156,6 +168,8 @@ export type ActionRequest<P> = {
   expectedVersion: string;
   approvalRef: string | null;
   manifestRef: string | null;
+  /** Q-03. The run a `controlRun` or `reconcileRun` acts on. Null or absent for every other operation. */
+  runRef?: string | null;
   idempotencyKey: string;
   payload: P;
   requestId: string;
@@ -164,6 +178,8 @@ export type ActionRequest<P> = {
 export const actionStateSchema = z.enum([
   "draft",
   "approvalPending",
+  /** Q-01. Approved, awaiting dispatch. Not a success state: nothing has been sent. */
+  "approved",
   "queued",
   "blocked",
   "running",
@@ -196,6 +212,8 @@ export const actionResponseSchema = z.object({
     .object({ kind: z.string(), ownerRef: z.string().nullable(), dueAt: z.string().nullable(), available: z.boolean() })
     .nullable(),
   nextPollAfterMs: z.number().nullable(),
+  /** Q-04. Required on every action answer. */
+  executionCertainty: executionCertaintySchema,
 });
 export type ActionResponse = z.infer<typeof actionResponseSchema>;
 
@@ -222,4 +240,14 @@ export type SaveResourceResponse<T> = {
   persistedByRef: string;
   record: T;
   reasonCodes: string[];
+  /** Q-04. Required on every save answer. */
+  executionCertainty: ExecutionCertainty;
 };
+
+/**
+ * What the demo services and the reference server say for an action answer: the certainty describes the command the
+ * request made, not any later dispatch. A blocked, failed or draft answer changed nothing; an uncertain one is unknown;
+ * anything else was applied. Approved is applied (the decision is stored) and still not sent.
+ */
+export const certaintyOfState = (state: ActionState): ExecutionCertainty =>
+  state === "blocked" || state === "failed" || state === "draft" ? "notApplied" : state === "outcomeUncertain" ? "uncertain" : "applied";

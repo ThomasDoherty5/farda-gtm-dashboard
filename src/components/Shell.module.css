@@ -1,7 +1,7 @@
 /* Figma nodes 10:217 to 10:238. Narrow widths are implementation adaptations: only Operations has native 390 and 1024 designs. */
 .canvas { min-height: 100vh; padding: var(--space-32); background: var(--color-canvas); }
 .frame { max-width: 1376px; margin: 0 auto; padding: var(--space-8); background: var(--color-ink); border-radius: var(--space-32); }
-.header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-24) var(--space-20); background: var(--color-ink); border-radius: var(--space-24); }
+.header { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); padding: var(--space-12) var(--space-24) var(--space-20); background: var(--color-ink); border-radius: var(--space-24); }
 .brand { display: flex; align-items: center; gap: var(--space-12); width: 174px; font: var(--text-h2); color: var(--color-onDark); }
 .mark { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; background: var(--color-violet); border-radius: var(--space-12); }
 .nav { display: flex; flex-wrap: wrap; gap: var(--space-8); list-style: none; margin: 0; padding: 0; }
@@ -34,3 +34,9 @@
   .spacer { display: none; }
   .navItem { min-width: 0 !important; }
 }
+
+/* Breadcrumbs sit in the header's own bottom padding, so they add no height and every page keeps its Figma position. They are text, not links. */
+.crumbs { position: absolute; left: var(--space-24); right: var(--space-24); bottom: 2px; height: 16px; overflow: hidden; pointer-events: none; }
+.crumbs ol { display: flex; flex-wrap: nowrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; font: var(--text-micro); line-height: 16px; color: var(--color-onDark); white-space: nowrap; }
+.crumbs li + li::before { content: "/"; margin-right: var(--space-4); opacity: 0.7; }
+.crumbs [aria-current] { opacity: 0.9; }

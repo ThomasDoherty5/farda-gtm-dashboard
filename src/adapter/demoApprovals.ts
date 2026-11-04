@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, certaintyOfState, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import type { ApprovalDetail, ControlPayload, DecidePayload, ReconcilePayload, RunCounts, RunDetail, RunItem } from "@/features/approvals/types";
 import { DEMO_ACTOR_ROLE, seedApprovals, seedRuns, sourceLookups } from "@/fixtures/approvals";
@@ -21,8 +21,28 @@ const countItems = (items: RunItem[]): RunCounts => {
  * It enforces what the real server must (role, version, expiry, policy, idempotency), receives
  * nothing from the client as authority, and contacts no provider. State resets on reload.
  */
-export function createDemoApprovals() {
-  const approvals = new Map(seedApprovals().map((a) => [a.approvalRef, a]));
+/**
+ * The one exemption from the commission-only rule: paying a fee that was already accepted under the earlier workflow. It is a property of
+ * the record (its own policy version), never of the role asked to decide it, so a founder-only record for a new fee is still refused.
+ */
+const isHistoricalLiability = (v: { policyVersion: string }) => v.policyVersion.startsWith("historical-liability");
+
+export function createDemoApprovals(
+  opts: {
+    actorRole?: string;
+    /** Test seam: replaces the seeded approvals. */
+    approvals?: ApprovalDetail[];
+    /** Runs when a dispatch is about to execute for the first time. It is skipped for a replay and for an approval that already ran. */
+    beforeDispatch?: (request: ActionRequest<unknown>) => void;
+    /** Runs when an approval is granted, so a policy layer can remember what was in force. */
+    onApproved?: (approvalRef: string) => void;
+  } = {},
+) {
+  const hooks = opts;
+  const actorRole = opts.actorRole ?? DEMO_ACTOR_ROLE;
+  /** A founder holds every role's authority. Nobody else can decide above their role. */
+  const canDecide = (required: string) => actorRole === required || actorRole === "founder";
+  const approvals = new Map((opts.approvals ?? seedApprovals()).map((a) => [a.approvalRef, a]));
   const runs = new Map(seedRuns().map((r) => [r.runRef, r]));
   const results = new Map<string, { hash: string; result: Promise<ActionResponse> }>();
   const stats = { dispatches: 0 };
@@ -46,7 +66,7 @@ export function createDemoApprovals() {
     if (a.historicalNote) return [];
     if (a.status === "expired") return [{ actionKind: "decideApproval", state: "held", reasonCodes: ["APPROVAL_EXPIRED"] }];
     if (a.status === "pending") {
-      if (a.requiredRole !== DEMO_ACTOR_ROLE) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
+      if (!canDecide(a.requiredRole)) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
       return [{ actionKind: "decideApproval", state: "available", reasonCodes: [] }];
     }
     if (a.status === "approved" && !a.execution) return [{ actionKind: "dispatchApprovedAction", state: "available", reasonCodes: [] }];
@@ -86,13 +106,18 @@ export function createDemoApprovals() {
     receiptRefs: [],
     nextAction: null,
     nextPollAfterMs: null,
+    executionCertainty: certaintyOfState(state),
     ...over,
   });
 
   const findApproval = (request: ActionRequest<unknown>) =>
     approvals.get(request.approvalRef ?? "") ?? fail("RECORD_NOT_FOUND", "This approval does not exist.", request.requestId);
-  const findRun = (request: ActionRequest<unknown>, runRef: string) =>
-    runs.get(runRef) ?? fail("RECORD_NOT_FOUND", "This run does not exist.", request.requestId);
+  /** Q-03: the run comes from the request's top-level `runRef`. A missing one is a validation failure, never a guess. */
+  const findRun = (request: ActionRequest<unknown>) => {
+    if (typeof request.runRef !== "string" || request.runRef.trim() === "")
+      fail("VALIDATION_FAILED", "This action needs a run reference.", request.requestId, { fieldErrors: { runRef: "A run reference is required." } });
+    return runs.get(request.runRef!) ?? fail("RECORD_NOT_FOUND", "This run does not exist.", request.requestId);
+  };
 
   const expectVersion = (request: ActionRequest<unknown>, current: string) => {
     if (request.expectedVersion !== current)
@@ -102,7 +127,7 @@ export function createDemoApprovals() {
   function decide(request: ActionRequest<DecidePayload>): ActionResponse {
     const a = findApproval(request);
     if (a.historicalNote) fail("APPROVAL_INVALID", "This is an archived record. It can't be decided.", request.requestId);
-    if (a.requiredRole !== DEMO_ACTOR_ROLE) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
+    if (!canDecide(a.requiredRole)) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
     if (a.status === "expired") fail("APPROVAL_EXPIRED", "This approval expired. It needs a fresh preview.", request.requestId);
     if (a.approvalRef === "demo-approval-conflict" && !conflictFired) {
       conflictFired = true;
@@ -117,7 +142,7 @@ export function createDemoApprovals() {
     const current = a.versions[a.versions.length - 1]!;
     const { decision, reason, editedMessage } = request.payload;
     const reasonText = reason?.trim() ?? "";
-    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && a.requiredRole !== "founder")
+    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && !isHistoricalLiability(current))
       fail("POLICY_VIOLATION", "New acquisition is commission-only, so an upfront fee can't be approved.", request.requestId, { fieldErrors: { upfrontFee: "Upfront fee must be zero for new acquisition." } });
     if (decision === "rejected" && !reasonText) fail("VALIDATION_FAILED", "A reason is required to reject.", request.requestId, { fieldErrors: { reason: "Enter a reason for rejecting." } });
     if (decision === "editRequired") {
@@ -126,7 +151,7 @@ export function createDemoApprovals() {
       if (text === current.payload.message) fail("VALIDATION_FAILED", "The message has not changed.", request.requestId, { fieldErrors: { editedMessage: "Change the message, or approve it as written." } });
       const n = a.versions.length;
       current.decision = "editRequired";
-      current.decidedByRole = DEMO_ACTOR_ROLE;
+      current.decidedByRole = actorRole;
       current.decidedAt = DEMO_NOW;
       current.reason = reasonText || null;
       current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
@@ -137,14 +162,15 @@ export function createDemoApprovals() {
     }
 
     current.decision = decision;
-    current.decidedByRole = DEMO_ACTOR_ROLE;
+    current.decidedByRole = actorRole;
     current.decidedAt = DEMO_NOW;
     current.reason = reasonText || null;
     current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
     a.status = decision;
+    if (decision === "approved") hooks.onApproved?.(a.approvalRef);
     if (decision === "rejected") return actionResponse(request, "canceled", { receiptRefs: [current.decisionReceiptRef] });
-    // The contract has no "approved" state. Blocked-awaiting-dispatch is the closest truthful one; raised for the THO-283 freeze.
-    return actionResponse(request, "blocked", {
+    // Q-01: approved is its own state, and it is not a success state. Nothing has been sent.
+    return actionResponse(request, "approved", {
       reasonCodes: ["AWAITING_DISPATCH"],
       nextAction: { kind: "dispatchApprovedAction", ownerRef: null, dueAt: a.expiresAt, available: true },
     });
@@ -155,6 +181,7 @@ export function createDemoApprovals() {
     if (a.status !== "approved") fail("APPROVAL_REQUIRED", "This action has no valid approval.", request.requestId);
     expectVersion(request, a.currentVersion);
     if (a.execution) return actionResponse(request, a.execution.state, { runRef: a.execution.runRef, receiptRefs: a.execution.receiptRefs });
+    hooks.beforeDispatch?.(request);
 
     stats.dispatches += 1;
     const recipient = a.versions[a.versions.length - 1]!.payload.recipients[0]!;
@@ -170,7 +197,7 @@ export function createDemoApprovals() {
   }
 
   function control(request: ActionRequest<ControlPayload>): ActionResponse {
-    const r = findRun(request, request.payload.runRef);
+    const r = findRun(request);
     expectVersion(request, r.version);
     if (r.state === "outcomeUncertain") {
       r.pausedAt ??= DEMO_NOW;
@@ -184,7 +211,7 @@ export function createDemoApprovals() {
   }
 
   function reconcile(request: ActionRequest<ReconcilePayload>): ActionResponse {
-    const r = findRun(request, request.payload.runRef);
+    const r = findRun(request);
     const a = approvals.get(r.approvalRef);
     const receipts = () => r.items.flatMap((i) => (i.receiptRef ? [i.receiptRef] : []));
     if (r.state === "succeeded") return actionResponse(request, "succeeded", { runRef: r.runRef, receiptRefs: receipts(), reasonCodes: ["ALREADY_RECONCILED"] });
@@ -236,6 +263,10 @@ export function createDemoApprovals() {
       if (approvalId === "demo-approval-forbidden") fail("FORBIDDEN", "You do not have access to this approval.", request.requestId);
       const a = approvals.get(approvalId) ?? fail("RECORD_NOT_FOUND", "This approval does not exist or was removed.", request.requestId);
       return respond(request, structuredClone(a), a.currentVersion, approvalCapabilities(a));
+    },
+    /** A copy of an approval for internal checks. Throws RECORD_NOT_FOUND when there is none. */
+    peekApproval(approvalRef: string, requestId: string): ApprovalDetail {
+      return structuredClone(approvals.get(approvalRef) ?? fail("RECORD_NOT_FOUND", "This approval does not exist.", requestId));
     },
     readRun(request: ReadRequest<{ runId: string }>) {
       const r = runs.get(request.filters.runId) ?? fail("RECORD_NOT_FOUND", "This run does not exist or was removed.", request.requestId);

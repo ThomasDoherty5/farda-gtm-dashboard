@@ -66,11 +66,11 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
         <KpiCard label="Media spend" context={data.channels.map((c) => `${c.label} ${m(c.spend.minorUnits)}`).join(" + ")} testId="metric-media-spend">{m(spend)}</KpiCard>
         <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{compact(impressions)}</KpiCard>
         <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{compact(clicks)} / {pctText(clicks, impressions)}</KpiCard>
-        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{dollars(spend / 100 / clicks)}</KpiCard>
+        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{clicks > 0 ? dollars(spend / 100 / clicks) : "N/A"}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="spend-title" className={styles.card20}>
-          <SectionHeading id="spend-title" title={lead ? `${Math.round((100 * lead.spend.minorUnits) / spend)}% of paid spend is on ${lead.label}` : "Paid spend"} note="USD · same reporting period · source exports pending" />
+          <SectionHeading id="spend-title" title={lead && spend > 0 ? `${Math.round((100 * lead.spend.minorUnits) / spend)}% of paid spend is on ${lead.label}` : "Paid spend"} note="USD · same reporting period · source exports pending" />
           <BarList label="Paid spend by channel" rows={data.channels.map((c) => ({ key: c.key, label: c.label, value: m(c.spend.minorUnits), share: ratio(c.spend.minorUnits, spend) }))} />
           <hr className={styles.divider} />
           <DetailRow label="Media total" value={m(spend)} />
@@ -83,11 +83,11 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
           <SectionHeading id="ctr-title" title={ranked[0] ? `${ranked[0].id} has the strongest click-through` : "Click-through by asset"} note={`CTR = clicks / impressions · ${data.assets.length === 4 ? "four" : data.assets.length} comparable demo assets`} />
           {ranked.length === 0 ? <p className={styles.small}>No assets match the current filters.</p> : (
             <>
-              <BarList label="Click-through rate by asset" rows={ranked.map((a) => ({ key: a.id, label: a.label, value: `${(Math.round((100 * a.clicks) / a.impressions * 10) / 10).toString()}%`, share: ratio((100 * a.clicks) / a.impressions, 3) }))} />
+              <BarList label="Click-through rate by asset" rows={ranked.map((a) => ({ key: a.id, label: a.label, value: a.impressions > 0 ? `${(Math.round((100 * a.clicks) / a.impressions * 10) / 10).toString()}%` : "N/A", share: a.impressions > 0 ? ratio((100 * a.clicks) / a.impressions, 3) : 0 }))} />
               <div className={styles.axis} aria-hidden="true" style={{ gridTemplateColumns: "192px repeat(3, minmax(0, 1fr)) 72px" }}><span /><span>0%</span><span>1%</span><span>2%</span><span>3%</span></div>
             </>
           )}
-          <p className={styles.small}>Clicks are a leading signal. They are not attributed orders, customer count or paid-media revenue.</p>
+          <p className={styles.small}>Clicks are a leading signal. They are not attributed orders, customer count or paid-media revenue. Paid media is not a creator fee.</p>
         </Card>
       </div>
       <Card labelledBy="costs-title">

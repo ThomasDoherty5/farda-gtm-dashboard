@@ -4,6 +4,7 @@ import type { MonitorFilters } from "@/adapter/demoMonitor";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
+import { SearchField } from "@/components/Search";
 import { SectionTabs } from "@/components/SectionTabs";
 import { Card, ChoiceButton, HandoffDialog, KpiCard, KpiGrid, SectionHeading, Table, ViewShell, usd } from "@/features/analytics/parts";
 import { DEMO_RUN_HOURLY_ID, type ContentMonitorData } from "@/fixtures/monitor";
@@ -144,10 +145,7 @@ function Body({ data, filters, setQ, clear }: { data: ContentMonitorData; filter
         <div className={m.headRow} style={{ alignItems: "flex-start" }}>
           <h2 id="posts-title">Posts worth paying attention to.</h2>
           <span style={{ flex: "0 1 300px" }} />
-          <label className={m.search}>
-            <span className="visually-hidden">Search handle or post</span>
-            <input type="search" placeholder="Search handle or post" value={filters.q} onChange={(e) => setQ(e.target.value)} />
-          </label>
+          <SearchField label="Search handle or post" value={filters.q} onChange={setQ} fluid />
         </div>
         {posts.length === 0 ? (
           <p className={a.label} role="status">{filters.q ? `No posts match “${filters.q}”.` : "No posts match these filters."} That isn't zero posts; the unfiltered set has {data.postTotal}.</p>
