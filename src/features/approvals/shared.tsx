@@ -33,6 +33,8 @@ const CAPABILITY_REASONS: Record<string, string> = {
   ROLE_REQUIRED: "You don't have the role this decision needs.",
   EVIDENCE_REQUIRED: "Check the source first. This needs independent evidence.",
   NOTHING_TO_PAUSE: "There is no unsent work to pause.",
+  NOTHING_TO_CANCEL: "There is no unsent work to cancel.",
+  ALREADY_PAUSED: "New work is already paused.",
   PLAYBACK_UNVERIFIED: "Blocked until permitted playback and actually observed intervals support the claimed review depth. Elapsed time, captions and thumbnails don't count.",
   SOURCE_ACCESS_UNVERIFIED: "Blocked until source access, a real account configuration, quota capacity and an authorized runtime exist. A demo can't start a live job.",
 };

@@ -1,0 +1,67 @@
+/* Recruitment, invitation and batch screens (Figma 38:131, 38:348, 66:821). Below 1180 the columns stack (implementation adaptation). */
+.navRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
+.form { display: flex; flex-direction: column; gap: 18px; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 376fr)); column-gap: var(--space-32); row-gap: 18px; }
+.notice { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-16); background: var(--color-subtle); border-radius: var(--space-16); }
+.notice p { margin: 0; }
+.noticeTitle { font: var(--text-label); }
+.steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-12); list-style: none; margin: 0; padding: 0; }
+.step { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-16); background: var(--color-violetSoft); border-radius: var(--space-16); }
+.step .num { font: var(--text-h2); color: var(--color-violet); }
+.step .label { font: var(--text-small); color: var(--color-ink); }
+.message { font: var(--text-body); }
+.micro { margin: 0; font: var(--text-micro); color: var(--color-muted); }
+.panelDark .micro { color: var(--color-onDark); }
+.buttons { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-16); }
+.sampleGrid { display: grid; grid-template-columns: minmax(0, 764fr) minmax(0, 460fr); gap: var(--space-24); align-items: start; }
+.sampleInfo { display: flex; flex-direction: column; gap: 14px; }
+.sampleList { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+.sampleRow { display: grid; grid-template-columns: minmax(0, 321px) minmax(0, 1fr); gap: var(--space-12); }
+.sampleRow dt { font: var(--text-small); color: var(--color-muted); }
+.sampleRow dd { margin: 0; font: var(--text-label); }
+.sampleBox { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding: var(--space-20); background: var(--color-violetSoft); border-radius: var(--space-16); }
+.sampleBox p, .sampleBox h3 { margin: 0; }
+.sampleBox > a, .sampleBox > button { width: 100%; }
+.reviewList { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; width: 100%; }
+.reviewList > div { display: grid; grid-template-columns: minmax(0, 150px) minmax(0, 1fr); gap: var(--space-12); }
+.reviewList dt { font: var(--text-small); color: var(--color-muted); }
+.reviewList dd { margin: 0; font: var(--text-label); overflow-wrap: anywhere; }
+.blockers { margin: 0; padding-left: var(--space-20); font: var(--text-small); }
+.readonly { display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--space-16); border: 1px solid var(--color-border); border-radius: var(--space-999); font: var(--text-label); color: var(--color-ink); background: var(--color-surface); }
+.bars { display: flex; flex-direction: column; gap: var(--space-16); margin: 0; padding: 0; list-style: none; }
+.bar { display: flex; align-items: flex-start; gap: var(--space-16); }
+.bar .name { flex: 0 0 158px; font: var(--text-small); color: var(--color-muted); }
+.bar .track { flex: 1 1 0; height: 18px; background: var(--color-violetSoft); border-radius: var(--space-999); }
+.bar .fill { height: 18px; background: var(--color-violet); border-radius: var(--space-999); }
+.bar .count { flex: 0 0 90px; font: var(--text-label); }
+.statusBar { display: flex; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.seg { display: flex; align-items: center; justify-content: center; height: 36px; min-width: 0; border-radius: var(--space-8); font: var(--text-label); overflow: hidden; }
+.sConfirmed { background: var(--color-violet); color: var(--color-onDark); }
+.sQueued { background: var(--color-violetSoft); color: var(--color-ink); }
+.sRunning { background: var(--color-ink); color: var(--color-onDark); }
+.sReconcile { background: var(--color-warningSoft); color: var(--color-ink); }
+.sLogin { background: var(--color-dangerSoft); color: var(--color-ink); }
+.sMuted { background: var(--color-subtle); color: var(--color-muted); }
+.tabsWrap { display: flex; flex-direction: column; gap: var(--space-16); }
+@media (max-width: 1179px) {
+  .sampleGrid { grid-template-columns: minmax(0, 1fr); }
+  .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .bar { flex-wrap: wrap; }
+  .bar .name { flex: 1 0 100%; }
+}
+@media (max-width: 479px) {
+  .steps { grid-template-columns: minmax(0, 1fr); }
+  .sampleRow, .reviewList > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+
+/* Batch item table (Figma 66:821): 12px cell padding, 44px control cells that keep the 46px row. */
+.items { width: 100%; min-width: 1000px; border-collapse: collapse; }
+.items th, .items td { padding: var(--space-12); border: 0; border-bottom: 1px solid var(--color-border); text-align: left; vertical-align: middle; font: var(--text-body); color: var(--color-ink); }
+.items thead th { font: var(--text-small); color: var(--color-muted); }
+.items td.control { padding-block: 1px; }
+.itemsScroll { overflow-x: auto; }
+.itemsScroll:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
+.status { margin: 0; padding: var(--space-12) var(--space-16); background: var(--color-violetSoft); border-radius: var(--space-16); font: var(--text-small); }
