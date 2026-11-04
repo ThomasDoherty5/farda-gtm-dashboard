@@ -13,6 +13,7 @@ import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { SourceDialog } from "@/features/approvals/shared";
 import { HOMES, homeLabel, type Home, type OperationsOverview, type QueueRow } from "@/fixtures/operations";
+import { OpsTabs } from "./OpsTabs";
 import { MobileOperations, TabletOperations } from "./OperationsCompact";
 import { useLayout, type Layout } from "./useLayout";
 import { figure, minutesAgoLabel, minutesBetween, reasonText, waitingLabel } from "./format";
@@ -100,13 +101,7 @@ function Body({ res, data, layout, home, demo }: { res: ReadResponse<OperationsO
 
   return (
     <>
-      <nav aria-label="Operations sections" className={styles.tabs}>
-        <LinkButton to={tabTo("overview")} variant={view === "overview" ? "primary" : "ghost"} aria-current={view === "overview" ? "page" : undefined}>Overview</LinkButton>
-        <LinkButton to={tabTo("orders")} variant={view === "orders" ? "primary" : "ghost"} aria-current={view === "orders" ? "page" : undefined}>Orders</LinkButton>
-        <LinkButton to={tabTo("shipping")} variant={view === "shipping" ? "primary" : "ghost"} aria-current={view === "shipping" ? "page" : undefined}>Shipping</LinkButton>
-        <LinkButton to="/inventory" variant="ghost">Stock</LinkButton>
-        <LinkButton to="/support/cases/TEST-ISS-021" variant="ghost">Support</LinkButton>
-      </nav>
+      <OpsTabs current={view} hrefs={{ overview: tabTo("overview"), orders: tabTo("orders"), shipping: tabTo("shipping") }} />
 
       <Notice tone={staleSource ? "warning" : "violet"} label={staleSource ? "Behind" : "Source"} title={`${data.source.label} · ${lastSync ? `Synced ${minutesAgoLabel(behind ?? 0)}` : "No successful sync recorded"}`} role={staleSource ? "status" : undefined} testId="source-freshness">
         {staleSource ? `The mirror is behind its source, so the figures below may be out of date. ${sourceNote}` : sourceNote}
