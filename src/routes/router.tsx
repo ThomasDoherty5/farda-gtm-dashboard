@@ -17,6 +17,7 @@ import { ConsentPage } from "@/features/lifecycle/ConsentPage";
 import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
 import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
 import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
+import { StateGalleryPage } from "@/features/states/StateGalleryPage";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
 import { CloseReconciliationPage } from "@/features/finance/CloseReconciliationPage";
 import { FinanceAnalyticsPage } from "@/features/finance/FinanceAnalyticsPage";
@@ -86,6 +87,7 @@ const implemented: Record<string, JSX.Element> = {
   "/customers/flows/review-request": <EmailFlowPage flow="review-request" />,
   "/customers/consent": <ConsentPage />,
   "/customers/activation": <ActivationPage />,
+  "/design-system/states": <StateGalleryPage />,
   "/operations": <OperationsPage />,
   "/orders/:orderId": <OrderPage />,
   "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,

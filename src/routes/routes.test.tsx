@@ -10,7 +10,7 @@ import { navSections } from "./nav";
 const renderAt = (path: string, adapter: FardaAdapter = createDemoAdapter()) => renderRoute(path, adapter);
 
 /** Overview, approval detail, and the two run tabs. The tabless run path is the hourly variant, not built. */
-const BUILT_SOURCES = new Set(["10:217", "6:234", "5:13", "5:156", "102:555", "102:364", "4:6", "4:171", "4:317", "12:292", "12:431", "12:808", "12:653", "12:708", "102:74", "6:24", "9:143", "23:275", "23:440", "38:131", "38:348", "66:821", "9:299", "9:436", "3:6", "14:74", "14:377", "30:349", "30:550", "30:721", "37:74", "37:251", "65:634", "65:814", "23:73", "25:166", "25:307", "25:481", "7:876", "7:1085", "14:637", "14:911", "66:641", "7:129", "7:317", "65:1037", "66:252", "66:447", "9:551", "7:510", "7:683", "12:1006", "5:289", "5:404", "11:372", "11:498", "11:624", "11:750", "11:852"]);
+const BUILT_SOURCES = new Set(["10:217", "6:234", "5:13", "5:156", "102:555", "102:364", "4:6", "4:171", "4:317", "12:292", "12:431", "12:808", "12:653", "12:708", "102:74", "6:24", "9:143", "23:275", "23:440", "38:131", "38:348", "66:821", "9:299", "9:436", "3:6", "14:74", "14:377", "30:349", "30:550", "30:721", "37:74", "37:251", "65:634", "65:814", "23:73", "25:166", "25:307", "25:481", "7:876", "7:1085", "14:637", "14:911", "66:641", "7:129", "7:317", "65:1037", "66:252", "66:447", "9:551", "7:510", "7:683", "12:1006", "5:289", "5:404", "11:372", "11:498", "11:624", "11:750", "11:852", "12:534"]);
 
 const concrete = (path: string) => path.replace(/:(\w+)/g, "demo-$1");
 
@@ -85,7 +85,7 @@ describe("shell", () => {
   it("keeps the development state gallery out of primary navigation but routable", async () => {
     expect(navSections.map((s) => s.seg)).not.toContain("design-system");
     renderAt("/design-system/states");
-    expect(await screen.findByRole("heading", { name: "Recovery state gallery" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Every state has a next step", level: 1 })).toBeInTheDocument();
   });
 
   it("shows the demo label on every demo route", async () => {

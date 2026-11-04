@@ -1,0 +1,4 @@
+/* Figma 12:560 to 12:631: four rows of three 416px cards, 24px apart. Below 1180 the rows stack. */
+.row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-24); align-items: start; }
+.retry { cursor: not-allowed; }
+@media (max-width: 1179px) { .row { grid-template-columns: minmax(0, 1fr); } }

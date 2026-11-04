@@ -183,6 +183,36 @@ Activation and Setup sit just over the proposed 0.5% mark, from sub-pixel text p
 | Overview in the primary nav | Highlighted on every lifecycle screen | The same: the `customers` section now belongs to Overview, not Operations | Matches Figma |
 | Three flow pages' height | 1302 | 1378 | The policy note, plus the demo footnote |
 
+## Recovery state gallery comparison (source 12:534)
+
+Owner THO-306, a development-only reference. Same capture settings and method as the settings comparison above.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 12:534 | `/design-system/states` | 1520 tall, not 1478 (development footnote) | 0.305%, over the whole shared 1440px |
+
+## Recovery state gallery mapping and differences
+
+| Figma | Code | Notes |
+| -- | -- | -- |
+| State / Loading, First use, No results, Refresh failed, Stale data, Access denied, Source changed, Uncertain outcome, Sign-in required, Confirmation, Success, Validation (12:561 to 12:646) | `StatePanel` (`src/components/StatePanel.tsx`) in `StateGalleryPage` | A badge names the state, so color never carries it alone. Loading placeholders are `LoadingBones` |
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Loading button | A gray disabled "Loading…" | The same, `aria-disabled` and described by a hidden status line; the card has `aria-busy` | CTRL-217: busy, blocked, no duplicate submission |
+| Retry disabled | A gray disabled button | The same, focusable, with the uncertain-outcome sentence as its description | CTRL-218: visible reason, and reconciliation is the next step |
+| Keep task | A button | Dismisses the confirmation and says nothing was canceled | CTRL-177: no transition, approval or write |
+| Clear filters, Take over browser | Buttons | Dialogs describing what the control does on a real screen | There is nothing to clear and no session here |
+| Other actions | Buttons | Links to the screen that owns the recovery (connections, a failed run, an approval, a receipt, launch control) | FE14-04: a logical destination |
+| Development footnote | None | "Development reference · these are examples of patterns, not live states" | The cards aren't real states |
+| `/design-system/states` in the nav | Automations highlighted | The same | Matches Figma; the route stays out of the menu |
+
+## Mobile and tablet Operations (12:653, 12:708)
+
+The native 390 and 1024 Operations designs are built with `/operations` under THO-301 (see "Operations comparison" below), not under THO-306. The shell part is still open: both designs collapse the navigation ("Menu" at 390, "More" at 1024), which would change how every screen is reached on narrow screens, and several existing browser tests click the primary navigation at 390. It needs Kevon's decision, so the shell still wraps, and the Operations comparison below attributes most of its remaining difference to that.
+
+`e2e/responsive.spec.ts` checks the screens built under THO-304, THO-305 and THO-306 at 390, 720 (200% zoom of 1440), 768, 1024 and 1920px for page overflow, a visible H1, and a table that scrolls inside a labeled region.
+
 ## Launch and analytics comparison (sources 3:6, 14:74, 14:377, 30:349, 30:550, 30:721)
 
 Same capture settings as Overview, from Thomas's copy of the file (see `figma-access-gap.md`), measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly.

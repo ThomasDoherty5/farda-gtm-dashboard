@@ -1,0 +1,8 @@
+/* Figma "State / …" cards (12:561 to 12:646): a badge, a title, one or two sentences, and the next step. */
+.panel { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-16); min-width: 0; padding: var(--space-24) 22px var(--space-24) var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.panel h3 { margin: 0; font: var(--text-h3); color: var(--color-ink); }
+.body { margin: 0; font: var(--text-body); color: var(--color-muted); }
+.bones { display: flex; flex-direction: column; gap: var(--space-16); width: 100%; }
+.bone { display: block; height: 12px; max-width: 100%; background: var(--color-violetSoft); border-radius: var(--space-4); }
+.status { margin: 0; font: var(--text-small); color: var(--color-ink); }
+@media (max-width: 479px) { .panel { padding: var(--space-16); } }
