@@ -11,3 +11,7 @@
 .ledger thead th { padding-block: var(--space-12); }
 .dense tbody tr { height: 63px; }
 .dense tbody th, .dense tbody td { padding-block: 0; }
+.list th, .list td { padding: var(--space-16) 0; color: var(--color-muted); }
+.list thead th { padding: var(--space-12) 0; text-transform: none; }
+.list tbody th { font: var(--text-label); color: var(--color-ink); }
+.list thead th { overflow-wrap: anywhere; }

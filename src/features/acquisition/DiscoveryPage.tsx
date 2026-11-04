@@ -10,11 +10,11 @@ import { Dialog } from "@/components/Dialog";
 import { SkeletonCard, EmptyState } from "@/components/EmptyState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { formatMoney } from "@/components/MetricValue";
-import { SectionTabs } from "@/components/SectionTabs";
 import { ViewError } from "@/components/ViewError";
 import { blockedReason } from "@/features/approvals/shared";
 import type { DiscoveryData } from "@/fixtures/discovery";
 import { DEMO_BATCH_ID, DEMO_CREATOR_ID, DEMO_EVIDENCE_ID, DEMO_HOURLY_RUN_ID } from "@/fixtures/ids";
+import { AcquisitionTabs } from "./AcquisitionTabs";
 import { FilterButton } from "./FilterButton";
 import styles from "./Acquisition.module.css";
 
@@ -48,14 +48,7 @@ export function DiscoveryPage() {
         <LinkButton variant="secondary" to={evidencePath} style={{ minWidth: 166 }}>Review evidence</LinkButton>
         <LinkButton to="/settings/capabilities" style={{ minWidth: 162 }}>Validate access</LinkButton>
       </div>
-      <SectionTabs label="Acquisition sections" tabs={[
-        { label: "Pipeline", to: "/creators/pipeline", width: 100 },
-        { label: "Daily sourcing", to: "/creators/discovery", width: 130, current: true },
-        { label: "Video evidence", to: evidencePath, width: 130 },
-        { label: "Social Cat", to: "/creators/social-cat?view=dashboard", width: 102 },
-        { label: "TikTok Shop", to: "/creators/tiktok?view=dashboard", width: 109 },
-        { label: "Content monitor", to: "/content", width: 137 },
-      ]} />
+      <AcquisitionTabs current="Daily sourcing" />
       {query.isPending && <SkeletonCard label="Loading daily sourcing…" />}
       {query.isError && <ViewError error={query.error} subject="Daily sourcing" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&
