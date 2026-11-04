@@ -53,9 +53,6 @@
 .tile .num { color: var(--color-violet); }
 .label { font: var(--text-small); }
 .tile .label { color: var(--color-ink); }
-.search { box-sizing: border-box; width: 320px; max-width: 100%; min-height: 44px; padding: var(--space-12); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-999); font: var(--text-body); color: var(--color-ink); }
-.search::placeholder { color: var(--color-muted); }
-.search:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
 
 /* Dashboard */
 .network [aria-pressed="true"] { background: var(--color-violetSoft); color: var(--color-violet); border-color: var(--color-violetSoft); }
@@ -99,4 +96,3 @@
   .details > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
 .lead { margin: 0; font: var(--text-body); color: var(--color-muted); }
-.search { line-height: 22px; }
