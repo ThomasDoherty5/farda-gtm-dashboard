@@ -75,6 +75,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
 | `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
+| `offerRewards` | `offerId`, `scenario` | RewardsRecord | `scorecards/RewardsPage` | `demoScorecards` | proposed + conflict | C-06. Typed `scenario: string`; an unknown scenario is `RECORD_NOT_FOUND`. |
 | `operationsOverview` | `scenario?` | OperationsOverview | `operations/OperationsPage` | `demoOps` | proposed + conflict | C-06. |
 | `nightlyReconciliation` | none | ReconciliationData | `settings/ReconciliationPage` | `demoReconciliation` | proposed | Nightly pairs, conflicts that name the authoritative side, and an append-only audit trail. Distinct from `launchReconciliation`. |
 | `operationsShipping` | none | shipments, exceptions, chain | `operations/ShippingPanels` | `demoOps` | proposed | In transit is counted on the screen from carrier states. |
@@ -155,6 +156,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `markWatched` | `unverified` (`PLAYBACK_UNVERIFIED`) | `evidenceRecord` | `acquisition/EvidencePage` | proposed |
 | `openEmailTool` | `unverified` (`PROVIDER_NOT_SELECTED`) | `lifecycleOverview` | none | proposed |
 | `payCommission` | `unsupported` (`PROVIDER_OWNS_PAYOUT`) | `settlementDetail` | none | proposed |
+| `purchaseReward` | `unverified` (`OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`) | `offerRewards` | none | proposed |
 | `recordDecision` | `unverified` (`DEMO_NO_DISPATCH`) | every analytics view | none | proposed |
 | `recordPermissionEvidence` | `available` | `channelCapabilities` | `settings/CapabilitiesPage` | conflict (C-15) |
 | `reopenCase` | `unsupported` (`INTERCOM_OWNS_CASES`) | `supportWorkspace` | none | proposed |

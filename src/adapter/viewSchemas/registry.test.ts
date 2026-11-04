@@ -1,3 +1,4 @@
+import { REWARD_SCENARIOS } from "@/fixtures/rewards";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -113,6 +114,7 @@ const WITH_RECORD: Record<string, unknown[]> = {
   evidenceRecord: [{ creatorId: "demo-creator-1", evidenceId: "demo-evidence-1" }],
   assessmentRecord: [{ creatorId: "demo-creator-1", assessmentId: "demo-assessment-content" }, { creatorId: "demo-creator-1", assessmentId: "demo-assessment-tiktok" }, { creatorId: "demo-creator-1", assessmentId: "demo-assessment-sc-commerce" }],
   offerDraft: [{ offerId: "demo-offer-1" }],
+  offerRewards: REWARD_SCENARIOS.map((s) => ({ offerId: "demo-offer-1", scenario: s.scenarioId })),
   settlementDetail: [{ settlementId: "COMM-DEMO-D" }, { settlementId: "TT-NATIVE-DEMO" }],
   payableDetail: [{ payableId: "PAY-0012" }],
   orderCustomer: [{ orderId: "TEST-SH-1042" }],
