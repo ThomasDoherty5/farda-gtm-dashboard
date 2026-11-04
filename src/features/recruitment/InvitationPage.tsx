@@ -181,7 +181,7 @@ function Body({ res, data }: { res: ReadResponse<InvitationData>; data: Invitati
           <h2 id="inv-native-title" className={acquisition.h2}>Approve terms before native commitment.</h2>
           <p className={acquisition.small}>Standard vs Shop Ads rate, active vs proposed/effective terms and flat-fee funding are separate fields.</p>
         </div>
-        <p className={acquisition.small}>Open PENDING samples may use the documented review API with verified seller scope. Target or other unverified actions use a validated browser route; neither route bypasses permissions, stock or exact-action approval.</p>
+        <p className={acquisition.small}>Open PENDING samples may use the documented review API with verified seller scope. Target or other unverified actions use a validated browser route; neither route bypasses permissions, stock or exact-action <br className="wide-break" />approval.</p>
         <div className={styles.buttons}>
           <LinkButton to={`/finance/settlements/${DEMO_SETTLEMENT_ID}`} style={{ minWidth: 262 }}>Native settlement & rates</LinkButton>
           <LinkButton variant="secondary" to={`/batches/${DEMO_BATCH_ID}`} style={{ minWidth: 208 }}>Bulk operations</LinkButton>

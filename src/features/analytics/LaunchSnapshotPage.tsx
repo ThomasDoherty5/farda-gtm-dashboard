@@ -66,7 +66,7 @@ function Body({ data }: { data: LaunchSnapshotData }) {
               </div>
             ))}
           </div>
-          <div className={styles.legend}>
+          <div className={styles.legend} style={{ alignItems: "flex-start" }}>
             <Badge width={144}>In conversation</Badge>
             <Badge tone="violet" width={164}>Ready for next step</Badge>
             <span style={{ flex: "0 1 104px" }} />
