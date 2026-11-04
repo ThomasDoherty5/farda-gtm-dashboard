@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { attributionDemo, campaignFunnelDemo, customerJourneyDemo, launchControlDemo, paidMediaDemo } from "@/fixtures/analytics";
+import { socialCatDashboardDemo } from "@/fixtures/creators";
 import { overviewOriginal, type OverviewFixtureKey } from "@/fixtures/overview";
 import { renderRoute } from "@/test/renderWithAdapter";
 import { weekBarHeight, weekTotals } from "./attributionMath";
@@ -359,5 +360,50 @@ describe("states shared by every analytics screen", () => {
     open("/analytics/attribution", "FX-09-expired-session");
     expect(await screen.findByRole("alert")).toHaveTextContent("Sign in again");
     expect(screen.queryByTestId("metric-net-receipts")).not.toBeInTheDocument();
+  });
+});
+
+describe("FE01-03 the $12,596 / 400-order example is never mixed with the pilot figures", () => {
+  const PILOT = { orders: 270, net: 180_000 };
+  it("every dataset that states the original example is keyed overview-original or derives from it", () => {
+    expect(overviewOriginal.datasetKey).toBe("overview-original");
+    expect(attributionDemo.datasetKey).toBe("overview-original");
+    expect(overviewOriginal.netReceipts.value!.minorUnits).toBe(1_259_600);
+    expect(overviewOriginal.orders.value).toBe(400);
+    for (const other of [paidMediaDemo.datasetKey, campaignFunnelDemo.datasetKey, customerJourneyDemo.datasetKey, launchControlDemo.datasetKey] as string[]) expect(other).not.toBe("overview-original");
+  });
+
+  it("no figure of the original example equals a pilot figure, and the pilot is a separate cohort", () => {
+    expect(overviewOriginal.orders.value).not.toBe(PILOT.orders);
+    expect(overviewOriginal.netReceipts.value!.minorUnits).not.toBe(PILOT.net);
+    expect(socialCatDashboardDemo.pilot.netEligibleSales.minorUnits).toBe(PILOT.net);
+    expect(attributionDemo.orders.value).toBe(400);
+  });
+
+  it("the Overview and Performance attribution pages show 400 orders and $12,596 and none of the pilot's $1,800 / 270", async () => {
+    open("/analytics/attribution");
+    await metric("net-receipts");
+    const main = screen.getByRole("main");
+    expect(within(main).getAllByText(/\$12,596/).length).toBeGreaterThan(0);
+    expect(within(main).queryByText(/270 (retained )?orders|\$1,800 (net|pilot)/)).not.toBeInTheDocument();
+  });
+});
+
+describe("FE01-05 no new upfront fee, and paid media is not a creator fee", () => {
+  it("the campaign funnel says no upfront creator fee is created", async () => {
+    open("/campaigns/demo-campaign-first-wave?tab=funnel");
+    expect(await screen.findByText(/commission-only; no upfront creator fee is created here/)).toBeInTheDocument();
+  });
+
+  it("the paid media page says paid media is not a creator fee, and keeps media apart from creator and sample economics", async () => {
+    open("/analytics/paid-media");
+    expect(await screen.findByText(/Paid media is not a creator fee/)).toBeInTheDocument();
+    expect(screen.getByText("Creator / sample economics")).toBeInTheDocument();
+    expect(screen.getByText("Media total")).toBeInTheDocument();
+  });
+
+  it("the attribution page labels commission, historical accepted fees and sample cost separately", async () => {
+    open("/analytics/attribution");
+    expect(await screen.findByText(/commission, historical accepted fees and sample landed cost, labeled separately/)).toBeInTheDocument();
   });
 });

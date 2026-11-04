@@ -315,3 +315,26 @@ export const customerJourneyDemo: CustomerJourneyData = {
   ],
   provenance: provenance("Illustrative commerce, support and review sources", "Production feeds and source selection pending"),
 };
+
+/* ---------- Source freshness and reconciliation (GTM275) ---------- */
+
+/** One source's own freshness. A source never inherits another's state. */
+export type SourceFreshnessRow = { sourceId: string; label: string; feeds: string; lastSourceSuccessAt: string | null; staleReasonCode: string | null };
+export type ReconciliationData = {
+  datasetKey: "reconciliation-demo";
+  asOf: string;
+  freshness: SourceFreshnessRow[];
+  /** Pre-built in the adapter from the datasets, so the page shows exactly what the pages state. */
+  matrix: import("@/features/analytics/reconciliation").MatrixRow[];
+  provenance: Provenance;
+};
+
+const hoursBefore = (h: number) => new Date(Date.parse(DEMO_NOW) - h * 3_600_000).toISOString();
+export const sourceFreshnessDemo: SourceFreshnessRow[] = [
+  { sourceId: "shopify-orders", label: "Shopify orders", feeds: "Overview · Performance attribution · Commerce", lastSourceSuccessAt: hoursBefore(1), staleReasonCode: null },
+  { sourceId: "tiktok-shop-orders", label: "TikTok Shop orders", feeds: "Overview · Performance attribution", lastSourceSuccessAt: hoursBefore(3), staleReasonCode: "NO_CHANGE" },
+  { sourceId: "ad-exports", label: "Meta and TikTok ad exports", feeds: "Paid media", lastSourceSuccessAt: hoursBefore(52), staleReasonCode: "SOURCE_SYNC_DELAYED" },
+  { sourceId: "support-desk", label: "Support desk", feeds: "Commerce, support and reviews", lastSourceSuccessAt: hoursBefore(2), staleReasonCode: "PARTIAL_ROWS" },
+  { sourceId: "reviews-feed", label: "Ratings-only review feed", feeds: "Commerce, support and reviews", lastSourceSuccessAt: hoursBefore(75), staleReasonCode: "SOURCE_ERROR_AUTH" },
+  { sourceId: "launch-tracker", label: "Notion launch tracker", feeds: "Launch snapshot · Launch control", lastSourceSuccessAt: null, staleReasonCode: null },
+];
