@@ -75,3 +75,54 @@ test("no horizontal overflow at 320px", async ({ page }) => {
   await expect(page.getByTestId("metric-Visual coverage")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
+
+test.describe("reviewer disagreement and override (VE-08)", () => {
+  const PARTIAL_DISPUTE = /Disagree or override audio and narrative 0:00 to 0:12/i;
+
+  test("an override is recorded with its reason beside the first record, which stays as it was", async ({ page }) => {
+    await page.goto(PARTIAL);
+    const disputes = page.getByTestId("disputes");
+    const coverage = await page.getByTestId("metric-Audio coverage").textContent();
+    const trigger = disputes.getByRole("button", { name: PARTIAL_DISPUTE });
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Disagree or override" });
+    await dialog.getByRole("button", { name: "Record disagreement" }).click();
+    await expect(dialog.getByText(/Give a reason of at least 12 characters/)).toBeVisible();
+    await dialog.getByRole("radio", { name: /Override/ }).check();
+    await dialog.getByLabel("From (m:ss)").fill("0:00");
+    await dialog.getByLabel("To (m:ss)").fill("0:12");
+    await dialog.getByRole("textbox", { name: "What it should say" }).fill("Music only, no speech.");
+    await dialog.getByLabel("Reason").fill("There is no voiceover in this clip.");
+    await dialog.getByRole("button", { name: "Record override" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId("dispute-status")).toContainText("Recorded at version 4. The first reviewer's record is unchanged.");
+    const entry = page.getByTestId("dispute-entry");
+    await expect(entry).toContainText("Voiceover over soft music.");
+    await expect(entry).toContainText("Music only, no speech.");
+    await expect(entry).toContainText("There is no voiceover in this clip.");
+    await expect(disputes.getByText("Disputed", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("metric-Audio coverage")).toHaveText(coverage ?? "");
+    await expect(page.getByTestId("readiness")).toContainText("contested");
+    await expect(page.getByRole("button", { name: "Mark watched" }).first()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  test("the dialog is keyboard-operable and returns focus to the control that opened it", async ({ page }) => {
+    await page.goto(PARTIAL);
+    const trigger = page.getByTestId("disputes").getByRole("button", { name: PARTIAL_DISPUTE });
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("dialog", { name: "Disagree or override" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(trigger).toBeFocused();
+  });
+
+  test("nothing to dispute before a review is saved, and the existing override page has no accessibility violations", async ({ page }) => {
+    await page.goto(EMPTY);
+    await expect(page.getByTestId("no-first-review")).toBeVisible();
+    await page.goto("/creators/demo-creator-1/evidence/demo-evidence-3");
+    await expect(page.getByTestId("dispute-entry")).toBeVisible();
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations).toEqual([]);
+  });
+});

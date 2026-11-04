@@ -112,3 +112,105 @@ describe("reading", () => {
     expect(() => read(createDemoEvidence(), "nope")).toThrow(AdapterError);
   });
 });
+
+describe("reviewer disagreement and override (VE-08)", () => {
+  const dispute = (over: Partial<import("@/features/acquisition/evidenceTypes").DisputeDraft> = {}) => ({ kind: "dispute" as const, observationId: "obs-seed-3", stance: "disagree" as const, reason: "There is no voiceover in this clip.", proposed: null, ...over });
+  const saveDispute = (ref: string | null, version: string | null, payload: unknown, key = `k-${++seq}`) => ({ ...save(ref, version, payload as EvidenceDraft, key), resourceKind: "reviewerAssessment" as const });
+
+  it("freezes the first reviewer's record when observations are first saved, and later drafts leave it alone", async () => {
+    const store = createDemoEvidence();
+    const first = await store.save(save("demo-evidence-1", "v1", draft({ observations: [o("n1")] })));
+    expect(first.record.firstReview).toMatchObject({ version: "v2", reviewerRole: "reviewer", mediaUrl: URL1 });
+    expect(first.record.firstReview!.observations.map((x) => x.id)).toEqual(["n1"]);
+    const second = await store.save(save("demo-evidence-1", "v2", draft({ observations: [o("n1"), o("n2", { startSec: 9, endSec: 20 })] })));
+    expect(second.record.observations).toHaveLength(2);
+    expect(second.record.firstReview!.observations.map((x) => x.id)).toEqual(["n1"]);
+    const emptied = await store.save(save("demo-evidence-1", "v3", draft({ observations: [] })));
+    expect(emptied.record.firstReview!.observations).toHaveLength(1);
+  });
+
+  it("has nothing to dispute until a review is saved", async () => {
+    const store = createDemoEvidence();
+    const error = await errorFrom(store.save(saveDispute("demo-evidence-1", "v1", dispute())));
+    expect(error.category).toBe("validation");
+    expect(error.body.fieldErrors?.observationId).toMatch(/no saved review/);
+    expect(read(store, "demo-evidence-1").capabilities.find((c) => c.actionKind === "recordDisagreement")).toMatchObject({ state: "held", reasonCodes: ["NO_REVIEW_ON_FILE"] });
+  });
+
+  it("records a disagreement beside the original without changing it, coverage, or readiness", async () => {
+    const store = createDemoEvidence();
+    const before = read(store, DEMO_EVIDENCE_PARTIAL_ID).data!;
+    const result = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute()));
+    const after = result.record;
+    expect(result.resourceVersion).toBe("v4");
+    expect(after.disputes).toHaveLength(1);
+    expect(after.disputes[0]).toMatchObject({ stance: "disagree", proposed: null, reviewerRole: "reviewer", recordedAgainst: DEMO_MEDIA_URL });
+    expect(after.disputes[0]!.prior).toEqual(before.firstReview!.observations[2]);
+    expect(after.observations).toEqual(before.observations);
+    expect(after.firstReview).toEqual(before.firstReview);
+    expect(after.readiness.reasonCodes).toEqual(["NO_COMPLETE_REVIEW", "CONTESTED"]);
+    expect(Object.keys(after)).not.toContain("watched");
+    expect(after.assessments).toEqual(before.assessments);
+  });
+
+  it("records an override with a replacement or a removal, still without editing the original", async () => {
+    const store = createDemoEvidence();
+    const replaced = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute({ stance: "override", proposed: { category: "audio", startSec: 0, endSec: 12, text: "Music only, no speech." } })));
+    expect(replaced.record.disputes[0]!.proposed).toMatchObject({ text: "Music only, no speech." });
+    const removed = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v4", dispute({ stance: "override", observationId: "obs-seed-1", proposed: "remove", reason: "This is a different clip, not the one linked." })));
+    expect(removed.record.disputes.map((d) => d.proposed === "remove")).toEqual([false, true]);
+    expect(removed.record.firstReview!.observations).toHaveLength(3);
+    expect(removed.record.observations).toHaveLength(3);
+  });
+
+  it("requires a reason, a valid proposal, and a target in the first record (server rejection)", async () => {
+    const store = createDemoEvidence();
+    const rejected = async (payload: unknown) => (await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", payload)))).body.fieldErrors ?? {};
+    expect(await rejected(dispute({ reason: "   " }))).toHaveProperty("reason");
+    expect(await rejected(dispute({ reason: "too short" }))).toHaveProperty("reason");
+    expect(await rejected(dispute({ stance: "override", proposed: null }))).toHaveProperty("proposed");
+    expect(await rejected(dispute({ stance: "disagree", proposed: "remove" }))).toHaveProperty("proposed");
+    expect(await rejected(dispute({ stance: "override", proposed: { category: "audio", startSec: 9, endSec: 3, text: "x" } }))).toHaveProperty("proposed.end");
+    expect(await rejected(dispute({ observationId: "made-up" }))).toHaveProperty("observationId");
+    expect(await rejected({ ...dispute(), kind: "something-else" })).toHaveProperty("kind");
+    expect(read(store, DEMO_EVIDENCE_PARTIAL_ID).data!.disputes).toHaveLength(0);
+  });
+
+  it("can't dispute a draft observation that isn't in the first record", async () => {
+    const store = createDemoEvidence();
+    const added = await store.save(save(DEMO_EVIDENCE_PARTIAL_ID, "v3", draft({ mediaUrl: DEMO_MEDIA_URL, observations: [...read(store, DEMO_EVIDENCE_PARTIAL_ID).data!.observations, o("late", { recordedAgainst: DEMO_MEDIA_URL })] })));
+    const error = await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, added.resourceVersion, dispute({ observationId: "late" }))));
+    expect(error.body.fieldErrors?.observationId).toMatch(/first reviewer's record/);
+  });
+
+  it("changing the video invalidates the first record, its disputes and readiness (a material change)", async () => {
+    const store = createDemoEvidence();
+    const disputed = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute()));
+    const changed = await store.save(save(DEMO_EVIDENCE_PARTIAL_ID, disputed.resourceVersion, draft({ mediaUrl: URL1, observations: [] })));
+    expect(changed.record.readiness.reasonCodes).toEqual(expect.arrayContaining(["NO_COMPLETE_REVIEW", "MEDIA_CHANGED"]));
+    expect(changed.record.readiness.reasonCodes).not.toContain("CONTESTED");
+    expect(changed.record.disputes).toHaveLength(1);
+    const error = await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, changed.resourceVersion, dispute({ reason: "A second, separate reason." }))));
+    expect(error.body.fieldErrors?.observationId).toMatch(/video changed/);
+  });
+
+  it("flags a changed checkout route as invalidating the model it was read against", async () => {
+    const store = createDemoEvidence();
+    const changed = await store.save(save(DEMO_EVIDENCE_PARTIAL_ID, "v3", draft({ mediaUrl: DEMO_MEDIA_URL, checkoutRoute: "tiktok-shop", observations: read(store, DEMO_EVIDENCE_PARTIAL_ID).data!.observations })));
+    expect(changed.record.readiness.reasonCodes).toContain("ROUTE_CHANGED");
+  });
+
+  it("rejects a stale version, replays a duplicate, and refuses a changed payload under the same key", async () => {
+    const store = createDemoEvidence();
+    const [a, b] = await Promise.all([store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute(), "same")), store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute(), "same"))]);
+    expect([a.resourceVersion, b.resourceVersion]).toEqual(["v4", "v4"]);
+    expect((await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute({ reason: "A different reason entirely." }), "same")))).body.code).toBe("MANIFEST_CHANGED");
+    const stale = await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute({ reason: "Another reason, on a stale page." }))));
+    expect(stale.category).toBe("conflict");
+    expect(stale.body.currentVersion).toBe("v4");
+    // Same content under a new key is not recorded twice.
+    const again = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v4", dispute()));
+    expect(again.reasonCodes).toEqual(["NO_CHANGE"]);
+    expect(again.record.disputes).toHaveLength(1);
+  });
+});
