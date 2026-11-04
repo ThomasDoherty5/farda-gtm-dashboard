@@ -78,6 +78,8 @@ const batchDetail = z.object({
     if (new Set(items.map((i) => i.id)).size !== items.length) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Batch item ids must be unique" });
   }),
   held: z.array(z.object({ key: text, label: text, byOwner: countsByOwner })),
+  /** TikTok sample requests. A decision counts only with TikTok's receipt; a denied route is an owner handoff, never a decision. */
+  samples: z.array(z.object({ id: text, handle: text, product: text, units: count, route: z.enum(["api", "authorityDenied"]), state: z.enum(["pending", "approved", "declined", "handoff"]), receiptRef: text.nullable(), ownerRef: text.nullable() })),
   filters: z.object({ source: z.enum(["tiktok", "all"]), deal: z.enum(["affiliate", "all"]), owner: z.union([z.literal("all"), owner]) }),
   model: z.object({ label: text, status: z.literal("pending") }),
   capacity: z.object({
@@ -141,6 +143,10 @@ const discoverySummary = z.object({
   currentPhase: count,
   capacityRows: z.array(z.object({ id: z.enum(["social-cat", "tiktok-shop", "shared"]), source: text, evidence: text, meaning: text, next: text })),
   batch: z.object({ batchId: text, selected: count, eligible: count, sampleUnits: count, sampleUnitCost: money, rateLabel: text }),
+  /** The plan's versions. An unread source account is unknown, never a made-up id. */
+  versions: z.object({ sourceAccount: provenanceValueSchema(text), icpVersion: text, policyVersion: text, accessStatus: text, scheduleStatus: z.enum(["draft", "active"]) }),
+  steps: z.array(z.object({ title: text, count: count.nullable(), countLabel: text, owner: text, evidence: text, next: text })).min(1),
+  identity: z.object({ surfaced: count, mergedDuplicates: count, suppressed: z.object({ optedOut: count, declinedRecently: count, existingRelationship: count }), selected: count }),
 }).superRefine((d, ctx) => {
   if (d.currentPhase >= d.phases.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["currentPhase"], message: "currentPhase must index a phase" });
   if (d.batch.eligible > d.batch.selected) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["batch", "eligible"], message: "Eligible cannot exceed selected" });
