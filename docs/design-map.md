@@ -291,6 +291,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Source dialog copy | "This prototype previews the handoff and performs no external action." | Says whether a verified link exists | The source-link profile forbids invented destinations, and this isn't the prototype |
 | Lifestyle only | A button with no stated behavior | Opens a dialog explaining the locked research scope | CTRL-164 requires an explanation, and the scope must not be widenable |
 | Start live discovery | Disabled button | Disabled, with the reason beside it | CTRL-165 requires a visible reason |
+| Post performance GMV note (25:481) | One fixed sentence that GMV is retained separately | Reads the post's GMV state: a reported figure with its definition and window, unknown (not $0) for a TikTok post with none, or does not apply to an Instagram post. The net sales card says "not GMV" | FE07-05: TikTok GMV is never retained net sales, and a missing GMV must not read as zero. The demo GMV for P-001 is synthetic |
 | Publishing filter | A button | A radio dialog, and a note that the demo's counts don't split by network | The demo batch isn't split by network, so no result is faked |
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
