@@ -108,6 +108,8 @@ Sent by a screen through `useAction`. Payload shapes are the TypeScript types at
 | `lookup` | `reconcileRun` | `{ runRef, request: "lookup" }` | the run's current state, reason code carries the lookup result (`sourceReceiptFound`, `confirmedNotExecuted`, `stillUnknown`) | `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | conflict (C-03) |
 | `recordConfirmedSent` | `reconcileRun` | `{ runRef, request: "recordConfirmedSent" }` | `succeeded` with the source receipt | `OUTCOME_UNCERTAIN` (no verified receipt; `executionCertainty: uncertain`), `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | proposed |
 | `freshAttempt` | `reconcileRun` | `{ runRef, request: "freshAttempt" }` | `queued` | `OUTCOME_UNCERTAIN` (not proven failed), `RECORD_NOT_FOUND`, `STALE_VERSION` | `approvals/RunPage` | conflict (C-03) |
+| `requestBatchApproval` | `requestApproval` | `{ batchId, recipients, rateLabel, sampleUnits, sampleUnitCostMinor, upfrontFeeMinor, policyVersion }` | `approvalPending` (`AWAITING_DECISION`, next `decideApproval`); never approved or sent | `STALE_VERSION`, `RECORD_NOT_FOUND`, `POLICY_VIOLATION` (`fieldErrors.upfrontFee`), `VALIDATION_FAILED` (`fieldErrors.recipients`: open-ended or oversized), `MANIFEST_CHANGED` | `acquisition/PlanView` | conflict (C-02) |
+| `decideTikTokSample` | `controlRun` | `{ batchId, sampleId, decision: approve \| decline }` | `succeeded` with the TikTok receipt; or `blocked` (`SOURCE_AUTHORITY_DENIED`, next `ownerHandoff`) when TikTok denies the account's scope | `RECORD_NOT_FOUND`, `VALIDATION_FAILED` (already handled) | `recruitment/BatchPage` | conflict (C-01) |
 | `retryMonitorProfile` | `controlRun` | `{ profile }` | `blocked` (`SOURCE_LOGIN_REQUIRED`, next `reconnectSource`) | `STALE_VERSION`, `VALIDATION_FAILED` | `monitor/HourlyRunPage` | conflict (C-01) |
 | `pauseBatch` | `controlRun` | `{ batchId }` | `paused` (`IN_FLIGHT_DRAINS`) | `STALE_VERSION`, `VALIDATION_FAILED` (already paused) | `recruitment/BatchPage` | conflict (C-01, C-09) |
 | `cancelUnsent` | `controlRun` | `{ batchId, itemIds? }` | `canceled`, or `partiallySucceeded` (`SENT_OR_RUNNING_EXCLUDED`) | `STALE_VERSION`, `VALIDATION_FAILED` (nothing unsent) | `recruitment/BatchPage` | conflict (C-01) |
@@ -219,6 +221,7 @@ Error body (`AdapterErrorBody`, in `errors.ts`, not in `contract.ts`): `code`, `
 | `dispatchApprovedAction` | `demoApprovals` |
 | `reconcileRun` | `demoApprovals` |
 | `reconciliationReview` | `demoFinance` |
+| `ownerHandoff` | `demoBatch` |
 | `reconnectSource` | `demoMonitor` |
 | `sourceReceipt` | `demoOps` |
 
