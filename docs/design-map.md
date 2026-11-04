@@ -57,7 +57,7 @@ Every row meets the pass mark (0.5% of pixels) except where "judged over" says w
 | 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
 | 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (added evidence controls) | 0.162%, judged over the top 1030px |
 | 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.431% |
-| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (blocked-action reasons +56, then the disagreement section +250; see below) | 0.218%, measured over the top 1450px |
+| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (2267 before the disagreement section was added; see below) | 0.179%, measured over the top 1450px |
 | 102:74 | `/creators/pipeline` | Matches (1440×2552) | 0.264% |
 | 6:24 | `/creators/social-cat?view=board` | Matches (1440×1658) | 0.270% |
 | 9:143 | `/creators/tiktok?view=board` | Matches (1440×1712) | 0.270% |

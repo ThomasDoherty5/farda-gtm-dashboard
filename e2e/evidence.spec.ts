@@ -15,8 +15,8 @@ test.describe("video evidence against Figma at 1440", () => {
     expect(await height("metric-Commerce confidence")).toBe(152);
     expect(await height("metric-Creative quality")).toBe(170);
     expect(await height("metric-Routine compatibility")).toBe(170);
-    // Intentional, and Figma has no frame for either (docs/design-map.md): the blocked-action reasons are two visible lines of text (+56, 2267),
-    // and the VE-08 "Disagree without erasing" section is added at the end of the page (+250, 2517).
+    // Intentional: the blocked-action reasons are two visible lines of text (56px, so 2267) and the disagreement section
+    // (VE-08) adds 250px, which Figma doesn't have (docs/design-map.md).
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(2517);
   });
 });
