@@ -187,6 +187,25 @@ export const customerJourneySchema = z.object({
   provenance: provenanceDisclosure,
 });
 
+/* ---------- Metric dictionary ---------- */
+
+const caveat = z.enum(["LANDED_COST_INCOMPLETE", "RETENTION_IMMATURE"]);
+const nullableCount = z.number().int().nonnegative().nullable();
+const nullableMinor = z.number().int().nonnegative().nullable();
+const caseInput = z.object({ netReceiptsMinor: nullableMinor, validOrders: nullableCount, acquisitionCostMinor: nullableMinor, newRetainedCustomers: nullableCount, marketingSpendMinor: nullableMinor, caveat: caveat.nullable() });
+
+export const metricDictionarySchema = z.object({
+  datasetKey: z.literal("headline-metrics-cases"),
+  version: z.string(),
+  effective: date,
+  stage: z.literal("fixture-complete"),
+  entries: z.array(z.object({ key: z.enum(["aov", "blendedCac", "mer", "platformRoas"]), label: z.string(), numerator: z.string(), denominator: z.string(), source: z.string(), currency: z.string(), window: z.string(), costBuckets: z.string(), refundTreatment: z.string() })),
+  related: z.array(z.object({ label: z.string(), basis: z.string() })),
+  buckets: z.array(z.object({ key: z.string(), label: z.string(), basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative(), alsoInCash: z.boolean(), note: z.string() })),
+  cases: z.array(z.object({ id: z.string(), label: z.string(), input: caseInput, expected: z.object({ aov: z.string(), cac: z.string(), mer: z.string() }), handCalculation: z.string() })),
+  sourceNote: z.string(),
+});
+
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
   overviewSummary: overviewSummarySchema,
@@ -196,4 +215,5 @@ export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
   paidMedia: paidMediaSchema,
   campaignFunnel: campaignFunnelSchema,
   customerJourney: customerJourneySchema,
+  metricDictionary: metricDictionarySchema,
 };
