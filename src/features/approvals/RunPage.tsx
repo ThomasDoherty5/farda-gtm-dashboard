@@ -8,7 +8,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { ViewError } from "@/components/ViewError";
-import { RoutePlaceholder } from "@/routes/RoutePlaceholder";
+import { HourlyRunPage } from "@/features/monitor/HourlyRunPage";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, SourceDialog, blockedReason, dateTime } from "./shared";
 import type { ControlPayload, ReconcilePayload, RunCounts, RunDetail } from "./types";
 import styles from "./Approvals.module.css";
@@ -19,12 +19,12 @@ const COUNT_LABELS: Record<keyof RunCounts, string> = { confirmed: "Confirmed", 
 
 /**
  * Agent run approval (5:13) and unknown-outcome recovery (5:156), owner THO-296.
- * The tabless path is the hourly monitor variant (25:307, THO-299), which isn't built yet.
+ * The tabless path is the hourly monitor variant (25:307, THO-299).
  */
 export function RunPage() {
   const [search] = useSearchParams();
   const tab = search.get("tab");
-  if (tab !== "approval" && tab !== "recovery") return <RoutePlaceholder path="/runs/:runId" />;
+  if (tab !== "approval" && tab !== "recovery") return <HourlyRunPage />;
   return <Run tab={tab} />;
 }
 
