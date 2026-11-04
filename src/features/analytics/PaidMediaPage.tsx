@@ -76,7 +76,8 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
           <DetailRow label="Media total" value={m(spend)} />
           <DetailRow label="Creator / sample economics" value={m(data.creatorSampleEconomics.minorUnits)} />
           <DetailRow label="Acquisition-cost total" value={m(acquisition)} />
-          <p className={styles.small}>Gifted-product economic cost is counted once; it is not added again to inventory-purchase cash outflow.</p>
+          {/* The design fixes this note at two lines; text metrics differ by platform, so the height is reserved. */}
+          <p className={styles.small} style={{ minHeight: 36 }}>Gifted-product economic cost is counted once; it is not added again to inventory-purchase cash outflow.</p>
         </Card>
         <Card labelledBy="ctr-title" className={styles.card20}>
           <SectionHeading id="ctr-title" title={ranked[0] ? `${ranked[0].id} has the strongest click-through` : "Click-through by asset"} note={`CTR = clicks / impressions · ${data.assets.length === 4 ? "four" : data.assets.length} comparable demo assets`} />
