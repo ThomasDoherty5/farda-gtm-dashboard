@@ -1,0 +1,98 @@
+/* Historical scorecards and the offer draft (Figma 37:74, 37:251, 65:814, 65:634). Below 1180 the columns stack. */
+.hist { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-20); background: var(--color-violetSoft); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.histSubtle { background: var(--color-subtle); }
+.hist p { margin: 0; }
+.histActions { display: flex; flex-wrap: wrap; gap: 10px; }
+.ctxRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.ctxRow p { margin: 0; }
+.dark { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; padding: 28px; background: var(--color-ink); color: var(--color-onDark); border-radius: var(--space-24); }
+.dark > * { margin: 0; }
+.dark h2 { font: var(--text-h2); }
+.darkText { font: var(--text-body); }
+.darkDetails { display: flex; flex-direction: column; gap: var(--space-16); margin: 0; }
+.darkDetails > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: var(--space-12); }
+.darkDetails dt { font: var(--text-small); }
+.darkDetails dd { margin: 0; font: var(--text-label); }
+.darkRule { width: 100%; height: 1px; margin: 0; border: 0; background: var(--color-border); }
+.gauge { position: relative; width: 180px; height: 180px; }
+.gauge svg { display: block; }
+.gaugeText { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 3px; }
+.gaugeScore { font: var(--text-display); }
+.gaugeOf { font: var(--text-micro); }
+.criteria { display: flex; flex-direction: column; gap: var(--space-18, 18px); margin: 0; padding: 0; list-style: none; }
+.criterion { display: grid; grid-template-columns: 330px minmax(0, 1fr) 126px; gap: var(--space-16); align-items: center; min-height: 40px; }
+.criterionLabel { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.criterionLabel strong { font: var(--text-label); font-weight: 500; }
+.criterionLabel span { font: var(--text-micro); color: var(--color-muted); }
+.criterionPoints { font: var(--text-label); color: var(--color-violet); }
+.evGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-16); align-items: start; }
+.evCard { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-12); padding: var(--space-20) 19px var(--space-20) var(--space-20); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.evCard > * { margin: 0; }
+.evCard > :last-child { width: 100%; }
+.evTitle { font: var(--text-label); }
+.evHeadline { font: var(--text-h3); color: var(--color-violet); }
+.gateGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-16); }
+.gateCard { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.gateCard strong { font: var(--text-label); font-weight: 500; }
+.decision { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-violetSoft); border-radius: var(--space-24); }
+.decision p { margin: 0; }
+.decisionRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-20); }
+.decisionCopy { display: flex; flex: 1 1 0; flex-direction: column; gap: var(--space-8); min-width: 280px; max-width: 810px; }
+.decisionCopy h2 { margin: 0; font: var(--text-h2); }
+.decisionCopy p { font: var(--text-body); color: var(--color-muted); }
+.controls { display: flex; flex-wrap: wrap; gap: var(--space-16); }
+.rowGates { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.rowGate { display: grid; grid-template-columns: 140px 280px minmax(0, 1fr); gap: var(--space-20); align-items: start; min-height: 28px; }
+.rowGate strong { font: var(--text-label); font-weight: 500; }
+.rowGate span:last-child { font: var(--text-small); color: var(--color-muted); }
+.score2 { display: grid; grid-template-columns: 312px minmax(0, 1fr); gap: var(--space-24); align-items: start; }
+.col { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; }
+.col > * { margin: 0; }
+.col > :last-child:is(span) { align-self: flex-start; }
+.heading54 { display: flex; flex-direction: column; gap: 6px; min-height: 54px; }
+.heading54 h2 { margin: 0; font: var(--text-h2); }
+.heading54 p { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.legend { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.fieldsRow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-24); align-items: start; }
+.tabsRow { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.tabGated { opacity: 0.6; }
+.econ { display: grid; grid-template-columns: 312px minmax(0, 1fr); gap: var(--space-24); align-items: start; }
+.chartScroll { overflow-x: auto; }
+.chart { position: relative; height: 340px; }
+.chartLine { position: absolute; left: 0; right: 0; height: 1px; background: var(--color-border); }
+.chartCols { position: absolute; inset: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--space-16); }
+.chartCol { position: relative; }
+.chartBar { position: absolute; left: 0; right: 0; border-radius: 6px; background: var(--color-violetSoft); }
+.chartBarStrong { background: var(--color-violet); }
+.chartValue { position: absolute; left: 0; right: 0; font: var(--text-label); color: var(--color-ink); white-space: nowrap; }
+.chartValueStrong { color: var(--color-violet); }
+.chartLabel { position: absolute; left: 0; right: 0; font: var(--text-micro); color: var(--color-muted); }
+.footer { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.status { margin: 0; font: var(--text-small); }
+@media (max-width: 1179px) {
+  .score2, .econ { grid-template-columns: minmax(0, 1fr); }
+  .evGrid, .gateGrid, .fieldsRow { grid-template-columns: minmax(0, 1fr); }
+  .criterion { grid-template-columns: minmax(0, 1fr) 96px; }
+  .criterion .barTrack { grid-column: 1 / -1; order: 3; }
+  .rowGate { grid-template-columns: minmax(0, 1fr); gap: var(--space-8); }
+  .chart { min-width: 640px; }
+}
+@media (max-width: 479px) {
+  .darkDetails > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
+.offerTab { display: inline-flex; align-items: center; justify-content: center; min-width: 190px; min-height: 44px; padding: var(--space-12); background: var(--color-surface); border: 0; border-radius: var(--space-12); font: var(--text-label); color: var(--color-muted); cursor: not-allowed; }
+.offerTabCurrent { background: var(--color-violetSoft); color: var(--color-violet); cursor: default; }
+.compRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-16); }
+.compRow p { margin: 0; flex: 1 1 320px; max-width: 756px; font: var(--text-small); color: var(--color-muted); }
+.fieldWrap { display: flex; flex-direction: column; min-width: 0; }
+.gateRows { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.actionsRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-16); }
+.actionsRow p { margin: 0; flex: 1 1 320px; max-width: 766px; font: var(--text-small); color: var(--color-muted); }
+.gap24 { gap: var(--space-24); }
+/* Figma centers the text 1px higher in the 48px field, and a locked field is drawn on the subtle fill. */
+.fieldsRow input, .fieldsRow select { padding: 10px 12px 12px; }
+.fieldsRow select { padding-left: 8px; }
+.fieldsRow input[aria-disabled="true"] { background: var(--color-subtle); color: var(--color-muted); }
+
+/* The design fixes each tab's width; the text is centered in it, so the 12px padding must not widen a long label. */
+.tabsFixed a { padding-inline: 0; }

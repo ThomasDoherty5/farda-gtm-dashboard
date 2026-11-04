@@ -87,7 +87,7 @@ export function TikTokSettlement({ s }: { res: ReadResponse<SettlementRecord>; s
             subtitle={<span id="hist-title-sub">Previously accepted flat-fee terms remain auditable. These controls do not select a new offer; current acquisition is commission-only.</span>}
             testId="historical"
           >
-            <SectionTabs label="Historical offer models, read only" tabs={[{ label: "Commission only", to: "#", width: 137, disabled: true, reasonFor: "hist-title-sub" }, { label: "Flat fee", to: "#", width: 100, disabled: true, reasonFor: "hist-title-sub" }, { label: "Flat fee + commission", to: "#", width: 179, disabled: true, reasonFor: "hist-title-sub" }]} />
+            <SectionTabs label="Historical offer models, read only" tabs={[{ label: "Commission only", to: "#", width: 137, disabled: true, reasonId: "hist-title-sub" }, { label: "Flat fee", to: "#", width: 100, disabled: true, reasonId: "hist-title-sub" }, { label: "Flat fee + commission", to: "#", width: 179, disabled: true, reasonId: "hist-title-sub" }]} />
             <GateRows
               label="Historical funding and review"
               rows={[

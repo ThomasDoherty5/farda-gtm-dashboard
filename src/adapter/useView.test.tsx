@@ -139,4 +139,50 @@ describe("useView", () => {
     unmount();
     await waitFor(() => expect(signal?.aborted).toBe(true));
   });
+
+  describe("keepPrevious", () => {
+    function Filtered({ filter }: { filter: string }) {
+      const query = useView<{ filter: string }, string>("filtered", { filter }, null, { keepPrevious: true });
+      return (
+        <>
+          <p data-testid="data">{query.data?.data ?? "none"}</p>
+          <p data-testid="placeholder">{String(query.isPlaceholderData)}</p>
+        </>
+      );
+    }
+    const tree = (adapter: ReturnType<typeof scriptedAdapter>, accounts: string[], filter: string, client = testClient()) => (
+      <QueryClientProvider client={client}>
+        <ScopeProvider adapter={adapter} scope={scope(accounts)} principal="p"><Filtered filter={filter} /></ScopeProvider>
+      </QueryClientProvider>
+    );
+
+    it("keeps the last data from the same scope while a changed filter loads", async () => {
+      let release: (() => void) | undefined;
+      const adapter = scriptedAdapter(async (request, call) => {
+        if (call === 2) await new Promise<void>((resolve) => { release = resolve; });
+        return response(request, `data for ${(request.filters as { filter: string }).filter}`);
+      });
+      const client = testClient();
+      const { rerender } = render(tree(adapter, ["a"], "one", client));
+      await waitFor(() => expect(screen.getByTestId("data")).toHaveTextContent("data for one"));
+      rerender(tree(adapter, ["a"], "two", client));
+      await waitFor(() => expect(screen.getByTestId("placeholder")).toHaveTextContent("true"));
+      expect(screen.getByTestId("data")).toHaveTextContent("data for one");
+      await act(async () => release?.());
+      await waitFor(() => expect(screen.getByTestId("data")).toHaveTextContent("data for two"));
+    });
+
+    it("never carries data across a scope change", async () => {
+      const adapter = scriptedAdapter(async (request, call) => {
+        if (call === 2) await new Promise(() => {});
+        return response(request, "account a's data");
+      });
+      const client = testClient();
+      const { rerender } = render(tree(adapter, ["a"], "one", client));
+      await waitFor(() => expect(screen.getByTestId("data")).toHaveTextContent("account a's data"));
+      rerender(tree(adapter, ["b"], "one", client));
+      await waitFor(() => expect(adapter.calls).toHaveLength(2));
+      expect(screen.getByTestId("data")).toHaveTextContent("none");
+    });
+  });
 });
