@@ -158,7 +158,7 @@ export function RecruitmentPage() {
           <li><Badge tone="warning" width={140}>Permission missing</Badge><p className={creators.settleName}>Social Cat automated execution</p><p className={acquisition.small}>Record express provider authorization before automated reads or writes</p></li>
           <li><Badge width={140}>Terminal outcome</Badge><p className={creators.settleName}>No qualifying content</p><p className={acquisition.small}>Review agreed obligations, record the outcome and retain sample cost; no automatic clawback.</p></li>
         </ul>
-        <div className={creators.contextActions}>
+        <div className={creators.contextActions} style={{ gap: 16 }}>
           <LinkButton to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 204 }}>Configure offer</LinkButton>
           <LinkButton variant="secondary" to={assessmentPath()} style={{ minWidth: 218 }}>Prior commerce score</LinkButton>
           <LinkButton variant="secondary" to="/finance/commissions" style={{ minWidth: 218 }}>Commission ledger</LinkButton>

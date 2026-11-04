@@ -105,7 +105,7 @@
 .gateLine dt { font: var(--text-label); }
 .gateLine dd { margin: 0; font: var(--text-body); }
 .gateList { display: flex; flex-direction: column; gap: var(--space-16); margin: 0; }
-.approval { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: var(--space-12); align-items: start; margin: 0; padding: 0; list-style: none; }
+.approval { display: grid; grid-template-columns: 40px minmax(0, 1fr) 72px; gap: var(--space-12); align-items: start; margin: 0; padding: 0; list-style: none; }
 .monogram { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--space-12); background: var(--color-violetSoft); color: var(--color-violet); font: var(--text-h3); }
 .approvalCopy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .approvalCopy strong { font: var(--text-label); font-weight: 500; }
