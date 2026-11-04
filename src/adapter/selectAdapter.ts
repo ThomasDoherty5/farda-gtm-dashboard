@@ -22,7 +22,9 @@ export function selectAdapter(
   if (mode === "demo") {
     const requested = new URLSearchParams(search).get("fixture");
     const fixture = overviewFixtureKeys.find((k) => k === requested || k.startsWith(`${requested}-`)) as OverviewFixtureKey | undefined;
-    return createDemoAdapter({ fixture });
+    // Demo only: `?latency=<ms>` holds every read in flight so the loading state can be inspected. Capped at 10 s; the live adapters never read it.
+    const latency = Number(new URLSearchParams(search).get("latency"));
+    return createDemoAdapter({ fixture, latencyMs: Number.isFinite(latency) ? Math.min(Math.max(latency, 0), 10_000) : 0 });
   }
   if (mode === "sandbox" || mode === "production") {
     // With no transport supplied the live adapter answers INTEGRATION_PENDING. Nothing falls back to demo data.

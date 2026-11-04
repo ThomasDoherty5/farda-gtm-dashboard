@@ -2,7 +2,9 @@
 .headRow { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-16); }
 .headRow > :first-child { flex: 1 1 320px; min-width: 0; }
 .statusBar { display: flex; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
-.statusBar li { display: flex; align-items: center; justify-content: center; min-width: 0; height: 36px; border-radius: var(--space-8); font: var(--text-label); white-space: nowrap; overflow: hidden; }
+.statusBar li { display: flex; align-items: center; justify-content: center; min-width: max-content; padding: 0 var(--space-8); height: 36px; border-radius: var(--space-8); font: var(--text-label); white-space: nowrap; overflow: hidden; }
+/* Narrow screens: the segments stack, so no label is cut off (implementation adaptation, docs/design-map.md). */
+@media (max-width: 767px) { .statusBar { flex-direction: column; } .statusBar li { flex: none !important; width: 100%; } }
 .statusBar li[data-state="held"] { background: var(--color-violet); color: var(--color-onDark); }
 .statusBar li[data-state="disputed"] { background: var(--color-warningSoft); color: var(--color-ink); }
 .statusBar li[data-state="awaitingProvider"] { background: var(--color-violetSoft); color: var(--color-ink); }

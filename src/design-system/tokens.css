@@ -77,7 +77,11 @@ a { color: var(--color-violet); }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: var(--space-8) var(--space-12); border-bottom: 1px solid var(--color-border); }
 th { font: var(--text-micro); color: var(--color-muted); }
+/* WCAG 2.5.8: a link that stands alone in its paragraph gets a 24px target; padding on an inline box does not move the text. */
+p > a:only-child { padding-block: 4px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* A link that is hidden until a keyboard user reaches it, so focus is never invisible (WCAG 2.4.7). */
+.visually-hidden-focusable:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* A line break that only applies on a wide screen. Figma's note overflows its box by a word; pinning the break keeps the line count the same on every platform. */
 .wide-break { display: none; }
 @media (min-width: 1180px) { .wide-break { display: inline; } }
