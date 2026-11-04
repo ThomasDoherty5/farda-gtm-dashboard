@@ -120,6 +120,20 @@ export const channelCapabilitiesSchema = z.object({
   recorded: z.record(z.object({ reviewer: z.string(), evidence: z.string(), observedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), version: z.string(), rowId: z.string().optional(), savedAt: z.string().optional() }).strict()),
 });
 
+/** The nightly reconciliation: pairs compared, conflicts naming the authoritative side, and an append-only audit trail. */
+export const nightlyReconciliationSchema = z.object({
+  datasetKey: z.literal("reconciliation-nightly-demo"),
+  version: z.string(),
+  run: z.object({ startedAt: z.string(), finishedAt: z.string(), state: z.enum(["completed", "partial", "failed"]), schedule: z.string() }),
+  pairs: z.array(z.object({ key: z.string(), label: z.string(), compared: z.number().int().nonnegative(), matched: z.number().int().nonnegative(), conflicts: z.number().int().nonnegative() })),
+  conflicts: z.array(z.object({
+    id: z.string(), pair: z.string(), record: z.string(), field: z.string(),
+    left: z.object({ source: z.string(), value: z.string() }), right: z.object({ source: z.string(), value: z.string() }),
+    detectedAt: z.string(), state: z.enum(["open", "repairRequested"]), authority: z.string().min(1), proposal: z.string(),
+  })),
+  audit: z.array(z.object({ id: z.string(), at: z.string(), actor: z.string(), action: z.string(), subject: z.string(), detail: z.string() })),
+});
+
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
   connectionsOverview: connectionsOverviewSchema,
@@ -127,4 +141,5 @@ export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
   automationRuns: automationRunsSchema,
   scheduleDetail: scheduleDetailSchema,
   channelCapabilities: channelCapabilitiesSchema,
+  nightlyReconciliation: nightlyReconciliationSchema,
 };
