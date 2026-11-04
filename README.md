@@ -42,6 +42,10 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - Customer lifecycle (THO-304), demo data only: the lifecycle overview (`/customers/lifecycle`, 5:289), the setup, early-access, abandoned-checkout and review-request email flows (`/customers/flows/:flow`, 5:404, 11:372, 11:498, 11:624), consent and audience eligibility (`/customers/consent`, 11:750) and activation and retention (`/customers/activation`, 11:852). Counts are illustrative aggregates, and shares are derived from them. Unknown consent is never counted as opted in, the three mandatory send policies are locked and explained, a saved flow draft is a new version that enables and sends nothing, and the template preview is synthetic. Reads are `lifecycleOverview`, `emailFlow`, `consentEligibility` and `activationRetention`; the draft save is a `configurationDraft` for `flow-<flow>`.
 - Recovery state gallery (THO-306, development only, `/design-system/states`, source 12:534): twelve recovery and feedback states built on a reusable `StatePanel`, each with a named badge and a logical next step. Loading and Retry-disabled show their reasons; Keep task dismisses a confirmation and changes nothing; no control asks for a credential. Not in primary navigation. Mobile and tablet Operations (12:653, 12:708) are not built: see `docs/design-map.md`.
 
+- Launch and analytics screens (THO-293), on demo datasets in `src/fixtures/analytics.ts` that reconcile to the Overview's 400 orders / $12,596: Launch snapshot (`/launch?view=snapshot`, source 3:6), Launch control (`?view=control`, 14:74), Performance attribution (`/analytics/attribution`, 14:377), Paid media (`/analytics/paid-media`, 30:349), Campaign funnel (`/campaigns/:campaignId?tab=funnel`, 30:550) and Commerce, support and reviews (`/analytics/customer-journey`, 30:721). Every metric shows its denominator and window, a missing input reads N/A with a reason, and L stays unset. Nothing here records a launch decision, approves a date or opens a provider record. Filters are URL state.
+
+- Scorecards and offer economics (THO-297): the Content quality (37:74), TikTok commerce (37:251) and Social Cat commerce (65:814) scorecards at `/creators/:creatorId/assessments/:assessmentId`, and Offer and economics (65:634) at `/offers/:offerId`. The scorecards are read-only historical v2 snapshots; a missing rating shows Needs data, never a rescaled total. The offer is a commission-only draft: a locked $0 upfront fee, fixed-per-sale gated, and a save through the adapter that shows only the acknowledged version. Demo data in `src/fixtures/scorecards.ts`.
+
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
 **Not done yet**
@@ -49,7 +53,7 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 - **The other 13 component sets** in `docs/design-map.md`, and responsive review against the native Operations references.
 - **The rest of THO-296:** the takeover dialog's real copy, real Slack handoff, login/MFA and denied-permission run states, and the separate provider settlement dialogs. `saveResource` is typed, but nothing uses it yet.
 - **Overview's real date range and export.** They need THO-283, so both dialogs say what's missing.
-- **The other 55 sources.** They render labeled placeholders. The approval flow's history views use the design's components, but have no Figma source of their own.
+- **The other sources.** They render labeled placeholders. The approval flow's history views use the design's components, but have no Figma source of their own.
 
 ## Commands
 
