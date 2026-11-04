@@ -2,7 +2,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
-import { REWARD_LADDER, REWARD_SCENARIOS, rewardScenario, type RewardScenario } from "@/fixtures/rewards";
+import { REWARD_LADDER, REWARD_SCENARIOS, rewardScenario, rewardsRecord, type RewardScenario } from "@/fixtures/rewards";
 import type { OverviewFixtureKey } from "@/fixtures/overview";
 import { renderRoute } from "@/test/renderWithAdapter";
 import { summarize } from "./rewardLadder";
@@ -227,5 +227,21 @@ describe("FE05-03 changed media, terms or policy invalidates readiness", () => {
     open("/creators/demo-creator-1/assessments/demo-assessment-content");
     await screen.findByTestId("score");
     expect(screen.queryByTestId("readiness-invalidated")).not.toBeInTheDocument();
+  });
+});
+
+describe("the live adapter can check the reward view", () => {
+  it("every demo scenario parses unchanged against the offerRewards schema", async () => {
+    const { scorecardsViewSchemas } = await import("@/adapter/viewSchemas/scorecards");
+    const schema = scorecardsViewSchemas.offerRewards!;
+    for (const s of REWARD_SCENARIOS) {
+      const record = rewardsRecord(s.scenarioId)!;
+      expect(schema.parse(record), s.scenarioId).toEqual(record);
+    }
+  });
+  it("a redemption with a missing amount stays null, never 0", async () => {
+    const { scorecardsViewSchemas } = await import("@/adapter/viewSchemas/scorecards");
+    const parsed = scorecardsViewSchemas.offerRewards!.parse(rewardsRecord("incomplete-evidence")) as { scenario: { redemptions: { amountMinor: number | null }[] } };
+    expect(parsed.scenario.redemptions[0]!.amountMinor).toBeNull();
   });
 });
