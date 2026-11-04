@@ -10,6 +10,8 @@ import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
 import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
 import { LaunchPage } from "@/features/analytics/LaunchPage";
 import { PaidMediaPage } from "@/features/analytics/PaidMediaPage";
+import { AssessmentPage } from "@/features/scorecards/AssessmentPage";
+import { OfferPage } from "@/features/scorecards/OfferPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { sourceScreens } from "./manifest.generated";
 import { navSections } from "./nav";
@@ -23,6 +25,8 @@ const implemented: Record<string, JSX.Element> = {
   "/analytics/paid-media": <PaidMediaPage />,
   "/campaigns/:campaignId": <CampaignFunnelPage />,
   "/analytics/customer-journey": <CustomerJourneyPage />,
+  "/creators/:creatorId/assessments/:assessmentId": <AssessmentPage />,
+  "/offers/:offerId": <OfferPage />,
   "/creators/discovery": <DiscoveryPage />,
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,

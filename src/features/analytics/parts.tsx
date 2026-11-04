@@ -126,11 +126,11 @@ export function Details({ rows, className }: { rows: { label: string; value: Rea
 }
 
 /** Table with the design's column widths as proportions. Scrolls inside a labeled region when narrow. */
-export function Table({ caption, columns, rows, tight = false, testId }: { caption: string; columns: { label: string; width: number }[]; rows: { key: string; cells: ReactNode[] }[]; tight?: boolean; testId?: string }) {
+export function Table({ caption, columns, rows, tight = false, cell12 = false, testId }: { caption: string; columns: { label: string; width: number }[]; rows: { key: string; cells: ReactNode[] }[]; tight?: boolean; cell12?: boolean; testId?: string }) {
   const total = columns.reduce((s, c) => s + c.width, 0);
   return (
     <div className={styles.tableWrap} role="region" aria-label={caption} tabIndex={0} data-testid={testId}>
-      <table className={`${styles.table} ${tight ? styles.tableTight : ""}`}>
+      <table className={`${styles.table} ${tight ? styles.tableTight : ""} ${cell12 ? styles.tableCell12 : ""}`}>
         <caption className="visually-hidden">{caption}</caption>
         <colgroup>{columns.map((c) => <col key={c.label} style={{ width: `${(100 * c.width) / total}%` }} />)}</colgroup>
         <thead><tr>{columns.map((c) => <th key={c.label} scope="col">{c.label}</th>)}</tr></thead>

@@ -3,6 +3,7 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
+import { createDemoOffers, readAssessment } from "./demoScorecards";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { AdapterError } from "./errors";
@@ -18,6 +19,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
+  const offers = createDemoOffers();
 
   return {
     environment: "demo",
@@ -31,6 +33,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+      if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
+      if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
       if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
       if (request.viewKey !== "overviewSummary")
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo fixture for view ${request.viewKey}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
@@ -46,6 +50,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (request.resourceKind === "actionDraft") return offers.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
       return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
   };

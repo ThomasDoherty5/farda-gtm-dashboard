@@ -37,6 +37,8 @@ This is the frontend for the Farda GTM operations dashboard. It is built from Ke
 
 - Launch and analytics screens (THO-293), on demo datasets in `src/fixtures/analytics.ts` that reconcile to the Overview's 400 orders / $12,596: Launch snapshot (`/launch?view=snapshot`, source 3:6), Launch control (`?view=control`, 14:74), Performance attribution (`/analytics/attribution`, 14:377), Paid media (`/analytics/paid-media`, 30:349), Campaign funnel (`/campaigns/:campaignId?tab=funnel`, 30:550) and Commerce, support and reviews (`/analytics/customer-journey`, 30:721). Every metric shows its denominator and window, a missing input reads N/A with a reason, and L stays unset. Nothing here records a launch decision, approves a date or opens a provider record. Filters are URL state.
 
+- Scorecards and offer economics (THO-297): the Content quality (37:74), TikTok commerce (37:251) and Social Cat commerce (65:814) scorecards at `/creators/:creatorId/assessments/:assessmentId`, and Offer and economics (65:634) at `/offers/:offerId`. The scorecards are read-only historical v2 snapshots; a missing rating shows Needs data, never a rescaled total. The offer is a commission-only draft: a locked $0 upfront fee, fixed-per-sale gated, and a save through the adapter that shows only the acknowledged version. Demo data in `src/fixtures/scorecards.ts`.
+
 - Real Figma tokens (all 45 variables and 9 text styles), Button, Badge, Alert, Empty state, Skeleton, Dialog, the shell and Overview (source 10:217), compared against Figma. See `docs/design-map.md`.
 
 **Not done yet**

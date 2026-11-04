@@ -93,6 +93,19 @@ Same capture settings as Overview, from Thomas's copy of the file (see `figma-ac
 
 What remains is text and edge antialiasing, plus the differences listed below. A person hasn't yet checked the diff images. Run the comparison with a dev server that can read the fonts: if the `node_modules` symlink points outside the worktree, Vite refuses to serve `@fontsource` files, the page falls back to a system font and every figure here doubles or worse. `e2e/analytics.spec.ts` checks each page's height, the KPI card size and the weekly chart's bar scale on every run.
 
+## Scorecards and offer comparison (sources 37:74, 37:251, 65:634, 65:814)
+
+Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are above the proposed 0.5% mark and are reported as not met.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 37:74 | `/creators/:creatorId/assessments/demo-assessment-content` | Matches (1440×2125) | 0.457% |
+| 37:251 | `…/assessments/demo-assessment-tiktok` | Matches (1440×2143) | 0.479% |
+| 65:634 | `/offers/:offerId` | Matches (1440×2080) | 0.638%, not met |
+| 65:814 | `…/assessments/demo-assessment-sc-commerce` | Matches (1440×2284) | 0.534%, not met |
+
+The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The pixel gap on the other two is text and form-control antialiasing, with native selects drawn slightly differently from Figma's text fields.
+
 ## Intentional differences from Figma
 
 | Item | Figma | Code | Why |
@@ -140,6 +153,11 @@ What remains is text and edge antialiasing, plus the differences listed below. A
 | Campaign tabs other than funnel | None | "This tab is not built" | Only the funnel has a design source |
 | Primary navigation on `/campaigns` | Overview section | Creators section | Figma's campaign pages are in the Creators group (found by the pixel diff) |
 | Commerce bar values | Unformatted ("16000") | "16,000" | Readability |
+| Historical scorecard "Hold candidate" | Normal secondary button | Disabled look, with the reason in the note below it | CTRL-064: a historical snapshot has no current opportunity to hold |
+| Assessment model buttons | Buttons that look like model choices | Links between the read-only snapshots, with `aria-current` on the current one | The model follows verified checkout, not a client choice (FHC-04) |
+| Offer fields | Populated text fields | Real fields. Objective and the $0 upfront fee are read-only, and the objective follows the chosen checkout provider. Publishing network and provider are native selects | CTRL-106 to CTRL-112 |
+| Offer actions | Save, Review commitment, Review approval payload | Save sends a validated draft through the adapter and shows only the version the service acknowledged. The two reviews are read-only previews | CTRL-101, CTRL-102, CTRL-114: a draft is not an approval |
+| Offer waterfall | A static chart | Drawn from the draft's assumptions on one scale. A nonzero amount is at least 1px tall | Editing the commission recomputes it |
 | Open commerce source, Open review outcomes, Open ad source | Buttons | Dialogs saying there is no verified source link | A fictional link can't perform a live action (SOURCE profile) |
 
 
