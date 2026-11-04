@@ -17,6 +17,13 @@ import { OperationsPage } from "@/features/operations/OperationsPage";
 import { OrderPage } from "@/features/operations/OrderPage";
 import { ReturnPage } from "@/features/operations/ReturnPage";
 import { ShippingExceptionPage } from "@/features/operations/ShippingExceptionPage";
+import { AttributionPage } from "@/features/analytics/AttributionPage";
+import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
+import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
+import { LaunchPage } from "@/features/analytics/LaunchPage";
+import { PaidMediaPage } from "@/features/analytics/PaidMediaPage";
+import { AssessmentPage } from "@/features/scorecards/AssessmentPage";
+import { OfferPage } from "@/features/scorecards/OfferPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { sourceScreens } from "./manifest.generated";
 import { navSections } from "./nav";
@@ -25,6 +32,13 @@ import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
 /** Screens implemented so far. Every other manifest path renders a labeled placeholder. */
 const implemented: Record<string, JSX.Element> = {
   "/overview": <OverviewPage />,
+  "/launch": <LaunchPage />,
+  "/analytics/attribution": <AttributionPage />,
+  "/analytics/paid-media": <PaidMediaPage />,
+  "/campaigns/:campaignId": <CampaignFunnelPage />,
+  "/analytics/customer-journey": <CustomerJourneyPage />,
+  "/creators/:creatorId/assessments/:assessmentId": <AssessmentPage />,
+  "/offers/:offerId": <OfferPage />,
   "/creators/discovery": <DiscoveryPage />,
   "/creators/pipeline": <PipelinePage />,
   "/creators/social-cat": <SocialCatPage />,
