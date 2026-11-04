@@ -37,6 +37,7 @@ export function createDemoEvidence() {
     if (!first) fieldErrors.observationId = "There is no saved review to dispute yet.";
     else if (!target) fieldErrors.observationId = "That observation isn't in the first reviewer's record.";
     else if (first.mediaUrl !== current.mediaUrl) fieldErrors.observationId = "The video changed since that review, so its observations no longer apply. Review the new video instead.";
+    else if (first.checkoutRoute !== current.checkoutRoute) fieldErrors.observationId = "The checkout route changed since that review, so its observations no longer apply. Review again against the new route instead.";
     if (current.disputes.length >= MAX_DISPUTES) fieldErrors.reason = `Keep it to ${MAX_DISPUTES} disagreements.`;
     if (Object.keys(fieldErrors).length) fail("VALIDATION_FAILED", "Fix the highlighted fields and record it again.", rid, { fieldErrors });
 
@@ -54,6 +55,7 @@ export function createDemoEvidence() {
       reviewerRole: DEMO_ACTOR_ROLE,
       recordedAt: DEMO_NOW,
       recordedAgainst: first!.mediaUrl,
+      recordedRoute: first!.checkoutRoute,
     };
     const next: EvidenceRecord = { ...current, version: `v${Number(current.version.slice(1)) + 1}`, disputes: [...current.disputes, dispute] };
     next.readiness = readinessOf(next);

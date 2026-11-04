@@ -23,7 +23,7 @@ const describe = (o: Pick<Observation, "category" | "startSec" | "endSec" | "tex
  * does not do: it doesn't change coverage, mark anything watched, make the evidence ready or authorize outreach.
  * Recording one is its own save against the saved version, so it can't ride along with an unsaved draft.
  */
-export function EvidenceDisputes({ res, record, draftDirty, draftMedia }: { res: ReadResponse<EvidenceRecord>; record: EvidenceRecord; draftDirty: boolean; /** The address in the draft, which may not be saved yet. A dispute only applies to the video it was recorded against. */ draftMedia: string | null }) {
+export function EvidenceDisputes({ res, record, draftDirty }: { res: ReadResponse<EvidenceRecord>; record: EvidenceRecord; draftDirty: boolean }) {
   const [target, setTarget] = useState<Observation | null>(null);
   const [recorded, setRecorded] = useState<{ version: string; noChange: boolean } | null>(null);
   const first = record.firstReview;
@@ -88,7 +88,7 @@ export function EvidenceDisputes({ res, record, draftDirty, draftMedia }: { res:
         <>
           <p className={styles.label}>Disagreements and overrides</p>
           <ul className={styles.log} aria-label="Disagreements and overrides">
-            {record.disputes.map((d) => <DisputeEntry key={d.id} dispute={d} current={draftMedia} />)}
+            {record.disputes.map((d) => <DisputeEntry key={d.id} dispute={d} saved={record} />)}
           </ul>
         </>
       )}
@@ -108,14 +108,17 @@ export function EvidenceDisputes({ res, record, draftDirty, draftMedia }: { res:
   );
 }
 
-function DisputeEntry({ dispute: d, current }: { dispute: Dispute; current: string | null }) {
-  const applies = d.recordedAgainst === current;
+/** A dispute applies only to the video and route it was recorded against, judged against the SAVED record, never the unsaved draft. */
+function DisputeEntry({ dispute: d, saved }: { dispute: Dispute; saved: Pick<EvidenceRecord, "mediaUrl" | "checkoutRoute"> }) {
+  const sameVideo = d.recordedAgainst === saved.mediaUrl;
+  const sameRoute = d.recordedRoute === saved.checkoutRoute;
   const says = d.proposed === "remove" ? "Remove this observation." : d.proposed ? describe(d.proposed) : "Disagrees. Proposes no replacement.";
   return (
     <li className={styles.entry} data-testid="dispute-entry" data-stance={d.stance}>
       <div className={styles.entryHead}>
         <Badge tone={d.stance === "override" ? "violet" : "neutral"} width={132}>{d.stance === "override" ? "Override" : "Disagreement"}</Badge>
-        {!applies && <Badge tone="warning" width={190}>Invalidated: different video</Badge>}
+        {!sameVideo && <Badge tone="warning" width={190}>Invalidated: different video</Badge>}
+        {sameVideo && !sameRoute && <Badge tone="warning" width={190}>Invalidated: different route</Badge>}
       </div>
       <div className={styles.prior}>
         <p className={page.small}>First reviewer recorded</p>

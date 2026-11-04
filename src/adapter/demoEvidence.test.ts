@@ -194,6 +194,19 @@ describe("reviewer disagreement and override (VE-08)", () => {
     expect(error.body.fieldErrors?.observationId).toMatch(/video changed/);
   });
 
+  it("a changed checkout route invalidates a recorded dispute and refuses a new one", async () => {
+    const store = createDemoEvidence();
+    const disputed = await store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, "v3", dispute()));
+    expect(disputed.record.disputes[0]).toMatchObject({ recordedRoute: "website" });
+    expect(disputed.record.readiness.reasonCodes).toContain("CONTESTED");
+    const moved = await store.save(save(DEMO_EVIDENCE_PARTIAL_ID, disputed.resourceVersion, draft({ mediaUrl: DEMO_MEDIA_URL, checkoutRoute: "tiktok-shop", observations: disputed.record.observations })));
+    expect(moved.record.readiness.reasonCodes).toContain("ROUTE_CHANGED");
+    expect(moved.record.readiness.reasonCodes).not.toContain("CONTESTED");
+    const error = await errorFrom(store.save(saveDispute(DEMO_EVIDENCE_PARTIAL_ID, moved.resourceVersion, dispute({ reason: "A second reason after the route moved." }))));
+    expect(error.body.fieldErrors?.observationId).toMatch(/route changed/);
+    expect(read(store, DEMO_EVIDENCE_PARTIAL_ID).data!.disputes).toHaveLength(1);
+  });
+
   it("flags a changed checkout route as invalidating the model it was read against", async () => {
     const store = createDemoEvidence();
     const changed = await store.save(save(DEMO_EVIDENCE_PARTIAL_ID, "v3", draft({ mediaUrl: DEMO_MEDIA_URL, checkoutRoute: "tiktok-shop", observations: read(store, DEMO_EVIDENCE_PARTIAL_ID).data!.observations })));

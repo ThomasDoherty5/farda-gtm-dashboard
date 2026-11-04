@@ -62,6 +62,7 @@ export const seedEvidence = (): EvidenceRecord[] => {
     reviewerRole: "second reviewer",
     recordedAt: DEMO_NOW,
     recordedAgainst: DEMO_MEDIA_URL,
+    recordedRoute: disputed.checkoutRoute,
   };
   return [base("demo-evidence-1", {}), partial(DEMO_EVIDENCE_PARTIAL_ID), withReadiness({ ...disputed, version: "v4", disputes: [dispute] })];
 };

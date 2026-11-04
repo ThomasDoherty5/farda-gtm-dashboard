@@ -57,7 +57,7 @@ Every row meets the pass mark (0.5% of pixels) except where "judged over" says w
 | 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
 | 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (added evidence controls) | 0.162%, judged over the top 1030px |
 | 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.431% |
-| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (blocked-action reasons +56, then the disagreement section +250; see below) | 0.179%, judged over the top 1700px |
+| 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (blocked-action reasons +56, then the disagreement section +250; see below) | 0.218%, measured over the top 1450px |
 | 102:74 | `/creators/pipeline` | Matches (1440×2552) | 0.264% |
 | 6:24 | `/creators/social-cat?view=board` | Matches (1440×1658) | 0.270% |
 | 9:143 | `/creators/tiktok?view=board` | Matches (1440×1712) | 0.270% |
@@ -593,7 +593,7 @@ Gaps in the journeys, kept visible: order milestones (Refund requested, Return r
 
 ## Video evidence disagreement and override (VE-08)
 
-Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 256px taller (2517).
+Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 250px taller than the 2267 pinned for the blocked-action reasons (2517). Reason for the new pin: VE-08 (reviewer disagreement and override) needs the first reviewer's record, the "not ready" reasons, the list of disagreements and the dispute dialog's entry points on the page, and the Figma source 102:364 has no frame for any of it. The e2e pin in `e2e/evidence.spec.ts` moves from 2267 to 2517 for that reason and no other; the cards above it keep the heights 102:364 gives them.
 
 | Rule | Where it is enforced |
 | -- | -- |

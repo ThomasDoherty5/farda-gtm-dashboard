@@ -52,6 +52,8 @@ export type Dispute = {
   recordedAt: string;
   /** The video the first record described. If the draft's video later differs, this dispute no longer applies. */
   recordedAgainst: string | null;
+  /** The checkout route the first record was read against. A dispute no longer applies once the saved route differs. */
+  recordedRoute: CheckoutRoute;
 };
 
 /** Why this evidence is not ready. There is no completed-review path, so "no complete review" is always a reason. */
