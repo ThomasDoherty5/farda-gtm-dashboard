@@ -16,6 +16,7 @@ import { ActionError, LeaveGuard, blockedReason } from "@/features/approvals/sha
 import { CATEGORY_LABEL, MODEL_FOR_ROUTE, ROUTE_LABEL, coveredSeconds, formatTime, parseTime, validateMediaUrl, validateObservation } from "./evidenceRules";
 import type { CheckoutRoute, EvidenceDraft, EvidenceRecord, Observation, ObservationCategory } from "./evidenceTypes";
 import { AcquisitionTabs } from "./AcquisitionTabs";
+import { EvidenceDisputes } from "./EvidenceDisputes";
 import styles from "./Acquisition.module.css";
 
 type Res = ReadResponse<EvidenceRecord>;
@@ -219,6 +220,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
         <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider <br className="wide-break" />evidence.</p>
       </section>
       <p className={styles.small}>Evidence-review template · no source footage or metrics are fabricated · full, partial, captions-only and inaccessible states remain distinct.</p>
+      <EvidenceDisputes res={res} record={record} draftDirty={dirty} />
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>
