@@ -6,9 +6,10 @@ import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
 import { DEMO_NOW, overviewFixtureKeys, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
 import { attributionDemo, campaignFunnelDemo, customerJourneyDemo, launchControlDemo, launchSnapshotDemo, paidMediaDemo, sourceFreshnessDemo, type AttributionData, type CampaignFunnelData, type CustomerJourneyData, type LaunchControlData, type ReconciliationData, type LaunchSnapshotData, type PaidMediaData } from "@/fixtures/analytics";
+import { metricDictionaryDemo, type MetricDictionaryData } from "@/fixtures/headlineMetrics";
 import { monitorPosts } from "@/fixtures/monitor";
 import { buildMatrix } from "@/features/analytics/reconciliation";
-import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, launchReconciliationSchema, launchSnapshotSchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
+import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, launchReconciliationSchema, launchSnapshotSchema, metricDictionarySchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 const request = (viewKey: string, filters: object = {}): ReadRequest<unknown> => ({
@@ -26,7 +27,8 @@ const typeChecks: [
   Fits<z.infer<typeof campaignFunnelSchema>, CampaignFunnelData>,
   Fits<z.infer<typeof customerJourneySchema>, CustomerJourneyData>,
   Fits<z.infer<typeof launchReconciliationSchema>, ReconciliationData>,
-] = [true, true, true, true, true, true, true, true];
+  Fits<z.infer<typeof metricDictionarySchema>, MetricDictionaryData>,
+] = [true, true, true, true, true, true, true, true, true];
 
 const REJECTED: Partial<Record<OverviewFixtureKey, string>> = {
   "FX-07-offline-read": "SOURCE_UNAVAILABLE",
@@ -45,12 +47,13 @@ const variants: Record<string, object[]> = {
   paidMedia: [{}, ...paidMediaFilters],
   campaignFunnel: [{ cohort: "first-wave" }, { cohort: "launch-a" }, {}],
   customerJourney: [{}],
+  metricDictionary: [{}],
 };
 
 describe("analytics view schemas: every demo response parses", () => {
   it("covers the view keys the demo adapter serves", () => {
     expect(Object.keys(analyticsViewSchemas).sort()).toEqual(Object.keys(variants).sort());
-    expect(typeChecks).toHaveLength(8);
+    expect(typeChecks).toHaveLength(9);
   });
 
   for (const [viewKey, filterSets] of Object.entries(variants)) {
@@ -220,6 +223,18 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["a row that compares one page only", (d) => (d.matrix[0].cells = d.matrix[0].cells.slice(0, 1))],
       ["a cell value as a string", (d) => (d.matrix[0].cells[0].value = "12596")],
       ["a freshness timestamp that is undefined instead of null", (d) => delete d.freshness[0].lastSourceSuccessAt],
+    ],
+  },
+  {
+    view: "metricDictionary", schema: metricDictionarySchema, valid: metricDictionaryDemo,
+    cases: [
+      ["missing required field", (d) => delete d.entries[0].refundTreatment],
+      ["another dataset", (d) => (d.datasetKey = "overview-original")],
+      ["unknown metric key", (d) => (d.entries[0].key = "roi")],
+      ["negative bucket", (d) => (d.buckets[0].minorUnits = -1)],
+      ["fractional bucket", (d) => (d.buckets[0].minorUnits = 1.5)],
+      ["unknown caveat", (d) => (d.cases[0].input.caveat = "WHATEVER")],
+      ["NaN-like input as a string", (d) => (d.cases[0].input.validOrders = "400")],
     ],
   },
 ];

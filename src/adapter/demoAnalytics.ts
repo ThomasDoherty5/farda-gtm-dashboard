@@ -20,10 +20,11 @@ import {
   type RightsState,
 } from "@/fixtures/analytics";
 import { DEMO_NOW, overviewOriginal, type OverviewFixtureKey } from "@/fixtures/overview";
+import { metricDictionaryDemo, type MetricDictionaryData } from "@/fixtures/headlineMetrics";
 import { monitorPosts } from "@/fixtures/monitor";
 import { buildMatrix } from "@/features/analytics/reconciliation";
 
-export const analyticsViewKeys = ["launchReconciliation", "launchSnapshot", "launchControl", "attribution", "paidMedia", "campaignFunnel", "customerJourney"] as const;
+export const analyticsViewKeys = ["launchReconciliation", "launchSnapshot", "launchControl", "attribution", "paidMedia", "campaignFunnel", "customerJourney", "metricDictionary"] as const;
 export type AnalyticsViewKey = (typeof analyticsViewKeys)[number];
 export const isAnalyticsView = (key: string): key is AnalyticsViewKey => (analyticsViewKeys as readonly string[]).includes(key);
 
@@ -94,6 +95,8 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
       }
       return make<CampaignFunnelData>(campaignFunnelDemo, "campaign-funnel-demo@1") as ReadResponse<T>;
     }
+    case "metricDictionary":
+      return make<MetricDictionaryData>(metricDictionaryDemo, `${metricDictionaryDemo.version}`) as ReadResponse<T>;
     case "customerJourney":
       return make<CustomerJourneyData>(customerJourneyDemo, "customer-journey-demo@1", (d) => ({ ...d, sessions: unknown("SESSIONS_SOURCE_UNSELECTED"), deliveredUnits: unknown("NO_DELIVERED_COHORT"), reviews: { ...d.reviews, ratedCount: unknown("RATINGS_FEED_UNAVAILABLE") } })) as ReadResponse<T>;
   }

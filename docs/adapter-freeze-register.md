@@ -74,8 +74,10 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
+| `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
 | `operationsOverview` | `scenario?` | OperationsOverview | `operations/OperationsPage` | `demoOps` | proposed + conflict | C-06. |
+| `opsHealth` | none | OpsHealth | `operations/OpsHealthPage` (route `/analytics/fulfillment?view=health`) | `demoOps` | proposed | No Figma source. Derived in `adapter/opsHealth.ts` from the shipment ledger. |
 | `orderDetail` | `orderId` | OrderDetail | `operations/OrderPage` | `demoOps` | proposed |  |
 | `overviewSummary` | none | OverviewData | `overview/OverviewPage` | `demoAdapter` | proposed | Nine demo fixture switches are chosen by an adapter option, not by the request. |
 | `paidMedia` | `rights`, `platform` | PaidMediaData | `analytics/PaidMediaPage` | `demoAnalytics` | proposed | Uses `keepPrevious`. |
