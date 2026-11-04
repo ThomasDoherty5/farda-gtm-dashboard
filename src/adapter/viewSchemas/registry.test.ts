@@ -109,7 +109,7 @@ const WITH_RECORD: Record<string, unknown[]> = {
   approvalDetail: [{ approvalId: "demo-approval-exact" }, { approvalId: "demo-approval-expired" }, { approvalId: "demo-approval-conflict" }],
   runDetail: [{ runId: "demo-run-approval" }, { runId: "demo-run-batch" }, { runId: "demo-run-uncertain" }, { runId: "demo-run-noevidence" }],
   hourlyRun: [{ runId: "demo-run-hourly" }],
-  collaborationDetail: [{ collaborationId: "demo-collaboration-1" }],
+  collaborationDetail: [{ collaborationId: "demo-collaboration-1" }, { collaborationId: "demo-collaboration-2" }],
   evidenceRecord: [{ creatorId: "demo-creator-1", evidenceId: "demo-evidence-1" }],
   assessmentRecord: [{ creatorId: "demo-creator-1", assessmentId: "demo-assessment-content" }, { creatorId: "demo-creator-1", assessmentId: "demo-assessment-tiktok" }, { creatorId: "demo-creator-1", assessmentId: "demo-assessment-sc-commerce" }],
   offerDraft: [{ offerId: "demo-offer-1" }],
