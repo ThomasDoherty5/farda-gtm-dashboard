@@ -2,9 +2,13 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoPolicy } from "./demoPolicy";
+import { guardTermsOf } from "./commissionPolicy";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
+import { createDemoDiscovery } from "./demoDiscovery";
+import { createDemoReconciliation } from "./demoReconciliation";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
 import { createDemoOffers, readAssessment, readRewards } from "./demoScorecards";
@@ -13,6 +17,7 @@ import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
 import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
+import { branchesDemo } from "@/fixtures/pipelineBranches";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
@@ -24,18 +29,35 @@ import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey 
  * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
  * Overview capabilities report "unverified" so nothing can look sent or paid.
  */
-export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number } = {}): FardaAdapter {
+export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
-  const approvals = createDemoApprovals();
+  /**
+   * The policy guard runs inside the approval service, after its stored-result replay, so a retry of a dispatch that
+   * already succeeded gets its original receipt even when the policy has since changed.
+   */
+  const approvals = createDemoApprovals({
+    actorRole: opts.actorRole,
+    beforeDispatch: (request) => policy.guardApprovedDispatch(request),
+    onApproved: (ref) => policy.recordApproval(ref),
+  });
+  /** Terms of an approval for the policy guard. Throws when it can't be read, and the guard then refuses. */
+  const approvalTerms = (ref: string) => {
+    const v = approvals.peekApproval(ref, "policy-guard");
+    const latest = v.versions.at(-1)!;
+    return guardTermsOf({ policyVersion: latest.policyVersion, requiredRole: v.requiredRole, terms: latest.payload.terms });
+  };
+  const policy = createDemoPolicy({ termsOf: approvalTerms, actorRole: opts.actorRole });
   const evidence = createDemoEvidence();
-  const ops = createDemoOps();
+  const ops = createDemoOps({ actorRole: opts.actorRole });
   const finance = createDemoFinance();
   const offers = createDemoOffers();
   const batch = createDemoBatch();
+  const discovery = createDemoDiscovery();
   const collaboration = createDemoCollaboration();
   const settings = createDemoSettings();
   const lifecycle = createDemoLifecycle();
+  const reconciliation = createDemoReconciliation();
 
   return {
     environment: "demo",
@@ -44,6 +66,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "nightlyReconciliation") return reconciliation.read(request) as ReadResponse<T>;
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
       const lifecycleView = lifecycle.read(request);
@@ -56,13 +79,21 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       const financeView = finance.read(request);
       if (financeView) return financeView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
-        return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+        return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerRewards") return readRewards<T>(request as ReadRequest<{ offerId: string; scenario?: string }>, fixture);
       if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
       if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
-      if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
+      if (request.viewKey === "pipelineSummary") {
+        const data = filterPipeline(pipelineFilters(request.filters, request.requestId));
+        return respondWith(request, data, { dataVersion: "pipeline-demo@2", dataState: data.sources.length ? "ready" : "empty" }) as ReadResponse<T>;
+      }
+      if (request.viewKey === "pipelineBranches") {
+        const source = (request.filters as { source?: string } | null)?.source ?? "both";
+        if (!["both", "social-cat", "tiktok-shop"].includes(source)) err("VALIDATION_FAILED", "source must be one of both, social-cat, tiktok-shop.", request.requestId);
+        return respondWith(request, { ...branchesDemo, sources: branchesDemo.sources.filter((s) => source === "both" || s.source === source) }, { dataVersion: "pipeline-branches-demo@1" }) as ReadResponse<T>;
+      }
       if (request.viewKey === "collaborationDetail") return collaboration.read(request) as ReadResponse<T>;
       if (request.viewKey === "batchDetail") return batch.read(request) as ReadResponse<T>;
       if (request.viewKey === "recruitmentQueue") return respondWith(request, filterRecruitment(recruitmentFilters(request.filters, request.requestId)), { dataVersion: "recruitment-demo@1" }) as ReadResponse<T>;
@@ -78,15 +109,18 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (reconciliation.handles(request)) return reconciliation.submit(request as ActionRequest<never>);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
       const opsResult = ops.submit(request);
       if (opsResult) return opsResult;
       const financeResult = finance.submit(request);
       if (financeResult) return financeResult;
+      if (discovery.handles(request)) return discovery.submit(request as ActionRequest<never>);
+      if (policy.handles(request)) return policy.submit(request);
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
-      if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
+      if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent" || request.actionKind === "decideTikTokSample") return batch.submit(request);
       return approvals.submit(request);
     },
     async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {
@@ -132,9 +166,11 @@ function recruitmentFilters(raw: unknown, requestId: string): RecruitmentData["f
 
 const PIPELINE_FACETS: { [K in keyof PipelineFilters]: readonly string[] } = {
   source: ["both", "social-cat", "tiktok-shop"],
+  route: ["outbound", "inbound"],
   network: ["all", "instagram", "tiktok"],
   checkout: ["all", "website", "tiktok-shop"],
   window: ["sep-oct", "sep", "oct"],
+  policy: ["all", "policy-2026-09", "policy-2026-10"],
 };
 
 /** Only allowed facet values are accepted; an unknown one is a validation error, not a silent default. */

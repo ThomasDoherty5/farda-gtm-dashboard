@@ -121,7 +121,7 @@ function Collabs({ res, s }: { res: ReadResponse<SettlementRecord>; s: Settlemen
 
       <MatchDialog open={dialog?.kind === "match"} res={res} s={s} onClose={() => setDialog(null)} />
       <Dialog open={dialog?.kind === "evidence"} title="Matching evidence" badge="Read only" onClose={() => setDialog(null)}>
-        <FactList label="Matching evidence" rows={[["Provider receipt", g.evidence.receipt ?? "None"], ["Group", g.id], ["Net accrued", dollars(paid)], ["Provider paid", `${dollars(paid)} · illustrative`], ["Difference", "$0 · not confirmed until a statement matches"], ["Merchant invoice", "Unmatched"]]} />
+        <FactList label="Matching evidence" rows={[["Provider receipt", g.evidence.receipt ?? "None"], ["Adjustments after payout", (g.adjustments ?? []).length ? (g.adjustments ?? []).map((a) => `${a.id}: ${dollars(a.amountMinor)} (${a.reason})`).join("; ") : "None"], ["Group", g.id], ["Net accrued", dollars(paid)], ["Provider paid", `${dollars(paid)} · illustrative`], ["Difference", "$0 · not confirmed until a statement matches"], ["Merchant invoice", "Unmatched"]]} />
         <p>Viewing evidence does not confirm a match or change a payout.</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
