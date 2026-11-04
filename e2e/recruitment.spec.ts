@@ -14,14 +14,6 @@ test.describe("recruitment screens against Figma at 1440", () => {
     return { x: Math.round(b!.x), y: Math.round(b!.y), w: Math.round(b!.width), h: Math.round(b!.height) };
   };
   const height = (page: Page) => page.evaluate(() => document.documentElement.scrollHeight);
-  // A line of text near its container's width can wrap on one platform and not another (the Linux runner's hinting differs from macOS),
-  // so the total may differ by one 18px line. Every other geometry check below stays exact.
-  const expectHeight = async (page: Page, figma: number) => {
-    const h = await height(page);
-    expect(h).toBeGreaterThanOrEqual(figma - 18);
-    expect(h).toBeLessThanOrEqual(figma);
-  };
-
   test("Social Cat recruitment (38:131): panels sit where the design puts them", async ({ page }) => {
     await page.goto(REC);
     await page.evaluate(() => document.fonts.ready);
@@ -37,7 +29,7 @@ test.describe("recruitment screens against Figma at 1440", () => {
     await page.goto(INV);
     await page.evaluate(() => document.fonts.ready);
     await ready(page, INV);
-    await expectHeight(page, 2658);
+    expect(await height(page)).toBe(2658);
     expect(await box(page.getByRole("textbox", { name: "Creator" }))).toMatchObject({ x: 97, w: 376, h: 48 });
     expect(await box(page.getByRole("textbox", { name: "Product" }))).toMatchObject({ x: 505, w: 376, h: 48 });
     expect(await box(page.getByRole("button", { name: "Send request · blocked" }))).toMatchObject({ w: 396, h: 44 });
@@ -47,7 +39,7 @@ test.describe("recruitment screens against Figma at 1440", () => {
     await page.goto(BATCH);
     await page.evaluate(() => document.fonts.ready);
     await ready(page, BATCH);
-    await expectHeight(page, 2298);
+    expect(await height(page)).toBe(2298);
     expect(await box(page.getByTestId("metric-Selected prospects").locator("xpath=ancestor::dl[1]"))).toMatchObject({ x: 72, w: 312, h: 170 });
     const segments = page.getByTestId("status-bar").locator("li");
     expect(Math.round((await segments.first().boundingBox())!.width)).toBe(821);
