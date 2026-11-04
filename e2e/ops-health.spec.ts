@@ -46,3 +46,10 @@ test("no horizontal overflow at 320px on the health view", async ({ page }) => {
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
+
+test("the Operations page links to the health view", async ({ page }) => {
+  await page.goto("/operations");
+  await page.getByRole("link", { name: "Issues and fulfillment health" }).click();
+  await expect(page).toHaveURL(/\/analytics\/fulfillment\?view=health$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Issues and fulfillment health" })).toBeVisible();
+});

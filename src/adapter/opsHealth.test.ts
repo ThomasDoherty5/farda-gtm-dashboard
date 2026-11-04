@@ -1,5 +1,5 @@
-import { buildOpsHealth, reduceShipment, type OpsHealth } from "./opsHealth";
-import { ISSUE_TAGS, REFUNDS, ledgerOrders, ledgerShipments, type LedgerShipment } from "@/fixtures/opsHealth";
+import { buildOpsHealth, healthGroup, mean, reduceShipment, type OpsHealth } from "./opsHealth";
+import { ISSUE_TAGS, REFUNDS, ledgerOrders, ledgerShipments, type LedgerOrder, type LedgerShipment, type ShipmentEvent, type ShipmentEventKind } from "@/fixtures/opsHealth";
 import { operationsDemo, shippingExceptionDemo } from "@/fixtures/operations";
 import { supportDemo } from "@/fixtures/support";
 import { DEMO_NOW } from "@/fixtures/overview";
@@ -34,14 +34,128 @@ describe("fulfillment averages are derived from the ledger", () => {
   it("leaves a shipped order with an unread label cost out of the cost average, never as $0", () => {
     const g = health.fulfillment.all;
     expect(g.costUnread).toBe(1);
-    const withCosts = ledgerShipments.filter((s) => s.labelCostCents !== null && reduceShipment(s).state !== "Label uncertain");
-    expect(g.costPerOrder.value).toEqual({ minorUnits: Math.round(withCosts.reduce((n, s) => n + s.labelCostCents!, 0) / withCosts.length), currency: "USD" });
+    // Worked by hand from the fixture: 30 delivered labels cycle 595, 645, 685, 725, 775 six times (6 x 3,425 = 20,550), plus the
+    // lost ($6.75) and returned ($6.85) labels = 21,910 over 32 costed orders = 684.69, so $6.85. The unread one (TEST-SP-0099) is out.
+    expect(g.costPerOrder.value).toEqual({ minorUnits: 685, currency: "USD" });
+  });
+});
+
+/** Hand-built ledger rows, so the expected numbers below are worked by hand and not recomputed with the code's formula. */
+const T0 = Date.parse("2026-10-01T00:00:00.000Z");
+const hr = (h: number) => new Date(T0 + h * 3_600_000).toISOString();
+const evt = (ref: string, n: number, kind: ShipmentEventKind, h: number): ShipmentEvent => ({ eventId: `${ref}-${n}`, kind, occurredAt: hr(h), receivedAt: hr(h) });
+const ship = (ref: string, order: string, cost: number | null, kinds: [ShipmentEventKind, number][], units = 1): LedgerShipment => ({
+  shipmentRef: ref, orderRef: order, home: "H1", carrier: "Carrier A", unitsShipped: units, labelCostCents: cost, events: kinds.map(([k, h], i) => evt(ref, i + 1, k, h)),
+});
+const order = (ref: string, units = 1, canceled = false): LedgerOrder => ({ orderRef: ref, orderedAt: hr(0), unitsOrdered: units, canceledAt: canceled ? hr(1) : null, reservationRef: `RSV-${ref}` });
+const orderedAt = new Map([["O1", hr(0)], ["O2", hr(0)], ["O3", hr(0)], ["O4", hr(0)]]);
+
+describe("averages of nothing are unknown, not zero", () => {
+  it("mean([]) is unknown with NO_SHIPMENTS_IN_GROUP and a sample of 0", () => {
+    expect(mean([])).toMatchObject({ days: { state: "unknown", value: null, reasonCode: "NO_SHIPMENTS_IN_GROUP" }, sample: 0 });
   });
 
-  it("answers unknown, not zero, for a group with nothing to average", () => {
-    const none = reduceShipment({ ...shipment("TEST-SP-0098") });
-    expect(none.shippedAt).toBeNull();
-    expect(none.labelCostCents).toBeNull();
+  it("mean works in hours and reports days to one decimal: 24 h and 48 h is 1.5 days", () => {
+    expect(mean([24, 48])).toMatchObject({ days: { state: "known", value: 1.5 }, sample: 2 });
+  });
+
+  it("an empty group is unknown for timing and cost, with the reasons", () => {
+    const g = healthGroup("Empty", [], orderedAt);
+    expect(g.orderToShipped.days).toMatchObject({ state: "unknown", value: null, reasonCode: "NO_SHIPMENTS_IN_GROUP" });
+    expect(g.shippedToDelivered.days).toMatchObject({ state: "unknown", value: null, reasonCode: "NO_SHIPMENTS_IN_GROUP" });
+    expect(g.costPerOrder).toMatchObject({ state: "unknown", value: null, reasonCode: "COST_NOT_READ" });
+    expect(g.orders).toBe(0);
+  });
+
+  it("a group of only an unconfirmed label has nothing to average and no cost", () => {
+    const g = healthGroup("Uncertain", [reduceShipment(ship("S1", "O1", null, [["label_uncertain", 2]]))], orderedAt);
+    expect(g.orderToShipped.days).toMatchObject({ state: "unknown", reasonCode: "NO_SHIPMENTS_IN_GROUP" });
+    expect(g.costPerOrder).toMatchObject({ state: "unknown", reasonCode: "COST_NOT_READ" });
+  });
+
+  it("a shipped group whose labels have no cost is COST_NOT_READ, not $0", () => {
+    const g = healthGroup("Unread", [reduceShipment(ship("S1", "O1", null, [["label_purchased", 1], ["carrier_accepted", 24]]))], orderedAt);
+    expect(g.costPerOrder).toMatchObject({ state: "unknown", value: null, reasonCode: "COST_NOT_READ" });
+    expect(g.costUnread).toBe(1);
+    expect(g.orderToShipped.days).toMatchObject({ state: "known", value: 1 });
+  });
+});
+
+describe("a leaves-out rule is worked by hand", () => {
+  const costed = (ref: string, order: string, cost: number | null) => reduceShipment(ship(ref, order, cost, [["label_purchased", 1], ["carrier_accepted", 24], ["delivered", 96]]));
+
+  it("leaves an unread cost out: $5.00 and $7.00 with one unread is $6.00 over 2 orders, and the unread one is counted aside", () => {
+    const g = healthGroup("G", [costed("S1", "O1", 500), costed("S2", "O2", 700), costed("S3", "O3", null)], orderedAt);
+    expect(g.costPerOrder.value).toEqual({ minorUnits: 600, currency: "USD" });
+    expect(g.costUnread).toBe(1);
+  });
+
+  it("a delivered shipment with no carrier acceptance is excluded from shipped-to-delivered and counted as unknown", () => {
+    const noScan = reduceShipment(ship("S4", "O4", 500, [["label_purchased", 1], ["delivered", 100]]));
+    expect(noScan).toMatchObject({ state: "Delivered", shippedAt: null });
+    // S1: accepted at 24 h, delivered at 96 h = 3 days. The unscanned one must not become a ~20,000-day average.
+    const g = healthGroup("G", [costed("S1", "O1", 500), noScan], orderedAt);
+    expect(g.shippedToDelivered).toMatchObject({ days: { state: "known", value: 3 }, sample: 1 });
+    expect(g.deliveredWithoutAcceptance).toBe(1);
+    const only = healthGroup("G", [noScan], orderedAt);
+    expect(only.shippedToDelivered.days).toMatchObject({ state: "unknown", value: null });
+    expect(only.orderToShipped.days).toMatchObject({ state: "unknown", value: null });
+  });
+
+  it("shipping cost per order divides by orders: an order with two labels counts once", () => {
+    // O1 has labels of $5.00 and $3.00 = $8.00; O2 has $4.00. (800 + 400) / 2 orders = $6.00. Per shipment would be $4.00.
+    const g = healthGroup("G", [costed("S1", "O1", 500), costed("S1b", "O1", 300), costed("S2", "O2", 400)], orderedAt);
+    expect(g.costPerOrder.value).toEqual({ minorUnits: 600, currency: "USD" });
+    expect(g.orders).toBe(2);
+  });
+
+  it("an order with any shipped label of unread cost is left out of the cost average whole, so it is never understated", () => {
+    const g = healthGroup("G", [costed("S1", "O1", 500), costed("S1b", "O1", null), costed("S2", "O2", 400)], orderedAt);
+    expect(g.costPerOrder.value).toEqual({ minorUnits: 400, currency: "USD" });
+  });
+});
+
+describe("canceled orders and unconfirmed labels", () => {
+  const live = [order("O1"), order("O2", 1, true)];
+  const shipments = [
+    ship("S1", "O1", 500, [["label_purchased", 1], ["carrier_accepted", 24], ["delivered", 96]]),
+    ship("S2", "O2", 900, [["label_purchased", 1], ["carrier_accepted", 48], ["delivered", 120]]),
+  ];
+
+  it("a canceled order's shipment and label cost stay out of every average", () => {
+    const h = buildOpsHealth({ orders: live, shipments });
+    expect(h.fulfillment.all.orderToShipped).toMatchObject({ days: { value: 1 }, sample: 1 });
+    expect(h.fulfillment.all.shippedToDelivered.sample).toBe(1);
+    expect(h.fulfillment.all.costPerOrder.value).toEqual({ minorUnits: 500, currency: "USD" });
+    expect(h.fulfillment.all.orders).toBe(1);
+    expect(h.fulfillment.byHome[0]!.costPerOrder.value).toEqual({ minorUnits: 500, currency: "USD" });
+  });
+
+  it("the canceled order still lists as Canceled", () => {
+    const h = buildOpsHealth({ orders: live, shipments });
+    expect(h.orders.find((o) => o.orderRef === "O2")).toMatchObject({ state: "Canceled", unitsShipped: 0 });
+  });
+
+  it("an unconfirmed label ships 0 units", () => {
+    const r = reduceShipment(ship("S3", "O3", null, [["label_uncertain", 2]], 2));
+    expect(r.unitsShipped).toBe(0);
+    expect(r.state).toBe("Label uncertain");
+  });
+
+  it("an unconfirmed label is not reported as a partial fulfillment", () => {
+    const h = buildOpsHealth({ orders: [order("O3", 2)], shipments: [ship("S3", "O3", null, [["label_uncertain", 2]], 2)] });
+    const o = h.orders[0]!;
+    expect(o).toMatchObject({ state: "Label uncertain", unitsShipped: 0 });
+    expect(o.note).toMatch(/not shipped/);
+    expect(o.note).not.toMatch(/waits for stock/);
+  });
+
+  it("a partial order that is also lost stays Lost and keeps the Lost note, with the unit counts", () => {
+    const h = buildOpsHealth({ orders: [order("O3", 3)], shipments: [ship("S3", "O3", 600, [["label_purchased", 1], ["carrier_accepted", 24], ["lost", 80]], 2)] });
+    const o = h.orders[0]!;
+    expect(o.state).toBe("Lost");
+    expect(o.note).toMatch(/reported it lost/);
+    expect(o.note).toMatch(/2 of 3 units shipped/);
   });
 });
 

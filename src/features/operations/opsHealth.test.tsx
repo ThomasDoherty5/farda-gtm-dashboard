@@ -1,6 +1,9 @@
 import { screen, within } from "@testing-library/react";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
+import type { FardaAdapter } from "@/adapter/adapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
+import type { OpsHealth } from "@/adapter/opsHealth";
+import { fulfillmentDemo } from "@/fixtures/operations";
 import { renderRoute } from "@/test/renderWithAdapter";
 
 const PATH = "/analytics/fulfillment?view=health";
@@ -62,5 +65,71 @@ describe("issues and fulfillment health", () => {
     renderRoute("/analytics/fulfillment", createDemoAdapter());
     expect(await screen.findByTestId("metric-Orders shipped")).toHaveTextContent("329");
     expect(screen.queryByTestId("health-notice")).not.toBeInTheDocument();
+  });
+});
+
+describe("the health counts and the overview total say how they differ", () => {
+  it("states that the health counts come from a sample ledger, not the overview's period total", async () => {
+    renderRoute(PATH, createDemoAdapter());
+    const notice = await screen.findByTestId("health-notice");
+    expect(notice).toHaveTextContent(/sample ledger of 34 shipments/);
+    expect(notice).toHaveTextContent(/not the period total/);
+    expect(screen.getByText(/^33 shipped orders in the sample ledger/)).toBeInTheDocument();
+    expect(screen.getByText(/^30 delivered in the sample ledger/)).toBeInTheDocument();
+  });
+
+  it("the overview total on the same dataset is a different number, so the difference is stated rather than hidden", async () => {
+    const overviewTotal = fulfillmentDemo(14).daily.reduce((n, d) => n + d.shipped, 0);
+    expect(overviewTotal).toBe(329);
+    renderRoute(PATH, createDemoAdapter());
+    expect(await screen.findByTestId("health-notice")).toHaveTextContent(/Fulfillment overview/);
+  });
+});
+
+describe("fin usage against a cap of zero", () => {
+  function withCap(minorUnits: number): FardaAdapter {
+    const demo = createDemoAdapter();
+    return {
+      ...demo,
+      readView: (async (req: Parameters<FardaAdapter["readView"]>[0]) => {
+        const r = await demo.readView(req);
+        const d = r.data as OpsHealth;
+        return { ...r, data: { ...d, issues: { ...d.issues, fin: { ...d.issues.fin, cap: { ...d.issues.fin.cap, minorUnits } } } } };
+      }) as FardaAdapter["readView"],
+    };
+  }
+
+  it("never prints Infinity or NaN percent", async () => {
+    renderRoute(PATH, withCap(0));
+    const fin = await screen.findByTestId("fin-usage");
+    expect(fin).not.toHaveTextContent(/Infinity|NaN/);
+    expect(fin).toHaveTextContent(/no cap set/i);
+  });
+});
+
+describe("an unscanned delivery is shown as unknown, not averaged", () => {
+  it("the table says how many delivered shipments are left out for lack of a carrier scan", async () => {
+    const demo = createDemoAdapter();
+    const adapter = {
+      ...demo,
+      readView: (async (req: Parameters<FardaAdapter["readView"]>[0]) => {
+        const r = await demo.readView(req);
+        const d = r.data as OpsHealth;
+        const bump = (g: OpsHealth["fulfillment"]["all"]) => ({ ...g, deliveredWithoutAcceptance: 1 });
+        return { ...r, data: { ...d, fulfillment: { ...d.fulfillment, all: bump(d.fulfillment.all), byHome: d.fulfillment.byHome.map((g, i) => (i === 0 ? bump(g) : g)) } } };
+      }) as FardaAdapter["readView"],
+    };
+    renderRoute(PATH, adapter);
+    await screen.findByTestId("metric-Shipped to delivered");
+    expect(screen.getByText(/1 delivered without a carrier scan left out/)).toBeInTheDocument();
+    expect(within(screen.getByTestId("health-by-home")).getByText(/1 delivered without a carrier scan/)).toBeInTheDocument();
+  });
+});
+
+describe("the Operations page links to the health view", () => {
+  it("offers a link, in the header, to the issues and fulfillment health view", async () => {
+    renderRoute("/operations", createDemoAdapter());
+    await screen.findByTestId("metric-To ship");
+    expect(screen.getByRole("link", { name: "Issues and fulfillment health" })).toHaveAttribute("href", "/analytics/fulfillment?view=health");
   });
 });

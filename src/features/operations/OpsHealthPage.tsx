@@ -10,16 +10,24 @@ import { FlatTable, HalfColumns, Notice, Page, PageHeader, Panel } from "@/compo
 import { ViewError } from "@/components/ViewError";
 import { orderDemo } from "@/fixtures/operations";
 import { figure } from "./format";
+import type { Money } from "@/adapter/contract";
 
 const days = (g: { days: Parameters<typeof figure<number>>[0] }) => figure(g.days, (d) => `${d} days`);
+/** Spend against its cap. A cap of zero is "no cap set", never a percentage of nothing. */
+const finUsage = (cost: Money, cap: Money) => (cap.minorUnits > 0 ? `${formatMoney(cost)} of ${formatMoney(cap)} cap (${Math.round((100 * cost.minorUnits) / cap.minorUnits)}%)` : `${formatMoney(cost)} spent, no cap set`);
 const trend = (now: number, before: number) => (now === before ? "no change" : `${now > before ? "+" : "−"}${Math.abs(now - before)}`);
 
 const groupRows = (groups: HealthGroup[]) =>
   groups.map((g) => ({
     key: g.key,
-    cells: [g.key, days(g.orderToShipped), days(g.shippedToDelivered), figure(g.costPerOrder, (m) => formatMoney(m)), g.costUnread ? `${g.costUnread} shipped without a cost` : "None"],
+    cells: [g.key, days(g.orderToShipped), days(g.shippedToDelivered), figure(g.costPerOrder, (m) => formatMoney(m)), leftOut(g)],
   }));
-const COLUMNS = [{ label: "Group", width: 180 }, { label: "Order to shipped", width: 170 }, { label: "Shipped to delivered", width: 190 }, { label: "Shipping cost per order", width: 200 }, { label: "Cost not read", width: 220 }];
+/** What a group leaves out of its averages, so a shorter sample is never mistaken for a full one. */
+const leftOut = (g: HealthGroup) => {
+  const items = [g.costUnread ? `${g.costUnread} shipped without a cost` : null, g.deliveredWithoutAcceptance ? `${g.deliveredWithoutAcceptance} delivered without a carrier scan` : null].filter((x): x is string => x !== null);
+  return items.length ? <>{items.map((x) => <div key={x}>{x}</div>)}</> : "None";
+};
+const COLUMNS = [{ label: "Group", width: 180 }, { label: "Order to shipped", width: 170 }, { label: "Shipped to delivered", width: 190 }, { label: "Shipping cost per order", width: 200 }, { label: "Left out of averages", width: 220 }];
 
 /**
  * Issues and fulfillment health (THO-271). This view has no Figma source: it is built from the design-system components and
@@ -43,16 +51,15 @@ export function OpsHealthPage() {
 
 function Body({ d }: { d: OpsHealth }) {
   const { issues, fulfillment: f } = d;
-  const finPct = Math.round((100 * issues.fin.cost.minorUnits) / issues.fin.cap.minorUnits);
   const week = issues.tags.reduce((n, t) => ({ now: n.now + t.thisWeek, before: n.before + t.lastWeek }), { now: 0, before: 0 });
   return (
     <>
       <Notice tone="violet" label="Demo" title="Synthetic data · no Figma source" testId="health-notice">
-        Built from a demo shipment ledger and issue tags. This view has no Figma frame, so no design fidelity is claimed. A shipment counts as shipped when the carrier accepts it, not when a label is bought.
+        {`Built from a demo shipment ledger and issue tags. This view has no Figma frame, so no design fidelity is claimed. These counts come from a sample ledger of ${d.integrity.shipments} shipments, not the period total on the Fulfillment overview, so the two numbers differ. A shipment counts as shipped when the carrier accepts it, not when a label is bought.`}
       </Notice>
       <KpiRow>
-        <Kpi label="Order to shipped" context={`${f.all.orderToShipped.sample} shipped orders`} testId="metric-Order to shipped">{days(f.all.orderToShipped)}</Kpi>
-        <Kpi label="Shipped to delivered" context={`${f.all.shippedToDelivered.sample} delivered · carrier delivery time`} testId="metric-Shipped to delivered">{days(f.all.shippedToDelivered)}</Kpi>
+        <Kpi label="Order to shipped" context={`${f.all.orderToShipped.sample} shipped orders in the sample ledger`} testId="metric-Order to shipped">{days(f.all.orderToShipped)}</Kpi>
+        <Kpi label="Shipped to delivered" context={`${f.all.shippedToDelivered.sample} delivered in the sample ledger · carrier delivery time${f.all.deliveredWithoutAcceptance ? ` · ${f.all.deliveredWithoutAcceptance} delivered without a carrier scan left out` : ""}`} testId="metric-Shipped to delivered">{days(f.all.shippedToDelivered)}</Kpi>
         <Kpi label="Shipping cost per order" context={f.all.costUnread ? `${f.all.costUnread} shipped order excluded: cost not read` : "Every shipped order has a cost"} testId="metric-Shipping cost per order">{figure(f.all.costPerOrder, (m) => formatMoney(m))}</Kpi>
         <Kpi label="Refunds with a receipt" context={`${issues.refunds.orders} orders · ${issues.refunds.pending.length} approved, no receipt yet`} testId="metric-Refunds">{formatMoney(issues.refunds.total)}</Kpi>
       </KpiRow>
@@ -71,7 +78,7 @@ function Body({ d }: { d: OpsHealth }) {
             columns={[{ label: "Tag", width: 220 }, { label: "This week", width: 120 }, { label: "Last week", width: 120 }, { label: "Change", width: 120 }]}
             rows={issues.tags.map((t) => ({ key: t.tag, cells: [t.tag, String(t.thisWeek), String(t.lastWeek), trend(t.thisWeek, t.lastWeek)] }))}
           />
-          <p data-testid="fin-usage">{`Fin: ${issues.fin.resolutions} resolutions · ${formatMoney(issues.fin.cost)} of ${formatMoney(issues.fin.cap)} cap (${finPct}%) · ${issues.fin.periodLabel}`}</p>
+          <p data-testid="fin-usage">{`Fin: ${issues.fin.resolutions} resolutions · ${finUsage(issues.fin.cost, issues.fin.cap)} · ${issues.fin.periodLabel}`}</p>
           <Link to="/support/cases/TEST-ISS-021">Open the handoff queue</Link>
         </Panel>
         <Panel title="Orders that did not ship cleanly" subtitle="One order, reservation and shipment identity" testId="order-exceptions">
