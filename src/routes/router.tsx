@@ -48,6 +48,7 @@ import { ConnectionsPage } from "@/features/settings/ConnectionsPage";
 import { SchedulePage } from "@/features/settings/SchedulePage";
 import { TeamPage } from "@/features/settings/TeamPage";
 import { sourceScreens } from "./manifest.generated";
+import { extraRoutes } from "./extraRoutes";
 import { navSections } from "./nav";
 import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
 
@@ -112,6 +113,7 @@ export function buildRoutes(): RouteObject[] {
     { index: true, element: <Navigate to="/overview" replace /> },
     ...paths.map((path) => ({ path, element: implemented[path] ?? <RoutePlaceholder path={path} /> })),
     ...navSections.filter((s) => !paths.includes(s.path)).map((s) => ({ path: s.path, element: sectionPages[s.seg] ?? <SectionIndex seg={s.seg} /> })),
+    ...extraRoutes,
     { path: "*", element: <NotFound /> },
   ];
   return [{ path: "/", element: <Shell />, children }];

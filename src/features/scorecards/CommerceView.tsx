@@ -7,6 +7,7 @@ import { DEMO_ASSESSMENT_CONTENT_ID, DEMO_ASSESSMENT_TIKTOK_ID, DEMO_OFFER_DRAFT
 import { HistoryDialog } from "./dialogs";
 import { HistoricalContext } from "./ScorecardView";
 import { bandOf, economics, pointsOf, scoreOf, usdAuto, usd2 } from "./scorecardMath";
+import { ReadinessNote } from "./readiness";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
 
@@ -36,6 +37,7 @@ export function CommerceView({ record }: { record: CommerceScorecardRecord }) {
       ]} />
       </div>
       <HistoricalContext creatorId={record.creatorId} note="The 82-point example belongs to the earlier proposed SC-COMMERCE-v2 model and AFF-01 draft. Current website acquisition uses WEBSITE-AFFILIATE-v3 after lifestyle evidence review and model publication." />
+      <ReadinessNote record={record} />
       <section className={s.hist} aria-label="SC-COMMERCE-v2 prior proposed snapshot">
         <p className={a.label}>SC-COMMERCE-v2 · prior proposed snapshot</p>
         <p className={a.small}>Read-only historical example: {score.total ?? "no"} points for affiliate-only AFF-01 with $0 fixed fee. Creative quality, routine compatibility and attributed sales remain separate evidence dimensions.</p>

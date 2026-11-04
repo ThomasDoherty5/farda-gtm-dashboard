@@ -7,7 +7,7 @@ import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
-import { createDemoOffers, readAssessment } from "./demoScorecards";
+import { createDemoOffers, readAssessment, readRewards } from "./demoScorecards";
 import { createDemoBatch } from "./demoBatch";
 import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
@@ -59,6 +59,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
+      if (request.viewKey === "offerRewards") return readRewards<T>(request as ReadRequest<{ offerId: string; scenario?: string }>, fixture);
       if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
       if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
       if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
