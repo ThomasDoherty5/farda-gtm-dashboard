@@ -12,6 +12,11 @@ import { TikTokPage } from "@/features/creators/TikTokPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
+import { FulfillmentAnalyticsPage } from "@/features/operations/FulfillmentAnalyticsPage";
+import { OperationsPage } from "@/features/operations/OperationsPage";
+import { OrderPage } from "@/features/operations/OrderPage";
+import { ReturnPage } from "@/features/operations/ReturnPage";
+import { ShippingExceptionPage } from "@/features/operations/ShippingExceptionPage";
 import { AttributionPage } from "@/features/analytics/AttributionPage";
 import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
 import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
@@ -51,6 +56,11 @@ const implemented: Record<string, JSX.Element> = {
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,
   "/runs/:runId": <RunPage />,
+  "/operations": <OperationsPage />,
+  "/orders/:orderId": <OrderPage />,
+  "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,
+  "/returns/:returnId": <ReturnPage />,
+  "/analytics/fulfillment": <FulfillmentAnalyticsPage />,
 };
 
 /** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */

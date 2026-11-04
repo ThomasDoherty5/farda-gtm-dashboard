@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useScope } from "@/adapter/scope";
-import { primaryNav, workspaceLinks } from "@/routes/nav";
+import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
 import { Badge } from "./Badge";
 import { Button, LinkButton } from "./Button";
 import { Dialog } from "./Dialog";
@@ -12,7 +12,7 @@ export function Shell() {
   const { adapter } = useScope();
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
-  const section = pathname.split("/")[1] ?? "";
+  const section = sectionOf(pathname);
   const demo = adapter.environment === "demo";
 
   return (
