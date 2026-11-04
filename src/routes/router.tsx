@@ -6,6 +6,9 @@ import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
 import { InventoryPage } from "@/features/inventory/InventoryPage";
+import { PayablePage } from "@/features/finance/PayablePage";
+import { SettlementPage } from "@/features/finance/SettlementPage";
+import { CommissionLedgerPage } from "@/features/finance/CommissionLedgerPage";
 import { SupportPage } from "@/features/support/SupportPage";
 import { FulfillmentAnalyticsPage } from "@/features/operations/FulfillmentAnalyticsPage";
 import { OperationsPage } from "@/features/operations/OperationsPage";
@@ -29,6 +32,9 @@ const implemented: Record<string, JSX.Element> = {
   "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,
   "/returns/:returnId": <ReturnPage />,
   "/inventory": <InventoryPage />,
+  "/finance/commissions": <CommissionLedgerPage />,
+  "/finance/settlements/:settlementId": <SettlementPage />,
+  "/finance/payables/:payableId": <PayablePage />,
   "/support/cases/:caseId": <SupportPage />,
   "/analytics/fulfillment": <FulfillmentAnalyticsPage />,
 };

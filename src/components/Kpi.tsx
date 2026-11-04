@@ -14,6 +14,6 @@ export function Kpi({ label, children, context, testId, hug = false }: { label: 
 }
 
 /** `keepColumns` holds the column count down to phone width, for the Operations 1024 design, which keeps three. */
-export function KpiRow({ children, columns = 4, keepColumns = false }: { children: ReactNode; columns?: number; keepColumns?: boolean }) {
-  return <div className={styles.row} data-keep-columns={keepColumns || undefined} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
+export function KpiRow({ children, columns = 4, keepColumns = false, alignStart = false }: { children: ReactNode; columns?: number; keepColumns?: boolean; /** Cards keep their own height instead of matching the tallest, as in Figma 66:252. */ alignStart?: boolean }) {
+  return <div className={styles.row} data-keep-columns={keepColumns || undefined} data-align-start={alignStart || undefined} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
 }
