@@ -18,7 +18,8 @@ import { FilterButton } from "@/features/acquisition/FilterButton";
 import { ActionError, blockedReason, SourceDialog } from "@/features/approvals/shared";
 import { OpsTabs } from "@/features/operations/OpsTabs";
 import { figure, minutesAgoLabel, reasonText } from "@/features/operations/format";
-import { availableOf, STAGES, type InventoryOverview, type Movement, type StockRow } from "@/fixtures/inventory";
+import { DEMO_NOW } from "@/fixtures/overview";
+import { availableOf, isLate, STAGES, type InventoryOverview, type Movement, type StockRow } from "@/fixtures/inventory";
 import { HOMES, homeLabel, type Home } from "@/fixtures/operations";
 import styles from "./Inventory.module.css";
 
@@ -99,6 +100,11 @@ function Body({ res, data, home, onSource }: { res: ReadResponse<InventoryOvervi
           <p>Shopify observed {figure(r.shopifyObserved, String)}; the movements give {r.onHand} on hand. The ledger balance is shown. Review both in the source before moving stock.</p>
         </Alert>
       ))}
+      {isLate(data.transfer, DEMO_NOW) && (
+        <Alert state="warning" title={`Transfer ${data.transfer.key} is late`} testId="transfer-late">
+          <p>It was expected by {data.transfer.expectedBy} and {homeLabel(data.transfer.to)} has not confirmed receipt. On hand at the destination is unchanged, and the {data.transfer.expectedUnits} units are not counted until the source records the receipt.</p>
+        </Alert>
+      )}
       {data.pendingRequests.length > 0 && (
         <Alert state="info" title={`${data.pendingRequests.length} transfer request${data.pendingRequests.length === 1 ? "" : "s"} waiting for approval`} testId="pending-requests">
           {data.pendingRequests.map((r) => <p key={r.key}>{r.units} units · {homeLabel(r.from)} → {homeLabel(r.to)}. {r.state}</p>)}

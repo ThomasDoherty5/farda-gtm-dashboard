@@ -1,7 +1,7 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError } from "./errors";
 import { respondWith } from "./demoViews";
-import { BATCH_ID, DEFAULT_BATCH_FILTERS, heldReasons, isUnsent, seedItems, type BatchData, type BatchItem } from "@/fixtures/batch";
+import { BATCH_ID, DEFAULT_BATCH_FILTERS, heldReasons, isUnsent, seedItems, seedSamples, type BatchData, type BatchItem, type SampleRequest } from "@/fixtures/batch";
 import { OWNERS } from "@/fixtures/creators";
 
 const fail = (code: string, message: string, requestId: string): never => {
@@ -17,9 +17,10 @@ export type CancelPayload = { batchId: string; itemIds?: string[] };
  */
 export function createDemoBatch() {
   let items: BatchItem[] = seedItems();
+  let samples: SampleRequest[] = seedSamples();
   let paused = false;
   let version = 1;
-  const results = new Map<string, ActionResponse>();
+  const results = new Map<string, { hash: string; response: ActionResponse }>();
 
   const versionLabel = () => `batch-v${version}`;
   const response = (request: ActionRequest<unknown>, state: ActionResponse["state"], reasonCodes: string[]): ActionResponse => ({
@@ -57,6 +58,7 @@ export function createDemoBatch() {
         paused,
         items: structuredClone(items),
         held: heldReasons,
+        samples: structuredClone(samples),
         filters,
         model: { label: "current v3 pending", status: "pending" },
         capacity: { nativeInvitations: 24, sampleUnits: 12, sampleCostMinor: 30_000, collaborationSlots: null },
@@ -66,12 +68,16 @@ export function createDemoBatch() {
         capabilities: [
           { actionKind: "pauseBatch", state: paused ? "held" : unsent > 0 ? "available" : "held", reasonCodes: paused ? ["ALREADY_PAUSED"] : unsent > 0 ? [] : ["NOTHING_TO_PAUSE"] },
           { actionKind: "cancelUnsent", state: unsent > 0 ? "available" : "held", reasonCodes: unsent > 0 ? [] : ["NOTHING_TO_CANCEL"] },
+          { actionKind: "decideTikTokSample", state: "available", reasonCodes: [] },
         ],
       });
     },
     async submit(request: ActionRequest<unknown>): Promise<ActionResponse> {
+      // A key names one logical action. Replaying it with a changed payload or version is a different request, never the first result.
+      const hash = JSON.stringify([request.actionKind, request.expectedVersion, request.payload ?? null]);
       const prior = results.get(request.idempotencyKey);
-      if (prior) return prior;
+      if (prior && prior.hash !== hash) fail("MANIFEST_CHANGED", "This request changed since the key was first used, so it needs a fresh review.", request.requestId);
+      if (prior) return prior.response;
       if (request.expectedVersion !== versionLabel()) fail("STALE_VERSION", "This batch changed since you opened it. Reload to see the current state.", request.requestId);
       let result: ActionResponse;
       if (request.actionKind === "pauseBatch") {
@@ -90,10 +96,26 @@ export function createDemoBatch() {
         items = items.map((i) => (ids.has(i.id) ? { ...i, state: "canceled" as const } : i));
         version += 1;
         result = response(request, selected.length === eligible.length ? "canceled" : "partiallySucceeded", selected.length === eligible.length ? [] : ["SENT_OR_RUNNING_EXCLUDED"]);
+      } else if (request.actionKind === "decideTikTokSample") {
+        const { sampleId, decision } = (request.payload ?? {}) as { batchId: string; sampleId: string; decision: "approve" | "decline" };
+        const sample = samples.find((s) => s.id === sampleId) ?? fail("RECORD_NOT_FOUND", "This sample request does not exist.", request.requestId);
+        if (decision !== "approve" && decision !== "decline") fail("VALIDATION_FAILED", "The decision must be approve or decline.", request.requestId);
+        if (sample.state !== "pending") fail("VALIDATION_FAILED", "This sample request was already handled.", request.requestId);
+        if (sample.route === "authorityDenied") {
+          // TikTok refuses this account's scope. Nothing was decided; a named owner takes it over.
+          samples = samples.map((s) => (s.id === sampleId ? { ...s, state: "handoff" as const, ownerRef: "Operations" } : s));
+          version += 1;
+          result = { ...response(request, "blocked", ["SOURCE_AUTHORITY_DENIED"]), nextAction: { kind: "ownerHandoff", ownerRef: "Operations", dueAt: null, available: true } };
+        } else {
+          const receiptRef = `demo-tiktok-sample-receipt-${sample.id}`;
+          samples = samples.map((s) => (s.id === sampleId ? { ...s, state: decision === "approve" ? ("approved" as const) : ("declined" as const), receiptRef } : s));
+          version += 1;
+          result = { ...response(request, "succeeded", []), receiptRefs: [receiptRef] };
+        }
       } else {
         throw new AdapterError({ code: "INTEGRATION_PENDING", message: `No demo behavior for ${request.actionKind}.`, requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       }
-      results.set(request.idempotencyKey, result);
+      results.set(request.idempotencyKey, { hash, response: result });
       return result;
     },
   };

@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION, type ActionRequest } from "./contract";
+import { CLOSE_PACKAGE_SCENARIOS } from "@/fixtures/financeClose";
 import { createDemoFinance, type ReconcilePayload } from "./demoFinance";
 import { AdapterError } from "./errors";
 
@@ -80,5 +81,50 @@ describe("reconciliation requests", () => {
 
   it("ignores actions it does not own", () => {
     expect(createDemoFinance().submit({ ...reconcile(ok), actionKind: "other" })).toBeNull();
+  });
+});
+
+describe("close package read", () => {
+  it("serves the package read only, with closing held for its own blockers", () => {
+    const f = createDemoFinance();
+    const res = read(f, "closePackage", { period: "2026-10" });
+    expect((res.data as { status: string }).status).toBe("open");
+    expect(res.capabilities).toEqual([{ actionKind: "closePeriod", state: "held", reasonCodes: ["UNRESOLVED_DIFFERENCE", "CPA_SIGN_OFF_PENDING", "EXPORT_INCOMPLETE"] }]);
+  });
+
+  it("answers the summary and the package from one source: same status and the same held reasons, under every scenario", () => {
+    const f = createDemoFinance();
+    for (const scenario of CLOSE_PACKAGE_SCENARIOS) {
+      const summary = read(f, "periodClose", { period: "2026-10", scenario });
+      const pkg = read(f, "closePackage", { period: "2026-10", scenario });
+      expect((summary.data as { status: string }).status, scenario).toBe((pkg.data as { status: string }).status);
+      expect(summary.capabilities, scenario).toEqual(pkg.capabilities);
+      const [cap] = pkg.capabilities;
+      expect(cap!.reasonCodes.length, `${scenario} says why it is held`).toBeGreaterThan(0);
+    }
+  });
+
+  it("gives the open month a reason it is held", () => {
+    expect(read(createDemoFinance(), "closePackage", { period: "2026-10", scenario: "open" }).capabilities[0]).toMatchObject({ state: "held", reasonCodes: ["UNRESOLVED_DIFFERENCE", "CPA_SIGN_OFF_PENDING", "EXPORT_INCOMPLETE"] });
+  });
+
+  it("rejects an unknown scenario on both close views, and never falls back to reconciling", () => {
+    const f = createDemoFinance();
+    for (const viewKey of ["periodClose", "closePackage"]) {
+      const err = errorFrom(() => read(f, viewKey, { period: "2026-10", scenario: "reconciliing" }));
+      expect(err.body.code).toBe("VALIDATION_FAILED");
+      expect(err.body.fieldErrors).toHaveProperty("scenario");
+    }
+  });
+
+  it("marks a closed fixture period as already closed, not available to close again", () => {
+    const res = read(createDemoFinance(), "closePackage", { period: "2026-10", scenario: "closed" });
+    expect(res.capabilities).toEqual([{ actionKind: "closePeriod", state: "unsupported", reasonCodes: ["ALREADY_CLOSED"] }]);
+  });
+
+  it("does not know a period that doesn't exist, and has no action that closes, signs off or exports", () => {
+    const f = createDemoFinance();
+    expect(errorFrom(() => read(f, "closePackage", { period: "1999-01" })).body.code).toBe("RECORD_NOT_FOUND");
+    for (const actionKind of ["closePeriod", "signOffPeriod", "exportReports"]) expect(f.submit({ ...reconcile(ok), actionKind })).toBeNull();
   });
 });

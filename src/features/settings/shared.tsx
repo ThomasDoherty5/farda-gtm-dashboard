@@ -6,7 +6,7 @@ import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
 
 export const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`;
 
-type NavKey = "runs" | "zaps" | "connections" | "reporting";
+type NavKey = "runs" | "zaps" | "connections" | "reporting" | "reconciliation";
 
 /** Section navigation across Automations (Figma "Workspace navigation", e.g. 14:663). These are links, so the current one uses aria-current. */
 export function AutomationNav({ current, width }: { current: NavKey; width: number }) {
@@ -15,6 +15,7 @@ export function AutomationNav({ current, width }: { current: NavKey; width: numb
     { key: "zaps", label: "Zaps", to: "/automations?tab=zaps" },
     { key: "connections", label: "Connections", to: "/settings/connections" },
     { key: "reporting", label: "Reporting", to: "/automations?tab=reporting" },
+    { key: "reconciliation", label: "Reconciliation", to: "/automations?tab=reconciliation" },
   ];
   return (
     <nav aria-label="Automation sections" style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-8)" }}>

@@ -69,4 +69,33 @@ describe("demo batch", () => {
   it("dispatches nothing for an action it doesn't implement", async () => {
     await expect(createDemoBatch().submit(act("sendBatch", "batch-v1", "k1"))).rejects.toMatchObject({ category: "unavailable" });
   });
+
+  describe("decideTikTokSample replays", () => {
+    const decide = (sampleId: string, decision: string, extra: object = {}) => ({ batchId: BATCH_ID, sampleId, decision, ...extra });
+
+    it("the same key and the same payload returns the first result", async () => {
+      const batch = createDemoBatch();
+      const version = batch.read(read()).dataVersion;
+      const first = await batch.submit(act("decideTikTokSample", version, "s1", decide("SR-001", "approve")));
+      const again = await batch.submit(act("decideTikTokSample", version, "s1", decide("SR-001", "approve")));
+      expect(again).toBe(first);
+    });
+
+    it("the same key with a changed decision is MANIFEST_CHANGED and decides nothing", async () => {
+      const batch = createDemoBatch();
+      const version = batch.read(read()).dataVersion;
+      await batch.submit(act("decideTikTokSample", version, "s2", decide("SR-001", "approve")));
+      await expect(batch.submit(act("decideTikTokSample", version, "s2", decide("SR-001", "decline")))).rejects.toMatchObject({ body: { code: "MANIFEST_CHANGED" } });
+      const samples = batch.read(read()).data!.samples;
+      expect(samples.find((x) => x.id === "SR-001")!.state).toBe("approved");
+    });
+
+    it("the same key aimed at a different sample is MANIFEST_CHANGED, not the first sample's receipt", async () => {
+      const batch = createDemoBatch();
+      const version = batch.read(read()).dataVersion;
+      await batch.submit(act("decideTikTokSample", version, "s3", decide("SR-001", "approve")));
+      await expect(batch.submit(act("decideTikTokSample", version, "s3", decide("SR-002", "approve")))).rejects.toMatchObject({ body: { code: "MANIFEST_CHANGED" } });
+      expect(batch.read(read()).data!.samples.find((x) => x.id === "SR-002")!.state).toBe("pending");
+    });
+  });
 });

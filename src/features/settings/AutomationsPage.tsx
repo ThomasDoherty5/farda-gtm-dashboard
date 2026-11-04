@@ -19,6 +19,7 @@ import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { ActionError, blockedReason } from "@/features/approvals/shared";
 import { RUN_PLATFORMS, RUN_STATES, type AutomationData, type AutomationRun } from "@/fixtures/settings";
+import { ReconciliationPage } from "./ReconciliationPage";
 import { AutomationNav, CadenceNotice } from "./shared";
 
 type Tab = "runs" | "zaps" | "reporting";
@@ -27,6 +28,11 @@ const allowed = (options: readonly { value: string }[], raw: string | null) => (
 
 /** Automation runs, with the Zaps and Reporting subviews (Figma source 14:637, owner THO-305). Read work; Request task only proposes, and never dispatches. */
 export function AutomationsPage() {
+  const [search] = useSearchParams();
+  return search.get("tab") === "reconciliation" ? <ReconciliationPage /> : <RunsPage />;
+}
+
+function RunsPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab: Tab = (TABS as string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as Tab) : "runs";
