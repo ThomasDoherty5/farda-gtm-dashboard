@@ -4,6 +4,7 @@ import { useScope } from "@/adapter/scope";
 import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
 import { Badge } from "./Badge";
 import { Button, LinkButton } from "./Button";
+import { ConnectionStatus } from "./ConnectionStatus";
 import { Dialog } from "./Dialog";
 import styles from "./Shell.module.css";
 
@@ -86,6 +87,7 @@ export function Shell() {
           <Outlet />
         </main>
       </div>
+      <ConnectionStatus />
       <Dialog open={menuOpen} title="Explore the Farda workspace." badge={demo ? "Demo" : undefined} onClose={() => setMenuOpen(false)}>
         <p>Choose a workflow.{demo ? " All views use illustrative data." : ""}</p>
         {/* Below 1180px the header shows fewer sections, so the menu lists them all. */}

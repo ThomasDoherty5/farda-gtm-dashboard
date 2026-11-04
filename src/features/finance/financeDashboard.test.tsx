@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import type { FardaAdapter } from "@/adapter/adapter";
-import { financeDashboardDemo, periodCloseDemo, runwayOf } from "@/fixtures/finance";
+import { financeDashboardDemo, runwayOf } from "@/fixtures/finance";
+import { periodCloseDemo } from "@/fixtures/financeClose";
 import { renderRoute } from "@/test/renderWithAdapter";
 
 beforeAll(() => {

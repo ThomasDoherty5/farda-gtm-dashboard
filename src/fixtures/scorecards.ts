@@ -15,7 +15,12 @@ export type Criterion = { label: string; rating: number | null; weight: number }
 export type Tone = "success" | "violet" | "warning" | "neutral";
 export type HistoryEntry = { version: string; model: string; policy: string; offer: string; at: string; reason: string };
 
-export type ScorecardRecord = {
+/** What an assessment was made against. A change to any part invalidates readiness that depended on it. */
+export type ReadinessBasis = { media: string; terms: string; policy: string };
+export const ASSESSED_BASIS: ReadinessBasis = { media: "media-2026-10-29", terms: "AFF-C01@v1", policy: "policy-2026-10" };
+export type BasisFields = { assessedBasis?: ReadinessBasis; currentBasis?: ReadinessBasis };
+
+export type ScorecardRecord = BasisFields & {
   kind: "content-v2" | "tiktok-commerce-v2";
   assessmentId: string;
   creatorId: string;
@@ -110,7 +115,7 @@ export const tiktokScorecard: ScorecardRecord = {
   ],
 };
 
-export type CommerceScorecardRecord = {
+export type CommerceScorecardRecord = BasisFields & {
   kind: "sc-commerce-v2";
   assessmentId: string;
   creatorId: string;

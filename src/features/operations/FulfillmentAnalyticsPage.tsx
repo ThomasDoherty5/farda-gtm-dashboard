@@ -9,6 +9,7 @@ import { FilterButton } from "@/features/acquisition/FilterButton";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { homeLabel, type FulfillmentAnalytics } from "@/fixtures/operations";
 import { figure, minutesAgoLabel, reasonText } from "./format";
+import { OpsHealthPage } from "./OpsHealthPage";
 import styles from "./Operations.module.css";
 
 const PERIODS = [{ value: "14", label: "Last 14 days" }, { value: "7", label: "Last 7 days" }];
@@ -18,7 +19,13 @@ const SCALE_PX = 6.75;
  * Fulfillment analytics (Figma source 12:808, owner THO-301). Every figure is derived from the daily rows, so the cards,
  * the chart and its table can't disagree. A comparison the data can't support reads N/A, never zero.
  */
+/** `?view=health` selects the issues and fulfillment health view; the default is the Figma-measured overview. */
 export function FulfillmentAnalyticsPage() {
+  const [search] = useSearchParams();
+  return search.get("view") === "health" ? <OpsHealthPage /> : <FulfillmentOverview />;
+}
+
+function FulfillmentOverview() {
   const [search, setSearch] = useSearchParams();
   const days = search.get("days") === "7" ? 7 : 14;
   const query = useView<{ days: number }, FulfillmentAnalytics>("fulfillmentAnalytics", { days });
