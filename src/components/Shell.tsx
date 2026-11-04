@@ -26,10 +26,12 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
     const heading = () => el.querySelector<HTMLElement>("h1");
     const syncTitle = () => { const text = heading()?.textContent?.trim(); document.title = text ? `${text} · Farda` : SITE_TITLE; };
     const focusHeading = () => {
-      const target = heading() ?? el;
+      // While a lazy screen loads, React keeps the previous screen's heading in the DOM but hidden: it is not the new page's heading.
+      const h = heading();
+      const target = h && h.getClientRects().length > 0 ? h : el;
       if (target !== el) target.tabIndex = -1;
       target.focus();
-      return target !== el;
+      return target !== el && document.activeElement === target;
     };
     syncTitle();
     if (shown.current !== pathname) {
@@ -38,12 +40,21 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
     }
     const observer = new MutationObserver(() => {
       syncTitle();
-      // The heading arrived after the navigation: move focus only if the user has not moved it on.
-      if (pending.current && heading() && (document.activeElement === el || document.activeElement === document.body)) pending.current = !focusHeading();
+      // The heading arrived after the navigation (a lazy screen): move focus unless the user has acted since, which
+      // is not the same as where focus sits, because the link they activated still holds it.
+      if (pending.current) pending.current = !focusHeading();
     });
     observer.observe(el, { childList: true, subtree: true, characterData: true });
-    const stop = window.setTimeout(() => { pending.current = false; }, 3000);
-    return () => { observer.disconnect(); window.clearTimeout(stop); };
+    const cancel = () => { pending.current = false; };
+    document.addEventListener("keydown", cancel, true);
+    document.addEventListener("pointerdown", cancel, true);
+    const stop = window.setTimeout(cancel, 3000);
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("keydown", cancel, true);
+      document.removeEventListener("pointerdown", cancel, true);
+      window.clearTimeout(stop);
+    };
   }, [main, pathname]);
 }
 
