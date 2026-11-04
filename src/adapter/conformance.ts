@@ -136,16 +136,13 @@ const saveRequest = (t: ConformanceTarget, s: Saves, over: Partial<SaveResourceR
 });
 
 async function rejection(p: Promise<unknown>): Promise<AdapterError> {
-  let resolved = false;
   try {
     await p;
-    resolved = true;
   } catch (e) {
     expect(e).toBeInstanceOf(AdapterError);
     return e as AdapterError;
   }
-  if (resolved) throw new Error("expected the adapter to reject with an AdapterError, but it answered");
-  throw new Error("unreachable");
+  throw new Error("expected the adapter to reject with an AdapterError, but it answered");
 }
 
 const sameAccounts = (a: string[], b: string[]) => [...a].sort().join(",") === [...b].sort().join(",");
