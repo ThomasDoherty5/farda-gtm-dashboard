@@ -6,7 +6,7 @@ import { SelectField } from "@/components/Field";
 import { FactList, Meter, Notice, Panel } from "@/components/Panels";
 import { KpiCard, KpiGrid, Table, ViewShell } from "@/features/analytics/parts";
 import { CEO_V1_COMMISSION_PCT, DEFAULT_REWARD_SCENARIO, EXAMPLE_NET_ORDER_MINOR, REWARD_CURRENCY, type RewardsRecord } from "@/fixtures/rewards";
-import { summarize, type Amount } from "./rewardLadder";
+import { summarize, tierStatusText, type Amount } from "./rewardLadder";
 import { usd2, usdAuto } from "./scorecardMath";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
@@ -55,7 +55,7 @@ function Rewards({ record, onScenario }: { record: RewardsRecord; onScenario: (i
         <SelectField label="Fixture scenario" helpText={sc.description} value={sc.scenarioId} onChange={onScenario} options={record.scenarios.map((x) => ({ value: x.scenarioId, label: x.label }))} />
       </Panel>
       <KpiGrid>
-        <KpiCard label="Canonical matured revenue" context={sum.refundedMinor || sum.excludedMinor ? `${money(sum.grossMaturedMinor)} matured − ${money(sum.refundedMinor)} refunds · ${money(sum.excludedMinor)} excluded` : "Each canonical order counted once"} testId="metric-matured">{money(sum.maturedMinor)}</KpiCard>
+        <KpiCard label="Canonical matured revenue" context={sum.refundedMinor || sum.excludedMinor ? `${money(sum.grossMaturedMinor)} matured − ${money(sum.refundedMinor)} refunds · ${money(sum.excludedMinor)} excluded${sum.refundExcessMinor ? ` · ${money(sum.refundExcessMinor)} of refunds exceed matured revenue, counted as $0` : ""}` : "Each canonical order counted once"} testId="metric-matured">{money(sum.maturedMinor)}</KpiCard>
         <KpiCard label="Pending orders" context={`${sum.pendingOrders} orders not yet matured · not counted`} testId="metric-pending">{money(sum.pendingMinor)}</KpiCard>
         <KpiCard label="Earned reward obligation" context="Allowance earned from claimed milestones" testId="metric-earned">{money(sum.earnedMinor)}</KpiCard>
         <KpiCard label="Outstanding obligation" context="Earned less redeemed" warn={sum.outstanding.state === "unknown"} testId="metric-outstanding">{amount(sum.outstanding)}</KpiCard>
@@ -63,6 +63,11 @@ function Rewards({ record, onScenario }: { record: RewardsRecord; onScenario: (i
       {sum.duplicateRowIds.length > 0 && (
         <Notice tone="violet" label="Deduplicated" title="Source mirror rows were ignored" role="status" testId="rewards-duplicates">
           {sum.duplicateRowIds.join(", ")} repeat orders already counted under the same canonical ID. Revenue counts once.
+        </Notice>
+      )}
+      {sum.refundAdjustments.length > 0 && (
+        <Notice tone="warning" label="Refund after claim" title="Earned rewards are preserved after a refund" role="status" testId="rewards-refund-adjustment">
+          {sum.refundAdjustments.map((x) => `${sum.tiers.find((t) => t.tier.id === x.tier)!.tier.label}: matured revenue is now ${money(x.shortfallMinor)} under the ${money(sum.tiers.find((t) => t.tier.id === x.tier)!.tier.thresholdMinor)} threshold`).join("; ")}. The earned allowance is preserved and stays in the obligation. The refund is a separate adjustment for the owner to decide; it is never deducted from earned or outstanding.
         </Notice>
       )}
       {replays > 0 && (
@@ -101,8 +106,8 @@ function Rewards({ record, onScenario }: { record: RewardsRecord; onScenario: (i
               money(t.tier.cumulativeCapMinor),
               `≈ ${sum.orderEquivalents[t.tier.id].toLocaleString("en-US")}`,
               <span key="st" data-testid={`tier-${t.tier.id}`}>
-                {t.earned ? <Badge tone="success">Earned{t.claimedAt ? " · claimed once" : ""}</Badge> : <Badge>Locked</Badge>}{" "}
-                {t.earned && (t.selection === "notSelected" ? "Reward not selected yet" : t.redeemed ? (t.redeemed.state === "known" ? `Redeemed ${money(t.redeemed.minor)}` : "Redeemed · cost unknown") : "Selected, not redeemed")}
+                {t.earned ? <Badge tone="success">Earned{t.claimedAt ? " · claimed once" : ""}{t.belowThreshold ? " · kept after refund" : ""}</Badge> : <Badge>Locked</Badge>}{" "}
+                {tierStatusText(t, money)}
               </span>,
             ],
           }))}

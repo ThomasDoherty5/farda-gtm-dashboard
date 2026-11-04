@@ -74,6 +74,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
+| `offerRewards` | `offerId`, `scenario` | RewardsRecord | `scorecards/RewardsPage` | `demoScorecards` | proposed + conflict | C-06. Typed `scenario: string`; an unknown scenario is `RECORD_NOT_FOUND`. |
 | `operationsOverview` | `scenario?` | OperationsOverview | `operations/OperationsPage` | `demoOps` | proposed + conflict | C-06. |
 | `orderDetail` | `orderId` | OrderDetail | `operations/OrderPage` | `demoOps` | proposed |  |
 | `overviewSummary` | none | OverviewData | `overview/OverviewPage` | `demoAdapter` | proposed | Nine demo fixture switches are chosen by an adapter option, not by the request. |
@@ -142,6 +143,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `markWatched` | `unverified` (`PLAYBACK_UNVERIFIED`) | `evidenceRecord` | `acquisition/EvidencePage` | proposed |
 | `openEmailTool` | `unverified` (`PROVIDER_NOT_SELECTED`) | `lifecycleOverview` | none | proposed |
 | `payCommission` | `unsupported` (`PROVIDER_OWNS_PAYOUT`) | `settlementDetail` | none | proposed |
+| `purchaseReward` | `unverified` (`OWNER_APPROVAL_PENDING`, `PROVIDER_ACCESS_UNVERIFIED`) | `offerRewards` | none | proposed |
 | `recordDecision` | `unverified` (`DEMO_NO_DISPATCH`) | every analytics view | none | proposed |
 | `recordPermissionEvidence` | `available` | `channelCapabilities` | `settings/CapabilitiesPage` | conflict (C-15) |
 | `reopenCase` | `unsupported` (`INTERCOM_OWNS_CASES`) | `supportWorkspace` | none | proposed |

@@ -58,6 +58,7 @@ export type RewardScenarioId =
   | "zero-sales"
   | "pending-qualification"
   | "partial-refund"
+  | "refund-after-claim"
   | "milestone-unlock"
   | "replay"
   | "existing-redemption"
@@ -122,6 +123,17 @@ export const REWARD_SCENARIOS: readonly RewardScenario[] = [
     batches: [b("TEST-BATCH-R1", "TEST-CAN-R1", "shopify", 160, 640_000, 60_000, "matured")],
     events: [],
     selections: [],
+    redemptions: [],
+    costEvidence: "complete",
+    newCommitmentsPaused: false,
+  },
+  {
+    scenarioId: "refund-after-claim",
+    label: "Refund after a claim",
+    description: "The first milestone was claimed, then a refund brought matured revenue back under $6,000. The earned allowance is preserved and the refund is shown as a separate adjustment.",
+    batches: [b("TEST-BATCH-RC1", "TEST-CAN-RC1", "shopify", 160, 640_000, 60_000, "matured")],
+    events: [{ eventId: "TEST-EVT-RC1", tier: "tech", at: "2026-10-30T16:00:00Z" }],
+    selections: [notSelected("tech")],
     redemptions: [],
     costEvidence: "complete",
     newCommitmentsPaused: false,

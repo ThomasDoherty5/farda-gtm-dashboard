@@ -1,16 +1,21 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { REWARD_LADDER, REWARD_SCENARIOS, rewardScenario, rewardsRecord, type RewardScenario } from "@/fixtures/rewards";
 import type { OverviewFixtureKey } from "@/fixtures/overview";
 import { renderRoute } from "@/test/renderWithAdapter";
-import { summarize } from "./rewardLadder";
+import { summarize, tierStatusText } from "./rewardLadder";
 import { changedBasis, invalidationText } from "./readiness";
 
 const scenario = (id: string): RewardScenario => rewardScenario(id)!;
 const open = (path: string, fixture: OverviewFixtureKey = "FX-01-happy-read") => renderRoute(path, createDemoAdapter({ fixture }));
 const REWARDS = (id: string) => `/offers/demo-offer-1/rewards?scenario=${id}`;
+/** Names of every button, link or button-like control inside `root` other than the single allowed way back. */
+const unexpectedControls = (root: Element) =>
+  [...root.querySelectorAll<HTMLElement>("button, a[href], input[type=submit], input[type=button], [role=button], [role=link]")]
+    .map((el) => (el instanceof HTMLInputElement ? el.value : (el.getAttribute("aria-label") ?? el.textContent ?? "")).trim())
+    .filter((name) => name !== "Back to the offer");
 const text = async (testId: string) => (await screen.findByTestId(testId)).textContent ?? "";
 
 describe("CEO-v1 reward ladder (Offer Economics v1)", () => {
@@ -97,8 +102,100 @@ describe("CEO-v1 reward ladder (Offer Economics v1)", () => {
     expect(JSON.stringify(REWARD_LADDER)).not.toMatch(/month/i);
   });
 
+  describe("a refund after a claim (earned obligations are preserved)", () => {
+    const base = scenario("zero-sales");
+    const batch = (rowId: string, net: number, refunded: number) => ({ rowId, canonicalId: `CAN-${rowId}`, source: "shopify" as const, orders: 1, netMinor: net, refundedMinor: refunded, status: "matured" as const });
+    const claimed = { eventId: "TEST-EVT-C1", tier: "tech" as const, at: "2026-10-30T16:00:00Z" };
+
+    it("a claimed milestone stays earned when a later refund drops matured revenue under the threshold", () => {
+      const sum = summarize({ ...base, batches: [batch("A", 640_000, 60_000)], events: [claimed], selections: [] });
+      expect(sum.maturedMinor).toBe(580_000);
+      expect(sum.tiers[0]).toMatchObject({ earned: true, claimedAt: claimed.at });
+      expect(sum.earnedMinor).toBe(30_000);
+      expect(sum.outstanding).toEqual({ state: "known", minor: 30_000 });
+    });
+
+    it("the refund is a separate adjustment naming the shortfall, not a deduction from earned or outstanding", () => {
+      const sum = summarize({ ...base, batches: [batch("A", 640_000, 60_000)], events: [claimed], selections: [] });
+      expect(sum.tiers[0]).toMatchObject({ belowThreshold: true, shortfallMinor: 20_000 });
+      expect(sum.refundAdjustments).toEqual([{ tier: "tech", shortfallMinor: 20_000 }]);
+    });
+
+    it("a redeemed milestone refunded below the threshold keeps its obligation and never shows a negative outstanding", () => {
+      const sum = summarize({ ...base, batches: [batch("A", 640_000, 300_000)], events: [claimed], selections: [{ tier: "tech", state: "selected", item: "AirPods (example)", selectedAt: null }], redemptions: [{ tier: "tech", amountMinor: 30_000, at: "2026-11-01T00:00:00Z" }] });
+      expect(sum.earnedMinor).toBe(30_000);
+      expect(sum.redeemed).toEqual({ state: "known", minor: 30_000 });
+      expect(sum.outstanding).toEqual({ state: "known", minor: 0 });
+    });
+
+    it("a redemption with no claim event is still an earned milestone after a refund", () => {
+      const sum = summarize({ ...base, batches: [batch("A", 640_000, 300_000)], events: [], redemptions: [{ tier: "tech", amountMinor: 30_000, at: "2026-11-01T00:00:00Z" }] });
+      expect(sum.tiers[0]).toMatchObject({ earned: true, belowThreshold: true });
+      expect(sum.outstanding).toEqual({ state: "known", minor: 0 });
+    });
+
+    it("an unclaimed milestone is still not earned when a refund keeps it under the threshold (the existing partial-refund case)", () => {
+      const sum = summarize({ ...base, batches: [batch("A", 640_000, 60_000)], events: [], selections: [] });
+      expect(sum.earnedMinor).toBe(0);
+      expect(sum.refundAdjustments).toEqual([]);
+    });
+
+    it("outstanding is never negative for any refund size", () => {
+      for (const refund of [0, 60_000, 300_000, 640_000, 900_000]) {
+        const sum = summarize({ ...base, batches: [batch("A", 640_000, refund)], events: [claimed], selections: [], redemptions: [{ tier: "tech", amountMinor: 30_000, at: "2026-11-01T00:00:00Z" }] });
+        expect(sum.outstanding.state === "known" && sum.outstanding.minor).toBeGreaterThanOrEqual(0);
+        expect(sum.earnedMinor).toBe(30_000);
+      }
+    });
+  });
+
+  describe("source mirrors are resolved the same way in either order", () => {
+    const base = scenario("zero-sales");
+    const source = { rowId: "ROW-SRC", canonicalId: "CAN-1", source: "shopify" as const, orders: 5, netMinor: 400_000, refundedMinor: 0, status: "pending" as const };
+    const mirror = { rowId: "ROW-MIRROR", canonicalId: "CAN-1", source: "shopify-mirror" as const, orders: 5, netMinor: 400_000, refundedMinor: 0, status: "matured" as const };
+
+    it("a pending source row and a matured mirror give the same result whichever comes first", () => {
+      const a = summarize({ ...base, batches: [source, mirror] });
+      const b = summarize({ ...base, batches: [mirror, source] });
+      expect(a).toEqual(b);
+      expect(a.maturedMinor).toBe(0);
+      expect(a.pendingMinor).toBe(400_000);
+      expect(a.duplicateRowIds).toEqual(["ROW-MIRROR"]);
+    });
+
+    it("two source rows with one canonical id also resolve independently of order", () => {
+      const x = { ...mirror, rowId: "ROW-B", source: "tiktok-shop" as const, netMinor: 100_000 };
+      const y = { ...mirror, rowId: "ROW-A", source: "tiktok-shop" as const, netMinor: 200_000 };
+      expect(summarize({ ...base, batches: [x, y] })).toEqual(summarize({ ...base, batches: [y, x] }));
+    });
+  });
+
+  it("matured revenue never goes negative when refunds exceed it, and the excess is reported", () => {
+    const sum = summarize({ ...scenario("zero-sales"), batches: [{ rowId: "A", canonicalId: "CAN-A", source: "shopify", orders: 1, netMinor: 100_000, refundedMinor: 250_000, status: "matured" }] });
+    expect(sum.maturedMinor).toBe(0);
+    expect(sum.refundExcessMinor).toBe(150_000);
+    expect(sum.next!.progressPct).toBe(0);
+    expect(sum.next!.remainingMinor).toBe(600_000);
+  });
+
+  it("a redeemed tier with no selection record reads Redeemed, not 'not selected'", () => {
+    const sum = summarize({ ...scenario("zero-sales"), batches: [{ rowId: "A", canonicalId: "CAN-A", source: "shopify", orders: 1, netMinor: 700_000, refundedMinor: 0, status: "matured" }], selections: [], redemptions: [{ tier: "tech", amountMinor: 30_000, at: "2026-11-01T00:00:00Z" }] });
+    expect(sum.tiers[0]!.selection).toBe("selected");
+    expect(tierStatusText(sum.tiers[0]!, (m) => `$${m / 100}`)).toBe("Redeemed $300");
+  });
+
+  it("tier status wording: Redeemed wins over not-selected, unknown cost is said, and a locked tier says nothing more", () => {
+    const money = (m: number) => `$${m / 100}`;
+    const withTier = (over: object) => ({ ...summarize(scenario("milestone-unlock")).tiers[0]!, ...over });
+    expect(tierStatusText(withTier({ selection: "notSelected", redeemed: null }), money)).toBe("Reward not selected yet");
+    expect(tierStatusText(withTier({ selection: "notSelected", redeemed: { state: "known", minor: 30_000 } }), money)).toBe("Redeemed $300");
+    expect(tierStatusText(withTier({ selection: "notSelected", redeemed: { state: "unknown", reason: "x" } }), money)).toBe("Redeemed · cost unknown");
+    expect(tierStatusText(withTier({ selection: "selected", redeemed: null }), money)).toBe("Selected, not redeemed");
+    expect(tierStatusText(withTier({ earned: false, selection: "locked" }), money)).toBe("");
+  });
+
   it("covers every fixture the ticket lists", () => {
-    expect(REWARD_SCENARIOS.map((s) => s.scenarioId).sort()).toEqual(["delayed-selection", "existing-redemption", "incomplete-evidence", "milestone-unlock", "partial-refund", "pending-qualification", "replay", "source-mirror-duplicate", "zero-sales"]);
+    expect(REWARD_SCENARIOS.map((s) => s.scenarioId).sort()).toEqual(["delayed-selection", "existing-redemption", "incomplete-evidence", "milestone-unlock", "partial-refund", "pending-qualification", "refund-after-claim", "replay", "source-mirror-duplicate", "zero-sales"]);
   });
 });
 
@@ -107,7 +204,28 @@ describe("reward ladder page", () => {
     open(REWARDS("milestone-unlock"));
     expect(await screen.findByTestId("rewards-recommendation")).toHaveTextContent(/Pending owner approval/);
     expect(screen.getByTestId("rewards-recommendation")).toHaveTextContent(/no purchase or payout control/);
-    for (const control of screen.queryAllByRole("button")) expect(control).not.toHaveAccessibleName(/purchase|buy|pay|redeem|claim|send|approve/i);
+    const page = screen.getByRole("region", { name: /Milestone rewards/ });
+    // The only control the page may have is the way back; any other button or link, in any scenario, fails here.
+    expect(unexpectedControls(page)).toEqual([]);
+  });
+
+  it("the control check does fail when a purchase, payout or claim control is added", () => {
+    const host = document.createElement("section");
+    host.innerHTML = '<a href="/offers/x">Back to the offer</a><button>Redeem reward</button><input type="submit" value="Pay creator"><div role="button">Claim</div><a href="/p">Buy now</a>';
+    expect(unexpectedControls(host)).toEqual(["Redeem reward", "Pay creator", "Claim", "Buy now"]);
+    const quiet = document.createElement("section");
+    quiet.innerHTML = '<a href="/offers/x">Back to the offer</a>';
+    expect(unexpectedControls(quiet)).toEqual([]);
+  });
+
+  it("has no purchase or payout control in any scenario", async () => {
+    for (const { scenarioId } of REWARD_SCENARIOS) {
+      open(REWARDS(scenarioId));
+      const page = await screen.findByRole("region", { name: /Milestone rewards/ });
+      await screen.findByTestId("reward-ladder");
+      expect(unexpectedControls(page), scenarioId).toEqual([]);
+      cleanup();
+    }
   });
 
   it("shows the ladder with thresholds, caps, example order counts, all-in allowance and no monthly reset", async () => {
@@ -148,6 +266,21 @@ describe("reward ladder page", () => {
     expect(await text("obl-redeemed")).toMatch(/^N\/A/);
     expect(await text("obl-outstanding")).toMatch(/^N\/A/);
     expect(screen.getByTestId("obl-contribution")).not.toHaveTextContent("$0");
+  });
+
+  it("a refund after a claim reads as a kept obligation with a separate adjustment, never a negative outstanding", async () => {
+    open(REWARDS("refund-after-claim"));
+    expect(await text("obl-earned")).toBe("$300");
+    expect(await text("obl-outstanding")).toBe("$300");
+    expect(screen.getByTestId("rewards-refund-adjustment")).toHaveTextContent(/\$200 under the \$6,000 threshold/);
+    expect(screen.getByTestId("rewards-refund-adjustment")).toHaveTextContent(/preserved/);
+    expect(screen.getByTestId("tier-tech")).toHaveTextContent(/Earned/);
+    expect(screen.getByTestId("obl-outstanding").textContent).not.toMatch(/-/);
+  });
+
+  it("the refunded scenario still reports canonical matured revenue net of the refund", async () => {
+    open(REWARDS("refund-after-claim"));
+    expect(await text("metric-matured")).toBe("$5,800");
   });
 
   it("replay and mirror duplicates are called out as ignored", async () => {
