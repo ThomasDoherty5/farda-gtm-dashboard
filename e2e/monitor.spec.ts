@@ -67,3 +67,13 @@ test("retrying the failed profile is blocked and nothing is shown as retried", a
   await page.getByRole("button", { name: "Retry failed profile" }).click();
   await expect(page.getByText(/Not retried: @everyday\.lee needs its source session reconnected first/)).toBeVisible();
 });
+
+test("post GMV is stated apart from net sales, and a missing GMV is unknown, not zero", async ({ page }) => {
+  await page.goto("/content/P-001");
+  await expect(page.getByTestId("metric-net-sales")).toHaveText("$2,015");
+  await expect(page.getByTestId("gmv-note")).toContainText("TikTok-reported GMV $3,100");
+  await expect(page.getByTestId("gmv-note")).toContainText("never relabeled as net sales");
+  await page.goto("/content/P-003");
+  await expect(page.getByTestId("gmv-note")).toContainText("unknown, not $0");
+  await expect(page.getByTestId("metric-net-sales")).toHaveText("$995");
+});
