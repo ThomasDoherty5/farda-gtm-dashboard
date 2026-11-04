@@ -38,10 +38,23 @@ Principles behind every choice: the server is the only authority (a hidden butto
 | D-17 Environments | Sandbox and production are separate deployments with separate databases and credentials, never a flag on one. Enabling production for a source account is founder-only, needs a second person, records a reason, and defaults to off. |
 | D-18 Ownership and order | Build in this order: the adapter service (sign-in, envelopes, idempotency, audit), then the approval service, then the job runner. The existing assignees keep their tickets; this file does not reassign anyone. |
 
+## Paths
+
+Decided defaults, recorded 2026-11-04 so the reference server and the HTTP transport agree. They sit under the reserved base URL (`VITE_FARDA_ADAPTER_BASE_URL`) and follow D-1: three POST operations that carry the existing envelopes, and one GET for the signed-in principal. The backend owner may change them; when one changes, edit this section, `src/adapter/httpTransport.ts` and `tools/reference-server/server.ts` in the same PR.
+
+| Method and path | Carries | Answers |
+| -- | -- | -- |
+| `POST /v1/read` | a `ReadRequest` | a `ReadResponse` |
+| `POST /v1/action` | an `ActionRequest` | an `ActionResponse` |
+| `POST /v1/save` | a `SaveResourceRequest` | a `SaveResourceResponse` |
+| `GET /v1/session` | nothing | the principal, its role, its allowed scopes and the per-session CSRF token |
+
+Writes (`/v1/action`, `/v1/save`) carry the CSRF token from the session call in the `X-CSRF-Token` header. The session itself is the `HttpOnly` cookie. Errors are JSON bodies with the D-14 fields, and statuses follow D-12 (the reference server's table is in `tools/reference-server/README.md`).
+
 ## What changes in the code because of these
 
 - Q-01 to Q-04 and D-13 change `src/adapter/contract.ts`, the demo services, the schemas in `src/adapter/viewSchemas/`, and the screens that switch on state. They ship in their own PR with tests.
-- D-1 and D-11 define what a reference service built for testing implements. That service is a test double, not the production backend.
+- D-1 and D-11 define what a reference service built for testing implements. That service (`tools/reference-server/`) is a test double, not the production backend, and it is the only thing that implements the paths above.
 - Everything else is for the backend owner.
 
 ## Not decided here

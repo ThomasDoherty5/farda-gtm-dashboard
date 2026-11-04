@@ -9,7 +9,8 @@ import { overviewFixtureKeys, type OverviewFixtureKey } from "@/fixtures/overvie
  * What the host gives the live adapter. The host owns the address and the session, so it builds the transport.
  * `baseUrl` is the reserved VITE_FARDA_ADAPTER_BASE_URL, passed through untouched and never interpreted here.
  */
-export type TransportFactory = (config: { environment: Exclude<Environment, "demo">; baseUrl: string | null }) => Transport;
+/** Returning nothing keeps the live adapter's default pending transport. */
+export type TransportFactory = (config: { environment: Exclude<Environment, "demo">; baseUrl: string | null }) => Transport | undefined;
 
 /** Chooses the adapter from build-time config. An unknown value is a hard error, not a demo fallback. */
 export function selectAdapter(
