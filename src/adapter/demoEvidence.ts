@@ -68,6 +68,7 @@ export function createDemoEvidence() {
     persistedByRef: "demo-reviewer",
     record: structuredClone(record),
     reasonCodes,
+    executionCertainty: "applied",
   });
 
   return {

@@ -51,7 +51,7 @@ describe("approval detail", () => {
     await adapter.submitAction({ schemaVersion: "x", operation: "decideApproval", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" }, actionKind: "decideApproval", entityRefs: [], expectedVersion: "v1", approvalRef: "demo-approval-exact", manifestRef: null, idempotencyKey: "from-slack", payload: { decision: "approved" }, requestId: "r" });
     await user.click(button("Approve this version"));
     expect(await screen.findByTestId("action-error")).toHaveTextContent("already decided");
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
   });
 
   it("marks the selected queue item, and links to the others", async () => {
@@ -69,7 +69,7 @@ describe("approval detail", () => {
   it("goes approved, then sent only with a receipt", async () => {
     const { user } = await open("/approvals/demo-approval-exact");
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     expect(status()).not.toHaveTextContent(/Sent,/);
     expect(screen.queryByTestId("source-receipt")).not.toBeInTheDocument();
 
@@ -133,7 +133,7 @@ describe("approval detail", () => {
     expect(screen.getByTestId("approval-version")).toHaveTextContent("Version 2");
     expect(status()).toHaveTextContent("Pending");
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
   });
 
   it("explains an expired approval and blocks decisions, while keeping the button focusable", async () => {
@@ -158,7 +158,7 @@ describe("approval detail", () => {
     const spy = vi.spyOn(adapter, "submitAction");
     const { user } = await open("/approvals/demo-approval-exact", adapter);
     await user.dblClick(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     expect(spy).toHaveBeenCalledTimes(1);
   });
 

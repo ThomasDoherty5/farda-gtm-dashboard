@@ -5,7 +5,7 @@ import { AdapterError } from "./errors";
 import { scopeKey, useScope } from "./scope";
 import { dropProtectedData } from "./useView";
 
-export type ActionInput<P> = Pick<ActionRequest<P>, "operation" | "actionKind" | "entityRefs" | "expectedVersion" | "approvalRef" | "manifestRef" | "payload">;
+export type ActionInput<P> = Pick<ActionRequest<P>, "operation" | "actionKind" | "entityRefs" | "expectedVersion" | "approvalRef" | "manifestRef" | "runRef" | "payload">;
 
 let requestCounter = 0;
 

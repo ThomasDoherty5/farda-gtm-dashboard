@@ -56,9 +56,10 @@ Approval history has no proposed path, so it uses query values on the approval r
 
 The full register of view keys, action kinds, error codes and open questions is `docs/adapter-freeze-register.md`; a test keeps it in step with the source. The questions below are the ones the approval flow raised first.
 
-Raised by the approval flow:
+Raised by the approval flow, and answered on 2026-11-04 in `docs/adapter-decisions.md` (defaults for the build, not a ruling over the backend owner; nothing is verified against a service):
 
-- `ActionResponse.state` has no value for "approved, awaiting dispatch". The demo returns `blocked` with `AWAITING_DISPATCH`.
-- The error catalogue has no not-found code. The demo uses `RECORD_NOT_FOUND`.
-- `ActionRequest` has no run reference for `controlRun` and `reconcileRun`. The demo puts `runRef` in the payload.
-- `executionCertainty` has no defined values. The demo uses `notApplied`, `uncertain` and `applied`.
+- Q-01: `ActionResponse.state` has `approved` (awaiting dispatch). It is not a success state, and the approval screens say "Approved, awaiting dispatch".
+- Q-02: `RECORD_NOT_FOUND` is a not-found code, returned only inside the verified scope.
+- Q-03: `ActionRequest` has an optional top-level `runRef`, used by `controlRun` and `reconcileRun` instead of the payload.
+- Q-04: `executionCertainty` is `notApplied`, `uncertain` or `applied`, and is required on every write error, action answer and save answer.
+- D-13: each `sourceFreshness` entry may carry `freshnessState`; the client falls back to the reason-code mapping when it is absent.

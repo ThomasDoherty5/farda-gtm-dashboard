@@ -3,7 +3,7 @@
  * See docs/live-adapter.md. They are kept here so `contract.ts` keeps its meaning until the freeze.
  */
 import { z } from "zod";
-import { verifiedScopeSchema } from "./contract";
+import { executionCertaintySchema, verifiedScopeSchema } from "./contract";
 
 /** Mirrors `AdapterErrorBody` in errors.ts. */
 export const adapterErrorBodySchema = z.object({
@@ -15,7 +15,8 @@ export const adapterErrorBodySchema = z.object({
   retryAfterMs: z.number().nullable().optional(),
   fieldErrors: z.record(z.string()).optional(),
   currentVersion: z.string().nullable().optional(),
-  executionCertainty: z.enum(["notApplied", "uncertain", "applied"]).optional(),
+  /** Q-04 requires it on every write error. It stays optional here so a server that omits it is read as `uncertain` by the live adapter, never as `notApplied`. */
+  executionCertainty: executionCertaintySchema.optional(),
 });
 export type WireErrorBody = z.infer<typeof adapterErrorBodySchema>;
 
@@ -30,4 +31,6 @@ export const saveResourceResponseSchema = z.object({
   persistedByRef: z.string(),
   record: z.unknown(),
   reasonCodes: z.array(z.string()),
+  /** Q-04. Required on every save answer. */
+  executionCertainty: executionCertaintySchema,
 });

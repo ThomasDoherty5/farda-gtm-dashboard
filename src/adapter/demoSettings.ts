@@ -86,6 +86,7 @@ export function createDemoSettings() {
           receiptRefs: [],
           nextAction: { kind: "decideApproval", ownerRef: "founder", dueAt: null, available: false },
           nextPollAfterMs: null,
+          executionCertainty: "applied",
         };
       });
     },
@@ -105,7 +106,7 @@ export function createDemoSettings() {
   };
 
   function reply<T>(request: SaveResourceRequest<unknown>, ref: string, version: string, record: T, reasonCodes: string[]): SaveResourceResponse<T> {
-    return { schemaVersion: SCHEMA_VERSION, requestId: request.requestId, scope: { ...request.requestedScope, authorizationScopeVersion: "demo-1" }, resourceRef: ref, resourceVersion: version, persistedAt: DEMO_NOW, persistedByRef: "demo-owner", record, reasonCodes };
+    return { schemaVersion: SCHEMA_VERSION, requestId: request.requestId, scope: { ...request.requestedScope, authorizationScopeVersion: "demo-1" }, resourceRef: ref, resourceVersion: version, persistedAt: DEMO_NOW, persistedByRef: "demo-owner", record, reasonCodes, executionCertainty: "applied" };
   }
 
   function saveSchedule(request: SaveResourceRequest<ScheduleDraft>): SaveResourceResponse<ScheduleDraft> {

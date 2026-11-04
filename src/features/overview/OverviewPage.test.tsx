@@ -72,6 +72,20 @@ describe("OverviewPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Oct 30, 2026");
   });
 
+  it("D-13 falls back to the reason code when the server sends no freshnessState, and reads the state when it does", async () => {
+    const ref = overviewOriginal.orders.sourceRef!;
+    const stale = (entry: Record<string, unknown>) =>
+      renderWithAdapter(<OverviewPage />, scriptedAdapter(async (request) => ({ ...ok(request), dataState: "stale", sourceFreshness: [{ sourceRef: ref, lastSourceSuccessAt: null, observedAt: null, mirroredAt: null, staleReasonCode: null, ...entry }] }) as ReadResponse<unknown>));
+    const first = stale({ staleReasonCode: "SOURCE_SYNC_DELAYED" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("SOURCE_SYNC_DELAYED");
+    first.unmount();
+    const second = stale({});
+    expect(await screen.findByRole("alert")).toHaveTextContent("never synced");
+    second.unmount();
+    stale({ freshnessState: "error" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("The last sync failed");
+  });
+
   it("FX-08 shows a neutral denial with no retry and no values", async () => {
     renderFixture("FX-08-forbidden-account");
     expect(await screen.findByRole("heading", { name: "No access to this account" })).toBeInTheDocument();

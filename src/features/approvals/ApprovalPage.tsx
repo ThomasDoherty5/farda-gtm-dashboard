@@ -14,7 +14,7 @@ import styles from "./Approvals.module.css";
 
 const STATUS: Record<ApprovalStatus, { label: string; tone: BadgeTone }> = {
   pending: { label: "Pending", tone: "warning" },
-  approved: { label: "Approved, not sent", tone: "violet" },
+  approved: { label: "Approved, awaiting dispatch", tone: "violet" },
   rejected: { label: "Rejected", tone: "neutral" },
   editRequired: { label: "Edit requested", tone: "warning" },
   expired: { label: "Expired", tone: "danger" },

@@ -80,6 +80,7 @@ export function createDemoOffers() {
       persistedByRef: "demo-offer-owner",
       record: structuredClone(next),
       reasonCodes: same ? ["NO_CHANGE"] : [],
+      executionCertainty: "applied",
     };
   };
 

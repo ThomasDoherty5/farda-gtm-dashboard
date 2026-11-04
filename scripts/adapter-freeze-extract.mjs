@@ -21,7 +21,8 @@ function walk(dir) {
     .flatMap((e) => {
       const p = join(dir, e.name);
       if (e.isDirectory()) return walk(p);
-      return /\.(ts|tsx)$/.test(e.name) && !/\.test\.(ts|tsx)$/.test(e.name) ? [p] : [];
+      // Test files and test-only helpers (the conformance suite and the *TestKit files) are not the app's use of the contract.
+      return /\.(ts|tsx)$/.test(e.name) && !/\.test\.(ts|tsx)$/.test(e.name) && !/(^conformance|TestKit)\.ts$/.test(e.name) ? [p] : [];
     });
 }
 
