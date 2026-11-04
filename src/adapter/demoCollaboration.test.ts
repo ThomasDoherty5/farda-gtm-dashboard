@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION, type ActionRequest, type ReadRequest } from "./contract";
 import { createDemoCollaboration } from "./demoCollaboration";
-import { COLLABORATION_ID, reviewAfter, revisionsRemaining } from "@/fixtures/collaboration";
+import { COLLABORATION_ID, VOLUNTARY_COLLABORATION_ID, collaborationDemo, postingTiming, reviewAfter, revisionsRemaining, voluntaryCollaborationDemo } from "@/fixtures/collaboration";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 const read = (id = COLLABORATION_ID): ReadRequest<unknown> => ({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "collaborationDetail", requestedScope: scope, filters: { collaborationId: id }, period: null, sort: [], page: { cursor: null, limit: 50 }, requestId: "r1" });
@@ -68,5 +68,72 @@ describe("demo collaboration", () => {
     const c = createDemoCollaboration();
     expect(() => c.read(read("nope"))).toThrow(/does not exist/);
     await expect(c.submit(act("sendNow", "collab-v1", "k1", {}))).rejects.toMatchObject({ category: "unavailable" });
+  });
+});
+
+describe("posting timing applies only when the accepted terms create the obligation (FE03-04)", () => {
+  const committed = collaborationDemo.terms;
+  it("a committed post has a due date, a grace period and a review date, and moves through four phases", () => {
+    expect(postingTiming(committed, "2026-11-01")).toMatchObject({ obligation: "committed", phase: "before-due", daysRemaining: 3, label: "Due in 3 days", short: "Due in 3 days" });
+    expect(postingTiming(committed, "2026-11-03")).toMatchObject({ phase: "before-due", daysRemaining: 1, label: "Due in 1 day" });
+    expect(postingTiming(committed, "2026-11-04")).toMatchObject({ phase: "due-today", daysRemaining: 3, due: "2026-11-04", reviewAfter: "2026-11-07" });
+    expect(postingTiming(committed, "2026-11-07")).toMatchObject({ phase: "in-grace", daysRemaining: 0 });
+    expect(postingTiming(committed, "2026-11-08")).toMatchObject({ phase: "past-grace", label: "Past the grace period · review since 2026-11-07" });
+  });
+
+  it("a voluntary post has no due date, grace period or review date, and is never late", () => {
+    const voluntary = voluntaryCollaborationDemo.terms;
+    for (const asOf of ["2026-10-14", "2026-11-04", "2026-11-13", "2027-03-01"]) {
+      const t = postingTiming(voluntary, asOf);
+      expect(t.obligation).toBe("voluntary");
+      expect(t).not.toHaveProperty("due");
+      expect(t).not.toHaveProperty("reviewAfter");
+      expect(["observing", "window-ended"]).toContain(t.phase);
+    }
+  });
+
+  it("a voluntary collaboration is observed for its window, then ready to close, with the sample cost retained", () => {
+    const voluntary = voluntaryCollaborationDemo.terms;
+    expect(postingTiming(voluntary, "2026-11-04")).toMatchObject({ phase: "observing", observeUntil: "2026-11-13", daysRemaining: 9, sampleCost: { minorUnits: 1_840, currency: "USD" } });
+    expect(postingTiming(voluntary, "2026-11-13")).toMatchObject({ phase: "observing", daysRemaining: 0 });
+    expect(postingTiming(voluntary, "2026-11-14")).toMatchObject({ phase: "window-ended", label: "Observation ended 2026-11-13 · ready to close" });
+  });
+});
+
+describe("demo voluntary collaboration", () => {
+  it("reads as its own record with no content and no fee", () => {
+    const res = createDemoCollaboration().read(read(VOLUNTARY_COLLABORATION_ID));
+    expect(res.data).toMatchObject({ ref: "COL-SC-051", content: null, terms: { agreedFee: null, posting: { kind: "voluntary" } }, requests: [] });
+  });
+
+  it("refuses a posting reminder, because no posting is owed", async () => {
+    const c = createDemoCollaboration();
+    await expect(c.submit(act("queueNextAction", "collab-v1", "k1", { collaborationId: VOLUNTARY_COLLABORATION_ID, actionKey: "remindCreator" }))).rejects.toMatchObject({ category: "validation", message: expect.stringContaining("voluntary post is observed, not chased") });
+    expect(c.read(read(VOLUNTARY_COLLABORATION_ID)).data!.requests).toEqual([]);
+  });
+
+  it("still allows the committed collaboration's reminder", async () => {
+    const c = createDemoCollaboration();
+    const result = await c.submit(act("queueNextAction", "collab-v1", "k1", { collaborationId: COLLABORATION_ID, actionKey: "remindCreator" }));
+    expect(result.state).toBe("approvalPending");
+  });
+
+  it("has nothing to give feedback on, revise or reject", async () => {
+    const c = createDemoCollaboration();
+    for (const [kind, payload] of [["queueFeedback", { text: "x", submissionVersion: "v2" }], ["requestRevision", { text: "x", submissionVersion: "v2" }], ["rejectContent", { reason: "x", submissionVersion: "v2" }]] as const) {
+      await expect(c.submit(act(kind, "collab-v1", `k-${kind}`, { collaborationId: VOLUNTARY_COLLABORATION_ID, ...payload }))).rejects.toMatchObject({ category: "validation" });
+    }
+  });
+
+  it("closes through the observation branch with only its own outcomes, and keeps queued requests per collaboration", async () => {
+    const c = createDemoCollaboration();
+    await expect(c.submit(act("closeCollaboration", "collab-v1", "k1", { collaborationId: VOLUNTARY_COLLABORATION_ID, outcome: "Declined", reason: "x" }))).rejects.toMatchObject({ category: "validation" });
+    await c.submit(act("closeCollaboration", "collab-v1", "k2", { collaborationId: VOLUNTARY_COLLABORATION_ID, outcome: "No response", reason: "Window ended with no post" }));
+    expect(c.read(read(VOLUNTARY_COLLABORATION_ID)).data!.requests).toEqual([expect.objectContaining({ summary: "Close as No response" })]);
+    expect(c.read(read(COLLABORATION_ID)).data!.requests).toEqual([]);
+  });
+
+  it("an unknown collaboration is still not found", () => {
+    expect(() => createDemoCollaboration().read(read("demo-collaboration-9"))).toThrow(/does not exist/);
   });
 });

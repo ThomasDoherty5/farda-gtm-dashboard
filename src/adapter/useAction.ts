@@ -1,8 +1,8 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { onlineManager, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
+import { offlineNotSent } from "./connectivity";
 import { AdapterError } from "./errors";
-import { isOnline, offlineError } from "./online";
 import { scopeKey, useScope } from "./scope";
 import { dropProtectedData } from "./useView";
 
@@ -21,18 +21,19 @@ export function useAction<P>() {
   const ctx = useScope();
   const client = useQueryClient();
   const keys = useRef(new Map<string, string>());
+  // networkMode "always": TanStack would otherwise pause the write and send it silently on reconnect. Offline it fails as not sent.
   return useMutation<ActionResponse, Error, ActionInput<P>>({
     networkMode: "always",
     mutationFn: (input) => {
-      if (!isOnline()) throw offlineError();
       const logical = JSON.stringify([input.operation, input.actionKind, input.approvalRef, input.expectedVersion, input.payload]);
       const idempotencyKey = keys.current.get(logical) ?? crypto.randomUUID();
       keys.current.set(logical, idempotencyKey);
+      if (!onlineManager.isOnline()) throw offlineNotSent(`act-offline-${++requestCounter}`);
       return ctx.adapter.submitAction<P>({ ...input, schemaVersion: SCHEMA_VERSION, requestedScope: ctx.scope, idempotencyKey, requestId: `act-${++requestCounter}` });
     },
     onSettled: async (_data, error) => {
       if (error instanceof AdapterError && error.category === "unauthenticated") dropProtectedData(client, scopeKey(ctx));
-      else await client.invalidateQueries({ queryKey: scopeKey(ctx) });
+      else if (!(error instanceof AdapterError && error.body.code === "OFFLINE_NOT_SENT")) await client.invalidateQueries({ queryKey: scopeKey(ctx) });
     },
   });
 }

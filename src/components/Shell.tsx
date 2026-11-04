@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
-import { useOnline } from "@/adapter/online";
 import { useScope } from "@/adapter/scope";
 import { breadcrumbsFor } from "@/routes/breadcrumbs";
 import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
 import { Badge } from "./Badge";
 import { Button, LinkButton } from "./Button";
+import { ConnectionStatus } from "./ConnectionStatus";
 import { Dialog } from "./Dialog";
 import styles from "./Shell.module.css";
 
@@ -17,7 +17,6 @@ export function Shell() {
   const section = sectionOf(pathname);
   const demo = adapter.environment === "demo";
   const crumbs = breadcrumbsFor(pathname, search);
-  const online = useOnline();
 
   return (
     <div className={styles.canvas}>
@@ -52,14 +51,10 @@ export function Shell() {
           </nav>
         </header>
         <main id="main" tabIndex={-1} className={styles.main}>
-          {!online && (
-            <p role="status" className={styles.offline} data-testid="offline-banner">
-              You're offline. What you see may be out of date, and nothing can be sent until you reconnect.
-            </p>
-          )}
           <Outlet />
         </main>
       </div>
+      <ConnectionStatus />
       <Dialog open={menuOpen} title="Explore the Farda workspace." badge={demo ? "Demo" : undefined} onClose={() => setMenuOpen(false)}>
         <p>Choose a workflow.{demo ? " All views use illustrative data." : ""}</p>
         {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}

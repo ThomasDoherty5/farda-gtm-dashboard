@@ -1,8 +1,6 @@
-import { useEffect } from "react";
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { SCHEMA_VERSION, type Period, type ReadResponse } from "./contract";
 import { AdapterError, mustClearProtectedData } from "./errors";
-import { BROWSER_OFFLINE, isOnline, offlineError, useOnline } from "./online";
 import { scopeKey, useScope } from "./scope";
 
 let requestCounter = 0;
@@ -18,8 +16,7 @@ let requestCounter = 0;
 export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean } = {}) {
   const ctx = useScope();
   const client = useQueryClient();
-  const online = useOnline();
-  const query = useQuery<ReadResponse<T>, Error>({
+  return useQuery<ReadResponse<T>, Error>({
     ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     queryKey: [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period],
     // Opt-in: while a changed filter loads, keep the last data from the same scope on screen (flagged by isPlaceholderData).
@@ -30,12 +27,9 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
           return previousQuery && root.every((part, i) => previousQuery.queryKey[i] === part) ? previous : undefined;
         }
       : undefined,
-    // The query runs even while offline, so the page can say "offline" instead of waiting on a paused request forever.
-    networkMode: "always",
-    retry: (count, error) => !(error instanceof AdapterError && (mustClearProtectedData(error.category) || !error.body.retryable || error.body.code === BROWSER_OFFLINE)) && count < 2,
+    retry: (count, error) => !(error instanceof AdapterError && (mustClearProtectedData(error.category) || !error.body.retryable)) && count < 2,
     queryFn: async ({ signal }) => {
       const requestId = `req-${++requestCounter}`;
-      if (!isOnline()) throw offlineError(requestId);
       try {
         const res = await ctx.adapter.readView<F, T>(
           {
@@ -59,13 +53,6 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
       }
     },
   });
-  // Reconnecting reloads a read that failed because the browser was offline, whatever order the events arrived in.
-  const failedOffline = query.isError && query.error instanceof AdapterError && query.error.body.code === BROWSER_OFFLINE;
-  const refetch = query.refetch;
-  useEffect(() => {
-    if (online && failedOffline) void refetch();
-  }, [online, failedOffline, refetch]);
-  return query;
 }
 
 export function dropProtectedData(client: QueryClient, root: readonly unknown[]) {

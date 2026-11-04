@@ -40,4 +40,3 @@
 .crumbs ol { display: flex; flex-wrap: nowrap; gap: var(--space-4); margin: 0; padding: 0; list-style: none; font: var(--text-micro); line-height: 16px; color: var(--color-onDark); white-space: nowrap; }
 .crumbs li + li::before { content: "/"; margin-right: var(--space-4); opacity: 0.7; }
 .crumbs [aria-current] { opacity: 0.9; }
-.offline { margin: 0 0 var(--space-16); padding: var(--space-12) var(--space-16); font: var(--text-label); color: var(--color-ink); background: var(--color-warningSoft, var(--color-subtle)); border: 1px solid var(--color-border); border-radius: var(--space-16); }
