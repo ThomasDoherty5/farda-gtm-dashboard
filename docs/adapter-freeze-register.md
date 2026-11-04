@@ -71,6 +71,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `inventoryOverview` | `scenario?` | InventoryOverview | `inventory/InventoryPage` | `demoOps` | proposed + conflict | C-06. |
 | `invitationDraft` | none | InvitationData | `recruitment/InvitationPage` | `demoAdapter` | proposed |  |
 | `launchControl` | none | LaunchControlData | `analytics/LaunchControlPage` | `demoAnalytics` | proposed |  |
+| `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
 | `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |

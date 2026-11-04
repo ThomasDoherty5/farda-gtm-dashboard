@@ -4,10 +4,12 @@ import type { z } from "zod";
 import { SCHEMA_VERSION, readResponseSchema, type ReadRequest } from "../contract";
 import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
-import { overviewFixtureKeys, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
+import { DEMO_NOW, overviewFixtureKeys, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
+import { attributionDemo, campaignFunnelDemo, customerJourneyDemo, launchControlDemo, launchSnapshotDemo, paidMediaDemo, sourceFreshnessDemo, type AttributionData, type CampaignFunnelData, type CustomerJourneyData, type LaunchControlData, type ReconciliationData, type LaunchSnapshotData, type PaidMediaData } from "@/fixtures/analytics";
 import { metricDictionaryDemo, type MetricDictionaryData } from "@/fixtures/headlineMetrics";
-import { attributionDemo, campaignFunnelDemo, customerJourneyDemo, launchControlDemo, launchSnapshotDemo, paidMediaDemo, type AttributionData, type CampaignFunnelData, type CustomerJourneyData, type LaunchControlData, type LaunchSnapshotData, type PaidMediaData } from "@/fixtures/analytics";
-import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, metricDictionarySchema, launchSnapshotSchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
+import { monitorPosts } from "@/fixtures/monitor";
+import { buildMatrix } from "@/features/analytics/reconciliation";
+import { analyticsViewSchemas, attributionSchema, campaignFunnelSchema, customerJourneySchema, launchControlSchema, launchReconciliationSchema, launchSnapshotSchema, metricDictionarySchema, overviewSummarySchema, paidMediaSchema } from "./analytics";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 const request = (viewKey: string, filters: object = {}): ReadRequest<unknown> => ({
@@ -24,8 +26,9 @@ const typeChecks: [
   Fits<z.infer<typeof paidMediaSchema>, PaidMediaData>,
   Fits<z.infer<typeof campaignFunnelSchema>, CampaignFunnelData>,
   Fits<z.infer<typeof customerJourneySchema>, CustomerJourneyData>,
+  Fits<z.infer<typeof launchReconciliationSchema>, ReconciliationData>,
   Fits<z.infer<typeof metricDictionarySchema>, MetricDictionaryData>,
-] = [true, true, true, true, true, true, true, true];
+] = [true, true, true, true, true, true, true, true, true];
 
 const REJECTED: Partial<Record<OverviewFixtureKey, string>> = {
   "FX-07-offline-read": "SOURCE_UNAVAILABLE",
@@ -37,6 +40,7 @@ const paidMediaFilters = (["all", "cleared", "expiring", "notGranted", "unknown"
 
 const variants: Record<string, object[]> = {
   overviewSummary: [{}],
+  launchReconciliation: [{}],
   launchSnapshot: [{}],
   launchControl: [{}],
   attribution: [{}],
@@ -49,7 +53,7 @@ const variants: Record<string, object[]> = {
 describe("analytics view schemas: every demo response parses", () => {
   it("covers the view keys the demo adapter serves", () => {
     expect(Object.keys(analyticsViewSchemas).sort()).toEqual(Object.keys(variants).sort());
-    expect(typeChecks).toHaveLength(8);
+    expect(typeChecks).toHaveLength(9);
   });
 
   for (const [viewKey, filterSets] of Object.entries(variants)) {
@@ -103,6 +107,15 @@ describe("analytics view schemas: every demo response parses", () => {
 
 type Case = [name: string, mutate: (d: any) => void];
 const clone = <T,>(v: T): T => structuredClone(v);
+function reconciliationFixture(): ReconciliationData {
+  return {
+    datasetKey: "reconciliation-demo",
+    asOf: DEMO_NOW,
+    freshness: sourceFreshnessDemo,
+    matrix: buildMatrix({ overview: overviewOriginal, attribution: attributionDemo, paidMedia: paidMediaDemo, journey: customerJourneyDemo, posts: monitorPosts }),
+    provenance: { source: "Datasets behind each page", observedAt: DEMO_NOW, timezone: "America/Los_Angeles", coverage: "Six demo sources, eight metrics", stale: false },
+  };
+}
 
 const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Case[] }[] = [
   {
@@ -197,6 +210,19 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["negative AOV", (d) => (d.globalAov.minorUnits = -1)],
       ["fractional AOV", (d) => (d.globalAov.minorUnits = 3149.5)],
       ["negative ticket count", (d) => (d.tickets[0].count = -1)],
+    ],
+  },
+  {
+    view: "launchReconciliation", schema: launchReconciliationSchema, valid: reconciliationFixture(),
+    cases: [
+      ["missing required field", (d) => delete d.matrix],
+      ["wrong dataset", (d) => (d.datasetKey = "paid-media-demo")],
+      ["unknown matrix status", (d) => (d.matrix[0].status = "close")],
+      ["unknown unit", (d) => (d.matrix[0].unit = "eur")],
+      ["fractional cents in a cell", (d) => (d.matrix[0].cells[0].value = 12596.5)],
+      ["a row that compares one page only", (d) => (d.matrix[0].cells = d.matrix[0].cells.slice(0, 1))],
+      ["a cell value as a string", (d) => (d.matrix[0].cells[0].value = "12596")],
+      ["a freshness timestamp that is undefined instead of null", (d) => delete d.freshness[0].lastSourceSuccessAt],
     ],
   },
   {

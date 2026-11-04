@@ -1,6 +1,6 @@
 /**
  * Runtime schemas for the view data of the Overview summary and the analytics views
- * (launchSnapshot, launchControl, attribution, paidMedia, campaignFunnel, customerJourney).
+ * (launchReconciliation, launchSnapshot, launchControl, attribution, paidMedia, campaignFunnel, customerJourney).
  * They validate `ReadResponse.data` only; the envelope is `readResponseSchema(...)` in contract.ts.
  *
  * Choices:
@@ -187,6 +187,25 @@ export const customerJourneySchema = z.object({
   provenance: provenanceDisclosure,
 });
 
+/* ---------- Source freshness and reconciliation ---------- */
+
+/** One place a figure appears. Exact values (cents for money) are integers, so a fraction is refused. A null value is a figure the page does not state, which makes its row "unknown", never a match. */
+const matrixCell = z.object({ page: z.string(), route: z.string(), value: z.number().int().nullable(), note: z.string().optional() });
+
+export const launchReconciliationSchema = z.object({
+  datasetKey: z.literal("reconciliation-demo"),
+  asOf: z.string(),
+  freshness: z.array(z.object({ sourceId: z.string(), label: z.string(), feeds: z.string(), lastSourceSuccessAt: z.string().nullable(), staleReasonCode: z.string().nullable() })),
+  matrix: z.array(z.object({
+    metric: z.string(),
+    unit: z.enum(["usd", "count"]),
+    cells: z.array(matrixCell).min(2),
+    status: z.enum(["matches", "differs", "unknown"]),
+    reason: z.string().nullable(),
+  })),
+  provenance: provenanceDisclosure,
+});
+
 /* ---------- Metric dictionary ---------- */
 
 const caveat = z.enum(["LANDED_COST_INCOMPLETE", "RETENTION_IMMATURE"]);
@@ -208,6 +227,7 @@ export const metricDictionarySchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
+  launchReconciliation: launchReconciliationSchema,
   overviewSummary: overviewSummarySchema,
   launchSnapshot: launchSnapshotSchema,
   launchControl: launchControlSchema,
