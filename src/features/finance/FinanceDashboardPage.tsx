@@ -5,6 +5,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { Divider, FactList, FlatTable, HalfColumns, Meter, Notice, Page, PageHeader, Panel } from "@/components/Panels";
@@ -40,6 +41,7 @@ export function FinanceDashboardPage() {
         <Button aria-haspopup="dialog" style={{ minWidth: 210 }} onClick={() => setDialog({ source: "Open QuickBooks" })}>Open QuickBooks</Button>
       </PageHeader>
       <FinanceNav current="overview" />
+      <ReadState res={query.data} subject="The finance dashboard" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading finance…" />}
       {query.isError && <ViewError error={query.error} subject="Finance" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No finance data yet"><p>QuickBooks responded, but no management report exists for this period.</p></EmptyState>}
@@ -62,9 +64,9 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
   const gross = p.revenue - p.cogs;
   const net = gross - p.opex;
   const runway = runwayOf(data);
-  const margin = (100 * gross) / p.revenue;
+  const margin = p.revenue > 0 ? (100 * gross) / p.revenue : null; // N/A over zero receipts, never NaN
   const rows: [string, number][] = [["Net revenue", p.revenue], ["Cost of goods sold", -p.cogs], ["Gross profit", gross], ["Operating expenses", -p.opex], ["Net income", net]];
-  const actualVsForecast = (100 * p.revenue) / data.forecastRevenue;
+  const actualVsForecast = data.forecastRevenue > 0 ? (100 * p.revenue) / data.forecastRevenue : null;
   const close = data.closeSummary;
   return (
     <>
@@ -97,12 +99,12 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
           <p className={styles.sub}>Forecast vs. actual</p>
           <p className={styles.warnText}>Forecast is illustrative until rebaselined.</p>
           <FactList wide label="Forecast vs actual" rows={[["Revenue actual / forecast", `${compact(p.revenue)} / ${compact(data.forecastRevenue)}`]]} />
-          <Meter percent={actualVsForecast} label={`Revenue actual is ${actualVsForecast.toFixed(0)}% of the illustrative forecast`} />
+          {actualVsForecast === null ? <p className={styles.warnText}>No forecast to compare with.</p> : <Meter percent={actualVsForecast} label={`Revenue actual is ${actualVsForecast.toFixed(0)}% of the illustrative forecast`} />}
         </Panel>
       </HalfColumns>
       <HalfColumns>
         <Panel title="Unit economics" subtitle="Pre-marketing contribution excludes acquisition and fixed spend." testId="unit-economics">
-          <FactList wide label="Unit economics" rows={[["Gross margin", `${margin.toFixed(1)}%`], ["Pre-marketing contribution / order", exact(data.contributionPerOrder)], ["CAC payback", "Awaiting creator allocation"], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
+          <FactList wide label="Unit economics" rows={[["Gross margin", margin === null ? "N/A" : `${margin.toFixed(1)}%`], ["Pre-marketing contribution / order", exact(data.contributionPerOrder)], ["CAC payback", "Awaiting creator allocation"], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
           <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 240, alignSelf: "flex-start" }} onClick={() => setDialog("definitions")}>View metric definitions</Button>
         </Panel>
         <Panel title="Month-end & compliance" subtitle="Review unresolved items before closing" testId="close-summary">

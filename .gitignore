@@ -10,3 +10,4 @@ test-results
 
 # Local snapshot of the private Linear handoff. Never commit: this repo is public.
 .handoff/
+dist-live

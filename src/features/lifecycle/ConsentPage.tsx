@@ -7,6 +7,7 @@ import { Button } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Alert } from "@/components/Alert";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { ContextLine, Page, PageHeader, Panel, Small } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
@@ -38,6 +39,7 @@ export function ConsentPage() {
         <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 160 }} onClick={() => setProviderOpen(true)}>Open provider</Button>
         <Button style={{ minWidth: 184 }} disabledReason={data ? null : "Available once the snapshot has loaded."} onClick={reviewExclusions}>Review exclusions</Button>
       </PageHeader>
+      <ReadState res={query.data} subject="Consent eligibility" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading consent eligibility…" />}
       {query.isError && <ViewError error={query.error} subject="Consent eligibility" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<ConsentData>} data={data} demo={demo} exclusionsRef={exclusionsRef} /> : <EmptyState state="Empty" title="No consent snapshot yet"><p>The source responded, but no provider snapshot exists. That isn't a finding that nobody is eligible.</p></EmptyState>)}

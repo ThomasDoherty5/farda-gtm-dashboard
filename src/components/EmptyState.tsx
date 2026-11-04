@@ -7,7 +7,7 @@ type Props = { state: "Empty" | "Loading" | "Denied" | "Error"; title: string; c
 
 export function EmptyState({ state, title, children, alert = false }: Props) {
   return (
-    <div role={alert ? "alert" : undefined} className={styles.empty}>
+    <div role={alert ? "alert" : undefined} data-empty-state={state} className={styles.empty}>
       <Badge tone={state === "Error" ? "danger" : "neutral"}>{state}</Badge>
       <h2 className={styles.emptyTitle}>{title}</h2>
       <div className={styles.emptyBody}>{children}</div>

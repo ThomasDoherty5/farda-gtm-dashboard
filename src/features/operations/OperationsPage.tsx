@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
+import { ReadState } from "@/components/ReadState";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -61,6 +62,8 @@ export function OperationsPage() {
           {layout === "tablet" && <><LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton><Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button></>}
         </PageHeader>
       )}
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="Operations" only={["partial"]} />
       {query.isPending && <SkeletonCard label="Loading operations…" />}
       {query.isError && <ViewError error={query.error} subject="Operations" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&

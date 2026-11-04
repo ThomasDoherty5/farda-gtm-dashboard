@@ -15,7 +15,8 @@ import styles from "./Analytics.module.css";
 export const usd = (m: Money) => formatMoney(m);
 export const usdExact = (m: Money) => formatMoneyExact(m);
 export const count = (n: number) => new Intl.NumberFormat("en-US").format(n);
-export const percent = (part: number, whole: number, digits = 1) => `${new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format((100 * part) / whole)}%`;
+/** A share as text. Over a whole that is not above zero there is no share, so it is "N/A", never NaN or Infinity (and never 0%). */
+export const percent = (part: number, whole: number, digits = 1) => (whole > 0 ? `${new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format((100 * part) / whole)}%` : "N/A");
 /** Exact ratio of two whole numbers, as a share of a scale in [0, 1]. */
 export const ratio = (value: number, scale: number) => (scale > 0 ? Math.min(1, Math.max(0, value / scale)) : 0);
 export const dateTime = (iso: string, timeZone = "America/Los_Angeles") =>
