@@ -11,11 +11,19 @@ let requestCounter = 0;
  * response whose verified scope differs from the requested scope is rejected (late-response guard).
  * A 401/403 drops everything cached for the scope, so prior data can't render beside the denial.
  */
-export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null) {
+export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean } = {}) {
   const ctx = useScope();
   const client = useQueryClient();
   return useQuery<ReadResponse<T>, Error>({
     queryKey: [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period],
+    // Opt-in: while a changed filter loads, keep the last data from the same scope on screen (flagged by isPlaceholderData).
+    // Data from a different principal, environment, workspace or account set is never carried over.
+    placeholderData: options.keepPrevious
+      ? (previous, previousQuery) => {
+          const root = scopeKey(ctx);
+          return previousQuery && root.every((part, i) => previousQuery.queryKey[i] === part) ? previous : undefined;
+        }
+      : undefined,
     retry: (count, error) => !(error instanceof AdapterError && (mustClearProtectedData(error.category) || !error.body.retryable)) && count < 2,
     queryFn: async ({ signal }) => {
       const requestId = `req-${++requestCounter}`;
