@@ -24,6 +24,7 @@ const save = (over: Partial<SaveResourceRequest<unknown>> = {}): SaveResourceReq
   payload: { mediaUrl: null, checkoutRoute: "tiktok-shop", observations: [] }, ...over,
 });
 
+const without = (o: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(o).filter(([k]) => k !== key));
 const quick = { retryDelayMs: 0 };
 const live = (transport: Transport, extra = {}) => createLiveAdapter("sandbox", { transport, ...quick, ...extra });
 const served = (log: TransportRequest[] = []) => demoBackedTransport(createDemoAdapter(), "sandbox", log);
@@ -213,7 +214,57 @@ describe("answers are validated before a screen sees them", () => {
   });
 });
 
+describe("the run reference is top-level (Q-03)", () => {
+  const control = (over: Partial<ActionRequest<unknown>> = {}) =>
+    act({ operation: "controlRun", actionKind: "pauseRun", approvalRef: "demo-approval-batch", expectedVersion: "r1", payload: { control: "pause" }, ...over });
+  it.each([undefined, null, "", "  "])("refuses controlRun and reconcileRun with runRef %j and sends nothing", async (runRef) => {
+    const log: TransportRequest[] = [];
+    const adapter = live(served(log));
+    for (const operation of ["controlRun", "reconcileRun"] as const) {
+      const e = await fail(adapter.submitAction(control({ operation, ...(runRef === undefined ? {} : { runRef }) })));
+      expect(e.body).toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied", fieldErrors: { runRef: expect.any(String) } });
+    }
+    expect(log).toEqual([]);
+  });
+  it("sends a named run through untouched", async () => {
+    const log: TransportRequest[] = [];
+    await live(served(log)).submitAction(control({ runRef: "demo-run-batch" })).catch(() => undefined);
+    expect((log[0]!.envelope as ActionRequest<unknown>).runRef).toBe("demo-run-batch");
+  });
+  it("does not require one for an operation that is not about a run", async () => {
+    const log: TransportRequest[] = [];
+    await live(served(log)).submitAction(act());
+    expect(log).toHaveLength(1);
+  });
+});
+
 describe("approved is not sent", () => {
+  it("treats `approved` as awaiting dispatch: it parses, carries no send claim, and is certain (Q-01, Q-04)", async () => {
+    const { req, body } = await (async () => {
+      const r = act();
+      const base = (await served().send({ kind: "action", envelope: r }, { signal: new AbortController().signal })) as Record<string, unknown>;
+      return { req: r, body: base };
+    })();
+    expect(body).toMatchObject({ state: "approved", executionCertainty: "applied", reasonCodes: ["AWAITING_DISPATCH"] });
+    const res = await live(rawTransport(body)).submitAction(act({ requestId: req.requestId }));
+    expect(res.state).toBe("approved");
+    expect(res.receiptRefs).toEqual([]);
+  });
+  it("refuses a success that also says nothing was applied", async () => {
+    const r = act();
+    const base = (await served().send({ kind: "action", envelope: r }, { signal: new AbortController().signal })) as Record<string, unknown>;
+    const e = await fail(live(rawTransport({ ...base, state: "succeeded", receiptRefs: ["x"], executionCertainty: "notApplied" })).submitAction(dispatch({ requestId: r.requestId })));
+    expect(e.body).toMatchObject({ code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+  });
+  it("reads an action or save answer with no executionCertainty as unreadable, so the write is uncertain (Q-04)", async () => {
+    const r = act();
+    const action = without((await served().send({ kind: "action", envelope: r }, { signal: new AbortController().signal })) as Record<string, unknown>, "executionCertainty");
+    expect((await fail(live(rawTransport(action)).submitAction(act({ requestId: r.requestId })))).body).toMatchObject({ code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+    const s = save();
+    const saved = without((await served().send({ kind: "save", envelope: s }, { signal: new AbortController().signal })) as Record<string, unknown>, "executionCertainty");
+    expect((await fail(live(rawTransport(saved)).saveResource(save({ requestId: s.requestId })))).body).toMatchObject({ code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+  });
+
   const actionBody = async (over: Record<string, unknown>) => {
     const req = act();
     const base = (await served().send({ kind: "action", envelope: req }, { signal: new AbortController().signal })) as Record<string, unknown>;
@@ -242,7 +293,7 @@ describe("approved is not sent", () => {
   it("through the demo-backed server: approve gives no receipt, dispatch gives one, and an uncertain dispatch gives none", async () => {
     const adapter = live(served());
     const decided = await adapter.submitAction(act());
-    expect([decided.state, decided.receiptRefs]).toEqual(["blocked", []]);
+    expect([decided.state, decided.receiptRefs]).toEqual(["approved", []]);
     const sent = await adapter.submitAction(dispatch());
     expect(sent.state).toBe("succeeded");
     expect(sent.receiptRefs.length).toBeGreaterThan(0);
@@ -301,7 +352,7 @@ describe("retries and duplicate delivery keep one logical command", () => {
     expect(log.map((r) => (r.envelope as ActionRequest<unknown>).idempotencyKey)).toEqual([req.idempotencyKey, req.idempotencyKey]);
     expect(log.map((r) => r.envelope.requestId)).toEqual([req.requestId, req.requestId]);
     // The server replayed its first answer rather than deciding twice.
-    expect(res.state).toBe("blocked");
+    expect(res.state).toBe("approved");
   });
   it("a save retried the same way keeps its key and does not bump the version twice", async () => {
     const log: TransportRequest[] = [];

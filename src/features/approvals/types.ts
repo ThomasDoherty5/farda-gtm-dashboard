@@ -106,5 +106,6 @@ export type RunDetail = {
 };
 
 export type DecidePayload = { decision: "approved" | "rejected" | "editRequired"; reason?: string; editedMessage?: string };
-export type ControlPayload = { runRef: string; control: "pause" };
-export type ReconcilePayload = { runRef: string; request: "lookup" | "recordConfirmedSent" | "freshAttempt" };
+/** Q-03: the run is the request's top-level `runRef`, not part of the payload. */
+export type ControlPayload = { control: "pause" };
+export type ReconcilePayload = { request: "lookup" | "recordConfirmedSent" | "freshAttempt" };

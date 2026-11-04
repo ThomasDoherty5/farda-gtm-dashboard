@@ -38,7 +38,7 @@ export function readMonitorView<T>(request: ReadRequest<unknown>, fixture: Overv
       case "FX-03-empty-filter": return { ...base, dataState: "empty", data: null, coverage: { ...base.coverage, expectedCount: 0, observedCount: 0 } };
       case "FX-04-missing-metric": return { ...base, data: degrade ? degrade(data) : data };
       case "FX-05-partial-coverage": return { ...base, dataState: "partial", coverage: { expectedCount: 9, observedCount: 5, missingCount: 4, complete: false, reasonCodes: ["POST_SNAPSHOTS_UNAVAILABLE"] } };
-      case "FX-06-stale-source": return { ...base, dataState: "stale", sourceFreshness: [{ sourceRef: { source: "monitor", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: "demo:monitor" }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SESSION_EXPIRED" }] };
+      case "FX-06-stale-source": return { ...base, dataState: "stale", sourceFreshness: [{ sourceRef: { source: "monitor", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: "demo:monitor" }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SESSION_EXPIRED", freshnessState: "error" }] };
       default: return base;
     }
   };
@@ -124,5 +124,6 @@ export function retryMonitorProfile(request: ActionRequest<{ profile: string }>)
     receiptRefs: [],
     nextAction: { kind: "reconnectSource", ownerRef: null, dueAt: null, available: true },
     nextPollAfterMs: null,
+    executionCertainty: "notApplied",
   };
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
+import { certaintyOfState, SCHEMA_VERSION, type ActionRequest, type ActionResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { BASE_POLICY, POLICY_BOUNDS, checkApprovedDispatch, evaluateTerms, fieldErrorsOf, routeCreatorReply, type AcquisitionTerms, type PolicyConfig, type UntrustedTerms } from "./commissionPolicy";
 import { createOnce } from "./demoOnce";
@@ -78,7 +78,8 @@ export function createDemoPolicy(opts: {
     modelVersion: null,
     offerVersion: null,
     reasonCodes,
-    receiptRefs,
+
+    executionCertainty: certaintyOfState(state),    receiptRefs,
     nextAction: state === "blocked" ? { kind: "reviewTermsMismatch", ownerRef: "Creator operations", dueAt: null, available: true } : null,
     nextPollAfterMs: null,
   });

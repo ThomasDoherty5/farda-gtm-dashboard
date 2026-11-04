@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { certaintyOfState, SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError } from "./errors";
 import { respondWith } from "./demoViews";
 import { RECONCILIATION_NOW, seedReconciliation, type ReconciliationData } from "@/fixtures/reconciliation";
@@ -56,6 +56,7 @@ export function createDemoReconciliation() {
         modelVersion: null,
         offerVersion: null,
         reasonCodes: ["AWAITING_APPROVAL"],
+        executionCertainty: certaintyOfState("approvalPending"),
         receiptRefs: [],
         nextAction: { kind: "decideApproval", ownerRef: "founder", dueAt: null, available: false },
         nextPollAfterMs: null,
