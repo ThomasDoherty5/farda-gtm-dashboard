@@ -7,6 +7,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { ContextLine, DetailRows, Halves, Page, PageHeader, Panel, PillNav, Small, kit } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
@@ -30,6 +31,7 @@ export function LifecyclePage() {
         <Button aria-haspopup="dialog" style={{ minWidth: 184 }} onClick={() => setDialog("tool")}>Open email tool</Button>
       </PageHeader>
       <PillNav label="Overview sections" items={[{ label: "GTM overview", to: "/overview", width: 132 }, { label: "Customer lifecycle", to: "/customers/lifecycle", width: 180, current: true }, { label: "Launch control", to: "/launch?view=control", width: 148 }]} />
+      <ReadState res={query.data} subject="The customer lifecycle" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading the customer lifecycle…" />}
       {query.isError && <ViewError error={query.error} subject="The customer lifecycle" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data ? <Body res={query.data as ReadResponse<LifecycleData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="No lifecycle data yet"><p>The source responded, but no customer flow has ever been recorded.</p></EmptyState>)}
@@ -61,7 +63,8 @@ function Body({ data, demo }: { res: ReadResponse<LifecycleData>; data: Lifecycl
           caption="Customer communication flows"
           columns={[{ label: "FLOW", width: "17.628%" }, { label: "ENTRY & EXIT", width: "37.981%" }, { label: "DELIVERY GATE", width: "31.25%" }, { label: "STATE" }]}
           rows={data.flows.map((f) => [
-            <Link key="n" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.name}</Link>,
+            // One action per row: where the state column already links to the flow, the name is text, not a second link to the same place.
+            f.state.endsWith("→") ? f.name : <Link key="n" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.name}</Link>,
             f.entryExit,
             f.gate,
             f.state.endsWith("→") ? <Link key="s" to={`/customers/flows/${f.key}`} className={kit.cellLink}>{f.state}</Link> : f.state,

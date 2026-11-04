@@ -7,6 +7,7 @@ import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { HourlyRunPage } from "@/features/monitor/HourlyRunPage";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, SourceDialog, blockedReason, dateTime } from "./shared";
@@ -38,7 +39,7 @@ function Run({ tab }: { tab: Tab }) {
   const uncertain = data?.state === "outcomeUncertain";
   const control = useAction<ControlPayload>();
   const [dialog, setDialog] = useState<"source" | "slack" | "takeover" | null>(null);
-  const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, payload: { runRef: data.runRef, control: "pause" } });
+  const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { control: "pause" } });
 
   return (
     <section aria-labelledby="run-title" data-figma-source={tab === "approval" ? "5:13" : "5:156"} className={styles.page}>
@@ -72,6 +73,7 @@ function Run({ tab }: { tab: Tab }) {
         <LinkButton to="/settings/connections" variant="ghost" style={{ minWidth: 124 }}>Connections</LinkButton>
         <LinkButton to="/automations?tab=reporting" variant="ghost" style={{ minWidth: 112 }}>Reporting</LinkButton>
       </nav>
+      <ReadState res={query.data} subject="This run" />
       {query.isPending && <p role="status">Loading run…</p>}
       {query.isError && <ViewError error={query.error} subject="This run" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} parent={<p><Link to="/runs">Back to runs</Link></p>} />}
       {data && (
@@ -180,7 +182,7 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
   const { adapter } = useScope();
   const reconcile = useAction<ReconcilePayload>();
   const send = (request: ReconcilePayload["request"]) =>
-    reconcile.mutate({ operation: "reconcileRun", actionKind: request, entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, payload: { runRef: data.runRef, request } });
+    reconcile.mutate({ operation: "reconcileRun", actionKind: request, entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { request } });
   const pending = (request: ReconcilePayload["request"]) => reconcile.isPending && reconcile.variables?.payload.request === request;
   const uncertain = data.state === "outcomeUncertain";
   const { result, evidence } = data.reconciliation;

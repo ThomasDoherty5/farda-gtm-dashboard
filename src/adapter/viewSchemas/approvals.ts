@@ -202,8 +202,8 @@ export const decidePayloadSchema = z.discriminatedUnion("decision", [
 ]);
 /** Dispatch carries nothing of its own: what is sent is the approved version, named by `approvalRef` and `expectedVersion`. */
 export const dispatchPayloadSchema = z.object({}).strict();
-export const controlPayloadSchema = z.object({ runRef: nonBlank, control: z.literal("pause") }).strict();
-const reconcilePayload = <R extends "lookup" | "recordConfirmedSent" | "freshAttempt">(request: R) => z.object({ runRef: nonBlank, request: z.literal(request) }).strict();
+export const controlPayloadSchema = z.object({ control: z.literal("pause") }).strict();
+const reconcilePayload = <R extends "lookup" | "recordConfirmedSent" | "freshAttempt">(request: R) => z.object({ request: z.literal(request) }).strict();
 
 /** The reconcile kinds are named after the request, as the run page sends them. */
 export const approvalActionSchemas: Record<string, { payload: z.ZodTypeAny }> = {

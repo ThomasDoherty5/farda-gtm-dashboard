@@ -7,6 +7,7 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ReadState } from "@/components/ReadState";
 import { Divider, DetailRows, Halves, Notice, Page, PageHeader, Panel, Small, Split, Steps } from "@/components/PageKit";
 import { ViewError } from "@/components/ViewError";
 import type { TeamData } from "@/fixtures/settings";
@@ -26,6 +27,7 @@ export function TeamPage() {
       <Notice kind="source" badge="Source" title="Permissions follow the source tools">
         Roles are managed in the connected tools. A workspace owner must confirm access changes before restricted actions are available.
       </Notice>
+      <ReadState res={query.data} subject="Team permissions" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading roles…" />}
       {query.isError && <ViewError error={query.error} subject="Team and permissions" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (query.data.data ? <Body res={query.data as ReadResponse<TeamData>} data={query.data.data} demo={demo} dialog={dialog} setDialog={setDialog} /> : <EmptyState state="Empty" title="No roles yet"><p>The source responded, but no role is registered.</p></EmptyState>)}

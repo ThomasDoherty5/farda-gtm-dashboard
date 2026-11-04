@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, certaintyOfState, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { opsExceptionsDemo, sandboxChain, shipmentsDemo } from "@/fixtures/opsShipping";
 import { respondWith } from "./demoViews";
@@ -74,6 +74,7 @@ export function createDemoOps(opts: { actorRole?: string } = {}) {
         observedAt: DEMO_NOW,
         mirroredAt: DEMO_NOW,
         staleReasonCode: scenario === "stale" ? "SOURCE_SYNC_DELAYED" : null,
+        freshnessState: scenario === "stale" ? "error" : "current",
       },
     ];
     return res;
@@ -101,6 +102,7 @@ export function createDemoOps(opts: { actorRole?: string } = {}) {
       modelVersion: null,
       offerVersion: null,
       reasonCodes: [],
+      executionCertainty: certaintyOfState("succeeded"),
       receiptRefs: [entry.id],
       nextAction: null,
       nextPollAfterMs: null,
@@ -203,6 +205,7 @@ export function createDemoOps(opts: { actorRole?: string } = {}) {
     receiptRefs: [],
     nextAction: null,
     nextPollAfterMs: null,
+    executionCertainty: certaintyOfState(state),
     ...over,
   });
 

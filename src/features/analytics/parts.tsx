@@ -1,6 +1,7 @@
 import { useId, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
+import { staleReasonText } from "@/adapter/freshness";
 import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Button, LinkButton } from "@/components/Button";
@@ -14,7 +15,8 @@ import styles from "./Analytics.module.css";
 export const usd = (m: Money) => formatMoney(m);
 export const usdExact = (m: Money) => formatMoneyExact(m);
 export const count = (n: number) => new Intl.NumberFormat("en-US").format(n);
-export const percent = (part: number, whole: number, digits = 1) => `${new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format((100 * part) / whole)}%`;
+/** A share as text. Over a whole that is not above zero there is no share, so it is "N/A", never NaN or Infinity (and never 0%). */
+export const percent = (part: number, whole: number, digits = 1) => (whole > 0 ? `${new Intl.NumberFormat("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format((100 * part) / whole)}%` : "N/A");
 /** Exact ratio of two whole numbers, as a share of a scale in [0, 1]. */
 export const ratio = (value: number, scale: number) => (scale > 0 ? Math.min(1, Math.max(0, value / scale)) : 0);
 export const dateTime = (iso: string, timeZone = "America/Los_Angeles") =>
@@ -157,7 +159,7 @@ export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res?.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
-          <p>{freshness?.staleReasonCode ?? "Reason unknown"}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
+          <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
         </Alert>
       )}
       {res?.dataState === "partial" && (

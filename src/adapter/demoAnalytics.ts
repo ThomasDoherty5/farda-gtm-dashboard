@@ -57,7 +57,7 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
         return {
           ...base,
           dataState: "stale",
-          sourceFreshness: [{ sourceRef: { source: "demo", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: `demo:${key}` }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED" }],
+          sourceFreshness: [{ sourceRef: { source: "demo", accountId: request.requestedScope.accountIds[0] ?? "demo", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: `demo:${key}` }, lastSourceSuccessAt: "2026-10-30T09:00:00.000Z", observedAt: "2026-10-30T09:00:00.000Z", mirroredAt: "2026-10-30T09:00:00.000Z", staleReasonCode: "SOURCE_SYNC_DELAYED", freshnessState: "error" }],
         };
       default:
         return base;

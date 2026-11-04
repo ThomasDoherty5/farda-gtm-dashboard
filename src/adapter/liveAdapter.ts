@@ -97,6 +97,7 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">, opt
     async submitAction<P>(request: ActionRequest<P>, opts?: ReadOptions): Promise<ActionResponse> {
       refuseForeignEnvironment(environment, request.requestedScope, request.requestId, true);
       requireKey(request);
+      requireRunRef(request);
       const raw = await exchange({ kind: "action", envelope: request as ActionRequest<unknown> }, opts?.signal);
       const parsed = actionResponseSchema.safeParse(raw);
       // A replay of the same idempotency key returns the first answer, so a write's requestId may be the original's.
@@ -251,9 +252,30 @@ export function redact(text: string): string {
 
 // ---- Checks on a successful answer ------------------------------------------------------------------
 
-/** What no screen may show as done, whatever the body says. Approved is not Sent. */
+/** Q-03: `controlRun` and `reconcileRun` name their run in the top-level `runRef`. Without one, nothing is sent. */
+function requireRunRef(request: ActionRequest<unknown>) {
+  if (request.operation !== "controlRun" && request.operation !== "reconcileRun") return;
+  if (typeof request.runRef === "string" && request.runRef.trim() !== "") return;
+  throw new AdapterError({
+    code: "VALIDATION_FAILED",
+    message: "This action needs a run reference. Nothing was sent.",
+    requestId: request.requestId,
+    correlationId: null,
+    retryable: false,
+    retryAfterMs: null,
+    executionCertainty: "notApplied",
+    fieldErrors: { runRef: "A run reference is required." },
+  });
+}
+
+/**
+ * What no screen may show as done, whatever the body says. Approved is not Sent: `approved` (Q-01) is never a claim that
+ * anything was sent, so it is not treated as one, and a send claim needs a source receipt and an `applied` certainty.
+ */
 function assertAuthoritative(request: ActionRequest<unknown>, res: ActionResponse) {
   const claimsSent = res.state === "succeeded" || res.state === "partiallySucceeded";
+  if (claimsSent && res.executionCertainty === "notApplied")
+    throw uncertain(request.requestId, "The service reported success and also that nothing was applied, so it is not shown as done.");
   if (claimsSent && res.receiptRefs.length === 0)
     throw uncertain(request.requestId, "The service reported success without a source receipt, so it is not shown as done.");
   const decidesOnly = request.operation === "previewAction" || request.operation === "requestApproval" || request.operation === "decideApproval";

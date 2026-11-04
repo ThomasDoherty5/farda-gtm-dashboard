@@ -109,6 +109,7 @@ export function createDemoFinance() {
       receiptRefs: [],
       nextAction: { kind: "reconciliationReview", ownerRef: "Finance", dueAt: null, available: false },
       nextPollAfterMs: null,
+      executionCertainty: "applied",
     };
     submitted.set(settlementId, { state: "Submitted for review. Nothing is marked reconciled and the paid receipt is unchanged.", actionRef: response.actionRef });
     return response;

@@ -1,4 +1,4 @@
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
+import { SCHEMA_VERSION, certaintyOfState, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import type { ApprovalDetail, ControlPayload, DecidePayload, ReconcilePayload, RunCounts, RunDetail, RunItem } from "@/features/approvals/types";
 import { DEMO_ACTOR_ROLE, seedApprovals, seedRuns, sourceLookups } from "@/fixtures/approvals";
@@ -106,13 +106,18 @@ export function createDemoApprovals(
     receiptRefs: [],
     nextAction: null,
     nextPollAfterMs: null,
+    executionCertainty: certaintyOfState(state),
     ...over,
   });
 
   const findApproval = (request: ActionRequest<unknown>) =>
     approvals.get(request.approvalRef ?? "") ?? fail("RECORD_NOT_FOUND", "This approval does not exist.", request.requestId);
-  const findRun = (request: ActionRequest<unknown>, runRef: string) =>
-    runs.get(runRef) ?? fail("RECORD_NOT_FOUND", "This run does not exist.", request.requestId);
+  /** Q-03: the run comes from the request's top-level `runRef`. A missing one is a validation failure, never a guess. */
+  const findRun = (request: ActionRequest<unknown>) => {
+    if (typeof request.runRef !== "string" || request.runRef.trim() === "")
+      fail("VALIDATION_FAILED", "This action needs a run reference.", request.requestId, { fieldErrors: { runRef: "A run reference is required." } });
+    return runs.get(request.runRef!) ?? fail("RECORD_NOT_FOUND", "This run does not exist.", request.requestId);
+  };
 
   const expectVersion = (request: ActionRequest<unknown>, current: string) => {
     if (request.expectedVersion !== current)
@@ -164,8 +169,8 @@ export function createDemoApprovals(
     a.status = decision;
     if (decision === "approved") hooks.onApproved?.(a.approvalRef);
     if (decision === "rejected") return actionResponse(request, "canceled", { receiptRefs: [current.decisionReceiptRef] });
-    // The contract has no "approved" state. Blocked-awaiting-dispatch is the closest truthful one; raised for the THO-283 freeze.
-    return actionResponse(request, "blocked", {
+    // Q-01: approved is its own state, and it is not a success state. Nothing has been sent.
+    return actionResponse(request, "approved", {
       reasonCodes: ["AWAITING_DISPATCH"],
       nextAction: { kind: "dispatchApprovedAction", ownerRef: null, dueAt: a.expiresAt, available: true },
     });
@@ -192,7 +197,7 @@ export function createDemoApprovals(
   }
 
   function control(request: ActionRequest<ControlPayload>): ActionResponse {
-    const r = findRun(request, request.payload.runRef);
+    const r = findRun(request);
     expectVersion(request, r.version);
     if (r.state === "outcomeUncertain") {
       r.pausedAt ??= DEMO_NOW;
@@ -206,7 +211,7 @@ export function createDemoApprovals(
   }
 
   function reconcile(request: ActionRequest<ReconcilePayload>): ActionResponse {
-    const r = findRun(request, request.payload.runRef);
+    const r = findRun(request);
     const a = approvals.get(r.approvalRef);
     const receipts = () => r.items.flatMap((i) => (i.receiptRef ? [i.receiptRef] : []));
     if (r.state === "succeeded") return actionResponse(request, "succeeded", { runRef: r.runRef, receiptRefs: receipts(), reasonCodes: ["ALREADY_RECONCILED"] });

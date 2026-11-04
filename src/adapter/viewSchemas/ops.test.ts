@@ -492,7 +492,7 @@ describe("action payloads and responses", () => {
       const response = await createDemoAdapter().submitAction(actionRequest("requestStockTransfer", "inv1", payloads.requestStockTransfer));
       const missing = omit(response, "actionRef");
       expect(opsActionResponseSchema.safeParse(missing).success).toBe(false);
-      expect(opsActionResponseSchema.safeParse({ ...response, state: "approved" }).success).toBe(false);
+      expect(opsActionResponseSchema.safeParse({ ...response, state: "sent" }).success).toBe(false);
       expect(opsActionResponseSchema.safeParse({ ...response, receiptRefs: "none" }).success).toBe(false);
     });
   });

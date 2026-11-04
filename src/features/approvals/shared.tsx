@@ -16,6 +16,7 @@ export const dateTime = (iso: string) =>
 export const EXECUTION_LABELS: Record<ActionState, string> = {
   draft: "Draft",
   approvalPending: "Approval required",
+  approved: "Approved, awaiting dispatch",
   queued: "Queued, not sent",
   blocked: "Blocked",
   running: "Running",

@@ -131,7 +131,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
       )}
       <KpiGrid>
         <KpiCard label="Net receipts" context={`${orders === null ? "Orders unknown" : `${count(orders)} orders`} · AOV ${aovResult.value === null ? "N/A" : usdExact({ minorUnits: aovResult.value, currency: "USD" })}`} testId="metric-net-receipts"><MetricText value={data.netReceipts} format={usd} /></KpiCard>
-        <KpiCard label="Contribution before marketing" context={contribution && net ? `${((100 * contribution.minorUnits) / net.minorUnits).toFixed(2)}% · proposed definition` : "Proposed definition · cost incomplete"} testId="metric-contribution"><MetricText value={data.contribution} format={usd} /></KpiCard>
+        <KpiCard label="Contribution before marketing" context={contribution && net && net.minorUnits > 0 ? `${((100 * contribution.minorUnits) / net.minorUnits).toFixed(2)}% · proposed definition` : "Proposed definition · cost incomplete"} testId="metric-contribution"><MetricText value={data.contribution} format={usd} /></KpiCard>
         <KpiCard label="Blended CAC" context={`${usd(spend)} ÷ ${count(data.newRetainedCustomers)} new retained customers`} testId="metric-cac">{moneyResult(cac)}</KpiCard>
         <KpiCard label="MER" context="Net receipts ÷ marketing cost" testId="metric-mer">{multipleResult(merResult)}</KpiCard>
       </KpiGrid>

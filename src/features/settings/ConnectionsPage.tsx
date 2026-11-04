@@ -9,6 +9,7 @@ import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { Divider, DetailRows, Gates, Notice, Page, PageHeader, Panel, Row, Small, Split, kit } from "@/components/PageKit";
+import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import type { ConnectionRow, ConnectionsData } from "@/fixtures/settings";
 import { AutomationNav, CadenceNotice } from "./shared";
@@ -47,6 +48,8 @@ export function ConnectionsPage() {
         Browser tasks act inside the source tool. Zapier routes approvals, events and mirrors. Platform capabilities require validation before enabling unattended actions.
       </Notice>
       {outcome === "ok" && <p role="status" className={kit.status} data-testid="check-status">Checked. {demo ? "Demo observations are unchanged and no provider was contacted." : "These are the health observations the source returned."}</p>}
+      {/* A partial or stale read is said in words, not only by a badge. */}
+      <ReadState res={query.data} subject="Connections" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading connections…" />}
       {query.isError && <ViewError error={query.error} subject="Connections" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (query.data.data ? <Body res={query.data as ReadResponse<ConnectionsData>} data={query.data.data} demo={demo} /> : <EmptyState state="Empty" title="No connections yet"><p>The source responded, but no connection is registered.</p></EmptyState>)}

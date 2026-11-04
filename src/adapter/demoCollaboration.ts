@@ -49,6 +49,7 @@ export function createDemoCollaboration() {
     receiptRefs: [],
     nextAction: { kind: "decideApproval", ownerRef: null, dueAt: null, available: true },
     nextPollAfterMs: null,
+    executionCertainty: "applied",
   });
 
   return {

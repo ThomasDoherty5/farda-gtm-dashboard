@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { ProvenanceValue, ReadResponse } from "@/adapter/contract";
+import { staleReasonText } from "@/adapter/freshness";
 import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Alert } from "@/components/Alert";
@@ -63,7 +64,7 @@ function Body({ res, demo }: { res: ReadResponse<OverviewData>; demo: boolean })
     <>
       {res.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
-          <p>{freshness?.staleReasonCode ?? "Reason unknown"}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
+          <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
         </Alert>
       )}
       {res.dataState === "partial" && (
@@ -110,13 +111,18 @@ function Dashboard({ data, demo }: { data: OverviewData; demo: boolean }) {
   );
 }
 
+function marginOf(data: OverviewData, contribution: number, net: number): number | null {
+  return data.netReceipts.state === "known" && data.contribution.state === "known" && net > 0 ? pct(contribution, net) : null;
+}
+
 function Kpis({ data }: { data: OverviewData }) {
   const net = data.netReceipts.value?.minorUnits ?? 0;
   const contribution = data.contribution.value?.minorUnits ?? 0;
   const orders = data.orders.value ?? 0;
   const weeks = weeklyTotals(data.daily);
   const peak = Math.max(1, ...weeks);
-  const margin = pct(contribution, net);
+  // A margin needs both figures to be known, and receipts above zero. Otherwise it is N/A, never 0%.
+  const margin = marginOf(data, contribution, net);
   const circumference = 2 * Math.PI * 39.6;
   const totalOrders = data.channels.reduce((s, c) => s + c.orders, 0);
   const [mainChannel, secondChannel] = data.channels;
@@ -136,14 +142,14 @@ function Kpis({ data }: { data: OverviewData }) {
         <dl className={`${styles.kpiText} ${styles.kpiTextWide}`}>
           <dt>Contribution</dt>
           <dd data-testid="metric-Contribution"><MetricValue value={data.contribution} format={formatMoney} /></dd>
-          <dd className={styles.note}>Before marketing · {margin.toFixed(1)}% margin</dd>
+          <dd className={styles.note}>Before marketing · {margin === null ? "margin N/A" : `${margin.toFixed(1)}% margin`}</dd>
         </dl>
         <div className={styles.donut} aria-hidden="true">
           <svg width="90" height="90" viewBox="0 0 90 90" fill="none">
             <circle className={styles.donutTrack} cx="45" cy="45" r="39.6" strokeWidth="10.8" />
-            <circle className={styles.donutArc} cx="45" cy="45" r="39.6" strokeWidth="10.8" strokeDasharray={`${(margin / 100) * circumference} ${circumference}`} transform="rotate(-90 45 45)" />
+            <circle className={styles.donutArc} cx="45" cy="45" r="39.6" strokeWidth="10.8" strokeDasharray={`${((margin ?? 0) / 100) * circumference} ${circumference}`} transform="rotate(-90 45 45)" />
           </svg>
-          <span>{Math.round(margin)}%</span>
+          <span>{margin === null ? "N/A" : `${Math.round(margin)}%`}</span>
         </div>
       </div>
       <div className={`${styles.card} ${styles.kpi}`}>
@@ -240,7 +246,7 @@ function Efficiency({ data }: { data: OverviewData }) {
   const net = data.netReceipts.value?.minorUnits ?? 0;
   const contribution = data.contribution.value?.minorUnits ?? 0;
   const spend = data.marketingSpend.minorUnits;
-  const margin = pct(contribution, net);
+  const margin = marginOf(data, contribution, net);
   const cac = data.newRetainedCustomers ? formatMoneyExact({ minorUnits: Math.round(spend / data.newRetainedCustomers), currency: "USD" }) : "N/A";
   const mer = spend ? `${(net / spend).toFixed(2)}×` : "N/A";
   return (
@@ -259,8 +265,8 @@ function Efficiency({ data }: { data: OverviewData }) {
         </div>
       </dl>
       <hr className={styles.divider} />
-      <div className={styles.progress} aria-hidden="true"><span style={{ width: `${margin}%` }} /></div>
-      <p className={styles.violetLabel}>{margin.toFixed(1)}% contribution before marketing</p>
+      <div className={styles.progress} aria-hidden="true"><span style={{ width: `${margin ?? 0}%` }} /></div>
+      <p className={styles.violetLabel}>{margin === null ? "Contribution margin N/A" : `${margin.toFixed(1)}% contribution before marketing`}</p>
       <p className={styles.note}>Net receipts less product, shipping, transaction and variable fulfilment costs. Proposed definition.</p>
       <Link to="/analytics/finance" className={styles.textLink}>Explore unit economics →</Link>
     </section>
