@@ -2,9 +2,11 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoBatch } from "./demoBatch";
 import { readCreatorsView } from "./demoCreators";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
+import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
 import { AdapterError } from "./errors";
 import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey } from "@/fixtures/overview";
@@ -19,6 +21,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
+  const batch = createDemoBatch();
 
   return {
     environment: "demo",
@@ -33,6 +36,9 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (request.viewKey === "pipelineSummary") return respondWith(request, filterPipeline(pipelineFilters(request.filters, request.requestId)), { dataVersion: "pipeline-demo@1" }) as ReadResponse<T>;
+      if (request.viewKey === "batchDetail") return batch.read(request) as ReadResponse<T>;
+      if (request.viewKey === "recruitmentQueue") return respondWith(request, filterRecruitment(recruitmentFilters(request.filters, request.requestId)), { dataVersion: "recruitment-demo@1" }) as ReadResponse<T>;
+      if (request.viewKey === "invitationDraft") return respondWith(request, invitationDemo, { dataVersion: "invitation-demo@1", capabilities: [{ actionKind: "sendInvitation", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       const creators = readCreatorsView(request);
       if (creators) return creators as ReadResponse<T>;
       if (request.viewKey !== "overviewSummary")
@@ -43,6 +49,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
       return approvals.submit(request);
     },
     async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {
@@ -60,6 +67,20 @@ function wait(ms: number, signal?: AbortSignal) {
     const t = setTimeout(resolve, ms);
     signal?.addEventListener("abort", () => { clearTimeout(t); reject(signal.reason); }, { once: true });
   });
+}
+
+const RECRUITMENT_FACETS = { networks: ["both", "instagram", "tiktok"], route: ["queue", "inbound", "outbound"] } as const;
+
+/** Only allowed facet values are accepted; an unknown one is a validation error, not a silent default. */
+function recruitmentFilters(raw: unknown, requestId: string): RecruitmentData["filters"] {
+  const given = (raw ?? {}) as Partial<Record<keyof RecruitmentData["filters"], string>>;
+  const out = { ...RECRUITMENT_DEFAULT } as Record<string, string>;
+  for (const key of Object.keys(RECRUITMENT_FACETS) as (keyof typeof RECRUITMENT_FACETS)[]) {
+    const value = given[key] ?? out[key]!;
+    if (!(RECRUITMENT_FACETS[key] as readonly string[]).includes(value)) err("VALIDATION_FAILED", `${key} must be one of ${RECRUITMENT_FACETS[key].join(", ")}.`, requestId);
+    out[key] = value;
+  }
+  return out as RecruitmentData["filters"];
 }
 
 const PIPELINE_FACETS: { [K in keyof PipelineFilters]: readonly string[] } = {

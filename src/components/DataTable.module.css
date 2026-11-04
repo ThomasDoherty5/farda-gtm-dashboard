@@ -7,3 +7,4 @@
 .list th, .list td { padding: var(--space-16) 0; color: var(--color-muted); }
 .list thead th { padding: var(--space-12) 0; text-transform: none; }
 .list tbody th { font: var(--text-label); color: var(--color-ink); }
+.list thead th { overflow-wrap: anywhere; }
