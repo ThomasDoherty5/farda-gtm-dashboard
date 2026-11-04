@@ -102,6 +102,7 @@ export function createDemoOps(opts: { actorRole?: string } = {}) {
       modelVersion: null,
       offerVersion: null,
       reasonCodes: [],
+      executionCertainty: certaintyOfState("succeeded"),
       receiptRefs: [entry.id],
       nextAction: null,
       nextPollAfterMs: null,

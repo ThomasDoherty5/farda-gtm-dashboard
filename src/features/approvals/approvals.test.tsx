@@ -82,7 +82,7 @@ describe("approval detail", () => {
   it("FE04-02: the page shows the same approval, run and receipt refs end to end", async () => {
     const { user } = await open("/approvals/demo-approval-exact");
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     await user.click(button("Send approved action"));
     expect(await screen.findByTestId("source-receipt")).toHaveTextContent("demo-source-receipt-demo-approval-exact");
     expect(screen.getByRole("link", { name: "Open run" })).toHaveAttribute("href", "/runs/demo-run-exact?tab=approval");
@@ -91,7 +91,7 @@ describe("approval detail", () => {
   it("FE04-04: a founder can decide the founder-only commitment, and approving it still sends and pays nothing", async () => {
     const { user } = await open("/approvals/demo-approval-founder", createDemoAdapter({ actorRole: "founder" }));
     await user.click(button("Approve this version"));
-    await waitFor(() => expect(status()).toHaveTextContent("Approved, not sent"));
+    await waitFor(() => expect(status()).toHaveTextContent("Approved, awaiting dispatch"));
     expect(status()).not.toHaveTextContent(/Paid|Sent,/);
     expect(screen.queryByTestId("source-receipt")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Pay/ })).not.toBeInTheDocument();
