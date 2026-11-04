@@ -68,7 +68,7 @@ test.describe("approvals", () => {
     await context.setOffline(false);
     await expect(status(page)).toBeEmpty();
     await page.getByRole("button", { name: "Approve this version" }).click();
-    await expect(page.getByTestId("approval-status")).toContainText("Approved, not sent");
+    await expect(page.getByTestId("approval-status")).toContainText("Approved, awaiting dispatch");
   });
 });
 
