@@ -13,6 +13,7 @@ export function Kpi({ label, children, context, testId, hug = false }: { label: 
   );
 }
 
-export function KpiRow({ children, columns = 4 }: { children: ReactNode; columns?: number }) {
-  return <div className={styles.row} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
+/** `align="start"` lets cards keep their own heights, as Figma's content-sized rows do; the default stretches them to one height. */
+export function KpiRow({ children, columns = 4, align = "stretch" }: { children: ReactNode; columns?: number; align?: "stretch" | "start" }) {
+  return <div className={align === "start" ? `${styles.row} ${styles.start}` : styles.row} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
 }

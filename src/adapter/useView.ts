@@ -19,6 +19,14 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
   return useQuery<ReadResponse<T>, Error>({
     ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     queryKey: [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period],
+    // Opt-in: while a changed filter loads, keep the last data from the same scope on screen (flagged by isPlaceholderData).
+    // Data from a different principal, environment, workspace or account set is never carried over.
+    placeholderData: options.keepPrevious
+      ? (previous, previousQuery) => {
+          const root = scopeKey(ctx);
+          return previousQuery && root.every((part, i) => previousQuery.queryKey[i] === part) ? previous : undefined;
+        }
+      : undefined,
     retry: (count, error) => !(error instanceof AdapterError && (mustClearProtectedData(error.category) || !error.body.retryable)) && count < 2,
     queryFn: async ({ signal }) => {
       const requestId = `req-${++requestCounter}`;
