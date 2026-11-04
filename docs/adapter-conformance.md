@@ -34,7 +34,7 @@ A rule with no scenario is never skipped quietly. It must have a reason in `gaps
 
 ## Live stub today
 
-The stub rejects every call with `INTEGRATION_PENDING`. It passes the `PENDING-*` rules and `IDENT-1`, and the hook-level scope checks that only need a recorded request. The rules that need an answer from a backend are `it.todo` with the reason, 35 of them at the time of writing.
+The stub rejects every call with `INTEGRATION_PENDING`. It passes the `PENDING-*` rules and `IDENT-1`, and the hook-level scope checks that only need a recorded request. The rules that need an answer from a backend are `it.todo` with the reason, 34 of them at the time of writing.
 
 ## Notes for the THO-283 freeze
 
