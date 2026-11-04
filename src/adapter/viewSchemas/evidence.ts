@@ -25,6 +25,34 @@ const observation = z.object({
   recordedAgainst: z.string().min(1),
 }).refine((o) => o.endSec > o.startSec, { message: "The end must be after the start", path: ["endSec"] });
 
+const checkoutRoute = z.enum(["website", "tiktok-shop"]);
+
+/** The first reviewer's record, frozen when the first observations were saved (VE-08). */
+const firstReview = z.object({
+  version: text,
+  recordedAt: instant,
+  reviewerRole: text,
+  mediaUrl: z.string().nullable(),
+  checkoutRoute,
+  observations: z.array(observation).max(MAX_OBSERVATIONS),
+});
+
+const proposed = z.object({ category: z.enum(["hook", "demonstration", "framing", "audio"]), startSec: seconds, endSec: seconds, text: z.string().trim().min(1).max(MAX_TEXT) });
+
+/** A second reviewer's disagreement or override, kept beside the first record. It names the video and route it was recorded against. */
+const dispute = z.object({
+  id: text,
+  observationId: text,
+  stance: z.enum(["disagree", "override"]),
+  reason: text,
+  proposed: z.union([proposed, z.literal("remove")]).nullable(),
+  prior: observation,
+  reviewerRole: text,
+  recordedAt: instant,
+  recordedAgainst: z.string().nullable(),
+  recordedRoute: checkoutRoute,
+});
+
 const httpsAddress = z.string().url().refine((u) => u.startsWith("https://"), { message: "Use an https:// address" });
 const score = provenanceValueSchema(z.number().finite().min(0));
 
@@ -41,6 +69,9 @@ const evidenceRecord = z.object({
   reviewerRole: text.nullable(),
   modelPublication: z.object({ label: text, note: text }),
   assessments: z.object({ creative: score, routine: score, commerce: score }),
+  firstReview: firstReview.nullable(),
+  disputes: z.array(dispute),
+  readiness: z.object({ state: z.literal("notReady"), reasonCodes: z.array(text) }),
 });
 
 export const evidenceViewSchemas: Record<string, z.ZodTypeAny> = { evidenceRecord };
