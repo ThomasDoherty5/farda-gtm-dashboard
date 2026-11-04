@@ -18,7 +18,23 @@ export type CommissionGroup = {
   state: CommissionState;
   /** Provider-side facts for the read-only evidence panel. */
   evidence: { receipt: string | null; note: string };
+  adjustments?: Adjustment[];
 };
+
+/** A change after payout. It is appended beside the receipt and never edits it. */
+export type Adjustment = { id: string; kind: "reversal"; amountMinor: number; at: string; reason: string; receiptRef: string };
+
+/** Returns a new group with the adjustment added. The receipt and every earlier adjustment are carried over untouched. Only a paid group can be adjusted. */
+export function appendAdjustment(g: CommissionGroup, adj: Adjustment): CommissionGroup {
+  if (g.state !== "paid" || !g.evidence.receipt) throw new Error("Only a paid group with a receipt can take an adjustment.");
+  if (adj.amountMinor >= 0) throw new Error("A reversal is a negative amount.");
+  if (adj.receiptRef !== g.evidence.receipt) throw new Error("An adjustment must name the receipt it adjusts.");
+  const prior = g.adjustments ?? [];
+  if (prior.some((a) => a.id === adj.id)) throw new Error("An adjustment id is never reused.");
+  return { ...g, evidence: { ...g.evidence }, adjustments: [...prior, adj] };
+}
+/** What was paid, after the appended adjustments. The paid amount itself is the receipt's and does not change. */
+export const netOfAdjustments = (paidMinor: number, g: CommissionGroup) => paidMinor + (g.adjustments ?? []).reduce((a, x) => a + x.amountMinor, 0);
 
 export const netAccrued = (g: CommissionGroup) => g.earned - g.reversed;
 export const STATE_LABEL: Record<CommissionState, string> = { held: "Held", disputed: "Disputed", awaitingProvider: "Awaiting provider", paid: "Paid" };
@@ -42,7 +58,7 @@ export const ledgerDemo = (): CommissionLedger => ({
     { id: "COMM-DEMO-A", grossSales: 80000, netBase: 60000, earned: 12000, reversed: 3000, state: "held", evidence: { receipt: null, note: "A $200 refund reversed $30 of earned commission. The provider holds the balance until its review deadline." } },
     { id: "COMM-DEMO-B", grossSales: 20000, netBase: 20000, earned: 3000, reversed: 0, state: "disputed", evidence: { receipt: null, note: "The provider records a dispute on this group. The amount stays in the accrual until the source resolves it." } },
     { id: "COMM-DEMO-C", grossSales: 40000, netBase: 40000, earned: 6000, reversed: 0, state: "awaitingProvider", evidence: { receipt: null, note: "Eligibility is recorded in the provider. Payout waits for the provider's own schedule." } },
-    { id: "COMM-DEMO-D", grossSales: 60000, netBase: 60000, earned: 9000, reversed: 0, state: "paid", evidence: { receipt: "TEST-RCPT-0090", note: "Paid by the provider. The receipt is immutable; any later reversal is recorded as an adjustment." } },
+    { id: "COMM-DEMO-D", grossSales: 60000, netBase: 60000, earned: 9000, reversed: 0, state: "paid", evidence: { receipt: "TEST-RCPT-0090", note: "Paid by the provider. The receipt is immutable; any later reversal is recorded as an adjustment." }, adjustments: [{ id: "ADJ-0001", kind: "reversal", amountMinor: -500, at: "2026-10-28T17:00:00.000Z", reason: "A customer refund after payout reversed $5 of commission", receiptRef: "TEST-RCPT-0090" }] },
   ],
   economics: { commerceCosts: 81000, historicalFixedFee: 15000, samples: 10000, processingFeePct: 2.9 },
   orders: { initial: 50, retained: 45, refundedBeforeFulfillment: 5 },

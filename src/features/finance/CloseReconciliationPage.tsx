@@ -11,6 +11,7 @@ import { SourceDialog, blockedReason } from "@/features/approvals/shared";
 import { RecordShell } from "@/features/operations/RecordShell";
 import type { CloseState, PeriodClose } from "@/fixtures/finance";
 import { usd } from "@/fixtures/values";
+import { MonthsView, ManifestView } from "./CloseViews";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
 
@@ -23,6 +24,14 @@ const TONE: Record<CloseState, BadgeTone> = { complete: "success", unmatched: "w
  * export keeps the month visible as incomplete.
  */
 export function CloseReconciliationPage() {
+  const [search] = useSearchParams();
+  const view = search.get("view");
+  if (view === "months") return <MonthsView />;
+  if (view === "manifest") return <ManifestView />;
+  return <CloseChecklistPage />;
+}
+
+function CloseChecklistPage() {
   const { period = "" } = useParams();
   const [search] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;
@@ -94,6 +103,8 @@ function Body({ res, c, dialog, setDialog }: { res: ReadResponse<PeriodClose>; c
         <FactList label="Policy" rows={[["CPA tax-policy reference", "Not set"], ["Difference evidence", "Fees, timing, refunds and currency, in QuickBooks"]]} />
         <p>Opening this does not close the books.</p>
         <LinkButton variant="secondary" to="/finance/settlements/COMM-DEMO-D">Payout reconciliation</LinkButton>
+        <LinkButton variant="secondary" to="/finance/close/2026-10?view=months">Months and revisions</LinkButton>
+        <LinkButton variant="secondary" to="/finance/close/2026-10?view=manifest">Dry-run manifest</LinkButton>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
       <SourceDialog open={Boolean(dialog && typeof dialog === "object")} title={dialog && typeof dialog === "object" ? dialog.source : ""} url={null} onClose={() => setDialog(null)} />

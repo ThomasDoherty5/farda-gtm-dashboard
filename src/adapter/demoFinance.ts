@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
+import { manifestDemo, monthsDemo } from "@/fixtures/financeClose";
 import { respondWith } from "./demoViews";
 import { financeDashboardDemo, ledgerDemo, payableDemo, periodCloseDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
 
@@ -106,6 +107,10 @@ export function createDemoFinance() {
           return payable(request as ReadRequest<{ payableId: string }>);
         case "financeDashboard":
           return dashboard(request as ReadRequest<{ scenario?: string }>);
+        case "monthsHistory":
+          return respondWith(request, { datasetKey: "finance-months-demo" as const, months: monthsDemo }, { dataVersion: "months-demo@1" });
+        case "reportManifest":
+          return respondWith(request, manifestDemo(), { dataVersion: "manifest-demo@1" });
         case "periodClose":
           return close(request as ReadRequest<{ period: string; scenario?: string }>);
         default:

@@ -5,6 +5,7 @@ import { createDemoApprovals } from "./demoApprovals";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
+import { createDemoReconciliation } from "./demoReconciliation";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
 import { createDemoOffers, readAssessment } from "./demoScorecards";
@@ -24,18 +25,19 @@ import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey 
  * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
  * Overview capabilities report "unverified" so nothing can look sent or paid.
  */
-export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number } = {}): FardaAdapter {
+export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
-  const ops = createDemoOps();
+  const ops = createDemoOps({ actorRole: opts.actorRole });
   const finance = createDemoFinance();
   const offers = createDemoOffers();
   const batch = createDemoBatch();
   const collaboration = createDemoCollaboration();
   const settings = createDemoSettings();
   const lifecycle = createDemoLifecycle();
+  const reconciliation = createDemoReconciliation();
 
   return {
     environment: "demo",
@@ -44,6 +46,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "nightlyReconciliation") return reconciliation.read(request) as ReadResponse<T>;
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
       const lifecycleView = lifecycle.read(request);
@@ -76,6 +79,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (reconciliation.handles(request)) return reconciliation.submit(request as ActionRequest<never>);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
       const opsResult = ops.submit(request);
