@@ -8,7 +8,7 @@ import { SearchField } from "./Search";
 import { Skeleton, SkeletonCard, SkeletonRow } from "./Skeleton";
 import { SourceFreshness } from "./SourceFreshness";
 import { StepCard } from "./StepCard";
-import { Toast, ToastProvider, useToast } from "./Toast";
+import { SUCCESS_TOAST_MS, Toast, ToastProvider, useToast } from "./Toast";
 import { Toggle } from "./Toggle";
 import { Tooltip } from "./Tooltip";
 
@@ -92,6 +92,22 @@ describe("Toggle (6:459)", () => {
   });
 });
 
+describe("disabled and read-only states match what is announced", () => {
+  it("a disabled switch that is on is drawn on", () => {
+    const { container } = render(<Toggle label="Policy" checked onChange={() => undefined} disabledReason="Owned elsewhere." />);
+    expect(screen.getByRole("switch")).toHaveAttribute("aria-checked", "true");
+    expect(container.querySelector("[data-visual]")).toHaveAttribute("data-visual", "on");
+    const off = render(<Toggle label="Other" checked={false} onChange={() => undefined} disabledReason="Owned elsewhere." />);
+    expect(off.container.querySelector("[data-visual]")).toHaveAttribute("data-visual", "off");
+  });
+  it("a read-only checkbox is marked so it is styled as not clickable", () => {
+    const { container } = render(<Checkbox label="Consent" checked readOnly />);
+    expect(container.firstElementChild).toHaveAttribute("data-readonly", "true");
+    const normal = render(<Checkbox label="Plain" checked onChange={() => undefined} />);
+    expect(normal.container.firstElementChild).not.toHaveAttribute("data-readonly");
+  });
+});
+
 describe("Tooltip (6:714)", () => {
   it("opens on focus and hover, describes its trigger, and Escape dismisses without moving focus", async () => {
     render(<Tooltip label="Only the owning tool can edit this record.">{(p) => <button {...p}>Edit</button>}</Tooltip>);
@@ -123,10 +139,31 @@ describe("Toast (6:710)", () => {
     await userEvent.click(screen.getByText("bad"));
     expect(screen.getByRole("status")).toHaveTextContent("Saved.");
     await vi.advanceTimersByTimeAsync(6100);
+    expect(screen.getByText("Saved.")).toBeInTheDocument(); // no longer cleared at the old 6 seconds
+    await vi.advanceTimersByTimeAsync(SUCCESS_TOAST_MS);
     expect(screen.queryByText("Saved.")).toBeNull();
     expect(screen.getByRole("alert")).toHaveTextContent("Not saved.");
     await userEvent.click(screen.getByRole("button", { name: "Dismiss notification" }));
     expect(screen.queryByRole("alert")).toBeNull();
+    vi.useRealTimers();
+  });
+});
+
+describe("Toast timing (WCAG 2.2.1)", () => {
+  it("a success toast outlasts 6 seconds and waits while hovered or focused", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const Trigger = () => { const t = useToast(); return <button onClick={() => t.notify("success", "Saved.")}>ok</button>; };
+    render(<ToastProvider><Trigger /></ToastProvider>);
+    await userEvent.click(screen.getByText("ok"));
+    expect(SUCCESS_TOAST_MS).toBeGreaterThanOrEqual(20000);
+    await userEvent.hover(screen.getByText("Saved."));
+    await vi.advanceTimersByTimeAsync(SUCCESS_TOAST_MS * 3);
+    expect(screen.getByText("Saved.")).toBeInTheDocument();
+    await userEvent.unhover(screen.getByText("Saved."));
+    await vi.advanceTimersByTimeAsync(SUCCESS_TOAST_MS - 1000);
+    expect(screen.getByText("Saved.")).toBeInTheDocument(); // the countdown restarted in full
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(screen.queryByText("Saved.")).toBeNull();
     vi.useRealTimers();
   });
 });

@@ -104,7 +104,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
       <div className={styles.titleRow}>
         <div className={styles.heading}>
           <h1 id="evidence-title">Watch the routine. Keep the evidence.</h1>
-          <p>Selected review · lifestyle-only Instagram or TikTok footage · source access to validate</p>
+          <p>Selected review · lifestyle-only Instagram or TikTok Shop footage · source access to validate</p>
         </div>
         <Button variant="secondary" style={{ minWidth: 180 }} loading={save.isPending} disabledReason={saveBlocked} onClick={onSave}>Save partial review</Button>
         <Button style={{ minWidth: 164 }} disabledReason={watchedBlocked} reasonFor={watchedReasonId}>Mark watched</Button>
@@ -169,7 +169,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
         </div>
         <DataTable
           caption="Time-coded review evidence"
-          columns={[{ label: "Observation", width: "20.8%" }, { label: "Playback interval", width: "15.2%" }, { label: "Evidence status", width: "15.2%" }, { label: "Record" }]}
+          columns={[{ label: "Observation", width: "20.833%" }, { label: "Playback interval", width: "15.224%" }, { label: "Evidence status", width: "15.224%" }, { label: "Record" }]}
           testId="observation-table"
           rows={(Object.keys(CATEGORY_LABEL) as ObservationCategory[]).map((category) => {
             const here = observations.filter((o) => o.category === category);
@@ -217,7 +217,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
             </li>
           ))}
         </ul>
-        <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider evidence.</p>
+        <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider <br className="wide-break" />evidence.</p>
       </section>
       <p className={styles.small}>Evidence-review template · no source footage or metrics are fabricated · full, partial, captions-only and inaccessible states remain distinct.</p>
       <EvidenceDisputes res={res} record={record} draftDirty={dirty} draftMedia={validUrl} />

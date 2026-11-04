@@ -44,26 +44,65 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Toast | 6:710 | 2 | `Toast`, `ToastProvider`, `useToast` (success polite and self-clearing; error alert, kept until dismissed) | Built. Screens keep their in-flow `role="status"` lines, which sit next to the control that acted |
 | Tooltip | 6:714 | 1 | `Tooltip` (hover, focus, Escape; describes its trigger) | Built. Disabled reasons stay visible text, never tooltip-only |
 
-## Acquisition comparison (source 102:555)
+## Measured comparison, first half of the screens (fidelity sweep 1, THO-330)
+
+Measured 2026-11-03 against the copy `z9knjMdQ3kxL6Fblvu1tKc` (see `figma-access-gap.md`), at threshold 0.1, DPR 1, the design's exact width of 1440, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, demo fixtures. Run `npm run build`, then `npx vite preview --port 4181` and `BASE_URL=http://localhost:4181 node scripts/compare-figma.mjs <route> .handoff/figma/<capture>.png 0.1`. Use a production build: `vite dev` can't serve the `@fontsource` files through the shared `node_modules` link, falls back to a system font and reads about 5%.
+
+Every row meets the pass mark (0.5% of pixels) except where "judged over" says why the page height differs. For those, the percentage is over the top of the page, above the first intentional change, and the screen is judged on its geometry tests. These are fixture-complete measurements against a copy of the design; the mark is agreed by Thomas but not yet by Kevon, so this is not a release pass. The agent that wrote the code looked at the diff images of the screens it changed (text and edge antialiasing, the copy differences listed below). The design owner hasn't.
 
 | Source | Route | Size | Pixels different |
 | -- | -- | -- | -- |
-| 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.432% |
+| 10:217 | `/overview` | Matches (1440×1381) | 0.219% |
+| 6:234 | `/approvals/demo-approval-042` | Matches (1440×1609) | 0.432% |
+| 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
+| 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (added evidence controls) | 0.162%, judged over the top 1030px |
+| 102:555 | `/creators/discovery` | Matches (1440×2065) | 0.431% |
 | 102:364 | `/creators/demo-creator-1/evidence/demo-evidence-1` | 2517 tall, not 2211 (2261 before the disagreement section was added; see below) | 0.218%, measured over the top 1450px |
 | 102:74 | `/creators/pipeline` | Matches (1440×2552) | 0.264% |
 | 6:24 | `/creators/social-cat?view=board` | Matches (1440×1658) | 0.270% |
 | 9:143 | `/creators/tiktok?view=board` | Matches (1440×1712) | 0.270% |
-| 23:275 | `/creators/social-cat?view=dashboard` | 2601 tall, not 2583 (see below) | 0.266%, measured over the top 2380px; 1.592% over the shared height |
+| 23:275 | `/creators/social-cat?view=dashboard` | 2601 tall, not 2583 (read-only history reason wraps, +18) | 0.221%, judged over the top 2380px |
 | 23:440 | `/creators/tiktok?view=dashboard` | Matches (1440×2399) | 0.229% |
-| 38:131 | `/creators/social-cat/recruitment` | 2737 tall, not 2719 (see below) | 0.356%, measured over the top 2150px; 2.226% over the shared height |
+| 38:131 | `/creators/social-cat/recruitment` | 2737 tall, not 2719 (gate reason wraps, +18) | 0.356%, judged over the top 2150px |
 | 38:348 | `/creators/tiktok/invitations/new` | Matches (1440×2658) | 0.298% |
 | 66:821 | `/batches/demo-batch-tt-024` | Matches (1440×2298) | 0.230% |
 | 9:299 | `/collaborations/demo-collaboration-1?tab=overview` | Matches (1440×1675) | 0.228% |
 | 9:436 | `/collaborations/demo-collaboration-1?tab=content` | Matches (1440×1599) | 0.233% |
+| 3:6 | `/launch?view=snapshot` | Matches (1440×1282) | 0.434% |
+| 14:74 | `/launch?view=control` | Matches (1440×2028) | 0.174% |
+| 14:377 | `/analytics/attribution` | Matches (1440×2041) | 0.416% |
+| 30:349 | `/analytics/paid-media` | Matches (1440×1815) | 0.203% |
+| 30:550 | `/campaigns/demo-campaign-first-wave?tab=funnel` | Matches (1440×1777) | 0.208% |
+| 30:721 | `/analytics/customer-journey` | Matches (1440×1648) | 0.269% |
+| 37:74 | `/creators/demo-creator-1/assessments/demo-assessment-content` | Matches (1440×2125) | 0.375% |
+| 37:251 | `…/assessments/demo-assessment-tiktok` | Matches (1440×2143) | 0.386% |
+| 65:634 | `/offers/demo-offer-1` | Matches (1440×2080) | 0.407% |
+| 65:814 | `…/assessments/demo-assessment-sc-commerce` | Matches (1440×2284) | 0.210% |
+| 23:73 | `/content` | Matches (1440×1880) | 0.343% |
+| 25:166 | `/creators/watchlist` | Matches (1440×1671) | 0.233% |
+| 25:307 | `/runs/demo-run-hourly` (a tabless run path) | Matches (1440×1791) | 0.190% |
+| 25:481 | `/content/P-001` | Matches (1440×1364) | 0.364% |
 
-## Proposed pass mark
+What the sweep changed, found by reading the diff images against the capture:
 
-Proposed for THO-330, not yet agreed. At threshold 0.1, DPR 1 and the design's exact width:
+- The campaign funnel highlighted Overview in the navigation; Figma highlights Creators. The lifecycle merge had put `campaigns` back under Overview.
+- Figma lays tables and field rows out at the card's 1248px content width. A bordered card leaves 1246px, so every column sat 1px or 2px left. Analytics tables, the offer's field row, and the scorecard evidence and gate grids now extend the 2px at 1180px and wider.
+- The two commerce tables (`cell12`) had a semibold first cell, muted other cells and no left padding; Figma has regular ink text, 12px padding everywhere.
+- Evidence: "TikTok footage" is "TikTok Shop footage" as in Figma, and the observation columns are 260, 190 and 190px exactly.
+- Social Cat dashboard and recruitment: 16px between the offer buttons, not 10px, and the dashboard's network buttons are 224, 112 and 100px wide.
+- Scorecard context row text sits at the top of the row, as in Figma; the launch snapshot's "Open creator workspace" link too, and the decision ages sit in a 72px column.
+
+What stays above 0.4% is text and edge antialiasing plus copy differences (below), and the placement of figures inside bar charts, which a person should check.
+
+The lowest pages sit at 0.15 to 0.2% even where every box matches, which looks like the floor from text antialiasing between Figma's renderer and Chromium. That's an inference from the diff images, not something checked.
+
+### Page heights on other platforms
+
+The Linux CI runner lays text out slightly narrower than macOS, so a line that overflows its box by a few pixels on macOS can fit on Linux and make a page 18px shorter. The cause is deterministic and was found by comparing each text block's single-line width with its box. Three notes overflowed by a word (0.2% to 1.4%): the invitation's route note, the batch's illustrative-batch note and the evidence page's denominator note. Each now has a line break (`wide-break`, 1180px and wider) before its last word, so the line count is the same on every platform, and the invitation, batch and evidence height checks are exact again. Paid media's note already has a 36px minimum height. Not changed: Automation runs' height check in `e2e/settings.spec.ts` still allows one 18px line (second fidelity sweep's screen).
+
+## Pass mark
+
+For THO-330. Thomas Doherty agreed this mark on 2026-11-04 and confirmed the copy of the Figma file is current; Kevon Baha hasn't confirmed either. At threshold 0.1, DPR 1 and the design's exact width:
 
 - Page size matches exactly, unless a listed intentional difference changes it.
 - At most 0.5% of pixels differ, checked with `scripts/compare-figma.mjs <path> <capture> 0.1 0.5`.
@@ -80,13 +119,9 @@ Capture: 1440×1381, DPR 1, Chromium headless, Inter 400/500/600 loaded, America
 
 Same capture settings as Overview. The approval and run fixtures reproduce the Figma samples. The sample record is archived, so it shows no decision panel.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 6:234 | `/approvals/demo-approval-042` | Matches (1440×1609) | 0.432%, including the changed decision copy |
-| 5:13 | `/runs/demo-run-approval?tab=approval` | Matches (1440×1635) | 0.153% |
-| 5:156 | `/runs/demo-run-uncertain?tab=recovery` | 1806 tall, not 1672 (see below) | 4.182%, measured over the shared height |
+The measured table is in "Measured comparison, first half of the screens" above.
 
-The recovery figure is high because everything below the added evidence controls sits lower, not because those panels differ.
+The recovery page is 134px taller because of the added evidence controls, so below them every panel sits lower. The table above judges it over the top 1030px, above the first change.
 
 ## Settings and automation comparison (sources 7:876, 7:1085, 14:637, 14:911, 66:641)
 
@@ -217,40 +252,23 @@ The native 390 and 1024 Operations designs are built with `/operations` under TH
 
 Same capture settings as Overview, from Thomas's copy of the file (see `figma-access-gap.md`), measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 3:6 | `/launch?view=snapshot` | Matches (1440×1282) | 0.481% |
-| 14:74 | `/launch?view=control` | Matches (1440×2028) | 0.409% |
-| 14:377 | `/analytics/attribution` | Matches (1440×2041) | 0.416% |
-| 30:349 | `/analytics/paid-media` | Matches (1440×1815) | 0.368% |
-| 30:550 | `/campaigns/:campaignId?tab=funnel` | Matches (1440×1777) | 0.274% |
-| 30:721 | `/analytics/customer-journey` | Matches (1440×1648) | 0.269% |
+The measured table is in "Measured comparison, first half of the screens" above.
 
 What remains is text and edge antialiasing, plus the differences listed below. A person hasn't yet checked the diff images. Run the comparison with a dev server that can read the fonts: if the `node_modules` symlink points outside the worktree, Vite refuses to serve `@fontsource` files, the page falls back to a system font and every figure here doubles or worse. `e2e/analytics.spec.ts` checks each page's height, the KPI card size and the weekly chart's bar scale on every run.
 
 ## Scorecards and offer comparison (sources 37:74, 37:251, 65:634, 65:814)
 
-Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are above the proposed 0.5% mark and are reported as not met.
+Same capture settings as the analytics screens. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 37:74 | `/creators/:creatorId/assessments/demo-assessment-content` | Matches (1440×2125) | 0.457% |
-| 37:251 | `…/assessments/demo-assessment-tiktok` | Matches (1440×2143) | 0.479% |
-| 65:634 | `/offers/:offerId` | Matches (1440×2080) | 0.638%, not met |
-| 65:814 | `…/assessments/demo-assessment-sc-commerce` | Matches (1440×2284) | 0.534%, not met |
+The measured table is in "Measured comparison, first half of the screens" above.
 
-The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The pixel gap on the other two is text and form-control antialiasing, with native selects drawn slightly differently from Figma's text fields.
+The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The offer's remaining gap is text and form-control antialiasing, with native selects drawn with a chevron where Figma's text fields have none.
 
 ## Content monitor comparison (sources 23:73, 25:166, 25:307, 25:481)
 
-Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are just above the proposed 0.5% mark and are reported as not met.
+Same capture settings as the analytics screens. Every page size matches exactly.
 
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 23:73 | `/content` | Matches (1440×1880) | 0.512%, not met |
-| 25:166 | `/creators/watchlist` | Matches (1440×1671) | 0.509%, not met |
-| 25:307 | `/runs/demo-run-hourly` (a tabless run path) | Matches (1440×1791) | 0.428% |
-| 25:481 | `/content/P-001` | Matches (1440×1364) | 0.364% |
+The measured table is in "Measured comparison, first half of the screens" above.
 
 The hourly run shares `/runs/:runId` with the approval and recovery views. A `tab` of `approval` or `recovery` selects those; no tab selects the hourly monitor, and a run that isn't an hourly monitoring run says so.
 
@@ -273,11 +291,12 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Source dialog copy | "This prototype previews the handoff and performs no external action." | Says whether a verified link exists | The source-link profile forbids invented destinations, and this isn't the prototype |
 | Lifestyle only | A button with no stated behavior | Opens a dialog explaining the locked research scope | CTRL-164 requires an explanation, and the scope must not be widenable |
 | Start live discovery | Disabled button | Disabled, with the reason beside it | CTRL-165 requires a visible reason |
+| Post performance GMV note (25:481) | One fixed sentence that GMV is retained separately | Reads the post's GMV state: a reported figure with its definition and window, unknown (not $0) for a TikTok post with none, or does not apply to an Instagram post. The net sales card says "not GMV" | FE07-05: TikTok GMV is never retained net sales, and a missing GMV must not read as zero. The demo GMV for P-001 is synthetic |
 | Publishing filter | A button | A radio dialog, and a note that the demo's counts don't split by network | The demo batch isn't split by network, so no result is faked |
 | Capacity filter | A button | Filters the capacity table by source | CTRL-162 requires the matching record set to recompute |
 | Sample batch preview | Overlay 79:2673 | Dialog built from the same wording, with figures derived from the data | Keeps the text and numbers in step |
 | Orders bubbles | Fixed sizes | Fixed sizes | Matches Figma, but sizes aren't data-driven; the labels carry the values |
-| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding about 50px | CTRL-154 requires a visible reason. This is why the page is 2261 tall, not 2211 before the disagreement section (VE-08) adds 256px |
+| Blocked-action reasons (evidence) | Disabled Add observation and Mark watched with no reason | The reasons are listed as text under the buttons, adding 56px | CTRL-154 requires a visible reason. This is why the page is 2267 tall, not 2211, before the disagreement section (VE-08) is added |
 | Video URL field | Placeholder text "Awaiting validated source URL" shown as if populated | A real input, empty at first, with that text as the placeholder | The field has to accept an address |
 | Checkout route | Fixed select appearance | Native select | Keyboard and screen reader behavior come for free |
 | Observation rows | No way to undo | A Remove link on each recorded observation | Drafts need correcting before they are saved |
@@ -299,7 +318,10 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Metrics as of | A ghost button | Opens a read-only disclosure of source, observation time, timezone, coverage and freshness | CTRL-205 |
 | Campaign cohort | One button | Two named cohorts, First-wave and Launch A monitoring. The second shows an empty state | CTRL-207: the handoff says the cohorts are separate, and no figure is invented for Launch A |
 | Campaign tabs other than funnel | None | "This tab is not built" | Only the funnel has a design source |
-| Primary navigation on `/campaigns` | Overview section | Creators section | Figma's campaign pages are in the Creators group (found by the pixel diff) |
+| Primary navigation on `/campaigns` | Creators section | Creators section | Matches Figma (found by the pixel diff). The lifecycle merge had moved it to Overview; `nav.ts` has it under Creators again |
+| Social Cat history tabs | The note ends after "tracked independently." | A second sentence says the history tabs are read-only and no gifted-only, paid or hybrid acquisition can start | The disabled tabs' reason is visible and also the tabs' accessible description. Adds one 18px line |
+| Social Cat recruitment gates | The note ends after "observed performance." | A second sentence says sample, content and rights stay locked until each one's own gate is met | Same. Adds one 18px line |
+| Publishing network filter on the Social Cat dashboard | All three buttons look the same | The selected network is violet, and the buttons are `aria-pressed` | The current filter has to show. All publishing networks is selected at first |
 | Commerce bar values | Unformatted ("16000") | "16,000" | Readability |
 | Historical scorecard "Hold candidate" | Normal secondary button | Disabled look, with the reason in the note below it | CTRL-064: a historical snapshot has no current opportunity to hold |
 | Assessment model buttons | Buttons that look like model choices | Links between the read-only snapshots, with `aria-current` on the current one | The model follows verified checkout, not a client choice (FHC-04) |
@@ -327,6 +349,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Pipeline panel padding | 24px with 1px border | 24px, with 22px on the right | Gives the design's 1248px content width inside the 1296px panel |
 | Creator cost and sales cards | "—" for Cost per live video and Attributed sales | "N/A", with the same context text | An em dash doesn't say whether the value is unknown or not applicable; the context line gives the reason |
 | Lifecycle board "Paid UGC · $150 proposed" | A paid fee proposal card | "12% commission · proposed" | New acquisition is commission-only; a card must not propose an upfront fee |
+| Channel route on both dashboards (23:275, 23:440) | One line of source, network, checkout and provider (Social Cat); source and publishing badges (TikTok) | Labeled parts for Source, Publishing, Checkout and Payout owner on both, and "A TikTok post is not a TikTok Shop order" on Social Cat. A "Hourly monitoring" link beside "Daily sourcing" on both dashboards and boards | FE02-03 and FE02-05: the four are different facts, and daily acquisition and hourly monitoring are different destinations. The Social Cat provider is illustrative |
 | Lifecycle board pay approval | "Content approved · 1 video" | "Historical fee · 1 video", with the note "Founder decision required." unchanged | The only fee left is an accepted historical obligation, and the card says so |
 | Owner and layout buttons | "All owners" and "Board view" buttons with no stated behavior | Radio dialogs: owners (counts follow the owner) and Board or List layout, both in the URL | CTRL-024 and CTRL-025; the list layout holds the same records |
 | Social Cat network buttons | Three buttons with no selected state | The same buttons with a pressed state, in the URL | CTRL-052–054 need a visible selection that recomputes the figures |
@@ -358,6 +381,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Collaboration commands (Queue next action, Queue feedback, Request revision, Reject, Close, Suppress, Create new) | Buttons | Dialogs that validate (a reason, an allowed outcome, the current submission, revision rounds left) and queue a request for approval through the adapter, with an expected version and idempotency key. Nothing is sent, closed or suppressed | CTRL-029, 032–034, 036, 039, 040: a queued request is not an approved one, and approved is not sent |
 | Collaboration "Approve content" | Disabled button | Disabled, with the page's own sentence "Acceptance remains blocked while the required license is missing." as its description | CTRL-038; derived from the rights data, so it opens when a signed license exists |
 | Collaboration tabs | Overview, Brief, Content, Messages, Payments on one frame; Collaboration, Content review, Rights, Payments on the other | The same tabs, each in the URL (`?tab=`). Brief, Messages, Payments and Rights have no Figma frame: they show only data the record holds and say so | CTRL-030, 031, 037 need a target for each tab; nothing is invented beyond the data |
+| Posting timing on the overview | Posting due, grace period and review date for the one example | The same rows for a collaboration whose accepted terms commit a post, with a short "Due today" style suffix on the due date. A collaboration whose terms commit no post (`/collaborations/demo-collaboration-2`, no Figma frame) shows no due date, grace period or review date; it shows the observation window, the retained sample cost and an observe-then-close branch, offers no posting reminder, and has no content review | FE03-04: posting and no-post timing apply only when the accepted terms create the obligation. The demo date comes from the record (`asOf`), not the browser clock. The voluntary record is synthetic |
 | Review after | A typed date | Derived from the posting due date and the grace period | The two inputs can't disagree with the result |
 | Agreed fee on COL-SC-042 | "USD 150" | "USD 150", read-only, labeled as an accepted historical term in the page's own context box | The one place a fee may appear; no control can create or repeat it |
 | Queued requests | None | A short list "Requests awaiting approval" appears under the context box once something is queued | The queue must be visible, or a queued action looks like nothing happened |
