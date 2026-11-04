@@ -26,23 +26,23 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Nav item | 2:85 | 2 | `Shell` nav links | Built |
 | Alert | 6:616 | 4 | `Alert` (`state`) | Built |
 | Empty state | 6:649 | 4 | `EmptyState` (`state`) | Built |
-| Skeleton | 6:659 | 2 | `SkeletonCard` | Card built; Row pending |
-| Modal | 6:687 | 3 | `Dialog` | Built from the Overview dialogs; set not read yet |
+| Skeleton | 6:659 | 2 | `Skeleton`, `SkeletonCard`, `SkeletonRow` (`src/components/EmptyState.tsx`, re-exported from `Skeleton.tsx`) | Built (Card is on every route's loading state; Row has no screen yet, since no list loads on its own) |
+| Modal | 6:687 | 3 | `Modal` (`state` confirm, access, reconcile; `busy`; `confirmDisabledReason`), a 460px compact confirmation. `Dialog` stays the 560px form dialog from 51:1945 | Built. Read from 6:687: Confirm and Access say "Continue", Reconcile says "Open source". No screen uses it yet; the existing two-button confirms put the primary action first, which is a different order |
 | Input | 6:404 | 5 | `Field`, `TextField`, `SelectField` (label, 48px field, help or error text) | Default, filled and error built; disabled and focus not checked |
-| Search | 6:414 | 3 | Not built | Pending |
+| Search | 6:414 | 3 | `SearchField` (`label`, `placeholder`, `fluid`). Default is the placeholder, Query is the value, Focus is the 2px violet border on `:focus-within` | Built; replaces the three local copies (Automation runs, TikTok worklist, Content monitor) |
 | Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked. The launch and performance pages use a primary-button variant of it (`WorkspaceTabs`, from 14:100) |
-| Checkbox | 6:443 | 4 | Not built | Pending |
-| Toggle | 6:459 | 3 | Not built | Pending |
-| Source freshness | 6:500 | 5 | `Notice` (violet or warning) for the Operations strip | Built for Operations; other states not checked |
+| Checkbox | 6:443 | 4 | `Checkbox` (`checked`, `mixed`, `disabled`, `readOnly`, `describedBy`) over a native input | Built; replaces the locked policy list. The settlement match list keeps its own multi-line rows |
+| Toggle | 6:459 | 3 | `Toggle` (`role="switch"`, `disabledReason`) | Built. No screen uses a switch: the design draws filters such as Assigned to me as pressed buttons |
+| Source freshness | 6:500 | 5 | `SourceFreshness` (`state` live, synced, stale, unknown, error). Unknown never shows a time. The page-level strip stays `Notice` (violet or warning) | Built; all five states unit-tested. No screen uses the card yet |
 | KPI card | 6:516 | 3 | `Kpi`, `KpiRow` | Built from ACQ03. Overview still uses its own cards |
 | Table cell | 6:528 | 3 | `DataTable` | Text cell built |
 | Table row | 6:557 | 4 | `DataTable` | Default built |
 | Table header | 6:564 | 1 | `DataTable` | Built |
-| Step | 6:595 | 5 | Not built | Pending |
+| Step | 6:595 | 5 | `StepCard` (`state` pending, approval, running, completed, failed) | Built. The row form is Lifecycle/Step 5:3 below; no screen uses the card |
 | Lifecycle/Step | 5:3 | Not counted in the 21 | `Step` in `RunPage` | Built from instances in 5:13 and 5:156 |
-| Drawer | 6:703 | 1 | Not built | Pending |
-| Toast | 6:710 | 2 | Not built | Pending |
-| Tooltip | 6:714 | 1 | Not built | Pending |
+| Drawer | 6:703 | 1 | `Drawer` (title, badge, detail rows, note, action) as a right-docked modal dialog | Built. No screen opens one yet |
+| Toast | 6:710 | 2 | `Toast`, `ToastProvider`, `useToast` (success polite and self-clearing; error alert, kept until dismissed) | Built. Screens keep their in-flow `role="status"` lines, which sit next to the control that acted |
+| Tooltip | 6:714 | 1 | `Tooltip` (hover, focus, Escape; describes its trigger) | Built. Disabled reasons stay visible text, never tooltip-only |
 
 ## Measured comparison, first half of the screens (fidelity sweep 1, THO-330)
 
