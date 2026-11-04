@@ -1,0 +1,8 @@
+/* Render-error state. Reuses the empty-state surface (Figma component set 6:649) and tokens; adds no new visual language. */
+.panel { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-16); max-width: 560px; padding: var(--space-24); background: var(--color-subtle); border: 1px solid var(--color-border); border-radius: var(--space-24); }
+.title { margin: 0; font: var(--text-h3); color: var(--color-ink); }
+.title:focus { outline: none; }
+.title:focus-visible { outline: 2px solid var(--color-ink); outline-offset: 4px; }
+.body { margin: 0; font: var(--text-body); color: var(--color-muted); }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.standalone { display: block; max-width: 1440px; margin: 0 auto; padding: var(--space-24); }
