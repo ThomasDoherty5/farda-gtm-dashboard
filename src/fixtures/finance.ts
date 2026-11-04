@@ -143,3 +143,112 @@ export const PAYABLE_STAGES: { key: PayableDetail["stage"]; title: string; note:
   { key: "posted", title: "Posted", note: "QuickBooks entry linked" },
   { key: "reconciled", title: "Reconciled", note: "Ledger matched" },
 ];
+
+/**
+ * Finance dashboard and close fixtures (Figma sources 7:510, 7:683, 12:1006) — SYNTHETIC management figures for a 30-day window.
+ * Net revenue ties to the Overview dataset's $12,596. YTD and calendar-month figures are unknown ("Awaiting data"), never zero.
+ * The historical $70,000 raised is context only; runway always uses verified current cash.
+ */
+export type FinanceDashboard = {
+  datasetKey: "finance-demo";
+  version: string;
+  period: { label: string; days: 30 };
+  /** Amounts are minor units. YTD is unknown until a source report arrives. */
+  pnl: { revenue: number; cogs: number; opex: number; ytd: ProvenanceValue<number> };
+  cash: ProvenanceValue<number>;
+  cashAsOf: string;
+  historicalRaised: number;
+  /** Average net cash out over the observation window. Null months of history = insufficient history. */
+  burn: ProvenanceValue<number>;
+  burnWindowMonths: number;
+  burnHistoryMonths: number;
+  inventoryValue: number;
+  accountsPayable: number;
+  salesTaxPayable: number;
+  forecastRevenue: number;
+  contributionPerOrder: number;
+  samplesPlanned: number;
+  closeSummary: { period: string; label: string; unmatchedPayouts: number; cpaSignOff: string };
+  /** Month-end cash for the months before now, oldest first (Jul to Oct). Observed, not forecast. */
+  cashHistory: { month: string; minor: number }[];
+  costBreakdown: { label: string; minor: number }[];
+  payouts: { channel: string; matched: number; needsReview: number }[];
+};
+
+export const financeDashboardDemo = (scenario?: string): FinanceDashboard => ({
+  datasetKey: "finance-demo",
+  version: "fin1",
+  period: { label: "30 Sep–29 Oct 2026", days: 30 },
+  pnl: { revenue: 1259600, cogs: 441000, opex: 990600, ytd: unknown("YTD_REPORT_NOT_RECEIVED") },
+  cash: known(4620000),
+  cashAsOf: "Oct 29",
+  historicalRaised: 7000000,
+  burn: scenario === "insufficient" ? unknown("INSUFFICIENT_HISTORY") : scenario === "zeroburn" ? known(0) : known(580000),
+  burnWindowMonths: 3,
+  burnHistoryMonths: scenario === "insufficient" ? 1 : 3,
+  inventoryValue: 832000,
+  accountsPayable: 480000,
+  salesTaxPayable: 94200,
+  forecastRevenue: 1400000,
+  contributionPerOrder: 1420,
+  samplesPlanned: 46,
+  closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: 2, cpaSignOff: "Pending" },
+  cashHistory: [{ month: "Jul", minor: 6360000 }, { month: "Aug", minor: 5780000 }, { month: "Sep", minor: 5200000 }, { month: "Oct", minor: 4620000 }],
+  costBreakdown: [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
+  payouts: [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
+});
+
+/** Runway in months from verified cash and average burn. Null with a reason when it can't be computed honestly. */
+export function runwayOf(d: FinanceDashboard): { months: number | null; reason: string | null } {
+  if (d.burn.state !== "known" || d.burn.value === null || d.burnHistoryMonths < d.burnWindowMonths) return { months: null, reason: `Burn needs ${d.burnWindowMonths} months of history; ${d.burnHistoryMonths} available.` };
+  if (d.cash.state !== "known" || d.cash.value === null) return { months: null, reason: "Current cash is unknown." };
+  if (d.burn.value <= 0) return { months: null, reason: "Cash is not being spent, so there is no runway to count." };
+  return { months: d.cash.value / d.burn.value, reason: null };
+}
+
+export type CloseState = "complete" | "unmatched" | "waiting" | "blocked";
+export type CloseCheck = { check: string; owner: string; state: CloseState; label: string };
+export type CloseExceptionRow = { payout: string; expected: number; difference: number };
+export type PeriodClose = {
+  datasetKey: "finance-demo";
+  version: string;
+  period: string;
+  label: string;
+  checks: CloseCheck[];
+  closeOwner: string;
+  cpaReview: string;
+  status: "open" | "closed" | "reopened" | "revised";
+  exceptions: CloseExceptionRow[];
+  /** Report package: each report is "not generated" until the close and export complete. */
+  reports: { name: string; state: string }[];
+  exportFailed: boolean;
+};
+
+export const periodCloseDemo = (period: string, scenario?: string): PeriodClose | null => {
+  if (period !== "2026-10") return null;
+  const failed = scenario === "exportfailed";
+  return {
+    datasetKey: "finance-demo",
+    version: "close1",
+    period,
+    label: "October",
+    checks: [
+      { check: "Sales, fees and refunds posted", owner: "Finance", state: "complete", label: "Complete" },
+      { check: "Inventory & sample COGS checked", owner: "Finance", state: "complete", label: "Complete" },
+      { check: "Creator and media costs posted", owner: "Finance", state: "complete", label: "Complete" },
+      { check: "Sales tax reviewed", owner: "CPA", state: "complete", label: "Complete" },
+      { check: "Payouts matched to bank", owner: "Finance", state: "unmatched", label: "2 unmatched" },
+      { check: "Reports exported to Drive", owner: "Finance", state: failed ? "blocked" : "waiting", label: failed ? "Export failed" : "Waiting" },
+      { check: "CPA sign-off and period close", owner: "CPA", state: "blocked", label: "Blocked" },
+    ],
+    closeOwner: "Finance lead",
+    cpaReview: "Not requested",
+    status: "open",
+    exceptions: [
+      { payout: "TEST-PO-SH-021", expected: 148640, difference: 1200 },
+      { payout: "TEST-PO-TT-018", expected: 64275, difference: 625 },
+    ],
+    reports: ["Profit & loss", "Balance sheet", "Cash flow", "Sales tax", "Inventory valuation", "Payout reconciliation"].map((name) => ({ name, state: failed ? "Export failed: rerun pending" : "Awaiting close" })),
+    exportFailed: failed,
+  };
+};

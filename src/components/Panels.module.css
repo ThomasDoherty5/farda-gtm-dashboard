@@ -70,7 +70,7 @@
   .facts > div { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 }
 .barRows { display: flex; flex-direction: column; gap: var(--space-20); margin: 0; padding: 0; list-style: none; }
-.barRow { display: grid; grid-template-columns: minmax(0, 110px) minmax(0, 390px) minmax(0, 56px); gap: var(--space-16); align-items: start; }
+.barRow { display: grid; grid-template-columns: var(--bar-cols, minmax(0, 110px) minmax(0, 390px) minmax(0, 56px)); gap: var(--space-16); align-items: start; }
 .barRow > span:first-child { font: var(--text-small); color: var(--color-muted); }
 .barRow > span:nth-child(2) { padding-top: 6px; }
 .barRow > span:last-child { font: var(--text-label); }

@@ -215,6 +215,37 @@ Pending Kevon Baha's confirmation.
 | Founder review | A button | A link to the archived fee approval sample | CTRL-041: navigation only; it neither approves nor pays |
 | Execution | "Execution blocked" badge | The same, with the Pay capability unsupported in the adapter | The provider owns payout. No screen offers a manual Pay action |
 
+## Finance comparison (sources 7:510, 7:683, 12:1006)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All three match the page size.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 7:510 Finance dashboard | `/finance` | Matches (1440×1707) | 0.283% |
+| 7:683 Close and reconciliation | `/finance/close/2026-10` | Matches (1440×1471) | 0.695% |
+| 12:1006 Finance analytics | `/analytics/finance` | Matches (1440×1313) | 0.721% |
+
+The dashboard meets the proposed 0.5% mark; the other two are within about 0.7%, from text and row offsets of a few pixels.
+
+## Finance: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Cash chart | An exported static vector (20:409) | An SVG drawn from the plotted source points at the same geometry (gridlines at $70k, $35k and $0; 120px months; 5px solid line, 4px dashed projection, 7px dot). Labels, the table alternative and the accessible name come from the same numbers | FIN272-06: plotted points, axes and labels must agree. A picture can't be checked against the data |
+| Projection | Always dashed to January | Drawn only when burn has three months of history and is above zero; otherwise omitted, and runway reads N/A with the reason | FIN272-04 and 05: disclose insufficient history; explain N/A for zero or negative burn |
+| Runway and gross margin | Typed text | Derived from cash, burn and the P&L rows (8.0 months, 65.0%) | The numbers can't drift from their sources |
+| Year to date | "Awaiting data" | An unknown value shown as "Awaiting data", never zero | A missing report is not a zero |
+| The $70,000 raised | Beside cash | Shown as context only; runway uses verified current cash | FIN272-05: never hardcode the historical raise as current cash |
+| Last 30 days, View metric definitions | Buttons | Dialogs: the window is fixed, and definitions are read only | Only one window exists in the demo |
+| Open QuickBooks, View report folder, Open close checklist | Buttons | Handoff dialogs saying no verified link exists | The links are fictional |
+| Open reconciliation | A button | A read-only dialog listing unmatched payouts, posting owner, difference evidence and the CPA policy reference ("Not set") | CTRL-171: navigation never closes the books, and no tax rule is invented |
+| Close | Checklist and "4 / 7" | Progress is derived from the checks. There is no close, sign-off or approve control; the capability is held for CPA sign-off and open reconciliation | FE11-03: a count is not a completed close |
+| Reports | "Awaiting close" | The same, and "Export failed: rerun pending" with an incomplete-month notice under `?scenario=exportfailed` | FIN274-06: a failed export never reads as a finished package |
+| Section navigation | Buttons | Month-end and Reports go to the October close, Unit economics to Financial pulse | The manifest has no separate routes for them |
+| Where $12,596 goes | Values typed | The five parts sum to the 30-day receipts, with a test | The breakdown has to reconcile |
+
 ## Shared page components
 
 `src/components/Panels.tsx` holds the page furniture the operations, support and finance screens share: PageHeader, Panel, Notice, FactList, Steps, FlatTable and Meter. Measurements come from Figma frames such as 4:6, 4:171 and 4:317. Panels keep a 24px padding and a 1px border. Figma's content width ignores the border, but using 23px padding made the pixel difference worse, so it is left at 24.

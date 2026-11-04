@@ -1,7 +1,7 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { respondWith } from "./demoViews";
-import { ledgerDemo, payableDemo, settlementDemo, type CommissionLedger, type PayableDetail, type SettlementRecord } from "@/fixtures/finance";
+import { financeDashboardDemo, ledgerDemo, payableDemo, periodCloseDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
 
 const fail = (code: string, message: string, requestId: string, extra: Partial<AdapterErrorBody> = {}): never => {
   throw new AdapterError({ code, message, requestId, correlationId: `demo-${requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", ...extra });
@@ -50,6 +50,18 @@ export function createDemoFinance() {
     return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "executePayment", state: "held", reasonCodes: ["FOUNDER_APPROVAL_PENDING"] }] });
   }
 
+  function dashboard(request: ReadRequest<{ scenario?: string }>): ReadResponse<FinanceDashboard> {
+    const scenario = request.filters.scenario;
+    if (scenario === "unavailable") fail("SOURCE_UNAVAILABLE", "QuickBooks could not be reached.", request.requestId, { retryable: true });
+    const data = financeDashboardDemo(scenario);
+    return respondWith(request, data, { dataVersion: data.version, dataState: scenario === "stale" ? "stale" : scenario === "insufficient" ? "partial" : "ready" });
+  }
+
+  function close(request: ReadRequest<{ period: string; scenario?: string }>): ReadResponse<PeriodClose> {
+    const data = periodCloseDemo(request.filters.period, request.filters.scenario) ?? fail("RECORD_NOT_FOUND", "This accounting period does not exist or was removed.", request.requestId);
+    return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "closePeriod", state: "held", reasonCodes: ["CPA_SIGN_OFF_REQUIRED", "RECONCILIATION_OPEN"] }] });
+  }
+
   function reconcile(request: ActionRequest<ReconcilePayload>): ActionResponse {
     const { settlementId, matches } = request.payload;
     const base = settlementDemo(settlementId) ?? fail("RECORD_NOT_FOUND", "This settlement does not exist.", request.requestId);
@@ -92,6 +104,10 @@ export function createDemoFinance() {
           return settlement(request as ReadRequest<{ settlementId: string }>);
         case "payableDetail":
           return payable(request as ReadRequest<{ payableId: string }>);
+        case "financeDashboard":
+          return dashboard(request as ReadRequest<{ scenario?: string }>);
+        case "periodClose":
+          return close(request as ReadRequest<{ period: string; scenario?: string }>);
         default:
           return null;
       }
