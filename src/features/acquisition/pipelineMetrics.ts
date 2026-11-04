@@ -33,8 +33,10 @@ export function stageRows(sources: SourceFacts[]): StageRow[] {
 export const currentCount = (sources: SourceFacts[], key: CurrentStageKey): number | null => sum(sources.map((s) => s.current[key]));
 export const currentTotal = (sources: SourceFacts[]) => CURRENT_STAGES.reduce((a, stage) => a + (currentCount(sources, stage.key) ?? 0), 0);
 
+/** Send totals, or null when any source has no send data for the route (inbound): N/A, never zeros. */
 export function sendTotals(sources: SourceFacts[]) {
-  const add = (pick: (s: SourceFacts["sends"]) => number) => sources.reduce((a, s) => a + pick(s.sends), 0);
+  if (sources.some((s) => s.sends === null)) return null;
+  const add = (pick: (s: NonNullable<SourceFacts["sends"]>) => number) => sources.reduce((a, s) => a + pick(s.sends!), 0);
   return { approved: add((s) => s.approved), confirmed: add((s) => s.confirmed), uncertain: add((s) => s.uncertain), queued: add((s) => s.queued), replies: add((s) => s.replies), attempts: add((s) => s.attempts), opportunities: add((s) => s.opportunities) };
 }
 

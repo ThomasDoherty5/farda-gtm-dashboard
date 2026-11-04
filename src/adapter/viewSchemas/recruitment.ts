@@ -102,13 +102,17 @@ const sourceFacts = z.object({
   reached: z.array(count.nullable()).length(STAGES),
   /** Median days from the previous stage. Null when timestamps are missing. */
   medianDays: z.array(z.number().nonnegative().nullable()).length(STAGES),
-  /** Only dispatch can be null: an inbound application has no outbound dispatch. Null is not applicable, never zero. */
-  current: z.object(Object.fromEntries(CURRENT_STAGE_KEYS.map((k) => [k, k === "dispatch" ? count.nullable() : count])) as Record<(typeof CURRENT_STAGE_KEYS)[number], typeof count> & { dispatch: z.ZodNullable<typeof count> }),
-  dispatch: z.object({ queued: count, toReconcile: count }),
+  /** Null where the bucket does not exist for the route (inbound has no outbound dispatch): N/A, never zero. */
+  current: z.object(Object.fromEntries(CURRENT_STAGE_KEYS.map((k) => [k, count.nullable()])) as Record<(typeof CURRENT_STAGE_KEYS)[number], ReturnType<typeof count.nullable>>),
+  dispatch: z.object({ queued: count, toReconcile: count }).nullable(),
   closed: z.object({ waiting: count, declined: count, expired: count }),
-  sends: z.object({ approved: count, confirmed: count, uncertain: count, queued: count, replies: count, attempts: count, opportunities: count }),
+  sends: z.object({ approved: count, confirmed: count, uncertain: count, queued: count, replies: count, attempts: count, opportunities: count }).nullable(),
   nativeMilestone: z.enum(["matched", "accepted"]),
   outcomes: z.object({ posts: count, comparablePosts: count, views: count, engagements: count, orders: count, fullyRefundedOrders: count, merchandise: money, refunds: money }),
+}).superRefine((v, ctx) => {
+  // Outbound dispatch is N/A for the whole source or for none of it: a null bucket beside real send counts is a contradiction.
+  const na = [v.current.dispatch === null, v.dispatch === null, v.sends === null];
+  if (na.some((x) => x !== na[0])) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "current.dispatch, dispatch and sends must all be null (no outbound route) or all be present", path: ["current", "dispatch"] });
 });
 
 const pipelineFilterKeys = z.enum(["source", "route", "network", "checkout", "window", "policy"]);
@@ -117,11 +121,10 @@ const pipelineSummary = z.object({
   cohort: z.object({ label: text, asOf: z.string().datetime(), timezone: text, grain: text }),
   filters: z.object({
     source: z.enum(["both", "social-cat", "tiktok-shop"]),
-    /** Inbound applications are a separate cohort from outbound invitations. */
-    route: z.enum(["outbound", "inbound"]),
     network: z.enum(["all", "instagram", "tiktok"]),
     checkout: z.enum(["all", "website", "tiktok-shop"]),
     window: z.enum(["sep-oct", "sep", "oct"]),
+    route: z.enum(["outbound", "inbound"]),
     policy: z.enum(["all", "policy-2026-09", "policy-2026-10"]),
   }),
   /** Filters set to a value the dataset cannot split. The counts do not change for them. */
@@ -132,18 +135,21 @@ const pipelineSummary = z.object({
 
 /* ---------- pipelineBranches ---------- */
 
-/** Terminal paths and optional branches. A null delivered count is unknown (no carrier receipt), never zero. */
+const source = z.enum(["social-cat", "tiktok-shop"]);
 const pipelineBranches = z.object({
-  datasetKey: z.literal("pipeline-branches-demo"),
+  datasetKey: text,
   cohort: text,
-  sources: z.array(z.object({
-    source: z.enum(["social-cat", "tiktok-shop"]),
-    label: text,
-    terminal: z.object({ declined: count, optOut: count, expired: count }),
-    sample: z.object({ accepted: count, requested: count, notRequested: count, stockCostApproved: count, shipped: count, delivered: count.nullable() }),
-    content: z.object({ terms: count, withObligation: count, withoutObligation: count, posted: count, due: count, overdue: count, postedVoluntarily: count, noneYet: count, trackingActive: count }),
-  })),
-  repeatCases: z.array(z.object({ handle: text, prior: z.enum(["declined", "optOut", "expired"]), source: z.enum(["social-cat", "tiktok-shop"]), repeatAllowed: z.boolean(), suppression: z.enum(["preserved", "permanent"]) })),
+  sources: z.array(
+    z.object({
+      source,
+      label: text,
+      terminal: z.object({ declined: count, optOut: count, expired: count }),
+      /** Delivered is null where no carrier receipt exists for the source: unknown, never zero. */
+      sample: z.object({ accepted: count, requested: count, notRequested: count, stockCostApproved: count, shipped: count, delivered: count.nullable() }),
+      content: z.object({ terms: count, withObligation: count, withoutObligation: count, posted: count, due: count, overdue: count, postedVoluntarily: count, noneYet: count, trackingActive: count }),
+    }),
+  ),
+  repeatCases: z.array(z.object({ handle: text, prior: z.enum(["declined", "optOut", "expired"]), source, repeatAllowed: z.boolean(), suppression: z.enum(["preserved", "permanent"]) })),
 });
 
 /* ---------- discoverySummary ---------- */

@@ -37,6 +37,7 @@ export const CURRENT_STAGES = [
 ] as const;
 export type CurrentStageKey = (typeof CURRENT_STAGES)[number]["key"];
 
+export type SendFacts = { approved: number; confirmed: number; uncertain: number; queued: number; replies: number; attempts: number; opportunities: number };
 export type SourceFacts = {
   source: PipelineSource;
   label: string;
@@ -46,9 +47,11 @@ export type SourceFacts = {
   medianDays: (number | null)[];
   /** Null where the bucket does not exist for the route (an inbound application has no outbound dispatch). */
   current: Record<CurrentStageKey, number | null>;
-  dispatch: { queued: number; toReconcile: number };
+  /** Null where the route has no outbound dispatch (an inbound application): N/A, never a zero. */
+  dispatch: { queued: number; toReconcile: number } | null;
   closed: { waiting: number; declined: number; expired: number };
-  sends: { approved: number; confirmed: number; uncertain: number; queued: number; replies: number; attempts: number; opportunities: number };
+  /** Null where the route has no outbound send (an inbound application): N/A, never a zero. */
+  sends: SendFacts | null;
   /** The source's own word for the milestone: Social Cat creates a match, TikTok records acceptance. */
   nativeMilestone: "matched" | "accepted";
   outcomes: { posts: number; comparablePosts: number; views: number; engagements: number; orders: number; fullyRefundedOrders: number; merchandise: Money; refunds: Money };
@@ -147,9 +150,9 @@ export const pipelineCells: Cell[] = [
       reached: [24, 20, 14, 12, null, 10, 8, 6, 4, 2],
       medianDays: [null, 1, 2, 1, null, 2, 1, 1, 7, 6],
       current: { videoReview: 4, evidenceHold: 6, approvalPending: 2, dispatch: null, matchPending: 2, termsPending: 2, trackingSetup: 2, contentPending: 2, firstOrderPending: 2, generatingOrders: 2 },
-      dispatch: { queued: 0, toReconcile: 0 },
+      dispatch: null,
       closed: { waiting: 1, declined: 1, expired: 0 },
-      sends: { approved: 12, confirmed: 0, uncertain: 0, queued: 0, replies: 0, attempts: 0, opportunities: 0 },
+      sends: null,
       outcomes: { posts: 4, comparablePosts: 3, views: 18_000, engagements: 540, orders: 6, fullyRefundedOrders: 0, merchandise: usd(12_000), refunds: zeroMoney },
     },
   },
@@ -169,9 +172,9 @@ function aggregate(meta: (typeof SOURCES)[number], cells: Cell[]): SourceFacts {
     reached: first.reached.map((_, i) => cells.reduce<number | null>((a, c) => addNullable(a, c.facts.reached[i] ?? null), 0)),
     medianDays: first.medianDays.map((m, i) => (cells.every((c) => (c.facts.medianDays[i] ?? null) === m) ? m : null)),
     current: Object.fromEntries(CURRENT_STAGES.map((s) => [s.key, cells.reduce<number | null>((a, c) => addNullable(a, c.facts.current[s.key]), 0)])) as Record<CurrentStageKey, number | null>,
-    dispatch: { queued: sum((f) => f.dispatch.queued), toReconcile: sum((f) => f.dispatch.toReconcile) },
+    dispatch: cells.some((c) => c.facts.dispatch === null) ? null : { queued: sum((f) => f.dispatch!.queued), toReconcile: sum((f) => f.dispatch!.toReconcile) },
     closed: { waiting: sum((f) => f.closed.waiting), declined: sum((f) => f.closed.declined), expired: sum((f) => f.closed.expired) },
-    sends: { approved: sum((f) => f.sends.approved), confirmed: sum((f) => f.sends.confirmed), uncertain: sum((f) => f.sends.uncertain), queued: sum((f) => f.sends.queued), replies: sum((f) => f.sends.replies), attempts: sum((f) => f.sends.attempts), opportunities: sum((f) => f.sends.opportunities) },
+    sends: cells.some((c) => c.facts.sends === null) ? null : { approved: sum((f) => f.sends!.approved), confirmed: sum((f) => f.sends!.confirmed), uncertain: sum((f) => f.sends!.uncertain), queued: sum((f) => f.sends!.queued), replies: sum((f) => f.sends!.replies), attempts: sum((f) => f.sends!.attempts), opportunities: sum((f) => f.sends!.opportunities) },
     outcomes: {
       posts: sum((f) => f.outcomes.posts), comparablePosts: sum((f) => f.outcomes.comparablePosts), views: sum((f) => f.outcomes.views), engagements: sum((f) => f.outcomes.engagements),
       orders: sum((f) => f.outcomes.orders), fullyRefundedOrders: sum((f) => f.outcomes.fullyRefundedOrders),
