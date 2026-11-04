@@ -75,6 +75,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
     async submitAction<P>(request: ActionRequest<P>, options?: ReadOptions): Promise<ActionResponse> {
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+      requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
@@ -90,6 +91,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
     async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+      requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
       if (settings.handlesSave(request)) return settings.save(request) as Promise<SaveResourceResponse<T>>;
       if (lifecycle.handlesSave(request)) return lifecycle.save(request) as Promise<SaveResourceResponse<T>>;
@@ -97,6 +99,12 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
   };
+}
+
+/** A write with no idempotency key can't be retried safely, so it is refused before anything is applied. */
+function requireIdempotencyKey(request: { idempotencyKey: string; requestId: string }) {
+  if (typeof request.idempotencyKey === "string" && request.idempotencyKey.trim() !== "") return;
+  throw new AdapterError({ code: "VALIDATION_FAILED", message: "A write needs an idempotency key. Nothing was applied.", requestId: request.requestId, correlationId: `demo-${request.requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", fieldErrors: { idempotencyKey: "An idempotency key is required." } });
 }
 
 function wait(ms: number, signal?: AbortSignal) {
