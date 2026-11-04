@@ -12,6 +12,27 @@ export type ItemState = "confirmed" | "queued" | "running" | "reconcile" | "logi
 export type BatchItem = { id: string; handle: string; terms: string; evidence: string; next: string; state: ItemState };
 export type HeldReason = { key: string; label: string; byOwner: Record<Owner, number> };
 
+/** A creator's request for a TikTok Shop sample. A decision counts only once TikTok's own API acknowledges it with a receipt. */
+export type SampleDecision = "pending" | "approved" | "declined" | "handoff";
+export type SampleRequest = {
+  id: string;
+  handle: string;
+  product: string;
+  units: number;
+  /** "api" is a route verified for this account. "authorityDenied" is a route TikTok refuses for this account's scope. */
+  route: "api" | "authorityDenied";
+  state: SampleDecision;
+  receiptRef: string | null;
+  /** Who takes over when the API route is denied. */
+  ownerRef: string | null;
+};
+
+export const seedSamples = (): SampleRequest[] => [
+  { id: "SR-001", handle: "@pilot.creator.17", product: "Demo carry set", units: 1, route: "api", state: "pending", receiptRef: null, ownerRef: null },
+  { id: "SR-002", handle: "@pilot.creator.18", product: "Demo carry set", units: 1, route: "api", state: "pending", receiptRef: null, ownerRef: null },
+  { id: "SR-003", handle: "@pilot.creator.19", product: "Demo carry set", units: 1, route: "authorityDenied", state: "pending", receiptRef: null, ownerRef: null },
+];
+
 export type BatchData = {
   datasetKey: "batch-demo";
   batchId: string;
@@ -19,6 +40,7 @@ export type BatchData = {
   paused: boolean;
   items: BatchItem[];
   held: HeldReason[];
+  samples: SampleRequest[];
   filters: { source: "tiktok" | "all"; deal: "affiliate" | "all"; owner: "all" | Owner };
   model: { label: string; status: "pending" };
   capacity: { nativeInvitations: number | null; sampleUnits: number; sampleCostMinor: number; collaborationSlots: null };

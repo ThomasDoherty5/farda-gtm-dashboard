@@ -141,3 +141,16 @@ for (const url of [REC, INV, BATCH]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   });
 }
+
+test.describe("TikTok sample requests", () => {
+  test("a verified decision shows TikTok's receipt, a denied one hands off, and axe is clean", async ({ page }) => {
+    await page.goto(`${BATCH}?tab=samples`);
+    await expect(page.getByTestId("samples-tab")).toBeVisible();
+    await page.getByRole("button", { name: "Approve sample SR-001" }).click();
+    await expect(page.getByTestId("sample-ack")).toContainText("Receipt demo-tiktok-sample-receipt-SR-001");
+    await page.getByRole("button", { name: "Approve sample SR-003" }).click();
+    await expect(page.getByTestId("sample-handoff")).toContainText("Nothing was decided");
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  });
+});

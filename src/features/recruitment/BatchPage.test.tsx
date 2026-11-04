@@ -187,3 +187,76 @@ describe("bulk batch detail (66:821)", () => {
     expect(await screen.findByRole("heading", { name: "No access to this account" })).toBeInTheDocument();
   });
 });
+
+describe("FE06-05 TikTok sample decisions", () => {
+  const SAMPLES = `${PATH}?tab=samples`;
+  const openSamples = async (adapter = createDemoAdapter()) => {
+    const router = renderRoute(SAMPLES, adapter);
+    await screen.findByTestId("samples-tab");
+    return { router, adapter, user: userEvent.setup() };
+  };
+  const row = (id: string) => within(screen.getByTestId("sample-requests")).getByText(id === "SR-001" ? "@pilot.creator.17" : id === "SR-002" ? "@pilot.creator.18" : "@pilot.creator.19").closest("tr")!;
+
+  it("lists the waiting requests, with the tab marked current", async () => {
+    await openSamples();
+    expect(screen.getByRole("link", { name: "Sample requests" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByText(/3 of 3 waiting/)).toBeInTheDocument();
+    expect(within(row("SR-001")).getByText("Waiting for a decision")).toBeInTheDocument();
+  });
+
+  it("an approval through the verified API route counts only with TikTok's receipt", async () => {
+    const adapter = createDemoAdapter();
+    const spy = vi.spyOn(adapter, "submitAction");
+    const { user } = await openSamples(adapter);
+    await user.click(screen.getByRole("button", { name: "Approve sample SR-001" }));
+    expect(await screen.findByTestId("sample-ack")).toHaveTextContent("Decided in TikTok for SR-001. Receipt demo-tiktok-sample-receipt-SR-001.");
+    await waitFor(() => expect(row("SR-001")).toHaveTextContent("Approved in TikTok · demo-tiktok-sample-receipt-SR-001"));
+    expect(spy.mock.calls[0]![0]).toMatchObject({ actionKind: "decideTikTokSample", payload: { batchId: "demo-batch-tt-024", sampleId: "SR-001", decision: "approve" } });
+    expect(within(row("SR-001")).queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("a decline is recorded the same way", async () => {
+    const { user } = await openSamples();
+    await user.click(screen.getByRole("button", { name: "Decline sample SR-002" }));
+    await waitFor(() => expect(row("SR-002")).toHaveTextContent("Declined in TikTok · demo-tiktok-sample-receipt-SR-002"));
+  });
+
+  it("when TikTok denies the account's authority the owner takes over, and nothing is shown as decided", async () => {
+    const { user } = await openSamples();
+    await user.click(screen.getByRole("button", { name: "Approve sample SR-003" }));
+    expect(await screen.findByTestId("sample-handoff")).toHaveTextContent("TikTok refused this account's authority for SR-003. Nothing was decided. Operations has the request");
+    await waitFor(() => expect(row("SR-003")).toHaveTextContent("Not decided · handed to Operations"));
+    expect(screen.queryByTestId("sample-ack")).not.toBeInTheDocument();
+    expect(row("SR-003")).not.toHaveTextContent(/Approved|Declined/);
+  });
+
+  it("without a verified API capability the decisions are disabled with the reason, and nothing is submitted", async () => {
+    const demo = createDemoAdapter();
+    const adapter = scriptedAdapter(async (request) => {
+      const base = await demo.readView<unknown, unknown>(request);
+      return { ...base, capabilities: base.capabilities.map((c) => (c.actionKind === "decideTikTokSample" ? { ...c, state: "unverified" as const, reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] } : c)) };
+    });
+    const submit = vi.spyOn(adapter, "submitAction");
+    const { user } = await openSamples(adapter);
+    const approve = screen.getByRole("button", { name: "Approve sample SR-001" });
+    expect(approve).toHaveAttribute("aria-disabled", "true");
+    await user.click(approve);
+    expect(submit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("samples-blocked")).toBeInTheDocument();
+  });
+
+  it("an acknowledgment with no receipt is not shown as decided", async () => {
+    const demo = createDemoAdapter();
+    const adapter = scriptedAdapter((request) => demo.readView(request));
+    vi.spyOn(adapter, "submitAction").mockImplementation(async (request) => ({ ...(await demo.submitAction(request)), receiptRefs: [] }));
+    const { user } = await openSamples(adapter);
+    await user.click(screen.getByRole("button", { name: "Approve sample SR-001" }));
+    expect(await screen.findByTestId("sample-ack")).toHaveTextContent("returned no receipt yet, so it is not shown as decided");
+  });
+
+  it("the live adapter shows an honest pending state and no sample requests", async () => {
+    renderRoute(SAMPLES, createLiveAdapter("sandbox"));
+    expect(await screen.findByRole("heading", { name: "Data unavailable" })).toBeInTheDocument();
+    expect(screen.queryByTestId("sample-requests")).not.toBeInTheDocument();
+  });
+});

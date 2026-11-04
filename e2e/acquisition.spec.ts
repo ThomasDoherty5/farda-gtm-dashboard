@@ -59,3 +59,29 @@ test("no horizontal overflow at 320px", async ({ page }) => {
   await expect(page.getByTestId("metric-Schedule")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
+
+test.describe("plan detail", () => {
+  test("requests approval for the finite batch, shows it pending, and has no axe violations", async ({ page }) => {
+    await page.goto("/creators/discovery?view=plan");
+    await expect(page.getByTestId("plan-versions")).toBeVisible();
+    await page.getByRole("button", { name: "Request approval for this batch" }).click();
+    await expect(page.getByTestId("approval-ack")).toContainText("Not approved and not sent");
+    const results = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+    expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  });
+
+  test("the daily page keeps its size with the Plan detail link, and links to the detail", async ({ page, viewport }) => {
+    await page.goto("/creators/discovery");
+    await page.evaluate(() => document.fonts.ready);
+    if (viewport?.width === 1440) expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(2065);
+    await page.getByRole("link", { name: "Plan detail" }).click();
+    await expect(page).toHaveURL(/view=plan/);
+  });
+
+  test("no horizontal overflow at 320px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/creators/discovery?view=plan");
+    await expect(page.getByTestId("plan-versions")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+});

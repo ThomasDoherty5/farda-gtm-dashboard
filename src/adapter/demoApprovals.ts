@@ -21,7 +21,10 @@ const countItems = (items: RunItem[]): RunCounts => {
  * It enforces what the real server must (role, version, expiry, policy, idempotency), receives
  * nothing from the client as authority, and contacts no provider. State resets on reload.
  */
-export function createDemoApprovals() {
+export function createDemoApprovals(opts: { actorRole?: string } = {}) {
+  const actorRole = opts.actorRole ?? DEMO_ACTOR_ROLE;
+  /** A founder holds every role's authority. Nobody else can decide above their role. */
+  const canDecide = (required: string) => actorRole === required || actorRole === "founder";
   const approvals = new Map(seedApprovals().map((a) => [a.approvalRef, a]));
   const runs = new Map(seedRuns().map((r) => [r.runRef, r]));
   const results = new Map<string, { hash: string; result: Promise<ActionResponse> }>();
@@ -46,7 +49,7 @@ export function createDemoApprovals() {
     if (a.historicalNote) return [];
     if (a.status === "expired") return [{ actionKind: "decideApproval", state: "held", reasonCodes: ["APPROVAL_EXPIRED"] }];
     if (a.status === "pending") {
-      if (a.requiredRole !== DEMO_ACTOR_ROLE) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
+      if (!canDecide(a.requiredRole)) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
       return [{ actionKind: "decideApproval", state: "available", reasonCodes: [] }];
     }
     if (a.status === "approved" && !a.execution) return [{ actionKind: "dispatchApprovedAction", state: "available", reasonCodes: [] }];
@@ -102,7 +105,7 @@ export function createDemoApprovals() {
   function decide(request: ActionRequest<DecidePayload>): ActionResponse {
     const a = findApproval(request);
     if (a.historicalNote) fail("APPROVAL_INVALID", "This is an archived record. It can't be decided.", request.requestId);
-    if (a.requiredRole !== DEMO_ACTOR_ROLE) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
+    if (!canDecide(a.requiredRole)) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
     if (a.status === "expired") fail("APPROVAL_EXPIRED", "This approval expired. It needs a fresh preview.", request.requestId);
     if (a.approvalRef === "demo-approval-conflict" && !conflictFired) {
       conflictFired = true;
@@ -126,7 +129,7 @@ export function createDemoApprovals() {
       if (text === current.payload.message) fail("VALIDATION_FAILED", "The message has not changed.", request.requestId, { fieldErrors: { editedMessage: "Change the message, or approve it as written." } });
       const n = a.versions.length;
       current.decision = "editRequired";
-      current.decidedByRole = DEMO_ACTOR_ROLE;
+      current.decidedByRole = actorRole;
       current.decidedAt = DEMO_NOW;
       current.reason = reasonText || null;
       current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
@@ -137,7 +140,7 @@ export function createDemoApprovals() {
     }
 
     current.decision = decision;
-    current.decidedByRole = DEMO_ACTOR_ROLE;
+    current.decidedByRole = actorRole;
     current.decidedAt = DEMO_NOW;
     current.reason = reasonText || null;
     current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
