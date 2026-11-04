@@ -74,7 +74,7 @@ function Collabs({ res, s }: { res: ReadResponse<SettlementRecord>; s: Settlemen
           <Kpi label="Creator cash paid" context="Illustrative provider-paid event" testId="metric-Creator cash paid">{dollars(paid)}</Kpi>
           <Kpi label="Merchant invoice" context="Not yet matched to authoritative statement" testId="metric-Merchant invoice">{s.invoiceState === "unmatched" ? "Unmatched" : "Matched"}</Kpi>
           <Kpi label="Fee estimate" context={`${s.processingFeePct}% of ${dollars(paid)} · tax/FX excluded`} testId="metric-Fee estimate">{formatMoneyExact(usd(fee))}</Kpi>
-          <Kpi label="Ledger reconciliation" context="No second commission expense or payment" testId="metric-Ledger reconciliation">Pending</Kpi>
+          <Kpi label="Ledger reconciliation" context={<>No second commission expense or<br />payment</>} testId="metric-Ledger reconciliation">Pending</Kpi>
         </KpiRow>
         <div className={styles.lanes}>
           <section className={styles.lane} data-tone="violet" style={{ gap: 16 }} aria-labelledby="provider-lane">
