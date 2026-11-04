@@ -84,7 +84,7 @@ function Body({ res, c, dialog, setDialog }: { res: ReadResponse<PeriodClose>; c
           <Panel id="reports-title" title="One complete report package" subtitle="Generated reports retain period and export timestamp" testId="reports">
             <FactList wide label="Report package" rows={c.reports.map((r) => [r.name, r.state])} />
             <Divider />
-            <Note>Export failure keeps the month visible as incomplete. A rerun must preserve the period and report identity.</Note>
+            <Note>Export failure keeps the month visible as incomplete. A rerun must preserve the period and report{" "}<br />identity.</Note>
           </Panel>
         </section>
       </HalfColumns>
