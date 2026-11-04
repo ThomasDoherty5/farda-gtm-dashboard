@@ -33,7 +33,7 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked. The launch and performance pages use a primary-button variant of it (`WorkspaceTabs`, from 14:100) |
 | Checkbox | 6:443 | 4 | Not built | Pending |
 | Toggle | 6:459 | 3 | Not built | Pending |
-| Source freshness | 6:500 | 5 | Not built | Pending |
+| Source freshness | 6:500 | 5 | `Notice` (violet or warning) for the Operations strip | Built for Operations; other states not checked |
 | KPI card | 6:516 | 3 | `Kpi`, `KpiRow` | Built from ACQ03. Overview still uses its own cards |
 | Table cell | 6:528 | 3 | `DataTable` | Text cell built |
 | Table row | 6:557 | 4 | `DataTable` | Default built |
@@ -284,6 +284,56 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 | Review after | A typed date | Derived from the posting due date and the grace period | The two inputs can't disagree with the result |
 | Agreed fee on COL-SC-042 | "USD 150" | "USD 150", read-only, labeled as an accepted historical term in the page's own context box | The one place a fee may appear; no control can create or repeat it |
 | Queued requests | None | A short list "Requests awaiting approval" appears under the context box once something is queued | The queue must be visible, or a queued action looks like nothing happened |
+
+## Operations comparison (sources 4:6, 4:171, 4:317, 12:292, 12:431, 12:808, 12:708, 12:653)
+
+Same capture settings as Overview, on a production build (a dev server can't load the font here). Measured 2026-11-03 at threshold 0.1 against the copy `z9knjMdQ3kxL6Fblvu1tKc`. Against the proposed pass mark (not agreed): sizes match and at most 0.5% differ for six of the eight; the 390 and 1024 variants and the active return do not meet it.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 4:6 Operations overview | `/operations` | Matches (1440×1452) | 0.294% |
+| 4:171 Order detail | `/orders/TEST-SH-1042` | Matches (1440×1331) | 0.243% |
+| 4:317 Shipping exception | `/shipments/TEST-SP-0093/exceptions/TEST-EVT-129` | Matches (1440×1119) | 0.142% |
+| 12:292 Return/replacement | `/returns/TEST-RET-028` | 1469 tall, not 1423 (see below) | 0.199% over the top 1285px; 3.021% over the shared height |
+| 12:431 Return resolved | `/returns/TEST-RET-028?scenario=resolved` | Matches (1440×846) | 0.362% |
+| 12:808 Fulfillment analytics | `/analytics/fulfillment` | Matches (1440×1287) | 0.374% |
+| 12:708 Tablet operations | `/operations` at 1024 | Matches (1024×1078) | 2.664%, mostly the shell navigation (see below) |
+| 12:653 Mobile operations | `/operations?home=H2` at 390 | 1424 tall, not 1366 | 21.097% over the shared height, mostly because the shell navigation is taller and shifts everything below it |
+
+The 1024 and 390 figures are not a pass, and the 390 figure says little about the page content, because the shell above it differs. Operations is the only screen with native 1024 and 390 designs, so these are the first real responsive targets; the shell's own responsive design is for THO-306 to decide.
+
+`e2e/operations.spec.ts` checks page heights against Figma, panel geometry, the chart scale (6.75px per order) and both compositions on every run.
+
+## Operations: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| "All homes" button | A button | Opens a radio dialog and filters by `home` in the URL. The button shows only the choice, as Figma does; its accessible name includes "Home:" | CTRL-162-style filter: scope has to survive a reload and Back (OPS270-06) |
+| Queue subtitle | "Orders and approved samples · oldest first" | Adds " · showing 5 of 18" when the list is partial | The table shows the oldest 5 of 18; saying so stops it reading as the whole queue |
+| Held work | Not shown | A separate "held, not ready to leave home" panel appears only when the data has holds, each with its reason and the source action | OPS270-03: held work never appears ready to dispatch. The default fixture has none, so the 1440 page height is unchanged |
+| Orders and Shipping tabs | Buttons | `?view=orders` and `?view=shipping` filter the same page. Stock goes to `/inventory`, Support to a support case | CTRL-167 needs an order list; the manifest has no separate route for it |
+| Operations overview, 1024 | Open source button 350px after the title | Right-aligned | The design's spacer is a fixed width; right-aligned holds up at other widths |
+| Operations overview, 1024 and 390 | No home control | Home scope can still be set by the `home` value in the URL; the 1440 page has the control | The native compact designs don't draw one. This needs a design decision |
+| Operations, 1024 | Navigation shows "More" and no demo badge, and no brand mark | The shell keeps Automations and the Demo workspace badge, drops the brand mark and tightens item widths so it fits one row | The demo label must stay visible; "More" has no destination in the manifest |
+| Operations, 390 | Menu button in place of navigation; one queue card TEST-SH-1044 | The shell is unchanged (wrapped navigation). TEST-SH-1044 is not in the data, and an added "needs attention" card links to the shipping exception | Changing the shell navigation at 390 breaks existing journeys on every screen. TEST-SH-1044 at 18 hours would also contradict the 1440 oldest-first list. The exception card is the only way to reach exceptions on a phone |
+| Shell active section | Overview highlighted for analytics | `/analytics/fulfillment` highlights Operations and `/analytics/finance` highlights Finance | Figma 12:808 highlights Operations |
+| Shipping exception | Order key SHOP-TEST-1042 | SHOP-TEST-1031 | In Figma 4:171 that key is a different order, still waiting for shipment. The demo ties the shipment to its own order |
+| Shipping exception | Two buttons | A third, "Record next step", opens a dialog for the one in-app intent | FE09-04: an intent with actor, reason and expected version. It records a choice for approval and refunds nothing |
+| Order detail | One sample order | Also TEST-SH-1031 (every milestone) and TEST-SC-0081 (a creator sample, with total N/A) | FE09-02 and OPS270-04: milestones and identities stay separate. A sample's total is N/A, never $0 |
+| Return fields | Text that looks like fields | A native select for disposition and resolution, a text field for reason, and a reset | CTRL-173 to CTRL-175 describe real, draft fields. Native selects show a chevron |
+| Return, "Close unavailable" | No reason shown | One line: "Needs the inventory receipt, refund settlement and QuickBooks posting." | CTRL-214 requires a visible reason. This is why the active page is 46px taller |
+| Return, "Prepare browser task" | Always enabled | Submits an approval request, reports "Prepared, waiting for approval", then disables | A click is not a refund, restock or shipment, and a second outcome is refused |
+| Return resolved | Same case as the active one | `?scenario=resolved`, a demo-only value | The demo has one return. A live record's state decides the variant |
+| Preview replacement plan | Button | Dialog built from the record, no adapter call | CTRL-176: a preview neither refunds nor ships. The adapter's preview intent waits for THO-283 |
+| Fulfillment period | "Last 14 days" button | A radio dialog with 7 and 14 days. At 7 days the prior period reads N/A and the delivery mix is unavailable | The demo holds 14 days of daily rows. Everything shown is derived from them, so the cards, chart and table agree |
+| Fulfillment chart | Picture of bars | Bars plus an accessible name and a hidden data table | FE09-08 requires a chart alternative |
+| Source dialogs | "Open Shopify", "Open Shippo", "Open source row" and similar | Handoff dialogs saying no verified link exists | The links are fictional. FE09-06 and the SOURCE profile forbid guessing a destination |
+
+## Shared page components
+
+`src/components/Panels.tsx` holds the page furniture the operations, support and finance screens share: PageHeader, Panel, Notice, FactList, Steps, FlatTable and Meter. Measurements come from Figma frames such as 4:6, 4:171 and 4:317. Panels keep a 24px padding and a 1px border. Figma's content width ignores the border, but using 23px padding made the pixel difference worse, so it is left at 24.
 
 ## Implementation adaptations
 

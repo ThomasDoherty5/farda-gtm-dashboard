@@ -2,6 +2,7 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoOps } from "./demoOps";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
 import { createDemoOffers, readAssessment } from "./demoScorecards";
@@ -26,6 +27,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const latencyMs = opts.latencyMs ?? 0;
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
+  const ops = createDemoOps();
   const offers = createDemoOffers();
   const batch = createDemoBatch();
   const collaboration = createDemoCollaboration();
@@ -43,6 +45,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
+      const opsView = ops.read(request);
+      if (opsView) return opsView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
@@ -66,6 +70,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       await wait(latencyMs, options?.signal);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
+      const opsResult = ops.submit(request);
+      if (opsResult) return opsResult;
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
       if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
