@@ -1,0 +1,7 @@
+/* Support workspace (Figma 7:317). */
+.issue { font: var(--text-label); color: var(--color-ink); text-decoration: none; }
+.issue:hover { text-decoration: underline; }
+.label { margin: 0; font: var(--text-label); }
+.body { margin: 0; font: var(--text-body); color: var(--color-muted); }
+.small { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.link { color: var(--color-ink); text-decoration: underline; }

@@ -104,3 +104,50 @@ describe("reads", () => {
     expect(read(ops, "operationsOverview", { scenario: "stale" })!.dataState).toBe("stale");
   });
 });
+
+describe("stock transfer requests", () => {
+  const transfer = (over: Partial<{ from: string; to: string; units: number; reason: string }> = {}) => ({ from: "H1", to: "H2", units: 10, reason: "Rebalance", ...over });
+  const request = (payload: object, version = "inv1", key?: string) => action("requestStockTransfer", version, payload, key);
+
+  it("queues the request for approval, and moves nothing", () => {
+    const ops = createDemoOps();
+    expect(ops.submit(request(transfer()))!.state).toBe("approvalPending");
+    const res = read(ops, "inventoryOverview", {})!;
+    const data = res.data as { rows: { home: string; onHand: number }[]; pendingRequests: unknown[]; version: string };
+    expect(data.rows.map((r) => r.onHand)).toEqual([100, 28, 68]);
+    expect(data.pendingRequests).toHaveLength(1);
+    expect(data.version).toBe("inv2");
+  });
+
+  it("counts waiting requests against what the source home can still give", () => {
+    const ops = createDemoOps();
+    ops.submit(request(transfer({ units: 80 })));
+    const err = errorFrom(() => ops.submit(request(transfer({ units: 7, to: "H3" }), "inv2")));
+    expect(err.category).toBe("resourceHold");
+    expect(err.body.fieldErrors).toEqual({ units: "Only 6 available at Home H1." });
+  });
+
+  it("refuses a duplicate request, a stale version, the same home, and bad quantities", () => {
+    const ops = createDemoOps();
+    ops.submit(request(transfer()));
+    expect(errorFrom(() => ops.submit(request(transfer(), "inv2"))).message).toMatch(/duplicate movement/);
+    expect(errorFrom(() => ops.submit(request(transfer({ units: 1 }), "inv1"))).body.currentVersion).toBe("inv2");
+    expect(errorFrom(() => ops.submit(request(transfer({ to: "H1" }), "inv2"))).body.fieldErrors).toHaveProperty("to");
+    for (const units of [0, -3, 2.5, Number.NaN]) expect(errorFrom(() => ops.submit(request(transfer({ units }), "inv2"))).body.fieldErrors).toHaveProperty("units");
+    expect(errorFrom(() => ops.submit(request(transfer({ reason: " " }), "inv2"))).body.fieldErrors).toHaveProperty("reason");
+  });
+
+  it("returns the original answer for a retried key", () => {
+    const ops = createDemoOps();
+    const first = ops.submit(request(transfer(), "inv1", "same"))!;
+    expect(ops.submit(request(transfer(), "inv1", "same"))).toEqual(first);
+  });
+});
+
+describe("support reads", () => {
+  it("answers each known case and says not found for another", () => {
+    const ops = createDemoOps();
+    expect(read(ops, "supportWorkspace", { caseId: "TEST-ISS-016" })!.capabilities).toEqual([{ actionKind: "reopenCase", state: "unsupported", reasonCodes: ["INTERCOM_OWNS_CASES"] }]);
+    expect(errorFrom(() => read(ops, "supportWorkspace", { caseId: "x" })).category).toBe("notFound");
+  });
+});
