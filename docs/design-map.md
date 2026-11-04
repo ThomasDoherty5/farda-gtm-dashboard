@@ -590,7 +590,7 @@ Two fixtures: `demo-evidence-2` has a saved review to dispute, and `demo-evidenc
 
 Owner THO-330 (flows and states). The fixture families FX-01 to FX-15 and the state rows of the control contract, run against every route in the manifest. Fixture-complete: the demo adapter and a faulting wrapper stand in for the server; nothing here proves the live service (THO-283) behaves this way.
 
-**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 58 routes × 12 checks, 684 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
+**Unit matrix** (\`src/routes/contractStates.test.tsx\`, 57 routes × 12 checks, 684 tests). \`src/test/faultAdapter.ts\` wraps the real demo adapter and changes only what a server would: whether and how the read is answered, or what it says about itself. The checks are the same for every route, so a new screen can't skip them.
 
 | Case | Fixture | What every route must do |
 | -- | -- | -- |
