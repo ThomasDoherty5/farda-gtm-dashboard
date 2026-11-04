@@ -125,17 +125,7 @@ The recovery page is 134px taller because of the added evidence controls, so bel
 
 ## Settings and automation comparison (sources 7:876, 7:1085, 14:637, 14:911, 66:641)
 
-Owner THO-305. Same capture settings as Overview, against the copy `z9knjMdQ3kxL6Fblvu1tKc`, at threshold 0.1 on 2026-11-03. Measured against a production build (`npm run build` then `vite preview`): the dev server can't serve the fonts through the shared `node_modules` link, so it falls back to a system font and reads about 5%.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 66:641 | `/settings/capabilities` | Matches (1440×2015) | 0.212% |
-| 14:637 | `/automations` | Matches (1440×2072) | 0.254% |
-| 7:876 | `/settings/connections` | 2100 tall, not 2058 (demo footnote and the demo label on the page) | 0.282%, over the top 2000px |
-| 7:1085 | `/settings/team` | 1391 tall, not 1349 (demo footnote) | 0.112%, over the top 1280px |
-| 14:911 | `/automations/:jobId/schedule` | 2263 tall, not 2099 (see below) | 0.534%, over the top 760px |
-
-The schedule's lower half is checked by eye, with an offset, because the added fields move it down. The pass mark is not met for the schedule's full height, so don't read it as a pass.
+Owner THO-305. Measurements for this screen are in "Second-half comparison" below.
 
 ## Settings and automation mapping
 
@@ -173,19 +163,7 @@ The schedule's lower half is checked by eye, with an offset, because the added f
 
 ## Customer lifecycle comparison (sources 5:289, 5:404, 11:372, 11:498, 11:624, 11:750, 11:852)
 
-Owner THO-304. Same capture settings and method as the settings comparison above (copy `z9knjMdQ3kxL6Fblvu1tKc`, threshold 0.1, DPR 1, production build, 2026-11-03).
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 11:750 | `/customers/consent` | 1318 tall, not 1276 (demo footnote) | 0.098%, over the top 1230px |
-| 5:289 | `/customers/lifecycle` | 1411 tall, not 1369 (demo footnote) | 0.235%, over the top 1320px |
-| 11:372 | `/customers/flows/early-access` | 1378 tall, not 1302 (see below) | 0.47%, over the top 840px |
-| 11:498 | `/customers/flows/abandoned-checkout` | 1378 tall, not 1302 | 0.469%, over the top 840px |
-| 11:624 | `/customers/flows/review-request` | 1378 tall, not 1302 | 0.467%, over the top 840px |
-| 11:852 | `/customers/activation` | 1148 tall, not 1106 (demo footnote) | 0.611%, over the top 1070px. **Not met** |
-| 5:404 | `/customers/flows/setup` | 1365 tall, not 1323 (demo footnote) | 0.68%, over the top 1290px. **Not met** |
-
-Activation and Setup sit just over the proposed 0.5% mark, from sub-pixel text positions; the diffs show only text and edge antialiasing. The three flow pages are checked over their top 840px only, because the added policy note moves the lower half. These are measurements against a proposal, not a pass.
+Owner THO-304. Measurements for this screen are in "Second-half comparison" below.
 
 ## Customer lifecycle mapping
 
@@ -220,11 +198,7 @@ Activation and Setup sit just over the proposed 0.5% mark, from sub-pixel text p
 
 ## Recovery state gallery comparison (source 12:534)
 
-Owner THO-306, a development-only reference. Same capture settings and method as the settings comparison above.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 12:534 | `/design-system/states` | 1520 tall, not 1478 (development footnote) | 0.305%, over the whole shared 1440px |
+Owner THO-306, a development-only reference. Measurements for this screen are in "Second-half comparison" below.
 
 ## Recovery state gallery mapping and differences
 
@@ -388,20 +362,7 @@ The hourly run shares `/runs/:runId` with the approval and recovery views. A `ta
 
 ## Operations comparison (sources 4:6, 4:171, 4:317, 12:292, 12:431, 12:808, 12:708, 12:653)
 
-Same capture settings as Overview, on a production build (a dev server can't load the font here). Measured 2026-11-03 at threshold 0.1 against the copy `z9knjMdQ3kxL6Fblvu1tKc`. Against the proposed pass mark (not agreed): sizes match and at most 0.5% differ for six of the eight; the 390 and 1024 variants and the active return do not meet it.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 4:6 Operations overview | `/operations` | Matches (1440×1452) | 0.294% |
-| 4:171 Order detail | `/orders/TEST-SH-1042` | Matches (1440×1331) | 0.243% |
-| 4:317 Shipping exception | `/shipments/TEST-SP-0093/exceptions/TEST-EVT-129` | Matches (1440×1119) | 0.142% |
-| 12:292 Return/replacement | `/returns/TEST-RET-028` | 1469 tall, not 1423 (see below) | 0.199% over the top 1285px; 3.021% over the shared height |
-| 12:431 Return resolved | `/returns/TEST-RET-028?scenario=resolved` | Matches (1440×846) | 0.362% |
-| 12:808 Fulfillment analytics | `/analytics/fulfillment` | Matches (1440×1287) | 0.374% |
-| 12:708 Tablet operations | `/operations` at 1024 | Matches (1024×1078) | 2.664%, mostly the shell navigation (see below) |
-| 12:653 Mobile operations | `/operations?home=H2` at 390 | 1424 tall, not 1366 | 21.097% over the shared height, mostly because the shell navigation is taller and shifts everything below it |
-
-The 1024 and 390 figures are not a pass, and the 390 figure says little about the page content, because the shell above it differs. Operations is the only screen with native 1024 and 390 designs, so these are the first real responsive targets; the shell's own responsive design is for THO-306 to decide.
+Measurements for this screen are in "Second-half comparison" below.
 
 `e2e/operations.spec.ts` checks page heights against Figma, panel geometry, the chart scale (6.75px per order) and both compositions on every run.
 
@@ -434,12 +395,7 @@ Pending Kevon Baha's confirmation.
 
 ## Stock and support comparison (sources 7:129, 7:317)
 
-Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. Both match the page size and are under the proposed 0.5%.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 7:129 Stock per home and transfer | `/inventory` | Matches (1440×1454) | 0.347% |
-| 7:317 Support workspace | `/support/cases/TEST-ISS-021` | Matches (1440×1389) | 0.236% |
+Measurements for this screen are in "Second-half comparison" below.
 
 ## Stock and support: intentional differences from Figma
 
@@ -461,16 +417,7 @@ Pending Kevon Baha's confirmation.
 
 ## Settlement comparison (sources 65:1037, 66:252, 66:447, 9:551)
 
-Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All four match the page size. See the table.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 65:1037 Commission ledger | `/finance/commissions` | Matches (1440×2185) | 0.435% |
-| 66:252 Collabs payout reconciliation | `/finance/settlements/COMM-DEMO-D` | Matches (1440×2111) | 0.576% |
-| 66:447 TikTok native settlement | `/finance/settlements/TT-NATIVE-DEMO` | Matches (1440×2194) | 1.037% |
-| 9:551 Historical manual fee settlement | `/finance/payables/PAY-0012` | Matches (1440×1506) | 0.601% |
-
-Only the ledger meets the proposed 0.5% mark. The other three are within about 1% and the remaining difference is text and row offsets of a few pixels, plus the items below. Layout was calibrated against each frame's node geometry (`get_metadata`), so panel sizes match exactly. The waterfall's bar heights are computed from the data at Figma's scale (224px for net sales) and match.
+Layout was calibrated against each frame's node geometry (`get_metadata`), so panel sizes match exactly. The waterfall's bar heights are computed from the data at Figma's scale (224px for net sales) and match. Measurements for this screen are in "Second-half comparison" below.
 
 ## Settlement: intentional differences from Figma
 
@@ -496,15 +443,7 @@ Pending Kevon Baha's confirmation.
 
 ## Finance comparison (sources 7:510, 7:683, 12:1006)
 
-Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All three match the page size.
-
-| Source | Route | Size | Pixels different |
-| -- | -- | -- | -- |
-| 7:510 Finance dashboard | `/finance` | Matches (1440×1707) | 0.283% |
-| 7:683 Close and reconciliation | `/finance/close/2026-10` | Matches (1440×1471) | 0.695% |
-| 12:1006 Finance analytics | `/analytics/finance` | Matches (1440×1313) | 0.721% |
-
-The dashboard meets the proposed 0.5% mark; the other two are within about 0.7%, from text and row offsets of a few pixels.
+Measurements for this screen are in "Second-half comparison" below.
 
 ## Finance: intentional differences from Figma
 
@@ -526,6 +465,70 @@ Pending Kevon Baha's confirmation.
 | Close package and corrections, Months and revisions, Dry-run manifest | Not drawn in 7:683 | Three links inside the reconciliation dialog to `?view=package`, `?view=months` and `?view=manifest`, built from shared components with no fidelity claim. The page stays 1471px because the links sit inside the dialog | FIN274-02/03, FIN-EVIDENCE and the month-end close acceptance. They are evidence views, not controls |
 | Section navigation | Buttons | Month-end and Reports go to the October close, Unit economics to Financial pulse | The manifest has no separate routes for them |
 | Where $12,596 goes | Values typed | The five parts sum to the 30-day receipts, with a test | The breakdown has to reconcile |
+
+## Second-half comparison (Operations, stock and support, settlement, finance, lifecycle, settings, recovery)
+
+Owners THO-300 to THO-306. Measured 2026-11-03 against Thomas's copy of the design (file key `z9knjMdQ3kxL6Fblvu1tKc`; the original refuses MCP access), at DPR 1, the capture's exact width, Chromium headless, Inter 400/500/600 loaded, America/Los_Angeles, threshold 0.1. The app is a production build (`npm run build`, then `vite preview --port 4182`) because a dev server can't load the font through the shared `node_modules` link, which reads about 5%. Command: `BASE_URL=http://localhost:4182 node scripts/compare-figma.mjs <route> <capture> 0.1`. Captures stay in the gitignored `.handoff/figma/`.
+
+How to read the table:
+
+- **Pixels different** is over the rows that are judged. A page that is taller on purpose is compared in aligned parts, using `SEGMENTS` in `scripts/compare-figma.mjs`: render rows are compared with the Figma rows they correspond to, so an added line doesn't shift everything below it. The rows left out are the added content itself (listed under each area's differences).
+- Where the only extra height is the demo footnote (42px), the judged rows are the Figma height minus the bottom 46px (the footnote and the bezel it moves).
+- **Pass mark** is the proposal above (exact size, at most 0.5%), not agreed with Kevon.
+
+| Source | Route | Figma size | Rendered | Pixels different (judged rows) | Pass mark |
+| -- | -- | -- | -- | -- | -- |
+| 4:6 Operations overview | `/operations` | 1440×1452 | 1440×1452 | 0.169% | Met |
+| 4:171 Order detail | `/orders/TEST-SH-1042` | 1440×1331 | 1440×1331 | 0.144% | Met |
+| 4:317 Shipping exception | `/shipments/TEST-SP-0093/exceptions/TEST-EVT-129` | 1440×1119 | 1440×1119 | 0.142% | Met |
+| 12:292 Return/replacement | `/returns/TEST-RET-028` | 1440×1423 | 1440×1469 | 0.231% over 1330 rows (3.013% unaligned) | Met over aligned rows. The page is 46px taller on purpose (the "Close unavailable" reason) |
+| 12:431 Return resolved | `/returns/TEST-RET-028?scenario=resolved` | 1440×846 | 1440×846 | 0.121% | Met |
+| 12:808 Fulfillment analytics | `/analytics/fulfillment` | 1440×1287 | 1440×1287 | 0.133% | Met |
+| 7:129 Stock per home and transfer | `/inventory` | 1440×1454 | 1440×1454 | 0.150% | Met |
+| 7:317 Support workspace | `/support/cases/TEST-ISS-021` | 1440×1389 | 1440×1389 | 0.127% | Met |
+| 9:551 Historical manual fee settlement | `/finance/payables/PAY-0012` | 1440×1506 | 1440×1506 | 0.477% | Met |
+| 65:1037 Commission ledger | `/finance/commissions` | 1440×2185 | 1440×2185 | 0.303% | Met |
+| 66:252 Collabs payout reconciliation | `/finance/settlements/COMM-DEMO-D` | 1440×2111 | 1440×2111 | 0.405% | Met |
+| 66:447 TikTok native settlement | `/finance/settlements/TT-NATIVE-DEMO` | 1440×2194 | 1440×2194 | 0.660% (0.376% below the navigation bar) | Not met, on purpose: the navigation highlights Finance, Figma highlights Creators (see Settlement differences). The two nav pills alone are about 0.3% |
+| 7:510 Finance dashboard | `/finance` | 1440×1707 | 1440×1707 | 0.247% | Met |
+| 7:683 Close and reconciliation | `/finance/close/2026-10` | 1440×1471 | 1440×1471 | 0.177% | Met |
+| 12:1006 Finance analytics | `/analytics/finance` | 1440×1313 | 1440×1313 | 0.210% | Met |
+| 5:289 Customer lifecycle | `/customers/lifecycle` | 1440×1369 | 1440×1411 | 0.239% over 1323 rows | Met over aligned rows (demo footnote, +42px) |
+| 5:404 Setup email | `/customers/flows/setup` | 1440×1323 | 1440×1365 | 0.169% over 1277 rows | Met over aligned rows (demo footnote, +42px) |
+| 11:372 Early-access email | `/customers/flows/early-access` | 1440×1302 | 1440×1378 | 0.406% over 1130 rows | Met over aligned rows (policy reasons and footnote, +76px) |
+| 11:498 Abandoned checkout | `/customers/flows/abandoned-checkout` | 1440×1302 | 1440×1378 | 0.405% over 1130 rows | Met over aligned rows (+76px) |
+| 11:624 Review request | `/customers/flows/review-request` | 1440×1302 | 1440×1378 | 0.404% over 1130 rows | Met over aligned rows (+76px) |
+| 11:750 Consent | `/customers/consent` | 1440×1276 | 1440×1318 | 0.098% over 1230 rows | Met over aligned rows (demo footnote, +42px) |
+| 11:852 Activation and retention | `/customers/activation` | 1440×1106 | 1440×1148 | 0.250% over 1060 rows | Met over aligned rows (demo footnote, +42px) |
+| 7:876 Connections | `/settings/connections` | 1440×2058 | 1440×2100 | 0.257% over 2012 rows | Met over aligned rows (demo footnote, +42px) |
+| 7:1085 Team permissions | `/settings/team` | 1440×1349 | 1440×1391 | 0.119% over 1303 rows | Met over aligned rows (demo footnote, +42px) |
+| 14:637 Automation runs | `/automations` | 1440×2072 | 1440×2072 | 0.215% | Met |
+| 14:911 Zap/report schedule | `/automations/zap-12/schedule` | 1440×2099 | 1440×2263 | 0.216% over 1596 rows (4.310% unaligned) | Met over aligned rows (editable fields add 122px, footnote 42px). The Cadence and Time zone block and the steps list are not in the judged rows |
+| 66:641 Channel capabilities | `/settings/capabilities` | 1440×2015 | 1440×2015 | 0.183% | Met |
+| 12:534 Recovery state gallery | `/design-system/states` | 1440×1478 | 1440×1520 | 0.162% over 1432 rows | Met over aligned rows (development footnote, +42px) |
+| 12:708 Tablet operations | `/operations` at 1024 | 1024×1078 | 1024×1078 | 2.518% (0.230% over rows 216 to 1078, everything under the header) | Not met. The shell navigation is not the "More" design (about 1.1 points), and the Open source button is right-aligned rather than 350px in (about 1.2 points; see below) |
+| 12:653 Mobile operations | `/operations?home=H2` at 390 | 390×1366 | 390×1424 | 21.097% unaligned | Not met. The shell navigation wraps to 224px against Figma's 96px "Menu" bar, the canvas inset is 8px against 16px, and the cards differ on purpose; nothing below the shell lines up, so no aligned figure is given |
+
+Why the remaining differences are what they are:
+
+- **Text antialiasing.** Figma's raster and Chromium's differ at every glyph edge, even where the text sits at the same pixel positions (the navigation labels do). The lowest figures above, 0.098% to 0.15%, are what a screen reads when nothing else differs, so about 0.1 points of every figure is a floor, not drift.
+- **Shell at 390 and 1024.** Both native Operations designs collapse the navigation ("Menu", "More"). Doing that changes how every screen is reached on narrow widths and needs Kevon's decision (THO-306), so the shell still wraps. Operations is the only screen with native 390 and 1024 designs.
+- **Tablet "Open source".** Figma's 1024 header puts one button after a fixed 350px spacer; the code right-aligns it so it holds at other widths (listed under Operations differences). Left where it is, the two positions of that button account for about 1.2 points of the page's 2.518%.
+
+What changed in this sweep (all measured against the pass mark before and after):
+
+- `Panel` content is 2px wider, with 22px right padding: Figma's panel content runs from 25px inside the left edge to 23px inside the right edge, not symmetrically. Eleven screens moved by 0.1 to 0.3 points (for example Operations 0.294% to 0.169%, Return resolved 0.362% to 0.121%, Fulfillment analytics 0.374% to 0.133%, Finance analytics 0.721% to 0.210%). The notice box already used the same asymmetry (20px and 18px).
+- Close and reconciliation: the close status rows are 40px apart, as in Figma 7:683 (0.695% to 0.177%).
+- Finance analytics: the bars of "Where $12,596 goes" start at the top of their row (`BarRows` `trackTop={0}`).
+- TikTok native settlement: the four route chips are 232, 246, 246 and 172px wide with a 16px gap (they were hugging their text with a 12px gap); the rate lanes use the same asymmetric padding (1.037% to 0.660%).
+- Schedule: the numbered steps are 77px apart (title to description 6px); the notice buttons are 10px apart (0.534% to 0.222% over the top 760px). Automation runs shares the button spacing (0.254% to 0.215%).
+- Lifecycle flows: the sandbox result badge sits at the left of its card, as in Figma, instead of stretching.
+- Operations 1024: the queue table columns and the stock labels are 2px narrower to match Figma's panel content.
+- `text-rendering: geometricPrecision` on `body`. It changes no pixel on macOS (every figure above is the same with and without it) and makes Chromium on Linux lay out unhinted text, as macOS does. See the next list.
+
+Assertions that are still loosened:
+
+- `e2e/settings.spec.ts`: the page heights of Automation runs (2072) and Channel capabilities (2015) allow 18px, one wrapped line. The cause is known: CI's Linux Chromium measured Automation runs at 2054, and on macOS the paragraph "Daily runs discover permitted lifestyle prospects, ..." in the notice is 1275px wide on one line in a 1256px box, 1.5% too wide to fit, so any platform whose text runs 1.5% narrower puts it on one line. Forcing the unhinted text layout above is the proposed cure; it is not verified on Linux from this machine, so the two assertions are left as they were until a CI run of this branch shows exact heights.
 
 ## Shared page components
 

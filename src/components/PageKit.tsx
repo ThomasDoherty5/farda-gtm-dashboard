@@ -35,7 +35,7 @@ export function Panel({ title, note, large = false, roomy = false, tight = false
  * The violet boxes under a page title. `context` is the bordered "Current acquisition policy" box that can hold actions,
  * `plain` is the borderless notice, and `source` is the notice with a leading "Source" badge.
  */
-export function Notice({ title, kind = "context", badge, actions, descriptionId, children }: { title: string; kind?: "context" | "plain" | "source"; badge?: string; actions?: ReactNode; descriptionId?: string; children: ReactNode }) {
+export function Notice({ title, kind = "context", badge, actions, actionsGap, descriptionId, children }: { title: string; kind?: "context" | "plain" | "source"; badge?: string; actions?: ReactNode; /** Space between the action buttons in px, where a design sets other than 12. */ actionsGap?: number; descriptionId?: string; children: ReactNode }) {
   if (kind === "source")
     return (
       <div className={styles.source}>
@@ -50,7 +50,7 @@ export function Notice({ title, kind = "context", badge, actions, descriptionId,
     <div className={`${styles.context} ${kind === "plain" ? styles.contextPlain : ""}`}>
       <p className={styles.contextTitle}>{title}</p>
       <p id={descriptionId} className={styles.small}>{children}</p>
-      {actions && <div className={styles.row}>{actions}</div>}
+      {actions && <div className={styles.row} style={actionsGap ? { gap: actionsGap } : undefined}>{actions}</div>}
     </div>
   );
 }

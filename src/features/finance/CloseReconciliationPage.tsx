@@ -84,7 +84,7 @@ function Body({ res, c, scenario, dialog, setDialog }: { res: ReadResponse<Perio
         <Panel title="October 2026" subtitle="Synthetic dry-run period" roomy testId="progress">
           <p className={styles.progressValue} data-testid="metric-Close progress">{done} / {total}</p>
           <Meter percent={(100 * done) / total} label={`${done} of ${total} checks complete`} />
-          <FactList label="Close status" rows={[["Close owner", c.closeOwner], ["CPA review", c.cpaReview], ["Period status", PERIOD_STATUS_LABEL[c.status]]]} />
+          <FactList gap={20} label="Close status" rows={[["Close owner", c.closeOwner], ["CPA review", c.cpaReview], ["Period status", PERIOD_STATUS_LABEL[c.status]]]} />
           <Divider />
           <Note>A closed period is locked in the ledger. Reopen only through the source review process.</Note>
           <Button aria-haspopup="dialog" style={{ minWidth: 230, alignSelf: "flex-start" }} onClick={() => setDialog({ source: "Open the close checklist" })}>Open close checklist</Button>

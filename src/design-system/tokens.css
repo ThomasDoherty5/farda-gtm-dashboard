@@ -71,7 +71,7 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html { color-scheme: light; }
-body { margin: 0; font: var(--text-body); letter-spacing: 0; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; background: var(--color-canvas); color: var(--color-ink); }
+body { margin: 0; font: var(--text-body); letter-spacing: 0; text-rendering: geometricPrecision; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; background: var(--color-canvas); color: var(--color-ink); }
 a { color: var(--color-violet); }
 :focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
 table { border-collapse: collapse; width: 100%; }

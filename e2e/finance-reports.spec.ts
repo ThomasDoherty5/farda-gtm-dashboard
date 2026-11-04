@@ -28,6 +28,24 @@ test.describe("finance dashboard, close and analytics against Figma at 1440", ()
     });
   }
 
+  test("the close status rows are 40px apart, as in 7:683", async ({ page }) => {
+    await page.goto("/finance/close/2026-10");
+    const rows = page.locator('dl[aria-label="Close status"] > div');
+    await expect(rows).toHaveCount(3);
+    const y = async (i: number) => Math.round((await rows.nth(i).boundingBox())!.y);
+    expect((await y(1)) - (await y(0))).toBe(40);
+    expect((await y(2)) - (await y(1))).toBe(40);
+  });
+
+  test("the cost bars start at the top of their rows, as in 12:1006", async ({ page }) => {
+    await page.goto("/analytics/finance");
+    const row = page.locator('ul[aria-label="Order contribution breakdown"] > li').first();
+    await expect(row).toBeVisible();
+    const top = (await row.boundingBox())!.y;
+    const track = (await row.locator(":scope > span").nth(1).boundingBox())!.y;
+    expect(Math.round(track - top)).toBe(0);
+  });
+
   test("the cash chart puts $46,200 where 20:409 does", async ({ page }) => {
     await page.goto("/analytics/finance");
     const svg = page.getByRole("img", { name: /Observed cash fell/ });

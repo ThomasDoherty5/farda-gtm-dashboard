@@ -31,6 +31,7 @@ export function CadenceNotice({ title, children, funnel = false }: { title: stri
   return (
     <Notice
       title={title}
+      actionsGap={10}
       actions={
         <>
           <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>

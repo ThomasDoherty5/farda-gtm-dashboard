@@ -25,7 +25,7 @@
 .test { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-20); background: var(--color-subtle); border-radius: var(--space-16); }
 .test p { margin: 0; font: var(--text-label); color: var(--color-ink); }
 .test .result { align-self: stretch; text-align: center; font: var(--text-small); color: var(--color-muted); }
-
+.test > span { align-self: flex-start; }
 /* Consent distribution (11:799): one bar, one mutually exclusive category per record. */
 .bar { display: flex; height: 72px; overflow: hidden; }
 .bar > span { display: block; height: 72px; }

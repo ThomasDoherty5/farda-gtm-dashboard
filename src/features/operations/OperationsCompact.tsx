@@ -44,7 +44,7 @@ export function TabletOperations({ data, home, ready, syncedMinutesAgo, stale }:
         {ready.length ? (
           <FlatTable
             caption="Ready to leave home"
-            columns={[{ label: "Order / sample", width: 354 }, { label: "Home", width: 170 }, { label: "Waiting", width: 180 }, { label: "Action", width: 160 }]}
+            columns={[{ label: "Order / sample", width: 354 }, { label: "Home", width: 170 }, { label: "Waiting", width: 180 }, { label: "Action", width: 158 }]}
             rows={ready.slice(0, 3).map((r) => ({
               key: r.ref,
               cells: [<span key="r" className={styles.queueRef}>{r.ref}</span>, r.home, waitingLabel(r.waitingHours), <LinkButton key="a" to={`/orders/${r.ref}`} variant={r.waitingHours > data.warnAfterHours ? "secondary" : "ghost"} aria-label={`View ${r.ref}`} style={{ minWidth: 112 }}>View</LinkButton>],
@@ -57,7 +57,7 @@ export function TabletOperations({ data, home, ready, syncedMinutesAgo, stale }:
       </Panel>
       <HalfColumns keepColumns>
         <Panel title="Stock by home" testId="stock-panel">
-          <FactList label="Stock by home" rows={stock.map((s) => { const available = s.onHand - s.reserved; return [s.home, available < s.threshold ? `${available} · low stock` : `${available} available`] as [string, string]; })} />
+          <FactList label="Stock by home" labelWidth={166} rows={stock.map((s) => { const available = s.onHand - s.reserved; return [s.home, available < s.threshold ? `${available} · low stock` : `${available} available`] as [string, string]; })} />
         </Panel>
         <Panel title={`${exceptions.length} shipping exception${exceptions.length === 1 ? "" : "s"}`} testId="exceptions-panel">
           <p className={styles.panelText}>{exceptionSummary(exceptions.map((e) => e.state))} Resolve source cases before issuing replacements.</p>
