@@ -60,6 +60,7 @@ export const extraRecordUrls: string[] = [
   "/orders/TEST-SC-0081",
   "/orders/TEST-SH-1031",
   "/creators/demo-creator-1/evidence/demo-evidence-2",
+  "/finance/close/2026-10?scenario=exportfailed",
   "/approvals",
   "/runs",
   "/creators",

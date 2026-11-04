@@ -45,8 +45,10 @@ const SELECTORS: Record<string, { probe: string; values: string[] }> = {
 };
 const withParam = (url: string, key: string, value: string) => url + (url.includes("?") ? "&" : "?") + `${key}=${value}`;
 
+/** Loads a page and skips the data layer's retry back-off (1 s, 2 s, 4 s), so an unavailable source reaches its error state at once. */
 async function load(page: Page, url: string) {
   await page.goto(url);
+  await page.clock.fastForward(10_000);
   await expect(page.locator("main")).toBeVisible();
   // The state gallery shows a loading state on purpose.
   if (!url.startsWith("/design-system/states")) await expect(page.getByRole("status").filter({ hasText: /^Loading/ }), url).toHaveCount(0, { timeout: 30_000 });
@@ -56,6 +58,7 @@ async function load(page: Page, url: string) {
 chunk(allUrls, GROUPS).forEach((urls, i) => {
   test(`alternate states (loading excluded), 1440px, routes ${i + 1} of ${GROUPS}`, async ({ page }) => {
     test.setTimeout(300_000);
+    await page.clock.install();
     await page.setViewportSize({ width: 1440, height: 900 });
     const found: string[] = [];
     const reached: string[] = [];
