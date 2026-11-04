@@ -67,7 +67,7 @@ const rejects = (key: string, data: unknown) => expect(viewSchema(key).safeParse
 
 describe("the schema registry covers every operations view the demo serves", () => {
   it("has exactly these view keys", () => {
-    expect(Object.keys(opsViewSchemas).sort()).toEqual(["fulfillmentAnalytics", "inventoryOverview", "operationsOverview", "orderDetail", "returnDetail", "shippingException", "supportWorkspace"]);
+    expect(Object.keys(opsViewSchemas).sort()).toEqual(["fulfillmentAnalytics", "inventoryOverview", "operationsOverview", "opsHealth", "orderDetail", "returnDetail", "shippingException", "supportWorkspace"]);
     expect(Object.keys(opsActionSchemas).sort()).toEqual(["prepareReturnTask", "recordShippingDecision", "requestStockTransfer"]);
   });
 });
@@ -509,3 +509,22 @@ const _accepts = [
   {} as SupportWorkspace satisfies z.infer<typeof supportWorkspaceSchema>,
 ];
 void _accepts;
+
+describe("opsHealth", () => {
+  it("parses the demo response and keeps an unread cost unknown, never zero", async () => {
+    const data = await expectParses(createDemoAdapter(), "opsHealth", {});
+    expect(data.fulfillment.all.costUnread).toBe(1);
+    expect(data.fulfillment.all.orderToShipped.days).toMatchObject({ state: "known" });
+  });
+
+  it("rejects an unknown average that carries a number, a negative count and a missing group field", async () => {
+    type Loose = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    const good = (await createDemoAdapter().readView(readRequest("opsHealth", {}))).data as Loose;
+    const bad = (mutate: (d: Loose) => void) => { const d = clone(good); mutate(d); rejects("opsHealth", d); };
+    bad((d) => (d.fulfillment.all.orderToShipped.days = { state: "unknown", value: 0, reasonCode: "X" }));
+    bad((d) => (d.fulfillment.all.costUnread = -1));
+    bad((d) => delete d.fulfillment.all.deliveredWithoutAcceptance);
+    bad((d) => (d.orders[0].state = "Shipped"));
+    bad((d) => (d.issues.fin.cap.minorUnits = -1));
+  });
+});
