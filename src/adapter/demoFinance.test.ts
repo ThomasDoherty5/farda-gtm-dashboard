@@ -82,3 +82,23 @@ describe("reconciliation requests", () => {
     expect(createDemoFinance().submit({ ...reconcile(ok), actionKind: "other" })).toBeNull();
   });
 });
+
+describe("close package read", () => {
+  it("serves the package read only, with closing held for its own blockers", () => {
+    const f = createDemoFinance();
+    const res = read(f, "closePackage", { period: "2026-10" });
+    expect((res.data as { status: string }).status).toBe("reconciling");
+    expect(res.capabilities).toEqual([{ actionKind: "closePeriod", state: "held", reasonCodes: ["UNRESOLVED_DIFFERENCE", "CPA_SIGN_OFF_PENDING", "EXPORT_INCOMPLETE"] }]);
+  });
+
+  it("marks a closed fixture period as already closed, not available to close again", () => {
+    const res = read(createDemoFinance(), "closePackage", { period: "2026-10", scenario: "closed" });
+    expect(res.capabilities).toEqual([{ actionKind: "closePeriod", state: "unsupported", reasonCodes: ["ALREADY_CLOSED"] }]);
+  });
+
+  it("does not know a period that doesn't exist, and has no action that closes, signs off or exports", () => {
+    const f = createDemoFinance();
+    expect(errorFrom(() => read(f, "closePackage", { period: "1999-01" })).body.code).toBe("RECORD_NOT_FOUND");
+    for (const actionKind of ["closePeriod", "signOffPeriod", "exportReports"]) expect(f.submit({ ...reconcile(ok), actionKind })).toBeNull();
+  });
+});

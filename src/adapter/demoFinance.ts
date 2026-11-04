@@ -2,6 +2,7 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { respondWith } from "./demoViews";
 import { financeDashboardDemo, ledgerDemo, payableDemo, periodCloseDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
+import { closePackageDemo, type ClosePackage } from "@/fixtures/financeClose";
 
 const fail = (code: string, message: string, requestId: string, extra: Partial<AdapterErrorBody> = {}): never => {
   throw new AdapterError({ code, message, requestId, correlationId: `demo-${requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", ...extra });
@@ -62,6 +63,12 @@ export function createDemoFinance() {
     return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "closePeriod", state: "held", reasonCodes: ["CPA_SIGN_OFF_REQUIRED", "RECONCILIATION_OPEN"] }] });
   }
 
+  function closePackage(request: ReadRequest<{ period: string; scenario?: string }>): ReadResponse<ClosePackage> {
+    const data = closePackageDemo(request.filters.period, request.filters.scenario) ?? fail("RECORD_NOT_FOUND", "This accounting period does not exist or was removed.", request.requestId);
+    // The package is read-only evidence. Closing, signing off and exporting belong to their owners and stay unavailable here.
+    return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "closePeriod", state: data.status === "closed" ? "unsupported" : "held", reasonCodes: data.status === "closed" ? ["ALREADY_CLOSED"] : data.blockers.map((b) => b.code) }] });
+  }
+
   function reconcile(request: ActionRequest<ReconcilePayload>): ActionResponse {
     const { settlementId, matches } = request.payload;
     const base = settlementDemo(settlementId) ?? fail("RECORD_NOT_FOUND", "This settlement does not exist.", request.requestId);
@@ -108,6 +115,8 @@ export function createDemoFinance() {
           return dashboard(request as ReadRequest<{ scenario?: string }>);
         case "periodClose":
           return close(request as ReadRequest<{ period: string; scenario?: string }>);
+        case "closePackage":
+          return closePackage(request as ReadRequest<{ period: string; scenario?: string }>);
         default:
           return null;
       }

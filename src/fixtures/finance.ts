@@ -5,6 +5,7 @@
  * New acquisition is commission-only; the $150 fee is a historical, accepted obligation. Do not mix with other datasets.
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
+import type { PeriodStatus } from "./financeClose";
 import { known, unknown, usd } from "./values";
 
 export type CommissionState = "held" | "disputed" | "awaitingProvider" | "paid";
@@ -217,7 +218,7 @@ export type PeriodClose = {
   checks: CloseCheck[];
   closeOwner: string;
   cpaReview: string;
-  status: "open" | "closed" | "reopened" | "revised";
+  status: PeriodStatus;
   exceptions: CloseExceptionRow[];
   /** Report package: each report is "not generated" until the close and export complete. */
   reports: { name: string; state: string }[];
@@ -243,7 +244,7 @@ export const periodCloseDemo = (period: string, scenario?: string): PeriodClose 
     ],
     closeOwner: "Finance lead",
     cpaReview: "Not requested",
-    status: "open",
+    status: failed ? "failed" : "reconciling",
     exceptions: [
       { payout: "TEST-PO-SH-021", expected: 148640, difference: 1200 },
       { payout: "TEST-PO-TT-018", expected: 64275, difference: 625 },
