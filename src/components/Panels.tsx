@@ -119,3 +119,18 @@ export function Meter({ percent, tone, label }: { percent: number; tone?: "warni
     </div>
   );
 }
+
+/** Labeled bars (Figma "Chart row / …": a 110px label, a 390px track, a 56px value). `max` is the value a full track stands for. */
+export function BarRows({ label, rows, max, gap = 16 }: { label: string; rows: { label: string; value: number; display?: string; warn?: boolean }[]; max: number; gap?: 16 | 20 }) {
+  return (
+    <ul className={styles.barRows} style={{ gap }} aria-label={label}>
+      {rows.map((r) => (
+        <li key={r.label} className={styles.barRow}>
+          <span>{r.label}</span>
+          <span><Meter percent={(100 * r.value) / max} tone={r.warn ? "warning" : undefined} label={`${r.label}: ${r.display ?? r.value}`} /></span>
+          <span>{r.display ?? r.value}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}

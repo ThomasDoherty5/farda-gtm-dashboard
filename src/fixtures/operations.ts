@@ -5,6 +5,7 @@
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
 import { DEMO_NOW } from "./overview";
+import { HOME_STOCK } from "./inventory";
 import { known, notApplicable, unknown, usd } from "./values";
 
 export type Home = "H1" | "H2" | "H3";
@@ -60,11 +61,7 @@ export const operationsDemo: OperationsOverview = {
     total: 18,
     rows: [q("TEST-SH-1042", "H1", 57.6, 2), q("TEST-SC-0081", "H2", 50.4, 2), q("TEST-TT-1038", "H1", 31.2, 1), q("TEST-SH-1045", "H3", 16, 1), q("TEST-SC-0085", "H2", 8, 1)],
   },
-  stock: [
-    { home: "H1", onHand: 100, reserved: 14, capacity: 120, threshold: 20 },
-    { home: "H2", onHand: 28, reserved: 10, capacity: 80, threshold: 20 },
-    { home: "H3", onHand: 68, reserved: 4, capacity: 100, threshold: 20 },
-  ],
+  stock: HOME_STOCK.map((s) => ({ ...s })),
   transfers: [{ ref: "TEST-TR-012", toHome: "H2", state: "in transit" }],
   exceptions: [
     { shipmentRef: "TEST-SP-0093", exceptionId: "TEST-EVT-129", state: "Lost", home: "H2" },
@@ -378,11 +375,7 @@ export const fulfillmentDemo = (periodDays: 7 | 14): FulfillmentAnalytics => ({
   onTimePct: known(94),
   awaitingHandoff: known(18),
   overdue: 4,
-  stock: [
-    { home: "H1", available: 86, reserved: 14, threshold: 20 },
-    { home: "H2", available: 18, reserved: 10, threshold: 20 },
-    { home: "H3", available: 64, reserved: 4, threshold: 20 },
-  ],
+  stock: HOME_STOCK.map((s) => ({ home: s.home, available: s.onHand - s.reserved, reserved: s.reserved, threshold: s.threshold })),
   scaleUnits: 120,
   avgTransitDays: known(3.4),
   transit: periodDays === 14 ? [{ label: "1–2 days", share: 32 }, { label: "3–4 days", share: 51 }, { label: "5–6 days", share: 13 }, { label: "7+ days", share: 4, warn: true }] : null,

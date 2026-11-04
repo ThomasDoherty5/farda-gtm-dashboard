@@ -2,6 +2,9 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { respondWith } from "./demoViews";
 import { DEMO_NOW } from "@/fixtures/overview";
+import { availableOf, inventoryDemo, type TransferRequest } from "@/fixtures/inventory";
+import { HOMES, type Home } from "@/fixtures/operations";
+import { supportDemo } from "@/fixtures/support";
 import { fulfillmentDemo, heldRows, operationsDemo, orderDemo, returnDemo, shippingExceptionDemo, type OperationsOverview, type ReturnDetail, type ReturnDisposition, type ReturnResolution, type ShippingExceptionDetail } from "@/fixtures/operations";
 
 type Capability = ReadResponse<unknown>["capabilities"][number];
@@ -11,6 +14,7 @@ const fail = (code: string, message: string, requestId: string, extra: Partial<A
 };
 
 export type ReturnProposalPayload = { returnRef: string; disposition: ReturnDisposition; resolution: ReturnResolution; reason: string };
+export type TransferRequestPayload = { from: Home; to: Home; units: number; reason: string };
 export type ShippingDecisionPayload = { shipmentRef: string; exceptionId: string; decision: "refund" | "replacement"; reason: string };
 
 const minutesBefore = (iso: string, minutes: number) => new Date(new Date(iso).getTime() - minutes * 60_000).toISOString();
@@ -26,6 +30,7 @@ export function createDemoOps() {
   const results = new Map<string, { hash: string; result: ActionResponse }>();
 
   const proposals = new Map<string, NonNullable<ReturnDetail["proposal"]>>();
+  const transferRequests: TransferRequest[] = [];
   const exceptionKey = (shipmentRef: string, exceptionId: string) => `${shipmentRef}/${exceptionId}`;
 
   function overview(request: ReadRequest<{ scenario?: string }>): ReadResponse<OperationsOverview> {
@@ -94,6 +99,43 @@ export function createDemoOps() {
     return respondWith(request, data, { dataVersion: data.version, capabilities: caps });
   }
 
+  function inventory(request: ReadRequest<{ scenario?: string }>) {
+    const scenario = request.filters.scenario;
+    if (scenario === "unavailable") fail("SOURCE_UNAVAILABLE", "The inventory mirror could not be reached.", request.requestId, { retryable: true });
+    const data = inventoryDemo(scenario);
+    data.pendingRequests = structuredClone(transferRequests);
+    data.version = `inv${1 + transferRequests.length}`;
+    const stale = scenario === "stale";
+    const caps: Capability[] = [{ actionKind: "requestStockTransfer", ...(stale ? { state: "held" as const, reasonCodes: ["SOURCE_STALE"] } : { state: "available" as const, reasonCodes: [] }) }];
+    return respondWith(request, data, { dataVersion: data.version, dataState: stale ? "stale" : scenario === "delayed" ? "partial" : "ready", capabilities: caps });
+  }
+
+  function support(request: ReadRequest<{ caseId: string; scenario?: string }>) {
+    const data = supportDemo(request.filters.caseId, request.filters.scenario) ?? fail("RECORD_NOT_FOUND", "This support case does not exist or was removed.", request.requestId);
+    return respondWith(request, data, { dataVersion: `support-${data.caseId}@1`, dataState: request.filters.scenario === "stale" ? "stale" : "ready", capabilities: [{ actionKind: "reopenCase", state: "unsupported", reasonCodes: ["INTERCOM_OWNS_CASES"] }] });
+  }
+
+  function requestStockTransfer(request: ActionRequest<TransferRequestPayload>): ActionResponse {
+    const { from, to, units, reason } = request.payload;
+    const inv = inventoryDemo();
+    const current = `inv${1 + transferRequests.length}`;
+    if (request.expectedVersion !== current) fail("STALE_VERSION", "Stock changed. Reload it before requesting a transfer.", request.requestId, { currentVersion: current });
+    const field = (name: string, message: string): never => fail("VALIDATION_FAILED", message, request.requestId, { fieldErrors: { [name]: message } });
+    if (!HOMES.includes(from)) field("from", "Choose a home to move stock from.");
+    if (!HOMES.includes(to)) field("to", "Choose a home to move stock to.");
+    if (from === to) field("to", "The destination must differ from the source.");
+    if (!Number.isInteger(units) || units <= 0) field("units", "Enter a whole number of units above zero.");
+    const source = inv.rows.find((r) => r.home === from)!;
+    const reservedByRequests = transferRequests.filter((t) => t.from === from).reduce((n, t) => n + t.units, 0);
+    const available = availableOf(source) - reservedByRequests;
+    if (units > available) fail("QUOTA_OR_STOCK_HOLD", `Only ${available} units are available at Home ${from}. Reserved units can't be transferred.`, request.requestId, { fieldErrors: { units: `Only ${available} available at Home ${from}.` } });
+    if (!reason.trim()) field("reason", "Enter the operational reason.");
+    if (transferRequests.some((t) => t.from === from && t.to === to && t.units === units)) fail("VALIDATION_FAILED", "An identical transfer request is already waiting. A duplicate movement isn't allowed.", request.requestId);
+    const response = respond(request, "approvalPending", { reasonCodes: ["AWAITING_APPROVAL"], nextAction: { kind: "sourceReceipt", ownerRef: "Fulfillment", dueAt: null, available: false } });
+    transferRequests.push({ key: `REQ-${transferRequests.length + 1}`, from, to, units, reason: reason.trim(), state: "Waiting for approval. No stock has moved." });
+    return response;
+  }
+
   function fulfillment(request: ReadRequest<{ days?: number }>) {
     if (request.filters.days !== undefined && request.filters.days !== 7 && request.filters.days !== 14) fail("VALIDATION_FAILED", "Choose 7 or 14 days.", request.requestId, { fieldErrors: { days: "Choose 7 or 14 days." } });
     const data = fulfillmentDemo(request.filters.days === 7 ? 7 : 14);
@@ -157,6 +199,10 @@ export function createDemoOps() {
           return order(request as ReadRequest<{ orderId: string }>);
         case "shippingException":
           return shippingException(request as ReadRequest<{ shipmentId: string; exceptionId: string }>);
+        case "inventoryOverview":
+          return inventory(request as ReadRequest<{ scenario?: string }>);
+        case "supportWorkspace":
+          return support(request as ReadRequest<{ caseId: string; scenario?: string }>);
         case "returnDetail":
           return returnDetail(request as ReadRequest<{ returnId: string; scenario?: string }>);
         case "fulfillmentAnalytics":
@@ -167,14 +213,14 @@ export function createDemoOps() {
     },
     /** Same key and payload returns the original result; the same key with a changed payload is refused. */
     submit(request: ActionRequest<unknown>): ActionResponse | null {
-      if (request.actionKind !== "recordShippingDecision" && request.actionKind !== "prepareReturnTask") return null;
+      if (!["recordShippingDecision", "prepareReturnTask", "requestStockTransfer"].includes(request.actionKind)) return null;
       const hash = JSON.stringify([request.operation, request.actionKind, request.expectedVersion, request.payload]);
       const prior = results.get(request.idempotencyKey);
       if (prior) {
         if (prior.hash !== hash) fail("MANIFEST_CHANGED", "This action changed, so it needs a fresh preview.", request.requestId);
         return prior.result;
       }
-      const result = request.actionKind === "prepareReturnTask" ? prepareReturnTask(request as ActionRequest<ReturnProposalPayload>) : recordShippingDecision(request as ActionRequest<ShippingDecisionPayload>);
+      const result = request.actionKind === "requestStockTransfer" ? requestStockTransfer(request as ActionRequest<TransferRequestPayload>) : request.actionKind === "prepareReturnTask" ? prepareReturnTask(request as ActionRequest<ReturnProposalPayload>) : recordShippingDecision(request as ActionRequest<ShippingDecisionPayload>);
       results.set(request.idempotencyKey, { hash, result });
       return result;
     },

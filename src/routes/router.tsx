@@ -5,6 +5,8 @@ import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
+import { InventoryPage } from "@/features/inventory/InventoryPage";
+import { SupportPage } from "@/features/support/SupportPage";
 import { FulfillmentAnalyticsPage } from "@/features/operations/FulfillmentAnalyticsPage";
 import { OperationsPage } from "@/features/operations/OperationsPage";
 import { OrderPage } from "@/features/operations/OrderPage";
@@ -26,6 +28,8 @@ const implemented: Record<string, JSX.Element> = {
   "/orders/:orderId": <OrderPage />,
   "/shipments/:shipmentId/exceptions/:exceptionId": <ShippingExceptionPage />,
   "/returns/:returnId": <ReturnPage />,
+  "/inventory": <InventoryPage />,
+  "/support/cases/:caseId": <SupportPage />,
   "/analytics/fulfillment": <FulfillmentAnalyticsPage />,
 };
 

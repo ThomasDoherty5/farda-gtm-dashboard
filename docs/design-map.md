@@ -153,6 +153,33 @@ Pending Kevon Baha's confirmation.
 | Fulfillment chart | Picture of bars | Bars plus an accessible name and a hidden data table | FE09-08 requires a chart alternative |
 | Source dialogs | "Open Shopify", "Open Shippo", "Open source row" and similar | Handoff dialogs saying no verified link exists | The links are fictional. FE09-06 and the SOURCE profile forbid guessing a destination |
 
+## Stock and support comparison (sources 7:129, 7:317)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. Both match the page size and are under the proposed 0.5%.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 7:129 Stock per home and transfer | `/inventory` | Matches (1440×1454) | 0.347% |
+| 7:317 Support workspace | `/support/cases/TEST-ISS-021` | Matches (1440×1389) | 0.236% |
+
+## Stock and support: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Stock title row | "All homes" and "Open inventory" | A third button, "Request transfer", opens a dialog. "All homes" is a URL-backed home filter | The transfer form isn't drawn; the control contract says to implement it, not fake a finished one. It asks for a transfer and moves nothing |
+| Health | Healthy or Low stock | Also "Needs review" when Shopify's count disagrees with the movement ledger, with an alert naming both numbers. The ledger balance stays | FE10-02 and FE10-05: observed and movement-derived counts are different facts, and a conflict must show |
+| Movement log | Three complete rows | A movement without its receipt reads "Not counted · Receipt not recorded" and a note says it is excluded from balances. Appears only with `?scenario=delayed` | The log's own subtitle says incomplete rows are excluded; the page now shows when that happens |
+| Transfer, received units | "Not confirmed" | The same, and the value is an unknown, never a zero | A known zero and an unconfirmed receipt are different states |
+| Transfer requests | None | A waiting request shows in an alert: "Waiting for approval. No stock has moved." The request is refused for more than the available units (reserved can't move), a duplicate, the same home or a stale ledger version | A submitted request is not a verified receipt or a depletion |
+| Stock fixtures | Typed per screen | Operations, fulfillment analytics and stock all read one set of home balances | OPS270-STOCK-02: the stock and dispatch views must reconcile |
+| Support order reference | SH-1042 and TEST-SH-1042 | SH-1031 and TEST-SH-1031 | The lost-shipment case belongs to the order whose shipment is lost; in Figma 4:171, 1042 is still waiting for shipment |
+| "14-day cohort" button | A button | A dialog saying what the cohort covers and that the demo holds no other period | No period selector, since there is only one period to choose |
+| Case panel | One case, TEST-ISS-021 | The queue rows link to `/support/cases/:caseId`, and the panel shows that case, with a linked shipment or return link | The route has a case id. Next-step text for the other three cases is written for the demo |
+| Source buttons | Open source, Open Intercom, Open selected case, View conversation | Handoff dialogs saying no verified link exists | The links are fictional. Nothing replies to, reopens or reassigns a case: Intercom owns that, and the capability reads unsupported |
+| Linked shipment | Plain text | A link, in ink with an underline | It reaches the shipment exception |
+
 ## Shared page components
 
 `src/components/Panels.tsx` holds the page furniture the operations, support and finance screens share: PageHeader, Panel, Notice, FactList, Steps, FlatTable and Meter. Measurements come from Figma frames such as 4:6, 4:171 and 4:317. Panels keep a 24px padding and a 1px border. Figma's content width ignores the border, but using 23px padding made the pixel difference worse, so it is left at 24.
