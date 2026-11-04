@@ -10,6 +10,9 @@ import { CampaignFunnelPage } from "@/features/analytics/CampaignFunnelPage";
 import { CustomerJourneyPage } from "@/features/analytics/CustomerJourneyPage";
 import { LaunchPage } from "@/features/analytics/LaunchPage";
 import { PaidMediaPage } from "@/features/analytics/PaidMediaPage";
+import { PostPage } from "@/features/monitor/PostPage";
+import { WatchlistPage } from "@/features/monitor/WatchlistPage";
+import { MonitorPage } from "@/features/monitor/MonitorPage";
 import { AssessmentPage } from "@/features/scorecards/AssessmentPage";
 import { OfferPage } from "@/features/scorecards/OfferPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
@@ -27,6 +30,9 @@ const implemented: Record<string, JSX.Element> = {
   "/analytics/customer-journey": <CustomerJourneyPage />,
   "/creators/:creatorId/assessments/:assessmentId": <AssessmentPage />,
   "/offers/:offerId": <OfferPage />,
+  "/content": <MonitorPage />,
+  "/creators/watchlist": <WatchlistPage />,
+  "/content/:postId": <PostPage />,
   "/creators/discovery": <DiscoveryPage />,
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,

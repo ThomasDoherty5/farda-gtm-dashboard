@@ -106,6 +106,19 @@ Same capture settings as the analytics screens, measured 2026-11-03 at threshold
 
 The three assessment sources share one path. The record the adapter returns picks the layout (`kind`), so the address never chooses a scoring model. The pixel gap on the other two is text and form-control antialiasing, with native selects drawn slightly differently from Figma's text fields.
 
+## Content monitor comparison (sources 23:73, 25:166, 25:307, 25:481)
+
+Same capture settings as the analytics screens, measured 2026-11-03 at threshold 0.1 with the Inter fonts loaded. Every page size matches exactly. Two pages are just above the proposed 0.5% mark and are reported as not met.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 23:73 | `/content` | Matches (1440×1880) | 0.512%, not met |
+| 25:166 | `/creators/watchlist` | Matches (1440×1671) | 0.509%, not met |
+| 25:307 | `/runs/demo-run-hourly` (a tabless run path) | Matches (1440×1791) | 0.428% |
+| 25:481 | `/content/P-001` | Matches (1440×1364) | 0.364% |
+
+The hourly run shares `/runs/:runId` with the approval and recovery views. A `tab` of `approval` or `recovery` selects those; no tab selects the hourly monitor, and a run that isn't an hourly monitoring run says so.
+
 ## Intentional differences from Figma
 
 | Item | Figma | Code | Why |
@@ -158,6 +171,13 @@ The three assessment sources share one path. The record the adapter returns pick
 | Offer fields | Populated text fields | Real fields. Objective and the $0 upfront fee are read-only, and the objective follows the chosen checkout provider. Publishing network and provider are native selects | CTRL-106 to CTRL-112 |
 | Offer actions | Save, Review commitment, Review approval payload | Save sends a validated draft through the adapter and shows only the version the service acknowledged. The two reviews are read-only previews | CTRL-101, CTRL-102, CTRL-114: a draft is not an approval |
 | Offer waterfall | A static chart | Drawn from the draft's assumptions on one scale. A nonzero amount is at least 1px tall | Editing the commission recomputes it |
+| Monitor filters | Three buttons and a search pill | The same, as URL state. A window with no snapshot (Last 7 days) shows unknown counts, not zeros; a filter or search states "Showing N of M posts" and an empty match says it isn't zero posts | CTRL-048 to CTRL-051 |
+| Watchlist cohort control | "Launch cohort A" with every row shown | A named-cohort control. The default keeps all rows and marks members for screen readers; "Launch cohort A only" filters. Sample rows are labeled against the 40-profile total | CTRL-061: the design's default shows rows outside the cohort |
+| Watchlist and run next-step links | Plain text with an arrow | Buttons or links styled as that text. Each opens a read-only dialog that names what isn't connected (no verified conversation, post or session link) and changes nothing | CTRL-210 to CTRL-213 |
+| Hourly run policy | Populated fields | Read-only fields, with a Manage schedule link in the context line | CTRL-019 to CTRL-021: configuration belongs to THO-305 |
+| Retry failed profile | A button | Sends a read-only retry intent through the adapter. The demo's session is expired, so the answer is blocked and the page says nothing ran or was resent | CTRL-022: a retry never bypasses a login |
+| Post page for P-002 to P-005 | One post only | Same layout. Without consecutive snapshots the chart says so instead of drawing one | Only P-001 has a daily series in the design |
+| Dark coverage card | A border drawn inside | An inset ring, so the card's text width stays 396px | Keeps the design's wrapping |
 | Open commerce source, Open review outcomes, Open ad source | Buttons | Dialogs saying there is no verified source link | A fictional link can't perform a live action (SOURCE profile) |
 
 
