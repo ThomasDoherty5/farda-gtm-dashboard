@@ -7,6 +7,7 @@ import { guardTermsOf } from "./commissionPolicy";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
 import { createDemoOps } from "./demoOps";
+import { createDemoDiscovery } from "./demoDiscovery";
 import { createDemoReconciliation } from "./demoReconciliation";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
 import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
@@ -36,6 +37,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
    * already succeeded gets its original receipt even when the policy has since changed.
    */
   const approvals = createDemoApprovals({
+    actorRole: opts.actorRole,
     beforeDispatch: (request) => policy.guardApprovedDispatch(request),
     onApproved: (ref) => policy.recordApproval(ref),
   });
@@ -51,6 +53,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const finance = createDemoFinance();
   const offers = createDemoOffers();
   const batch = createDemoBatch();
+  const discovery = createDemoDiscovery();
   const collaboration = createDemoCollaboration();
   const settings = createDemoSettings();
   const lifecycle = createDemoLifecycle();
@@ -76,7 +79,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       const financeView = finance.read(request);
       if (financeView) return financeView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
-        return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+        return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
@@ -112,10 +115,11 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (opsResult) return opsResult;
       const financeResult = finance.submit(request);
       if (financeResult) return financeResult;
+      if (discovery.handles(request)) return discovery.submit(request as ActionRequest<never>);
       if (policy.handles(request)) return policy.submit(request);
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
-      if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
+      if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent" || request.actionKind === "decideTikTokSample") return batch.submit(request);
       return approvals.submit(request);
     },
     async saveResource<P, T>(request: SaveResourceRequest<P>, options?: ReadOptions): Promise<SaveResourceResponse<T>> {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SCHEMA_VERSION, actionResponseSchema, readResponseSchema, type ActionRequest, type ReadRequest } from "./contract";
 import { createDemoApprovals } from "./demoApprovals";
 import { AdapterError } from "./errors";
+import { seedApprovals } from "@/fixtures/approvals";
 import type { ApprovalDetail, DecidePayload, ReconcilePayload, RunDetail } from "@/features/approvals/types";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
@@ -265,5 +266,120 @@ describe("reads", () => {
     try { approval("nope"); } catch (e) { expect((e as AdapterError).category).toBe("notFound"); }
     try { approval("demo-approval-forbidden"); } catch (e) { expect((e as AdapterError).category).toBe("forbidden"); }
     try { run("nope"); } catch (e) { expect((e as AdapterError).category).toBe("notFound"); }
+  });
+});
+
+describe("FE04-02 canonical IDs from approval to receipt", () => {
+  it("carries one approval ref through the decision, the run and the source receipt, and approved never loops back", async () => {
+    const { data, run, decide, send } = setup();
+    const decided = await decide("demo-approval-exact", "v1", { decision: "approved" });
+    expect(decided.approvalRef).toBe("demo-approval-exact");
+    const approved = data("demo-approval-exact");
+    const decision = approved.versions.at(-1)!;
+    expect(decision.decisionReceiptRef).toBe("demo-decision-receipt-demo-approval-exact-v1");
+
+    const sent = await send("demo-approval-exact");
+    expect(sent.approvalRef).toBe("demo-approval-exact");
+    expect(sent.runRef).toBe("demo-run-exact");
+    expect(sent.receiptRefs).toEqual(["demo-source-receipt-demo-approval-exact"]);
+
+    const after = data("demo-approval-exact");
+    expect(after.execution).toEqual({ runRef: sent.runRef, state: "succeeded", receiptRefs: sent.receiptRefs });
+    const r = run(sent.runRef!).data as RunDetail;
+    expect(r.approvalRef).toBe("demo-approval-exact");
+    expect(r.correlationId).toBe(`corr-${sent.runRef}`);
+    expect(r.items.map((i) => i.receiptRef)).toEqual(sent.receiptRefs);
+
+    // Sending again returns the same run and receipt; it neither dispatches twice nor decides again.
+    const again = await send("demo-approval-exact");
+    expect(again.runRef).toBe(sent.runRef);
+    expect(again.receiptRefs).toEqual(sent.receiptRefs);
+    const deciding = await errorFrom(decide("demo-approval-exact", "v1", { decision: "approved" }));
+    expect(deciding.body.code).toBe("APPROVAL_INVALID");
+    expect(data("demo-approval-exact").status).toBe("approved");
+  });
+
+  it("an uncertain send keeps the same approval and run refs and carries no receipt", async () => {
+    const { data, run, decide, send } = setup();
+    await decide("demo-approval-uncertain", "v1", { decision: "approved" });
+    const sent = await send("demo-approval-uncertain");
+    expect(sent.state).toBe("outcomeUncertain");
+    expect(sent.approvalRef).toBe("demo-approval-uncertain");
+    expect(sent.receiptRefs).toEqual([]);
+    expect(data("demo-approval-uncertain").execution).toMatchObject({ runRef: sent.runRef, receiptRefs: [] });
+    expect((run(sent.runRef!).data as RunDetail).approvalRef).toBe("demo-approval-uncertain");
+  });
+});
+
+describe("FE04-04 founder authority for financial commitments", () => {
+  const founder = () => {
+    const store = createDemoApprovals({ actorRole: "founder" });
+    const decide = (id: string, payload: DecidePayload) => store.submit(action("decideApproval", id, "v1", payload));
+    const data = (id: string) => store.readApproval(read("approvalDetail", { approvalId: id })).data as ApprovalDetail;
+    const caps = (id: string) => store.readApproval(read("approvalDetail", { approvalId: id })).capabilities;
+    return { store, decide, data, caps };
+  };
+
+  it("a reviewer is refused on a founder-only commitment and nothing changes", async () => {
+    const { data, decide } = setup();
+    const err = await errorFrom(decide("demo-approval-founder", "v1", { decision: "approved" }));
+    expect(err.body.code).toBe("SOURCE_AUTHORITY_DENIED");
+    expect(err.body.message).toMatch(/founder/);
+    expect(data("demo-approval-founder").status).toBe("pending");
+  });
+
+  it("a founder is offered the decision, and a reviewer is shown it as denied for role", async () => {
+    expect(founder().caps("demo-approval-founder")).toEqual([{ actionKind: "decideApproval", state: "available", reasonCodes: [] }]);
+    const { approval } = setup();
+    expect(approval("demo-approval-founder").capabilities).toEqual([{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }]);
+  });
+
+  it("a founder can approve the historical fee, recorded as the founder's decision, and it is approved not paid", async () => {
+    const { decide, data } = founder();
+    const res = await decide("demo-approval-founder", { decision: "approved" });
+    expect(res.state).not.toBe("succeeded");
+    expect(res.receiptRefs).toEqual([]);
+    const approved = data("demo-approval-founder");
+    expect(approved).toMatchObject({ status: "approved", execution: null });
+    expect(approved.versions.at(-1)).toMatchObject({ decision: "approved", decidedByRole: "founder" });
+  });
+
+  it("founder authority does not make a new upfront fee approvable", async () => {
+    const { decide, data } = founder();
+    const err = await errorFrom(decide("demo-approval-fee", { decision: "approved" }));
+    expect(err.body.code).toBe("POLICY_VIOLATION");
+    expect(data("demo-approval-fee").status).toBe("pending");
+  });
+
+  it("the upfront-fee exemption belongs to the record, not to the role: a founder cannot approve a new upfront fee even where a founder is required", async () => {
+    const seed = seedApprovals();
+    const fee = seed.find((a) => a.approvalRef === "demo-approval-fee")!;
+    fee.requiredRole = "founder";
+    const store = createDemoApprovals({ actorRole: "founder", approvals: seed });
+    const err = await errorFrom(store.submit(action("decideApproval", "demo-approval-fee", "v1", { decision: "approved" })));
+    expect(err.body.code).toBe("POLICY_VIOLATION");
+    expect(err.body.fieldErrors?.upfrontFee).toBeDefined();
+    expect((store.readApproval(read("approvalDetail", { approvalId: "demo-approval-fee" })).data as ApprovalDetail).status).toBe("pending");
+  });
+
+  it("the accepted historical fee stays approvable because the record is a historical liability", async () => {
+    const { decide, data } = founder();
+    await decide("demo-approval-founder", { decision: "approved" });
+    expect(data("demo-approval-founder").status).toBe("approved");
+  });
+
+  it("a founder-required record is not exempt just by being founder-only: relabeling a new fee as historical needs the record's own policy version", async () => {
+    const seed = seedApprovals();
+    const historical = seed.find((a) => a.approvalRef === "demo-approval-founder")!;
+    historical.versions = historical.versions.map((v) => ({ ...v, policyVersion: "commission-only@demo" }));
+    const store = createDemoApprovals({ actorRole: "founder", approvals: seed });
+    const err = await errorFrom(store.submit(action("decideApproval", "demo-approval-founder", "v1", { decision: "approved" })));
+    expect(err.body.code).toBe("POLICY_VIOLATION");
+  });
+
+  it("a founder also holds the reviewer role", async () => {
+    const { decide, data } = founder();
+    await decide("demo-approval-exact", { decision: "approved" });
+    expect(data("demo-approval-exact").versions.at(-1)).toMatchObject({ decision: "approved", decidedByRole: "founder" });
   });
 });

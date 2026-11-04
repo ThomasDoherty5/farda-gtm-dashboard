@@ -21,13 +21,28 @@ const countItems = (items: RunItem[]): RunCounts => {
  * It enforces what the real server must (role, version, expiry, policy, idempotency), receives
  * nothing from the client as authority, and contacts no provider. State resets on reload.
  */
-export function createDemoApprovals(hooks: {
-  /** Runs when a dispatch is about to execute for the first time. It is skipped for a replay and for an approval that already ran. */
-  beforeDispatch?: (request: ActionRequest<unknown>) => void;
-  /** Runs when an approval is granted, so a policy layer can remember what was in force. */
-  onApproved?: (approvalRef: string) => void;
-} = {}) {
-  const approvals = new Map(seedApprovals().map((a) => [a.approvalRef, a]));
+/**
+ * The one exemption from the commission-only rule: paying a fee that was already accepted under the earlier workflow. It is a property of
+ * the record (its own policy version), never of the role asked to decide it, so a founder-only record for a new fee is still refused.
+ */
+const isHistoricalLiability = (v: { policyVersion: string }) => v.policyVersion.startsWith("historical-liability");
+
+export function createDemoApprovals(
+  opts: {
+    actorRole?: string;
+    /** Test seam: replaces the seeded approvals. */
+    approvals?: ApprovalDetail[];
+    /** Runs when a dispatch is about to execute for the first time. It is skipped for a replay and for an approval that already ran. */
+    beforeDispatch?: (request: ActionRequest<unknown>) => void;
+    /** Runs when an approval is granted, so a policy layer can remember what was in force. */
+    onApproved?: (approvalRef: string) => void;
+  } = {},
+) {
+  const hooks = opts;
+  const actorRole = opts.actorRole ?? DEMO_ACTOR_ROLE;
+  /** A founder holds every role's authority. Nobody else can decide above their role. */
+  const canDecide = (required: string) => actorRole === required || actorRole === "founder";
+  const approvals = new Map((opts.approvals ?? seedApprovals()).map((a) => [a.approvalRef, a]));
   const runs = new Map(seedRuns().map((r) => [r.runRef, r]));
   const results = new Map<string, { hash: string; result: Promise<ActionResponse> }>();
   const stats = { dispatches: 0 };
@@ -51,7 +66,7 @@ export function createDemoApprovals(hooks: {
     if (a.historicalNote) return [];
     if (a.status === "expired") return [{ actionKind: "decideApproval", state: "held", reasonCodes: ["APPROVAL_EXPIRED"] }];
     if (a.status === "pending") {
-      if (a.requiredRole !== DEMO_ACTOR_ROLE) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
+      if (!canDecide(a.requiredRole)) return [{ actionKind: "decideApproval", state: "denied", reasonCodes: ["ROLE_REQUIRED"] }];
       return [{ actionKind: "decideApproval", state: "available", reasonCodes: [] }];
     }
     if (a.status === "approved" && !a.execution) return [{ actionKind: "dispatchApprovedAction", state: "available", reasonCodes: [] }];
@@ -107,7 +122,7 @@ export function createDemoApprovals(hooks: {
   function decide(request: ActionRequest<DecidePayload>): ActionResponse {
     const a = findApproval(request);
     if (a.historicalNote) fail("APPROVAL_INVALID", "This is an archived record. It can't be decided.", request.requestId);
-    if (a.requiredRole !== DEMO_ACTOR_ROLE) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
+    if (!canDecide(a.requiredRole)) fail("SOURCE_AUTHORITY_DENIED", `Only a ${a.requiredRole} can decide this approval.`, request.requestId);
     if (a.status === "expired") fail("APPROVAL_EXPIRED", "This approval expired. It needs a fresh preview.", request.requestId);
     if (a.approvalRef === "demo-approval-conflict" && !conflictFired) {
       conflictFired = true;
@@ -122,7 +137,7 @@ export function createDemoApprovals(hooks: {
     const current = a.versions[a.versions.length - 1]!;
     const { decision, reason, editedMessage } = request.payload;
     const reasonText = reason?.trim() ?? "";
-    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && a.requiredRole !== "founder")
+    if (decision === "approved" && current.payload.terms.upfrontFee.minorUnits > 0 && !isHistoricalLiability(current))
       fail("POLICY_VIOLATION", "New acquisition is commission-only, so an upfront fee can't be approved.", request.requestId, { fieldErrors: { upfrontFee: "Upfront fee must be zero for new acquisition." } });
     if (decision === "rejected" && !reasonText) fail("VALIDATION_FAILED", "A reason is required to reject.", request.requestId, { fieldErrors: { reason: "Enter a reason for rejecting." } });
     if (decision === "editRequired") {
@@ -131,7 +146,7 @@ export function createDemoApprovals(hooks: {
       if (text === current.payload.message) fail("VALIDATION_FAILED", "The message has not changed.", request.requestId, { fieldErrors: { editedMessage: "Change the message, or approve it as written." } });
       const n = a.versions.length;
       current.decision = "editRequired";
-      current.decidedByRole = DEMO_ACTOR_ROLE;
+      current.decidedByRole = actorRole;
       current.decidedAt = DEMO_NOW;
       current.reason = reasonText || null;
       current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
@@ -142,7 +157,7 @@ export function createDemoApprovals(hooks: {
     }
 
     current.decision = decision;
-    current.decidedByRole = DEMO_ACTOR_ROLE;
+    current.decidedByRole = actorRole;
     current.decidedAt = DEMO_NOW;
     current.reason = reasonText || null;
     current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
