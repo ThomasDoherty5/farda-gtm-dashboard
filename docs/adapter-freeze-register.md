@@ -186,6 +186,7 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
+| `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |
 | `OUTCOME_UNCERTAIN` | outcomeUncertain | `demoApprovals` |
 | `POLICY_VIOLATION` | validation | `demoApprovals`, `demoCollaboration`, `demoScorecards` |
 | `QUOTA_OR_STOCK_HOLD` | resourceHold | `demoOps` |

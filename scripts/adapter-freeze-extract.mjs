@@ -12,6 +12,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
+/** Test helpers that live next to the source but are not source: their made-up names ("k", fixture ids) are not part of the contract. */
+const TEST_HELPERS = /^(conformance|transportTestKit|acquisitionTestKit)\.(ts|tsx)$|TestKit\.(ts|tsx)$/;
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const SCAN = ["src/adapter", "src/features", "src/fixtures"];
 
@@ -21,7 +24,7 @@ function walk(dir) {
     .flatMap((e) => {
       const p = join(dir, e.name);
       if (e.isDirectory()) return walk(p);
-      return /\.(ts|tsx)$/.test(e.name) && !/\.test\.(ts|tsx)$/.test(e.name) ? [p] : [];
+      return /\.(ts|tsx)$/.test(e.name) && !/\.test\.(ts|tsx)$/.test(e.name) && !TEST_HELPERS.test(e.name) ? [p] : [];
     });
 }
 
