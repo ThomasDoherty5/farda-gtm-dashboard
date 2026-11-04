@@ -3,7 +3,7 @@
 .histSubtle { background: var(--color-subtle); }
 .hist p { margin: 0; }
 .histActions { display: flex; flex-wrap: wrap; gap: 10px; }
-.ctxRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.ctxRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
 .ctxRow p { margin: 0; }
 .dark { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; padding: 28px; background: var(--color-ink); color: var(--color-onDark); border-radius: var(--space-24); }
 .dark > * { margin: 0; }
@@ -98,3 +98,7 @@
 .tabsFixed a { padding-inline: 0; }
 /* 320 CSS px reflow (WCAG 1.4.10): the decision copy may shrink below its 280px design width. Implementation adaptation, docs/design-map.md. */
 @media (max-width: 359px) { .decisionCopy { min-width: 0; } }
+/* Figma's three fields measure 400px with 24px gaps (1248px), two pixels wider than the panel's content box. */
+@media (min-width: 1180px) {
+  .fieldsRow, .evGrid, .gateGrid { margin-right: -2px; }
+}

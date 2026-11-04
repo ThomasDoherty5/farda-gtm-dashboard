@@ -82,6 +82,9 @@ p > a:only-child { padding-block: 4px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* A link that is hidden until a keyboard user reaches it, so focus is never invisible (WCAG 2.4.7). */
 .visually-hidden-focusable:not(:focus) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* A line break that only applies on a wide screen. Figma's note overflows its box by a word; pinning the break keeps the line count the same on every platform. */
+.wide-break { display: none; }
+@media (min-width: 1180px) { .wide-break { display: inline; } }
 .skip-link { position: absolute; left: var(--space-8); top: -100px; padding: var(--space-8); background: var(--color-surface); z-index: 10; }
 .skip-link:focus { top: var(--space-8); }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
