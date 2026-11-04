@@ -222,7 +222,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
         <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider <br className="wide-break" />evidence.</p>
       </section>
       <p className={styles.small}>Evidence-review template · no source footage or metrics are fabricated · full, partial, captions-only and inaccessible states remain distinct.</p>
-      <EvidenceDisputes res={res} record={record} draftDirty={dirty} draftMedia={validUrl} />
+      <EvidenceDisputes res={res} record={record} draftDirty={dirty} />
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>

@@ -593,7 +593,7 @@ Gaps in the journeys, kept visible: order milestones (Refund requested, Return r
 
 ## Video evidence disagreement and override (VE-08)
 
-Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 256px taller (2517).
+Owner THO-288, on `/creators/:creatorId/evidence/:evidenceId`. The section "Disagree without erasing" sits at the end of the page, so nothing above it moved: the top 1450px still differ by 0.218%, and the page is 250px taller than the 2267 pinned for the blocked-action reasons (2517). Reason for the new pin: VE-08 (reviewer disagreement and override) needs the first reviewer's record, the "not ready" reasons, the list of disagreements and the dispute dialog's entry points on the page, and the Figma source 102:364 has no frame for any of it. The e2e pin in `e2e/evidence.spec.ts` moves from 2267 to 2517 for that reason and no other; the cards above it keep the heights 102:364 gives them.
 
 | Rule | Where it is enforced |
 | -- | -- |

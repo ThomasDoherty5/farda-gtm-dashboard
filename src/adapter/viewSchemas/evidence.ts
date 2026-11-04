@@ -56,6 +56,8 @@ const dispute = z.object({
   reviewerRole: text,
   recordedAt: instant,
   recordedAgainst: z.string().nullable(),
+  /** The route the first record was read against; a dispute no longer applies once the saved route differs. */
+  recordedRoute: checkoutRoute,
 });
 
 /** There is no completed-review path, so a record is always not ready and always says why. */

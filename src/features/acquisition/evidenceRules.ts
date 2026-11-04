@@ -99,7 +99,7 @@ export function validateDispute(d: Pick<DisputeDraft, "stance" | "reason" | "pro
 export function readinessOf(record: Pick<EvidenceRecord, "mediaUrl" | "checkoutRoute" | "firstReview" | "disputes">): Readiness {
   const reasonCodes = ["NO_COMPLETE_REVIEW"];
   const first = record.firstReview;
-  if (record.disputes.some((d) => d.recordedAgainst === record.mediaUrl)) reasonCodes.push("CONTESTED");
+  if (record.disputes.some((d) => d.recordedAgainst === record.mediaUrl && d.recordedRoute === record.checkoutRoute)) reasonCodes.push("CONTESTED");
   if (first && first.mediaUrl !== record.mediaUrl) reasonCodes.push("MEDIA_CHANGED");
   if (first && first.checkoutRoute !== record.checkoutRoute) reasonCodes.push("ROUTE_CHANGED");
   return { state: "notReady", reasonCodes };

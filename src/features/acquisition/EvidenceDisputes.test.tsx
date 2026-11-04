@@ -108,12 +108,26 @@ describe("reviewer disagreement and override (VE-08)", () => {
     expect(section().getByText("Disputed")).toBeInTheDocument();
   });
 
-  it("marks a dispute as invalidated when the video changes", async () => {
+  it("typing in the video field does not invalidate a saved dispute; only a saved change does", async () => {
     const { user } = await open(DEMO_EVIDENCE_DISPUTED_ID);
-    expect(screen.queryByText("Invalidated: different video", { selector: "[data-testid=dispute-entry] *" })).toBeNull();
+    const invalidated = () => within(screen.getByTestId("dispute-entry")).queryByText(/^Invalidated:/);
+    expect(invalidated()).toBeNull();
     await user.clear(screen.getByLabelText("Original video URL"));
     await user.type(screen.getByLabelText("Original video URL"), "https://www.instagram.com/reel/NEWREEL0001/");
-    expect(within(screen.getByTestId("dispute-entry")).getByText("Invalidated: different video")).toBeInTheDocument();
+    expect(invalidated()).toBeNull(); // the draft is unsaved, so the saved record and its dispute still stand
+  });
+
+  it("marks a dispute invalidated once the saved video or checkout route differs", async () => {
+    const adapter = createDemoAdapter();
+    const save = (version: string, mediaUrl: string, checkoutRoute: string, key: string) => adapter.saveResource({
+      schemaVersion: "1", operation: "saveResource", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" },
+      resourceKind: "evidenceDraft", resourceRef: DEMO_EVIDENCE_DISPUTED_ID, expectedVersion: version, idempotencyKey: key, requestId: key,
+      payload: { mediaUrl, checkoutRoute, observations: [] },
+    } as never);
+    const record = (await adapter.readView({ schemaVersion: "1", operation: "readView", viewKey: "evidenceRecord", requestedScope: { workspaceId: "w", accountIds: ["a"], environment: "demo" }, filters: { creatorId: "demo-creator-1", evidenceId: DEMO_EVIDENCE_DISPUTED_ID }, period: null, sort: [], page: { cursor: null, limit: 50 }, requestId: "q" } as never) as { data: { version: string; mediaUrl: string; checkoutRoute: string } }).data;
+    await save(record.version, record.mediaUrl, record.checkoutRoute === "website" ? "tiktok-shop" : "website", "route-change");
+    await open(DEMO_EVIDENCE_DISPUTED_ID, adapter);
+    expect(within(screen.getByTestId("dispute-entry")).getByText("Invalidated: different route")).toBeInTheDocument();
   });
 
   it("shows a conflict when the record changed, and keeps the dialog and the typed reason", async () => {
