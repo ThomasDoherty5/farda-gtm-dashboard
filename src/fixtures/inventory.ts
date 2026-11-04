@@ -46,7 +46,12 @@ export type Transfer = {
   /** Unknown until the destination confirms. It is never shown as zero. */
   receivedUnits: ProvenanceValue<number>;
   stage: "requested" | "dispatched" | "received";
+  /** When the destination should have confirmed receipt. A transfer past this date and not received is late. */
+  expectedBy: string;
 };
+
+/** Late means expected earlier than now and not received. It says nothing about on-hand, which only a receipt changes. */
+export const isLate = (t: Transfer, nowIso: string) => t.stage !== "received" && t.expectedBy < nowIso.slice(0, 10);
 
 export type TransferRequest = { key: string; from: Home; to: Home; units: number; reason: string; state: string };
 
@@ -83,6 +88,6 @@ export const inventoryDemo = (scenario?: string): InventoryOverview => ({
     { key: "TEST-MOV-0186", type: "Return inspected", home: "H3", effect: { field: "onHand", delta: 1 }, complete: true },
     ...(scenario === "delayed" ? [{ key: "TEST-MOV-0189", type: "Transfer received", home: "H2" as Home, effect: { field: "onHand" as const, delta: 24 }, complete: false, missing: "Receipt not recorded" }] : []),
   ],
-  transfer: { key: "TEST-TR-012", from: "H1", to: "H2", expectedUnits: 24, receivedUnits: unknown("RECEIPT_NOT_CONFIRMED"), stage: "dispatched" },
+  transfer: { key: "TEST-TR-012", from: "H1", to: "H2", expectedUnits: 24, receivedUnits: unknown("RECEIPT_NOT_CONFIRMED"), stage: "dispatched", expectedBy: scenario === "late" ? "2026-10-30" : "2026-11-04" },
   pendingRequests: [],
 });
