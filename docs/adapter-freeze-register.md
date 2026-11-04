@@ -81,16 +81,11 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `overviewSummary` | none | OverviewData | `overview/OverviewPage` | `demoAdapter` | proposed | Nine demo fixture switches are chosen by an adapter option, not by the request. |
 | `paidMedia` | `rights`, `platform` | PaidMediaData | `analytics/PaidMediaPage` | `demoAnalytics` | proposed | Uses `keepPrevious`. |
 | `payableDetail` | `payableId` | PayableDetail | `finance/PayablePage` | `demoFinance` | proposed |  |
-<<<<<<< HEAD
+| `closePackage` | `period`, `scenario?` | ClosePackage | `finance/ClosePackagePage` | `demoFinance` | proposed + conflict | C-05, C-06. Read from the same fixture evidence as `periodClose`, so the two cannot disagree. An unknown `scenario` is refused with `VALIDATION_FAILED`. |
+| `monthsHistory` | none | months list | `finance/CloseViews` | `demoFinance` | proposed | Synthetic months. October's status is read from the close package. |
 | `periodClose` | `period`, `scenario?` | PeriodClose | `finance/CloseReconciliationPage` | `demoFinance` | proposed + conflict | C-05 (period is a filter, `period` request field is `null`), C-06. |
 | `pipelineBranches` | `source` | BranchesData | `acquisition/BranchesView` | `demoAdapter` | proposed | Splits by source only; the page shows the other pipeline filters it was opened with and says they do not change these counts. |
 | `pipelineSummary` | `source`, `route`, `network`, `checkout`, `window`, `policy` | PipelineData | `acquisition/PipelinePage` | `demoAdapter` | proposed + conflict | C-05. Demo refuses unknown facet values with `VALIDATION_FAILED`. |
-=======
-| `closePackage` | `period`, `scenario?` | ClosePackage | `finance/ClosePackagePage` | `demoFinance` | proposed + conflict | C-05, C-06. Read from the same fixture evidence as `periodClose`, so the two cannot disagree. An unknown `scenario` is refused with `VALIDATION_FAILED`. |
-| `monthsHistory` | none | months list | `finance/CloseViews` | `demoFinance` | proposed | Synthetic months. October's status is read from the close package. |
-| `periodClose` | `period`, `scenario?` | PeriodClose | `finance/CloseReconciliationPage` | `demoFinance` | proposed + conflict | C-05 (period is a filter, `period` request field is `null`), C-06. Derived from the close package. An unknown `scenario` is refused with `VALIDATION_FAILED`. |
-| `pipelineSummary` | `source`, `network`, `checkout`, `window` | PipelineData | `acquisition/PipelinePage` | `demoAdapter` | proposed + conflict | C-05. Demo refuses unknown facet values with `VALIDATION_FAILED`. |
->>>>>>> origin/main
 | `postPerformance` | `postId` | PostPerformanceData | `monitor/PostPage` | `demoMonitor` | proposed |  |
 | `recruitmentQueue` | `networks`, `route` | RecruitmentData | `recruitment/RecruitmentPage` | `demoAdapter` | proposed + conflict | C-05. Uses `keepPrevious`. Demo refuses unknown facet values. |
 | `reportManifest` | none | Manifest | `finance/CloseViews` | `demoFinance` | proposed | Synthetic dry-run manifest of the seven package reports. Nothing is generated. |
