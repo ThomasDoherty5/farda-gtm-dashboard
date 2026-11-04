@@ -11,3 +11,5 @@
 .button[aria-disabled="true"] { background: var(--color-subtle); border-color: transparent; color: var(--color-muted); opacity: 1; cursor: not-allowed; }
 .button[aria-busy="true"] { background: var(--color-violet); color: var(--color-onDark); cursor: progress; }
 .reason { display: block; font: var(--text-small); color: var(--color-muted); margin: var(--space-4) 0 var(--space-8); }
+/* 320 CSS px reflow (WCAG 1.4.10): a button with an inline minimum width may not push the page sideways. Implementation adaptation, docs/design-map.md. */
+@media (max-width: 359px) { .button { min-width: 0 !important; } }

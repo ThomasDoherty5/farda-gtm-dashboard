@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { sourceScreens } from "../src/routes/manifest.generated";
+import { openSection } from "./support/nav";
 
 /** Fails the test on any console error or unhandled rejection in the page. */
 function watchErrors(page: Page) {
@@ -38,7 +39,7 @@ test("every manifest route deep-links and survives a refresh", async ({ page }) 
 
 test("Back and Forward restore the route", async ({ page }) => {
   await page.goto("/overview");
-  await page.getByRole("link", { name: "Finance" }).click();
+  await openSection(page, "Finance");
   await expect(page).toHaveURL(/\/finance$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/overview$/);
@@ -51,7 +52,7 @@ test("selecting the current section adds no history entry (CTRL-220)", async ({ 
   await page.goto("/overview");
   await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
   const before = await page.evaluate(() => history.length);
-  await page.getByRole("link", { name: "Overview" }).click();
+  await openSection(page, "Overview");
   expect(await page.evaluate(() => history.length)).toBe(before);
 });
 

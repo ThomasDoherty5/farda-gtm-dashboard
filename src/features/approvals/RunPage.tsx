@@ -130,7 +130,7 @@ function ApprovalTab({ data, onSlack }: { data: RunDetail; onSlack: () => void }
             <hr className={styles.divider} />
             <p className={styles.small}>Draft example only. Changed text, terms or recipient invalidates the previous approval.</p>
             <Button className={styles.fullButton} aria-haspopup="dialog" onClick={onSlack}>View historical approval in Slack</Button>
-            <Link to={`/approvals/${data.approvalRef}`} className="visually-hidden">Open approval {data.approvalRef}</Link>
+            <Link to={`/approvals/${data.approvalRef}`} className="visually-hidden-focusable">Open approval {data.approvalRef}</Link>
           </section>
           <section className={styles.card} style={{ gap: "var(--space-16)" }} aria-labelledby="source-title">
             <h2 id="source-title" className={styles.h2}>Inside {data.source}</h2>

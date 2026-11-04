@@ -6,6 +6,8 @@
 .waiting { display: block; }
 .link { color: var(--color-ink); text-decoration: none; font: var(--text-label); }
 .link:hover { text-decoration: underline; }
+/* WCAG 2.5.8: padding on an inline box grows the 24px target without moving the row. */
+.link { padding-block: 4px; }
 .holdReason { margin: 0; font: var(--text-small); color: var(--color-warning); }
 .stockRow { display: flex; flex-direction: column; gap: var(--space-8); }
 .stockLine { display: grid; grid-template-columns: minmax(0, 168px) minmax(0, 1fr); gap: var(--space-12); }
@@ -95,3 +97,5 @@
 @media (max-width: 1179px) { .analytics { grid-template-columns: minmax(0, 1fr); } .kpiStack { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); } }
 @media (max-width: 767px) { .homeLine { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 .badgeHeading { margin: 0; font: inherit; }
+/* Narrow screens: the label and the value stack, so the value has the full width (implementation adaptation, docs/design-map.md). */
+@media (max-width: 599px) { .best { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); } }

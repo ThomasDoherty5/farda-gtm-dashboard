@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openSection } from "./support/nav";
 
 /**
  * A screen that throws while rendering. The built app has no throwing route, so the test makes currency formatting
@@ -33,7 +34,8 @@ test("a render error shows an honest, accessible error state inside the shell", 
   await expect(heading).toBeFocused();
   const alert = page.getByRole("alert");
   await expect(alert.getByText("Error", { exact: true })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: "Primary" })).toBeVisible();
+  // The shell stays: the section navigation, or at 390px the Menu button that opens it.
+  await expect(page.getByRole("navigation", { name: "Primary" }).or(page.getByRole("button", { name: "Menu", exact: true }))).toBeVisible();
   // Route kept, no partial data, no raw error.
   await expect(page).toHaveURL(/\/overview$/);
   await expect(page.getByTestId("metric-Paid orders")).toHaveCount(0);
@@ -53,7 +55,7 @@ test("other screens still work once the failing cause is gone", async ({ page })
   await page.reload(); // fresh document, flag cleared
   await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
   await expect(page.getByTestId("render-error")).toHaveCount(0);
-  await page.getByRole("link", { name: "Finance", exact: true }).click();
+  await openSection(page, "Finance");
   await expect(page).toHaveURL(/\/finance$/);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await expect(page.getByTestId("render-error")).toHaveCount(0);
@@ -63,7 +65,7 @@ test("navigating from the error state to another screen clears it without a relo
   await armThrow(page);
   await page.goto("/overview");
   await expect(page.getByTestId("render-error")).toBeVisible();
-  await page.getByRole("link", { name: "Automations", exact: true }).click();
+  await openSection(page, "Automations");
   await expect(page).toHaveURL(/\/automations$/);
   await expect(page.getByTestId("render-error")).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();

@@ -52,6 +52,8 @@
 .totalsSpace { flex: 0 1 160px; }
 .textLink { font: var(--text-label); color: var(--color-violet); text-decoration: none; }
 .textLink:hover { text-decoration: underline; }
+/* WCAG 2.5.8: a 24px target. Padding grows the hit area; the equal negative margin keeps the layout where Figma has it. */
+.textLink { padding-block: 3px; margin-block: -3px; }
 .cardTitle { font: var(--text-h3); }
 .channel { display: flex; flex-direction: column; gap: 10px; }
 .channelAmount { display: flex; gap: var(--space-12); font: var(--text-label); }

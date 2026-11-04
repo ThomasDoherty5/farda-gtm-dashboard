@@ -150,11 +150,11 @@ function Body({ res, data, setDialog }: { res: ReadResponse<CommissionLedger>; d
                 );
               })}
             </div>
-            <table className="visually-hidden">
+            <div className="visually-hidden"><table>
               <caption>Contribution after creator costs, USD</caption>
               <thead><tr><th scope="col">Step</th><th scope="col">Amount</th></tr></thead>
               <tbody>{waterfall.map((w) => <tr key={w.label}><th scope="row">{w.label}</th><td>{cents(w.value)}</td></tr>)}</tbody>
-            </table>
+            </table></div>
           </div>
           <p className={styles.footnote}>Processing estimate = {e.processingFeePct}% × {dollars(t.accrued)}, excluding tax/FX. Actual invoice is authoritative. Refunds are already removed from net sales; paid cash is settlement of the accrued expense.</p>
         </Panel>

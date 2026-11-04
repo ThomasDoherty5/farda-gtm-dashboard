@@ -33,6 +33,8 @@
 .rule { align-self: stretch; height: 1px; background: var(--color-border); }
 .cardLink { font: var(--text-small); color: var(--color-violet); text-decoration: none; }
 .cardLink:hover { text-decoration: underline; }
+/* WCAG 2.5.8: a 24px target. Padding grows the hit area; the equal negative margin keeps the layout where Figma has it. */
+.cardLink { padding-block: 3px; margin-block: -3px; }
 .empty { margin: 0; font: var(--text-small); color: var(--color-muted); }
 .flow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .flow > span[aria-hidden] { font: var(--text-label); color: var(--color-violet); }

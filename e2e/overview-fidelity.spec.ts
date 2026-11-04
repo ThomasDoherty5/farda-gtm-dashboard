@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openSection, openWorkspaceMenu } from "./support/nav";
 
 /** Geometry and styles read from Figma source 10:217 and Button set 2:69, at the 1440 design width. */
 test.describe("Overview against Figma at 1440", () => {
@@ -120,7 +121,8 @@ test.describe("Overview controls", () => {
     ];
     for (const [name, url] of cases) {
       await page.goto("/overview");
-      await page.getByRole("link", { name, exact: true }).click();
+      if (name === "Creators") await openSection(page, name);
+      else await page.getByRole("link", { name, exact: true }).click();
       await expect(page, name).toHaveURL(url);
     }
   });
@@ -155,11 +157,17 @@ test.describe("Overview controls", () => {
 
   test("the workspace menu reaches screens outside the primary nav", async ({ page }) => {
     await page.goto("/overview");
-    await page.getByRole("button", { name: "Open workspace menu" }).click();
+    await openWorkspaceMenu(page);
     await page.getByRole("dialog").getByRole("link", { name: "Approvals" }).click();
     await expect(page).toHaveURL(/\/approvals$/);
     await expect(page.getByRole("dialog")).toBeHidden();
-    await expect(page.getByRole("link", { name: "Creators" })).toHaveAttribute("aria-current", "true");
+    const creators = page.getByRole("navigation", { name: "Primary" }).getByRole("link", { name: "Creators" });
+    if (await creators.isVisible()) await expect(creators).toHaveAttribute("aria-current", "true");
+    else {
+      // The header has collapsed into the menu (Figma 12:708, 12:653): the section is marked there.
+      await openWorkspaceMenu(page);
+      await expect(page.getByRole("dialog").getByRole("navigation", { name: "Sections" }).getByRole("link", { name: "Creators" })).toHaveAttribute("aria-current", "true");
+    }
   });
 
   test("the chart's scroll region works from the keyboard on a narrow screen", async ({ page }) => {
