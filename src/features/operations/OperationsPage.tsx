@@ -21,6 +21,8 @@ import { figure, minutesAgoLabel, minutesBetween, reasonText, waitingLabel } fro
 import styles from "./Operations.module.css";
 
 const HOME_OPTIONS = [{ value: "all", label: "All homes" }, ...HOMES.map((h) => ({ value: h, label: homeLabel(h) }))];
+/** The issues and fulfillment health view (no Figma source) lives on the fulfillment route. */
+const HEALTH_PATH = "/analytics/fulfillment?view=health";
 const VIEWS = ["overview", "orders", "shipping"] as const;
 type View = (typeof VIEWS)[number];
 
@@ -50,11 +52,13 @@ export function OperationsPage() {
       {layout === "desktop" ? (
         <PageHeader id="ops-title" title="Operations" subtitle="The right next action, for every order and every home.">
           <FilterButton name="Home" bare title="Choose a home" options={HOME_OPTIONS} value={home} onChange={setHome} width={160} />
+          <LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 190 }}>Issues and fulfillment health</LinkButton>
           <Button aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSourceOpen(true)}>Open warehouse</Button>
         </PageHeader>
       ) : (
         <PageHeader id="ops-title" title="Operations">
-          {layout === "tablet" && <Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button>}
+          {layout === "mobile" && <LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton>}
+          {layout === "tablet" && <><LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton><Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button></>}
         </PageHeader>
       )}
       {query.isPending && <SkeletonCard label="Loading operations…" />}

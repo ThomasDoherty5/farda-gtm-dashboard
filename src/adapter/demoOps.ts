@@ -6,6 +6,7 @@ import { DEMO_NOW } from "@/fixtures/overview";
 import { availableOf, inventoryDemo, type TransferRequest } from "@/fixtures/inventory";
 import { HOMES, type Home } from "@/fixtures/operations";
 import { supportDemo } from "@/fixtures/support";
+import { buildOpsHealth } from "./opsHealth";
 import { fulfillmentDemo, heldRows, operationsDemo, orderDemo, returnDemo, shippingExceptionDemo, type OperationsOverview, type ReturnDetail, type ReturnDisposition, type ReturnResolution, type ShippingExceptionDetail } from "@/fixtures/operations";
 
 type Capability = ReadResponse<unknown>["capabilities"][number];
@@ -264,6 +265,8 @@ export function createDemoOps(opts: { actorRole?: string } = {}) {
         }
         case "operationsShipping":
           return respondWith(request, { datasetKey: "operations-shipping-demo" as const, shipments: shipmentsDemo, exceptions: opsExceptionsDemo, chain: sandboxChain }, { dataVersion: "operations-shipping-demo@1" });
+        case "opsHealth":
+          return respondWith(request, buildOpsHealth(), { dataVersion: "ops-health@1" });
         case "fulfillmentAnalytics":
           return fulfillment(request as ReadRequest<{ days?: number }>);
         default:

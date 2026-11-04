@@ -282,6 +282,24 @@ export const orderCustomerSchema = z
   })
   .refine((d) => d.revealed === null || (d.access.state === "allowed" && d.audit.length > 0), { message: "Details are never shown without allowed access and an audit entry" });
 
+/* ---------- issues and fulfillment health (opsHealth) ---------- */
+
+const healthAverage = z.object({ days: pvDays, sample: count });
+const healthGroup = z.object({ key: nonBlank, orderToShipped: healthAverage, shippedToDelivered: healthAverage, costPerOrder: pvMoney, orders: count, costUnread: count, deliveredWithoutAcceptance: count });
+const shipmentState = z.enum(["Delivered", "In transit", "Lost", "Returned", "Label uncertain"]);
+
+export const opsHealthSchema = z.object({
+  datasetKey,
+  issues: z.object({
+    tags: z.array(z.object({ tag: nonBlank, thisWeek: count, lastWeek: count })),
+    refunds: z.object({ total: nonNegativeMoneySchema, orders: count, pending: z.array(z.object({ orderRef: nonBlank, amount: nonNegativeMoneySchema })) }),
+    fin: z.object({ periodLabel: z.string(), resolutions: count, cost: nonNegativeMoneySchema, cap: nonNegativeMoneySchema }),
+  }),
+  fulfillment: z.object({ all: healthGroup, byHome: z.array(healthGroup), byCarrier: z.array(healthGroup) }),
+  orders: z.array(z.object({ orderRef: nonBlank, reservationRef: nonBlank, shipmentRef: nonBlank.nullable(), home: homeSchema.nullable(), state: z.union([shipmentState, z.literal("Canceled"), z.literal("Partially fulfilled")]), unitsOrdered: count, unitsShipped: count, note: z.string() })),
+  integrity: z.object({ shipments: count, duplicatesIgnored: count, outOfOrder: count, stockDecrements: count }),
+});
+
 export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
   operationsOverview: operationsOverviewSchema,
   orderDetail: orderDetailSchema,
@@ -292,6 +310,7 @@ export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
   fulfillmentAnalytics: fulfillmentAnalyticsSchema,
   operationsShipping: operationsShippingSchema,
   orderCustomer: orderCustomerSchema,
+  opsHealth: opsHealthSchema,
 };
 
 /* ---------- actions ---------- */
