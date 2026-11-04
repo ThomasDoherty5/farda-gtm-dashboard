@@ -16,6 +16,7 @@ import { dateTime } from "@/features/approvals/shared";
 import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
 import { CURRENT_STAGES, DEFAULT_PIPELINE_FILTERS, type PipelineData, type PipelineFilters } from "@/fixtures/pipeline";
 import { AcquisitionTabs } from "./AcquisitionTabs";
+import { BranchesView } from "./BranchesView";
 import { FilterButton } from "./FilterButton";
 import { currentCount, currentTotal, netBySource, outcomeTotals, sendTotals, stageRows, type StageRow } from "./pipelineMetrics";
 import acquisition from "./Acquisition.module.css";
@@ -23,11 +24,13 @@ import styles from "./Pipeline.module.css";
 
 const FACETS = {
   source: [{ value: "both", label: "Both" }, { value: "social-cat", label: "Social Cat" }, { value: "tiktok-shop", label: "TikTok Shop" }],
+  route: [{ value: "outbound", label: "Outbound" }, { value: "inbound", label: "Inbound" }],
   network: [{ value: "all", label: "All" }, { value: "instagram", label: "Instagram" }, { value: "tiktok", label: "TikTok" }],
   checkout: [{ value: "all", label: "All" }, { value: "website", label: "Website" }, { value: "tiktok-shop", label: "TikTok Shop" }],
   window: [{ value: "sep-oct", label: "Sep 01–Oct 30" }, { value: "sep", label: "Sep 01–Sep 30" }, { value: "oct", label: "Oct 01–Oct 30" }],
+  policy: [{ value: "all", label: "All" }, { value: "policy-2026-09", label: "2026-09" }, { value: "policy-2026-10", label: "2026-10" }],
 } as const satisfies Record<keyof PipelineFilters, { value: string; label: string }[]>;
-const FACET_NAMES: Record<keyof PipelineFilters, string> = { source: "source", network: "publishing network", checkout: "checkout destination", window: "cohort window" };
+const FACET_NAMES: Record<keyof PipelineFilters, string> = { source: "source", route: "route", policy: "policy version", network: "publishing network", checkout: "checkout destination", window: "cohort window" };
 
 const allowed = <K extends keyof PipelineFilters>(key: K, raw: string | null): PipelineFilters[K] =>
   (FACETS[key].some((o) => o.value === raw) ? raw : DEFAULT_PIPELINE_FILTERS[key]) as PipelineFilters[K];
@@ -38,15 +41,23 @@ const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`
 const na = (value: number | null) => (value === null ? "N/A" : formatCount(value));
 const usd = (m: Parameters<typeof formatMoney>[0]) => formatMoney(m);
 
-/** Full acquisition pipeline (Figma source 102:74, owner THO-289). Read work only: nothing here sends, approves or changes a source. */
+/** Full acquisition pipeline (Figma source 102:74, owner THO-289). `?view=branches` shows terminal paths and the optional sample and content branches. */
 export function PipelinePage() {
+  const [search] = useSearchParams();
+  return search.get("view") === "branches" ? <BranchesView /> : <PipelineView />;
+}
+
+/** The funnel. Read work only: nothing here sends, approves or changes a source. */
+function PipelineView() {
   const { adapter } = useScope();
   const [search, setSearch] = useSearchParams();
   const filters: PipelineFilters = {
     source: allowed("source", search.get("source")),
+    route: allowed("route", search.get("route")),
     network: allowed("network", search.get("network")),
     checkout: allowed("checkout", search.get("checkout")),
     window: allowed("window", search.get("window")),
+    policy: allowed("policy", search.get("policy")),
   };
   const query = useView<PipelineFilters, PipelineData>("pipelineSummary", filters);
   const setFilter = (key: keyof PipelineFilters, value: string) => {
@@ -61,7 +72,7 @@ export function PipelinePage() {
       <div className={acquisition.titleRow}>
         <div className={acquisition.heading}>
           <h1 id="pipeline-title">From discovery to repeat sales.</h1>
-          <p>Mature synthetic cohort · Sep–Oct 2026 · outbound invitations · one opportunity per creator</p>
+          <p>{filters.route === "inbound" ? "Synthetic inbound applications · Sep–Oct 2026 · applicants are never invited by us · one opportunity per creator" : "Mature synthetic cohort · Sep–Oct 2026 · outbound invitations · one opportunity per creator"}</p>
         </div>
         <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 156 }}>Daily sourcing</LinkButton>
         <LinkButton to={evidencePath} style={{ minWidth: 162 }}>Review evidence</LinkButton>
@@ -69,9 +80,11 @@ export function PipelinePage() {
       <AcquisitionTabs current="Pipeline" />
       <div className={acquisition.controls}>
         <FilterButton name="Source" title="Choose acquisition source" options={[...FACETS.source]} value={filters.source} onChange={(v) => setFilter("source", v)} width={174} />
+        <FilterButton name="Route" title="Choose inbound or outbound route" options={[...FACETS.route]} value={filters.route} onChange={(v) => setFilter("route", v)} width={160} />
         <FilterButton name="Network" title="Choose publishing network" options={[...FACETS.network]} value={filters.network} onChange={(v) => setFilter("network", v)} width={174} />
         <FilterButton name="Checkout" title="Choose checkout destination" options={[...FACETS.checkout]} value={filters.checkout} onChange={(v) => setFilter("checkout", v)} width={174} />
         <FilterButton name="Cohort window" title="Choose cohort start window" options={[...FACETS.window]} value={filters.window} onChange={(v) => setFilter("window", v)} width={174} bare />
+        <FilterButton name="Policy" title="Choose policy version" options={[...FACETS.policy]} value={filters.policy} onChange={(v) => setFilter("policy", v)} width={160} />
         <Badge tone="violet" width={174}>{demo ? "Illustrative cohort" : "Cohort"}</Badge>
       </div>
       <div className={acquisition.context}>
@@ -84,7 +97,7 @@ export function PipelinePage() {
         (query.data.data && query.data.dataState !== "empty" ? (
           <Body res={query.data as ReadResponse<PipelineData>} data={query.data.data} demo={demo} />
         ) : (
-          <EmptyState state="Empty" title="No opportunities match"><p>The source responded, but no opportunity matches these filters. Clear a filter to widen the cohort.</p></EmptyState>
+          <EmptyState state="Empty" title="No opportunities match"><p>The source responded, but no opportunity matches these filters. This is an empty selection, not a count of zero. Clear a filter to widen the cohort.</p></EmptyState>
         ))}
       {demo && <p className={acquisition.small}>Illustrative completed-cohort scenario · no real creators qualified or invitations sent · no approved v3 weights are implied.</p>}
     </section>
@@ -113,6 +126,7 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
     matchPending: `${closed.waiting} waiting ·${THIN}${closed.declined} declined ·${THIN}${closed.expired} expired`,
   };
   const unsplit = data.unsplit.map((k) => FACET_NAMES[k]);
+  const inbound = filters.route === "inbound";
 
   return (
     <>
@@ -131,7 +145,7 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
       )}
 
       <KpiRow>
-        <Kpi label="Confirmed invitations" context={`${na(sent.reached)} unique opportunities · not ${na(sends.attempts)} attempts`} testId="metric-Confirmed invitations">{na(sent.reached)}</Kpi>
+        <Kpi label="Confirmed invitations" context={inbound ? "N/A · applicants are never sent an outbound invitation" : `${na(sent.reached)} unique opportunities · not ${na(sends.attempts)} attempts`} testId="metric-Confirmed invitations">{na(sent.reached)}</Kpi>
         <Kpi label="Matched / accepted" context={`${matched.conversion ?? "N/A"} of confirmed sends · source-native meaning`} testId="metric-Matched / accepted">{na(matched.reached)}</Kpi>
         <Kpi label="Terms confirmed" context="Acceptance is separate from a Social Cat match" testId="metric-Terms confirmed">{na(terms.reached)}</Kpi>
         <Kpi label="Retained-order creators" context={`${na(retained.reached)} of ${na(published.reached)} published creators · not ${na(outcomes.orders)} orders`} testId="metric-Retained-order creators">{na(retained.reached)}</Kpi>
@@ -204,12 +218,15 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
             <h2 id="work-title" className={acquisition.h2}>Where the work sits today.</h2>
             <p className={acquisition.small}>Exclusive stage counts add to {formatCount(total)}. Every held item retains a reason, owner and next action.</p>
           </div>
-          <LinkButton variant="secondary" to={queueTo} style={{ minWidth: 172 }}>Open work queue</LinkButton>
+          <div className={acquisition.actions}>
+            <LinkButton variant="secondary" to="/creators/pipeline?view=branches" style={{ minWidth: 172 }}>Paths and branches</LinkButton>
+            <LinkButton variant="secondary" to={queueTo} style={{ minWidth: 172 }}>Open work queue</LinkButton>
+          </div>
         </div>
         {[CURRENT_STAGES.slice(0, 5), CURRENT_STAGES.slice(5)].map((group, i) => (
           <div key={i} className={styles.stageRow}>
             {group.map((s) => (
-              <Kpi key={s.key} label={s.label} context={stageContext[s.key] ?? s.next ?? ""} testId={`stage-${s.label}`}>{currentCount(sources, s.key)}</Kpi>
+              <Kpi key={s.key} label={s.label} context={inbound && s.key === "dispatch" ? "N/A · no outbound dispatch" : (stageContext[s.key] ?? s.next ?? "")} testId={`stage-${s.label}`}>{na(currentCount(sources, s.key))}</Kpi>
             ))}
           </div>
         ))}
@@ -227,7 +244,7 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
           <Kpi label="Attributed net sales" context={`${usd(outcomes.merchandise)} merchandise − ${usd(outcomes.refunds)} refunds`} testId="metric-Attributed net sales">{usd(outcomes.net)}</Kpi>
         </KpiRow>
         <p className={acquisition.small}>
-          {na(retained.reached)} creators have retained orders. {netBySource(data).map((s) => `${s.label} source contributes ${usd(s.net)}`).join("; ")}. Source, publishing network and checkout are independent filters.
+          {na(retained.reached)} creators have retained orders. {netBySource(data).map((s) => `${s.label} source contributes ${usd(s.net)}`).join("; ")}. Daily acquisition cohort; hourly monitoring keeps its own coverage and cohort.
         </p>
       </section>
 

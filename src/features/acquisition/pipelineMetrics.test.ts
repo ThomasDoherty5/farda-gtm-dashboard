@@ -1,4 +1,4 @@
-import { CURRENT_STAGES, PIPELINE_STAGES, filterPipeline, pipelineDemo, pipelineSources, type SourceFacts } from "@/fixtures/pipeline";
+import { CURRENT_STAGES, DEFAULT_PIPELINE_FILTERS, PIPELINE_STAGES, filterPipeline, pipelineDemo, pipelineSources, type SourceFacts } from "@/fixtures/pipeline";
 import { currentTotal, outcomeTotals, percent, sendTotals, stageRows, sum } from "./pipelineMetrics";
 
 describe("pipeline fixture", () => {
@@ -31,10 +31,49 @@ describe("pipeline fixture", () => {
     }
   });
 
-  it("filters by source only, and reports the facets it cannot split", () => {
-    expect(filterPipeline({ source: "tiktok-shop", network: "all", checkout: "all", window: "sep-oct" })).toMatchObject({ unsplit: [], sources: [{ source: "tiktok-shop" }] });
-    expect(filterPipeline({ source: "both", network: "tiktok", checkout: "all", window: "oct" }).unsplit).toEqual(["network", "window"]);
-    expect(filterPipeline({ source: "both", network: "all", checkout: "all", window: "sep-oct" }).scaleMax).toBe(pipelineDemo.scaleMax);
+  const F = DEFAULT_PIPELINE_FILTERS;
+  const reachedOf = (filters: Partial<typeof F>, i = 0) => stageRows(filterPipeline({ ...F, ...filters }).sources)[i]!.reached;
+
+  it("CF-01: every facet picks cells, so no facet is left unsplit and the default view is unchanged", () => {
+    expect(filterPipeline(F).unsplit).toEqual([]);
+    expect(filterPipeline({ ...F, source: "tiktok-shop" })).toMatchObject({ unsplit: [], sources: [{ source: "tiktok-shop" }] });
+    expect(filterPipeline(F).scaleMax).toBe(pipelineDemo.scaleMax);
+    expect(filterPipeline(F).sources).toEqual(pipelineSources);
+  });
+
+  it.each([
+    ["network", "instagram", "tiktok"],
+    ["checkout", "website", "tiktok-shop"],
+    ["window", "sep", "oct"],
+  ] as const)("CF-01: the %s facet partitions the cohort, so its values add up to the whole", (facet, a, b) => {
+    expect(reachedOf({ [facet]: a })! + reachedOf({ [facet]: b })!).toBe(120);
+    expect(reachedOf({ [facet]: a })).not.toBe(reachedOf({}));
+  });
+
+  it("CF-01: policy version partitions the cohort, and the cohort window is a different slice from it", () => {
+    expect(reachedOf({ policy: "policy-2026-09" })! + reachedOf({ policy: "policy-2026-10" })!).toBe(120);
+    expect(reachedOf({ policy: "policy-2026-09" })).not.toBe(reachedOf({ window: "sep" }));
+  });
+
+  it("CF-01: an inbound application has no confirmed outbound send, and that stage is N/A rather than zero", () => {
+    const rows = stageRows(filterPipeline({ ...F, route: "inbound" }).sources);
+    expect(rows[0]!.reached).toBe(24);
+    expect(rows.find((r) => r.key === "confirmedSent")!.reached).toBeNull();
+    expect(rows.find((r) => r.key === "confirmedSent")!.conversion).toBeNull();
+    expect(filterPipeline({ ...F, route: "inbound" }).sources.map((s) => s.source)).toEqual(["social-cat"]);
+    expect(filterPipeline({ ...F, route: "inbound", source: "tiktok-shop" }).sources).toEqual([]);
+  });
+
+  it("a combined median is shown only where the slices agree", () => {
+    const rows = stageRows(filterPipeline({ ...F, route: "inbound" }).sources);
+    expect(rows.find((r) => r.key === "confirmedSent")!.medianDays).toBeNull();
+  });
+
+  it("every slice's exclusive stage counts reconcile to its own cohort", () => {
+    for (const filters of [{ network: "tiktok" }, { checkout: "tiktok-shop", window: "oct" }, { policy: "policy-2026-10" }, { route: "inbound" }] as const) {
+      const sources = filterPipeline({ ...F, ...filters }).sources;
+      expect(currentTotal(sources)).toBe(stageRows(sources)[0]!.reached);
+    }
   });
 });
 

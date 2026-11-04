@@ -29,8 +29,9 @@ export function stageRows(sources: SourceFacts[]): StageRow[] {
   }));
 }
 
-export const currentCount = (sources: SourceFacts[], key: CurrentStageKey) => sources.reduce((a, s) => a + s.current[key], 0);
-export const currentTotal = (sources: SourceFacts[]) => CURRENT_STAGES.reduce((a, stage) => a + currentCount(sources, stage.key), 0);
+/** A bucket's exclusive count, or null when it does not exist for the route (inbound has no outbound dispatch). Never zero. */
+export const currentCount = (sources: SourceFacts[], key: CurrentStageKey): number | null => sum(sources.map((s) => s.current[key]));
+export const currentTotal = (sources: SourceFacts[]) => CURRENT_STAGES.reduce((a, stage) => a + (currentCount(sources, stage.key) ?? 0), 0);
 
 export function sendTotals(sources: SourceFacts[]) {
   const add = (pick: (s: SourceFacts["sends"]) => number) => sources.reduce((a, s) => a + pick(s.sends), 0);
