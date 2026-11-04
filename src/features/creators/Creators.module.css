@@ -8,6 +8,7 @@
 .panel > span { align-self: flex-start; }
 .panelWide { gap: var(--space-20); }
 .panelViolet { padding: var(--space-24); background: var(--color-violetSoft); border: 0; }
+.panelBare { padding: var(--space-24); border: 0; }
 .panelDark { background: var(--color-ink); border-color: var(--color-border); color: var(--color-onDark); }
 .panelSubtle { background: var(--color-subtle); }
 .panelDark .small, .panelDark p { color: var(--color-onDark); }
