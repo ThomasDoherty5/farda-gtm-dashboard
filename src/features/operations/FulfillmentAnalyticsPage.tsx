@@ -69,11 +69,11 @@ function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean 
                 </div>
               ))}
             </div>
-            <table className="visually-hidden">
+            <div className="visually-hidden"><table>
               <caption>Orders shipped and open backlog per day</caption>
               <thead><tr><th scope="col">Day</th><th scope="col">Shipped</th><th scope="col">Open backlog</th></tr></thead>
               <tbody>{data.daily.map((d) => <tr key={d.label}><th scope="row">{d.label}</th><td>{d.shipped}</td><td>{d.backlog}</td></tr>)}</tbody>
-            </table>
+            </table></div>
           </div>
           <Divider />
           <dl className={styles.best}><dt>Best dispatch day</dt><dd data-testid="best-day">{best.shipped} orders · {best.label.length > 2 ? best.label : `Oct ${best.label}`}</dd></dl>

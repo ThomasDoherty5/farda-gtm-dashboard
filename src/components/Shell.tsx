@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useScope } from "@/adapter/scope";
 import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
@@ -7,11 +7,50 @@ import { Button, LinkButton } from "./Button";
 import { Dialog } from "./Dialog";
 import styles from "./Shell.module.css";
 
+const SITE_TITLE = "Farda GTM Operations";
+
+/**
+ * Route changes (WCAG 2.4.2, 2.4.3, 4.1.3): the document title names the page, and after navigating focus moves to the page heading,
+ * or to main while the heading is still loading, so keyboard and screen-reader users start at the top of the new page.
+ * The first load keeps the browser's own focus. Query-only changes (tabs, filters) do not move focus.
+ */
+function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
+  const shown = useRef(pathname);
+  const pending = useRef(false);
+  useEffect(() => {
+    const el = main.current;
+    if (!el) return;
+    const heading = () => el.querySelector<HTMLElement>("h1");
+    const syncTitle = () => { const text = heading()?.textContent?.trim(); document.title = text ? `${text} · Farda` : SITE_TITLE; };
+    const focusHeading = () => {
+      const target = heading() ?? el;
+      if (target !== el) target.tabIndex = -1;
+      target.focus();
+      return target !== el;
+    };
+    syncTitle();
+    if (shown.current !== pathname) {
+      shown.current = pathname;
+      pending.current = !focusHeading();
+    }
+    const observer = new MutationObserver(() => {
+      syncTitle();
+      // The heading arrived after the navigation: move focus only if the user has not moved it on.
+      if (pending.current && heading() && (document.activeElement === el || document.activeElement === document.body)) pending.current = !focusHeading();
+    });
+    observer.observe(el, { childList: true, subtree: true, characterData: true });
+    const stop = window.setTimeout(() => { pending.current = false; }, 3000);
+    return () => { observer.disconnect(); window.clearTimeout(stop); };
+  }, [main, pathname]);
+}
+
 /** Application shell (Figma 10:218): skip link, horizontal navigation, workspace menu and main landmark. */
 export function Shell() {
   const { adapter } = useScope();
   const { pathname } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const mainRef = useRef<HTMLElement>(null);
+  useRouteAnnouncement(mainRef, pathname);
   const section = sectionOf(pathname);
   const demo = adapter.environment === "demo";
 
@@ -38,7 +77,7 @@ export function Shell() {
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
           <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : "Menu"}</button>
         </header>
-        <main id="main" tabIndex={-1} className={styles.main}>
+        <main id="main" ref={mainRef} tabIndex={-1} className={styles.main}>
           <Outlet />
         </main>
       </div>

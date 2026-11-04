@@ -99,6 +99,8 @@
 .weekBars span:first-child { background: var(--color-violetSoft); }
 .linkText { font: var(--text-label); color: var(--color-violet); text-decoration: none; }
 .linkText:hover { text-decoration: underline; }
+/* WCAG 2.5.8: a 24px target. Padding grows the hit area; the equal negative margin keeps the layout where Figma has it. */
+.linkText, .approvalCopy a { padding-block: 2px; margin-block: -2px; }
 .gateLine { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: var(--space-16); margin: 0; }
 .gateLine dt { font: var(--text-label); }
 .gateLine dd { margin: 0; font: var(--text-body); }

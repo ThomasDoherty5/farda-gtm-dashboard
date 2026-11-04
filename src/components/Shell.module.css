@@ -12,7 +12,7 @@
 .spacer { flex: 0 1 116px; }
 .profile { min-width: 44px; min-height: 44px; padding: 0; text-align: left; background: none; border: 0; border-radius: var(--space-999); font: var(--text-label); color: var(--color-onDark); cursor: pointer; }
 .main { display: block; padding: var(--space-32); background: var(--color-surface); border-radius: var(--space-28); }
-.main:focus { outline: none; }
+.main:focus, .main h1:focus { outline: none; }
 @media (min-width: 1024px) {
   .header { position: sticky; top: 0; z-index: 5; }
 }

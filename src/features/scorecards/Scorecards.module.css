@@ -96,3 +96,5 @@
 
 /* The design fixes each tab's width; the text is centered in it, so the 12px padding must not widen a long label. */
 .tabsFixed a { padding-inline: 0; }
+/* 320 CSS px reflow (WCAG 1.4.10): the decision copy may shrink below its 280px design width. Implementation adaptation, docs/design-map.md. */
+@media (max-width: 359px) { .decisionCopy { min-width: 0; } }

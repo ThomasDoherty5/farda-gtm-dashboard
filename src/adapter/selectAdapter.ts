@@ -9,7 +9,9 @@ export function selectAdapter(env: { VITE_FARDA_ADAPTER?: string }, search = "")
   if (mode === "demo") {
     const requested = new URLSearchParams(search).get("fixture");
     const fixture = overviewFixtureKeys.find((k) => k === requested || k.startsWith(`${requested}-`)) as OverviewFixtureKey | undefined;
-    return createDemoAdapter({ fixture });
+    // Demo only: `?latency=<ms>` holds every read in flight so the loading state can be inspected. Capped at 10 s; the live adapters never read it.
+    const latency = Number(new URLSearchParams(search).get("latency"));
+    return createDemoAdapter({ fixture, latencyMs: Number.isFinite(latency) ? Math.min(Math.max(latency, 0), 10_000) : 0 });
   }
   if (mode === "sandbox" || mode === "production") return createLiveAdapter(mode);
   throw new Error(`Unknown VITE_FARDA_ADAPTER "${mode}". Expected demo, sandbox or production.`);
