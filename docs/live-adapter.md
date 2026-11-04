@@ -42,6 +42,10 @@ The adapter cannot make these true. They stay with the backend owner. See the ta
 - Report real freshness, coverage and provenance (AD-03). The adapter validates the shape and passes unknown and N/A through unchanged. It cannot know that a counter is really private or stale.
 - Keep provider credentials, logs and error text free of secrets (AD-02). The adapter redacts what it displays. It cannot clean a server log.
 
+## The HTTP transport and the reference server
+
+`src/adapter/httpTransport.ts` is a real `Transport` over `fetch` (paths in `docs/adapter-decisions.md`, under "Paths"): credentials included, the CSRF token for writes taken from the session call and held only in memory, the abort signal honoured, and statuses and typed bodies mapped to `TransportFailure` as `transportTestKit.ts` assumes. `main.tsx` supplies it through `selectAdapter` when `VITE_FARDA_ADAPTER` is `sandbox` or `production` and `VITE_FARDA_ADAPTER_BASE_URL` is set; otherwise the pending transport stays. The only server that answers it is `tools/reference-server/`, a test double. The conformance suite passes over real HTTP against that double. That is **reference-server-verified**, not integration-verified: no production backend exists.
+
 ## How to plug the transport in
 
 1. Write a `Transport` in the host that adds the session and sends the envelope to the published endpoint.
