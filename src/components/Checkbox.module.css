@@ -1,0 +1,10 @@
+/* Figma component set 6:443. */
+.checkbox { position: relative; display: flex; align-items: center; gap: var(--space-12); }
+.input { position: absolute; left: 0; top: 50%; width: 20px; height: 20px; margin: -10px 0 0; opacity: 0; cursor: pointer; }
+.box { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; background: var(--color-surface); border: 1px solid var(--color-violet); border-radius: var(--space-4); font: var(--text-small); color: var(--color-onDark); pointer-events: none; }
+.on { background: var(--color-violet); }
+.label { font: var(--text-body); color: var(--color-ink); cursor: pointer; }
+.input:focus-visible + .box { outline: 2px solid var(--color-violet); outline-offset: 2px; }
+.disabled .box { background: var(--color-surface); border-color: var(--color-border); }
+.disabled .on { background: var(--color-subtle); color: var(--color-muted); }
+.disabled .label, .disabled .input { color: var(--color-muted); cursor: not-allowed; }

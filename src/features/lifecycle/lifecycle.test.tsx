@@ -117,7 +117,7 @@ describe.each([
     const { user } = await go();
     const policies = screen.getByRole("group", { name: "Mandatory send policies, locked" });
     const boxes = within(policies).getAllByRole("checkbox");
-    expect(boxes.map((b) => b.nextElementSibling?.textContent)).toEqual(["Recheck consent before send", "Stop on opt-out or suppression", "Prevent duplicate enrollment"]);
+    expect(boxes.map((b) => (b as HTMLInputElement).labels?.[0]?.textContent)).toEqual(["Recheck consent before send", "Stop on opt-out or suppression", "Prevent duplicate enrollment"]);
     for (const box of boxes) {
       expect(box).toBeChecked();
       expect(box).toHaveAttribute("aria-readonly", "true");

@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { Checkbox } from "@/components/Checkbox";
 import { mandatoryPolicies, type FlowStep } from "@/fixtures/lifecycle";
 import styles from "./Lifecycle.module.css";
 
@@ -31,10 +32,7 @@ export function LockedPolicies() {
       <fieldset className={styles.policies} aria-describedby={reasonId}>
         <legend>Mandatory send policies, locked</legend>
         {mandatoryPolicies.map((label) => (
-          <div key={label} className={styles.policy}>
-            <input id={`${reasonId}-${label}`} type="checkbox" checked readOnly aria-readonly="true" onChange={() => undefined} />
-            <label htmlFor={`${reasonId}-${label}`}>{label}</label>
-          </div>
+          <Checkbox key={label} label={label} checked readOnly describedBy={reasonId} />
         ))}
       </fieldset>
       <p id={reasonId} className={styles.stepKind}>Locked policies. The server enforces them at send time, so a changed or forged request can't bypass them. Changing one needs its own authorized, versioned change.</p>

@@ -13,6 +13,7 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { Kpi } from "@/components/Kpi";
 import { DetailRows, Halves, Notice, Page, PageHeader, Panel, Row, kit } from "@/components/PageKit";
+import { SearchField } from "@/components/Search";
 import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { ActionError, blockedReason } from "@/features/approvals/shared";
@@ -91,7 +92,7 @@ function Runs({ data }: { data: AutomationData }) {
       </div>
 
       <Row>
-        <input id={searchId} type="search" className={kit.search} placeholder="Search run or collaboration" aria-label="Search run or collaboration" value={q} onChange={(e) => update({ q: e.target.value }, true)} />
+        <SearchField id={searchId} label="Search run or collaboration" placeholder="Search run or collaboration" value={q} onChange={(v) => update({ q: v }, true)} />
         <FilterButton name="Platform" title="Choose a platform" options={[...RUN_PLATFORMS]} value={platform} onChange={(v) => update({ platform: v })} width={176} bare />
         <FilterButton name="State" title="Choose a run state" options={[...RUN_STATES]} value={state} onChange={(v) => update({ state: v })} width={152} bare />
         <Button variant="secondary" aria-pressed={mine} style={{ minWidth: 184 }} onClick={() => update({ mine: mine ? null : "1" })}>Assigned to me</Button>
