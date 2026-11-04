@@ -116,6 +116,7 @@ const WITH_RECORD: Record<string, unknown[]> = {
   settlementDetail: [{ settlementId: "COMM-DEMO-D" }, { settlementId: "TT-NATIVE-DEMO" }],
   payableDetail: [{ payableId: "PAY-0012" }],
   periodClose: [{ period: "2026-10" }],
+  closePackage: [{ period: "2026-10" }, { period: "2026-10", scenario: "lateadjustment" }],
   emailFlow: [{ flow: "setup" }],
   scheduleDetail: [{ jobId: "zap-12" }],
   postPerformance: [{ postId: "P-001" }, { postId: "P-002" }],
