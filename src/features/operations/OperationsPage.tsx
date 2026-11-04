@@ -56,6 +56,7 @@ export function OperationsPage() {
         </PageHeader>
       ) : (
         <PageHeader id="ops-title" title="Operations">
+          {layout === "mobile" && <LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton>}
           {layout === "tablet" && <><LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton><Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button></>}
         </PageHeader>
       )}
