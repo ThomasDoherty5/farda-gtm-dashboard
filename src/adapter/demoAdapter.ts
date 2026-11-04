@@ -9,6 +9,7 @@ import { createDemoOffers, readAssessment } from "./demoScorecards";
 import { createDemoBatch } from "./demoBatch";
 import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
 import { readCreatorsView } from "./demoCreators";
+import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
@@ -30,6 +31,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const offers = createDemoOffers();
   const batch = createDemoBatch();
   const collaboration = createDemoCollaboration();
+  const settings = createDemoSettings();
 
   return {
     environment: "demo",
@@ -38,6 +40,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      const settingsView = settings.read(request);
+      if (settingsView) return settingsView as ReadResponse<T>;
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
@@ -64,6 +68,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      const settingsAction = settings.submit(request);
+      if (settingsAction) return settingsAction;
       const opsResult = ops.submit(request);
       if (opsResult) return opsResult;
       if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
@@ -75,6 +81,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (settings.handlesSave(request)) return settings.save(request) as Promise<SaveResourceResponse<T>>;
       if (request.resourceKind === "actionDraft") return offers.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
       return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
