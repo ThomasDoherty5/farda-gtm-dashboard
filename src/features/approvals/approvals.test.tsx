@@ -245,9 +245,10 @@ describe("agent run approval (CTRL-042, CTRL-043)", () => {
     expect(screen.queryByRole("link", { name: /Slack/ })).not.toBeInTheDocument();
   });
 
-  it("keeps the hourly monitor variant as a placeholder when no tab is given", async () => {
+  it("shows the hourly monitor variant when no tab is given, and says an approval run isn't one", async () => {
     renderRoute("/runs/demo-run-batch", createDemoAdapter());
-    expect(await screen.findByText(/Not built yet/)).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("This isn't an hourly monitoring run.");
+    expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
   });
 });
 

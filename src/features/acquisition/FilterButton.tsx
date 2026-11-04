@@ -7,7 +7,7 @@ type Option = { value: string; label: string };
 
 /**
  * A filter that lives in the URL. It shows the current choice on the button, offers only allowed
- * values, and never writes to a source. `bare` shows only the choice on the button, as Figma's "All homes" does. Choosing applies at once, so Back restores the previous choice.
+ * values, and never writes to a source. `bare` shows only the choice on the button, as Figma's "All homes" and date-window buttons do. Choosing applies at once, so Back restores the previous choice.
  */
 export function FilterButton({ name, title, options, value, onChange, width, bare = false }: { name: string; title: string; options: Option[]; value: string; onChange: (value: string) => void; width?: number; bare?: boolean }) {
   const [open, setOpen] = useState(false);

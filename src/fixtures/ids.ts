@@ -7,3 +7,7 @@ export const DEMO_ORDER_ID = "TEST-SH-1042";
 export const DEMO_SAMPLE_ID = "TEST-SC-0081";
 export const DEMO_SHIPMENT_ID = "TEST-SP-0093";
 export const DEMO_EXCEPTION_ID = "TEST-EVT-129";
+export const DEMO_COLLABORATION_ID = "demo-collaboration-1";
+export const DEMO_ASSESSMENT_ID = "demo-assessment-1";
+export const DEMO_OFFER_ID = "demo-offer-1";
+export const DEMO_SETTLEMENT_ID = "demo-settlement-1";

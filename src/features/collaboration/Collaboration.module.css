@@ -1,0 +1,40 @@
+/* Collaboration detail and content review (Figma 9:299, 9:436). Below 1180 the columns stack (implementation adaptation). */
+.kvList { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; min-width: 0; }
+.loose { gap: var(--space-16); }
+.kv { display: grid; grid-template-columns: var(--label, 160px) minmax(0, 1fr); gap: var(--space-12); }
+.kv dt { font: var(--text-small); color: var(--color-muted); }
+.kv dd { margin: 0; font: var(--text-label); color: var(--color-ink); overflow-wrap: anywhere; }
+.props { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-24); }
+.eligibility { display: grid; grid-template-columns: repeat(3, minmax(0, 390px)); gap: var(--space-24); margin: 0; }
+.timeline { display: flex; flex-direction: column; gap: var(--space-20); margin: 0; padding: 0; list-style: none; }
+.event { display: flex; align-items: flex-start; gap: var(--space-16); }
+.eventText { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.eventText p { margin: 0; }
+.eventTitle { font: var(--text-label); }
+.rule { align-self: stretch; height: 1px; background: var(--color-border); }
+.split { display: grid; grid-template-columns: minmax(0, 760fr) minmax(0, 516fr); gap: var(--space-20); align-items: start; }
+.column { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
+.darkBox { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-20); padding: var(--space-32); background: var(--color-ink); color: var(--color-onDark); border-radius: var(--space-20); }
+.darkBox p, .darkBox h2 { margin: 0; color: var(--color-onDark); }
+.criteria { display: flex; flex-direction: column; gap: var(--space-20); margin: 0; padding: 0; list-style: none; }
+.criterion { display: flex; align-items: flex-start; gap: var(--space-16); }
+.criterion span:first-child { flex: 1 1 0; font: var(--text-body); }
+.history { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; font: var(--text-body); color: var(--color-muted); }
+.stack { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-16); }
+.stack > a, .stack > button { width: 100%; }
+.requests { margin: 0; padding-left: var(--space-20); font: var(--text-small); }
+.ack { margin: 0; padding: var(--space-12) var(--space-16); background: var(--color-violetSoft); border-radius: var(--space-16); font: var(--text-small); }
+.form { display: flex; flex-direction: column; gap: var(--space-16); width: 100%; }
+.form p, .form ul { margin: 0; }
+.form ul { padding-left: var(--space-20); font: var(--text-small); }
+@media (max-width: 1179px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .eligibility { grid-template-columns: minmax(0, 1fr); gap: var(--space-12); }
+}
+@media (max-width: 767px) {
+  .props { grid-template-columns: minmax(0, 1fr); }
+  .criterion { flex-wrap: wrap; }
+}
+@media (max-width: 479px) {
+  .kv { grid-template-columns: minmax(0, 1fr); gap: 0; }
+}
