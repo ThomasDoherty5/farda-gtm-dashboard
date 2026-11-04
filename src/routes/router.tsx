@@ -5,6 +5,11 @@ import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
 import { ApprovalPage } from "@/features/approvals/ApprovalPage";
 import { ApprovalsIndex, RunsIndex } from "@/features/approvals/DemoScenarios";
 import { RunPage } from "@/features/approvals/RunPage";
+import { ActivationPage } from "@/features/lifecycle/ActivationPage";
+import { ConsentPage } from "@/features/lifecycle/ConsentPage";
+import { EmailFlowPage } from "@/features/lifecycle/EmailFlowPage";
+import { LifecyclePage } from "@/features/lifecycle/LifecyclePage";
+import { SetupFlowPage } from "@/features/lifecycle/SetupFlowPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
 import { AutomationsPage } from "@/features/settings/AutomationsPage";
 import { CapabilitiesPage } from "@/features/settings/CapabilitiesPage";
@@ -27,6 +32,13 @@ const implemented: Record<string, JSX.Element> = {
   "/automations": <AutomationsPage />,
   "/automations/:jobId/schedule": <SchedulePage />,
   "/settings/capabilities": <CapabilitiesPage />,
+  "/customers/lifecycle": <LifecyclePage />,
+  "/customers/flows/setup": <SetupFlowPage />,
+  "/customers/flows/early-access": <EmailFlowPage flow="early-access" />,
+  "/customers/flows/abandoned-checkout": <EmailFlowPage flow="abandoned-checkout" />,
+  "/customers/flows/review-request": <EmailFlowPage flow="review-request" />,
+  "/customers/consent": <ConsentPage />,
+  "/customers/activation": <ActivationPage />,
 };
 
 /** Section pages with demo entry points. Neither is a Figma source; both fall back to the section index. */

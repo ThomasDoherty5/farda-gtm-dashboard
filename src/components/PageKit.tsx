@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { Badge, type BadgeTone } from "./Badge";
+import { LinkButton } from "./Button";
 import styles from "./PageKit.module.css";
 
 /** Page-level pieces shared by the settings, automation and lifecycle screens. Each maps to a repeated Figma frame. */
@@ -17,10 +18,10 @@ export function PageHeader({ id, title, subtitle, titleWidth = 850, children }: 
   );
 }
 
-/** A bordered card with a "Section heading" (e.g. 7:919). `large` is the 22px heading used on full-width cards, `roomy` is the 24px gap Figma uses on the capability matrix, and `headingGap` is the 4px or 6px between a heading and its note (Figma uses both). */
-export function Panel({ title, note, large = false, roomy = false, headingGap, headingId, testId, children }: { title: string; note?: string | undefined; large?: boolean; roomy?: boolean; headingGap?: 4 | 6; headingId: string; testId?: string; children: ReactNode }) {
+/** A bordered card with a "Section heading" (e.g. 7:919). `large` is the 22px heading used on full-width cards, `roomy` is the 24px gap Figma uses on the capability matrix, and `headingGap` is the 4px, 6px or 20px between a heading and its note (Figma uses all three). */
+export function Panel({ title, note, large = false, roomy = false, tight = false, headingGap, headingId, testId, children }: { title: string; note?: string | undefined; large?: boolean; roomy?: boolean; tight?: boolean; headingGap?: 4 | 6 | 20; headingId: string; testId?: string; children: ReactNode }) {
   return (
-    <section className={`${styles.card} ${large ? styles.cardLarge : ""} ${roomy ? styles.cardRoomy : ""}`} aria-labelledby={headingId} data-testid={testId}>
+    <section className={`${styles.card} ${large ? styles.cardLarge : ""} ${roomy ? styles.cardRoomy : ""} ${tight ? styles.cardTight : ""}`} aria-labelledby={headingId} data-testid={testId}>
       <div className={styles.sectionHead} style={{ gap: headingGap ?? (large ? 6 : 4) }}>
         <h2 id={headingId} className={large ? styles.heading2 : styles.heading3}>{title}</h2>
         {note && <p>{note}</p>}
@@ -54,10 +55,11 @@ export function Notice({ title, kind = "context", badge, actions, descriptionId,
   );
 }
 
-/** Label and value rows (Figma "Detail" rows such as 7:1017). */
-export function DetailRows({ rows, wide = false }: { rows: readonly (readonly [string, string])[]; wide?: boolean }) {
+/** Label and value rows (Figma "Detail" rows such as 7:1017). `gap` and `labelWidth` follow the card the rows sit in (some use 20px and a 165px label). */
+export function DetailRows({ rows, wide = false, gap, labelWidth }: { rows: readonly (readonly [string, string])[]; wide?: boolean; gap?: number; labelWidth?: number }) {
+  const style = { ...(gap ? { gap } : {}), ...(labelWidth ? { "--detail-label": `${labelWidth}px` } : {}) } as CSSProperties;
   return (
-    <dl className={`${styles.details} ${wide ? styles.detailsWide : ""}`}>
+    <dl className={`${styles.details} ${wide ? styles.detailsWide : ""}`} style={style}>
       {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
     </dl>
   );
@@ -109,3 +111,27 @@ export const Page = ({ labelledBy, source, children }: { labelledBy: string; sou
 );
 export const Small = ({ children }: { children: ReactNode }) => <p className={styles.small}>{children}</p>;
 export const kit = styles;
+
+/** A state badge and one line of context beneath the title (Figma "Context" and "Flow context", e.g. 5:322). */
+export function ContextLine({ badge, tone = "violet", width = 160, trailing, children }: { badge: string; tone?: BadgeTone; width?: number; trailing?: ReactNode; children: ReactNode }) {
+  return (
+    <div className={styles.contextLine}>
+      <Badge tone={tone} width={width}>{badge}</Badge>
+      <p className={styles.small}>{children}</p>
+      {trailing}
+    </div>
+  );
+}
+
+export type PillItem = { label: string; to: string; width: number; current?: boolean };
+
+/** Section links drawn as pills (Figma "Secondary navigation", e.g. 5:315). The current one is marked with aria-current. */
+export function PillNav({ label, items, gap = 12 }: { label: string; items: PillItem[]; gap?: 8 | 12 }) {
+  return (
+    <nav aria-label={label} className={styles.row} style={{ gap }}>
+      {items.map((i) => (
+        <LinkButton key={i.label} to={i.to} variant={i.current ? "primary" : "ghost"} aria-current={i.current ? "page" : undefined} style={{ minWidth: i.width }}>{i.label}</LinkButton>
+      ))}
+    </nav>
+  );
+}

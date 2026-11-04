@@ -14,9 +14,9 @@ export const navSections = (() => {
 
 /** Primary navigation from Figma node 10:219, with destinations from the prototype. */
 export const primaryNav = [
-  { label: "Overview", to: "/overview", width: 122, sections: ["overview", "launch", "analytics", "campaigns"] },
+  { label: "Overview", to: "/overview", width: 122, sections: ["overview", "launch", "analytics", "campaigns", "customers"] },
   { label: "Creators", to: "/creators/social-cat?view=dashboard", width: 122, sections: ["creators", "collaborations", "approvals", "offers", "batches", "content"] },
-  { label: "Operations", to: "/operations", width: 122, sections: ["operations", "orders", "shipments", "returns", "inventory", "support", "customers"] },
+  { label: "Operations", to: "/operations", width: 122, sections: ["operations", "orders", "shipments", "returns", "inventory", "support"] },
   { label: "Finance", to: "/finance", width: 122, sections: ["finance"] },
   { label: "Automations", to: "/automations", width: 146, sections: ["automations", "settings", "runs"] },
 ] as const;

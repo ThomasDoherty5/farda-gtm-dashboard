@@ -2,6 +2,7 @@ import type { FardaAdapter, ReadOptions } from "./adapter";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
+import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
 import { discoveryDemo } from "@/fixtures/discovery";
@@ -19,6 +20,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const approvals = createDemoApprovals();
   const evidence = createDemoEvidence();
   const settings = createDemoSettings();
+  const lifecycle = createDemoLifecycle();
 
   return {
     environment: "demo",
@@ -29,6 +31,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       await wait(latencyMs, options?.signal);
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
+      const lifecycleView = lifecycle.read(request);
+      if (lifecycleView) return lifecycleView as ReadResponse<T>;
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
@@ -49,6 +53,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
       if (settings.handlesSave(request)) return settings.save(request) as Promise<SaveResourceResponse<T>>;
+      if (lifecycle.handlesSave(request)) return lifecycle.save(request) as Promise<SaveResourceResponse<T>>;
       return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
   };
