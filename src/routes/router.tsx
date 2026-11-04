@@ -1,4 +1,5 @@
 import { Navigate, type RouteObject } from "react-router-dom";
+import { RouteError, ShellError } from "@/components/RenderError";
 import { Shell } from "@/components/Shell";
 import { EvidencePage } from "@/features/acquisition/EvidencePage";
 import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
@@ -114,7 +115,9 @@ export function buildRoutes(): RouteObject[] {
     ...navSections.filter((s) => !paths.includes(s.path)).map((s) => ({ path: s.path, element: sectionPages[s.seg] ?? <SectionIndex seg={s.seg} /> })),
     { path: "*", element: <NotFound /> },
   ];
-  return [{ path: "/", element: <Shell />, children }];
+  // A pathless layout holds the screens, so a screen that throws is replaced inside the shell's main region and navigation survives.
+  // The shell route has its own error element for a failure in the shell itself.
+  return [{ path: "/", element: <Shell />, errorElement: <ShellError />, children: [{ errorElement: <RouteError />, children }] }];
 }
 
 function NotFound() {
