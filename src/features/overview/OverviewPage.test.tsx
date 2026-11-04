@@ -72,6 +72,44 @@ describe("OverviewPage", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Oct 30, 2026");
   });
 
+  it("GTM275-07: a healthy newest row does not clear the other sources, and each source keeps its own state", async () => {
+    renderFixture("FX-10-mixed-source-health");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Some sources are not current");
+    expect(alert).toHaveTextContent("The newest sync does not prove every source is healthy");
+    const state = (source: string) => alert.querySelector(`[data-source="${source}"]`)!.getAttribute("data-state");
+    expect(state("shopify")).toBe("current");
+    expect(state("tiktok-shop")).toBe("no-change");
+    expect(state("creator-monitor")).toBe("partial");
+    expect(state("ad-platforms")).toBe("never-synced");
+    expect(state("quickbooks")).toBe("error");
+    expect(alert.querySelector('[data-source="ad-platforms"]')).toHaveTextContent("Never synced");
+    expect(alert.querySelector('[data-source="ad-platforms"]')).toHaveTextContent("not zero");
+    expect(alert.querySelector('[data-source="tiktok-shop"]')).toHaveTextContent("No change since last check");
+    expect(alert.querySelector('[data-source="quickbooks"]')).toHaveTextContent("Last attempt failed");
+    // The figures are still shown and still labeled; nothing was turned into zero.
+    expect(await metric("Paid orders")).toHaveTextContent("400");
+  });
+
+  it("GTM275-07: a fully current dataset shows no freshness alert", async () => {
+    renderFixture("FX-01-happy-read");
+    expect(await metric("Paid orders")).toHaveTextContent("400");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("GTM275-07: the report preview lists every source with its own last success", async () => {
+    const user = userEvent.setup();
+    renderFixture("FX-10-mixed-source-health");
+    await metric("Paid orders");
+    await user.click(screen.getByRole("button", { name: "Export report" }));
+    const dialogs = screen.getAllByRole("dialog", { hidden: true });
+    const preview = dialogs.find((d) => d.querySelector("h2")?.textContent === "Report preview")!;
+    const items = within(preview).getAllByRole("listitem", { hidden: true });
+    expect(items).toHaveLength(5);
+    expect(preview).toHaveTextContent("Source coverage in this snapshot");
+    expect(preview).toHaveTextContent("QuickBooks");
+  });
+
   it("FX-08 shows a neutral denial with no retry and no values", async () => {
     renderFixture("FX-08-forbidden-account");
     expect(await screen.findByRole("heading", { name: "No access to this account" })).toBeInTheDocument();

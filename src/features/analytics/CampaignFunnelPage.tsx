@@ -79,7 +79,7 @@ function Body({ data }: { data: CampaignFunnelData }) {
         <Card labelledBy="caps-title" className={styles.card20}>
           <SectionHeading id="caps-title" title="Capacity includes active reservations" note="Shipped + reserved cannot exceed the campaign gift cap." />
           <BarList label="Gift capacity used" rows={data.campaigns.map((c) => { const u = capacityUse(c); return { key: c.key, label: c.label, value: `${u.used} / ${u.cap}${u.over ? " over" : ""}`, share: ratio(u.used, u.cap), ...(u.over ? { tone: "warning" as const } : {}) }; })} />
-          <p className={styles.small}>Releasing a reservation changes availability, not physical on-hand. A new sample needs both stock and campaign capacity.</p>
+          <p className={styles.small}>Releasing a reservation changes availability, not physical on-hand. A new sample needs both stock and campaign capacity. <span data-testid="campaign-policy">No new upfront fee offers: acquisition is commission-only, and approved sample cost and historical commitments are labeled separately.</span></p>
           <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 238 }} aria-haspopup="dialog" onClick={() => setReservations(true)}>Review reservations</Button></div>
         </Card>
         <Card labelledBy="mature-title" className={styles.card20}>

@@ -174,7 +174,7 @@ test.describe("Overview controls", () => {
   });
 });
 
-for (const url of ["/overview", "/overview?fixture=FX-06"]) {
+for (const url of ["/overview", "/overview?fixture=FX-06", "/overview?fixture=FX-10"]) {
   test(`no accessibility violations with a dialog open on ${url}`, async ({ page }) => {
     const { default: AxeBuilder } = await import("@axe-core/playwright");
     await page.goto(url);
@@ -185,3 +185,19 @@ for (const url of ["/overview", "/overview?fixture=FX-06"]) {
     expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
   });
 }
+
+test("a healthy newest source does not hide the others: each source shows its own state", async ({ page }) => {
+  await page.goto("/overview?fixture=FX-10");
+  const alert = page.getByRole("alert");
+  await expect(alert).toContainText("Some sources are not current");
+  const states = await alert.locator("[data-source]").evaluateAll((els) => els.map((e) => [e.getAttribute("data-source"), e.getAttribute("data-state")]));
+  expect(states).toEqual([["shopify", "current"], ["tiktok-shop", "no-change"], ["creator-monitor", "partial"], ["ad-platforms", "never-synced"], ["quickbooks", "error"]]);
+  await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
+});
+
+test("the happy-path Overview shows no freshness alert and keeps the Figma page height", async ({ page, viewport }) => {
+  test.skip(viewport?.width !== 1440, "Figma's reference is 1440 wide");
+  await page.goto("/overview");
+  await expect(page.getByTestId("metric-Paid orders")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});

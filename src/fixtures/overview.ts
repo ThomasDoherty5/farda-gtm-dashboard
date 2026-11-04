@@ -132,5 +132,6 @@ export const overviewFixtureKeys = [
   "FX-07-offline-read",
   "FX-08-forbidden-account",
   "FX-09-expired-session",
+  "FX-10-mixed-source-health",
 ] as const;
 export type OverviewFixtureKey = (typeof overviewFixtureKeys)[number];

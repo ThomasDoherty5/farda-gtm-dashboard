@@ -1,5 +1,5 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
-import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
+import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SourceRef, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { createDemoLifecycle } from "./demoLifecycle";
@@ -184,6 +184,20 @@ function overviewResponse<F>(request: ReadRequest<F>, fixture: OverviewFixtureKe
       return err("SOURCE_UNAVAILABLE", "The data service could not be reached.", request.requestId);
     case "FX-08-forbidden-account":
       return err("FORBIDDEN", "You do not have access to this account.", request.requestId);
+    case "FX-10-mixed-source-health": {
+      // The newest row is healthy. The other sources are not, so one row cannot stand for the dataset.
+      const src = (source: string): SourceRef => ({ source, accountId: "demo-account-farda", sourceId: null, canonicalId: null, url: null, identityState: "resolved", provenanceRef: `demo:freshness:${source}` });
+      return {
+        ...base,
+        sourceFreshness: [
+          { sourceRef: src("shopify"), lastSourceSuccessAt: DEMO_NOW, observedAt: DEMO_NOW, mirroredAt: DEMO_NOW, staleReasonCode: null },
+          { sourceRef: src("tiktok-shop"), lastSourceSuccessAt: "2026-11-02T09:00:00.000Z", observedAt: DEMO_NOW, mirroredAt: "2026-11-02T09:00:00.000Z", staleReasonCode: "SOURCE_NO_CHANGE" },
+          { sourceRef: src("creator-monitor"), lastSourceSuccessAt: "2026-11-01T18:00:00.000Z", observedAt: DEMO_NOW, mirroredAt: "2026-11-01T18:00:00.000Z", staleReasonCode: "SOURCE_ROWS_DEFERRED" },
+          { sourceRef: src("ad-platforms"), lastSourceSuccessAt: null, observedAt: null, mirroredAt: null, staleReasonCode: null },
+          { sourceRef: src("quickbooks"), lastSourceSuccessAt: "2026-10-28T12:00:00.000Z", observedAt: DEMO_NOW, mirroredAt: "2026-10-28T12:00:00.000Z", staleReasonCode: "SOURCE_SYNC_FAILED" },
+        ],
+      };
+    }
     case "FX-09-expired-session":
       return err("SESSION_EXPIRED", "Your session expired. Sign in again.", request.requestId);
   }

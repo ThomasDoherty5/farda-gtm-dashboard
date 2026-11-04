@@ -87,3 +87,7 @@
   .card { padding: var(--space-16); }
   .kpi { flex-wrap: wrap; }
 }
+
+.sourceList { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.sourceList li { font: var(--text-small); }
+.sourceList li strong { font: var(--text-label); }

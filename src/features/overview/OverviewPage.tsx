@@ -11,6 +11,7 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { MetricValue, formatCompact, formatCount, formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import type { OverviewData } from "@/fixtures/overview";
+import { HEALTH_LABEL, classifySource, isHealthy, overallHealth, sourceLabel, watermarkText } from "./freshness";
 import { axisMax, engagementRate, weeklyTotals } from "./metrics";
 import styles from "./OverviewPage.module.css";
 
@@ -19,6 +20,24 @@ const dateTime = (iso: string) =>
 const shortDate = (date: string) => new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
 const usd = (minorUnits: number) => formatMoney({ minorUnits, currency: "USD" });
 const pct = (part: number, whole: number) => (whole === 0 ? 0 : (100 * part) / whole);
+
+/** Every source with its own state and last successful coverage. The first or newest row never speaks for the others. */
+function SourceCoverage({ entries }: { entries: ReadResponse<OverviewData>["sourceFreshness"] }) {
+  if (entries.length === 0) return <p className={styles.note} data-testid="source-coverage">No source reported its freshness, so none is shown as current.</p>;
+  return (
+    <ul className={styles.sourceList} data-testid="source-coverage">
+      {entries.map((e) => {
+        const state = classifySource(e);
+        return (
+          <li key={e.sourceRef.source} data-source={e.sourceRef.source} data-state={state}>
+            <strong>{sourceLabel(e.sourceRef.source)}</strong> · {HEALTH_LABEL[state]}
+            <span className={styles.note}> {watermarkText(e, dateTime)}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 /** Performance overview (Figma source 10:217, owner THO-293). */
 export function OverviewPage() {
@@ -49,6 +68,7 @@ export function OverviewPage() {
       </Dialog>
       <Dialog open={dialog === "export"} title="Report preview" badge={demo ? "Demo" : undefined} onClose={() => setDialog(null)}>
         <p>{demo ? `The demo period is ${period ?? "one fixed window"}. Metrics are illustrative, and no file is generated. ` : "Export isn't connected yet, and no file is generated. "}Production exports retain the period, source freshness, and metric definitions.</p>
+        {query.data && <><p className={styles.note}>Source coverage in this snapshot:</p><SourceCoverage entries={query.data.sourceFreshness} /></>}
         <LinkButton to="/analytics/attribution">View performance report</LinkButton>
         <LinkButton to="/finance/close/2026-10">View month-end package</LinkButton>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close preview</Button>
@@ -59,16 +79,28 @@ export function OverviewPage() {
 
 function Body({ res, demo }: { res: ReadResponse<OverviewData>; demo: boolean }) {
   const freshness = res.sourceFreshness[0];
+  const worst = overallHealth(res.sourceFreshness);
+  // The state of the whole dataset is its worst source. A healthy newest row, or a "ready" answer, does not clear the others.
+  const mixed = res.dataState !== "stale" && res.dataState !== "partial" && worst !== null && !isHealthy(worst);
+  const list = res.sourceFreshness.length > 1 ? <SourceCoverage entries={res.sourceFreshness} /> : null;
   return (
     <>
       {res.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
           <p>{freshness?.staleReasonCode ?? "Reason unknown"}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
+          {list}
         </Alert>
       )}
       {res.dataState === "partial" && (
         <Alert state="warning" title="Partial data">
           <p>{res.coverage.observedCount} of {res.coverage.expectedCount} source records are available. Totals cover only those records.</p>
+          {list}
+        </Alert>
+      )}
+      {mixed && (
+        <Alert state="warning" title="Some sources are not current" >
+          <p>The newest sync does not prove every source is healthy. Figures that depend on a source below are only as good as its own last success.</p>
+          {list ?? <SourceCoverage entries={res.sourceFreshness} />}
         </Alert>
       )}
       {res.dataState === "empty" || !res.data ? (
