@@ -106,11 +106,11 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
               {["$70k", "$35k", "$0"].map((l, i) => <span key={l} className={styles.cashAxis} style={{ top: 12 + 110 * i }}>{l}</span>)}
               <div className={styles.months} aria-hidden="true">{MONTHS.map((m) => <span key={m}>{m}</span>)}</div>
             </div>
-            <table className="visually-hidden">
+            <div className="visually-hidden"><table>
               <caption>Cash by month. The first four are observed; any others are illustrative.</caption>
               <thead><tr><th scope="col">Month</th><th scope="col">Cash</th><th scope="col">Basis</th></tr></thead>
               <tbody>{[...actual.map((a) => [a.month, a.minor, "Observed"] as const), ...future.map((f) => [f.month, f.minor, "Illustrative"] as const)].map(([m, v, b]) => <tr key={m}><th scope="row">{m}</th><td>{whole(v)}</td><td>{b}</td></tr>)}</tbody>
-            </table>
+            </table></div>
           </div>
           <Divider />
           <FactList wide labelWidth={354} label="Cash and capital raised" rows={[["Current cash / raised", `${figure(data.cash, whole)} / ${whole(data.historicalRaised)}`]]} />
@@ -118,7 +118,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
       </div>
       <HalfColumns>
         <Panel title={`Where ${whole(p.revenue)} goes`} subtitle="Last 30 days · before marketing and fixed expense" testId="breakdown">
-          <BarRows label="Order contribution breakdown" max={600000} gap={16} widths={[126, 350, 80]} rows={data.costBreakdown.map((c) => ({ label: c.label, value: c.minor, display: whole(c.minor).replace(",", "") }))} />
+          <BarRows label="Order contribution breakdown" max={600000} gap={16} trackTop={0} widths={[126, 350, 80]} rows={data.costBreakdown.map((c) => ({ label: c.label, value: c.minor, display: whole(c.minor).replace(",", "") }))} />
           <p className={styles.footnote}>Pre-marketing contribution: {formatMoney({ minorUnits: data.contributionPerOrder, currency: "USD" })}/order. Contribution after attributed creator cost awaits allocation.</p>
           {peak > 600000 && <p className="visually-hidden">A value exceeds the bar scale.</p>}
         </Panel>

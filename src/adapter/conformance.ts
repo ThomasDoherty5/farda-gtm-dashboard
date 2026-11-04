@@ -774,6 +774,24 @@ export function runAdapterConformance(t: ConformanceTarget) {
       expect(res.receiptRefs).toEqual([]);
       expect(claimsSent(res)).toBe(false);
     });
+    rule("SENT-5", "a dispatch with an unknown outcome is never success: it answers outcomeUncertain or rejects OUTCOME_UNCERTAIN, and holds no receipt (D-12)", a?.uncertainApprovalRef !== undefined, async () => {
+      const adapter = t.create();
+      const u = { ...a!, approvalRef: a!.uncertainApprovalRef! };
+      await adapter.submitAction(decideRequest(t, u));
+      const outcome = await (adapter.submitAction(dispatchRequest(t, u)).then(
+        (res) => ({ res, error: null as AdapterError | null }),
+        (error: unknown) => ({ res: null, error: error as AdapterError }),
+      ));
+      if (outcome.error) {
+        expect(outcome.error).toBeInstanceOf(AdapterError);
+        expect(outcome.error.body.code).toBe("OUTCOME_UNCERTAIN");
+        expect(outcome.error.body.executionCertainty).toBe("uncertain");
+      } else {
+        expect(outcome.res!.state).toBe("outcomeUncertain");
+        expect(outcome.res!.receiptRefs).toEqual([]);
+        expect(claimsSent(outcome.res!)).toBe(false);
+      }
+    });
 
     // A reason on a rule that was never registered is a typo, and would hide a missing scenario.
     for (const id of [...Object.keys(t.gaps ?? {}), ...Object.keys(t.knownFailures ?? {})])

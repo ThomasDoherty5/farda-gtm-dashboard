@@ -35,6 +35,16 @@ test.describe("against Figma at 1440", () => {
     expect(await box(page.getByTestId("tests"))).toMatchObject({ x: 72, w: 1296 });
   });
 
+  test("a sandbox result sits at the left of its card, 20px in, as in 11:372", async ({ page }) => {
+    await page.goto("/customers/flows/early-access");
+    const card = page.getByTestId("tests").getByRole("listitem").first();
+    await expect(card).toBeVisible();
+    const c = (await card.boundingBox())!;
+    const badge = (await card.getByText("Sends once").boundingBox())!;
+    expect(Math.round(badge.x - c.x)).toBe(20);
+    expect(Math.round(badge.width)).toBe(240);
+  });
+
   test("Consent's bar is proportional to its counts", async ({ page }) => {
     await page.goto("/customers/consent");
     await expect(page.getByTestId("consent-bar")).toBeVisible();

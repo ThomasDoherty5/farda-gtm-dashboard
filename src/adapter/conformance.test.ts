@@ -83,6 +83,7 @@ const live: ConformanceTarget = {
     "SENT-2": noTransport,
     "SENT-3": noTransport,
     "SENT-4": noTransport,
+    "SENT-5": noTransport,
   },
 };
 

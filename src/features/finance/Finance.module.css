@@ -2,7 +2,9 @@
 .headRow { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-16); }
 .headRow > :first-child { flex: 1 1 320px; min-width: 0; }
 .statusBar { display: flex; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
-.statusBar li { display: flex; align-items: center; justify-content: center; min-width: 0; height: 36px; border-radius: var(--space-8); font: var(--text-label); white-space: nowrap; overflow: hidden; }
+.statusBar li { display: flex; align-items: center; justify-content: center; min-width: max-content; padding: 0 var(--space-8); height: 36px; border-radius: var(--space-8); font: var(--text-label); white-space: nowrap; overflow: hidden; }
+/* Narrow screens: the segments stack, so no label is cut off (implementation adaptation, docs/design-map.md). */
+@media (max-width: 767px) { .statusBar { flex-direction: column; } .statusBar li { flex: none !important; width: 100%; } }
 .statusBar li[data-state="held"] { background: var(--color-violet); color: var(--color-onDark); }
 .statusBar li[data-state="disputed"] { background: var(--color-warningSoft); color: var(--color-ink); }
 .statusBar li[data-state="awaitingProvider"] { background: var(--color-violetSoft); color: var(--color-ink); }
@@ -17,13 +19,14 @@
 .wfValue[data-kind="total"] { color: var(--color-violet); }
 .wfLabel { position: absolute; top: 270px; margin: 0; font: var(--text-micro); color: var(--color-muted); white-space: nowrap; }
 .lanes { display: grid; grid-template-columns: minmax(0, 600fr) minmax(0, 624fr); gap: var(--space-24); align-items: start; }
-.lane { display: flex; flex-direction: column; gap: var(--space-20); padding: var(--space-24); border: 1px solid var(--color-border); border-radius: var(--space-24); min-width: 0; }
+.lane { display: flex; flex-direction: column; gap: var(--space-20); padding: var(--space-24) 22px var(--space-24) var(--space-24); border: 1px solid var(--color-border); border-radius: var(--space-24); min-width: 0; }
 .lane[data-tone="violet"] { background: var(--color-violetSoft); }
 .lane[data-tone="subtle"] { background: var(--color-subtle); }
 .lane h3 { margin: 0; font: var(--text-h3); }
 .rateLanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-24); align-items: start; }
 .rateKpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); margin: 0; }
-.chips { display: flex; flex-wrap: wrap; gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-16); margin: 0; padding: 0; list-style: none; }
+.chips li > span { display: flex; }
 .actionsRow { display: flex; flex-wrap: wrap; gap: var(--space-12); }
 .paymentRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .paymentRow p { margin: 0; color: var(--color-muted); }

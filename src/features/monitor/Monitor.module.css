@@ -25,6 +25,8 @@
 .darkSmall { font: var(--text-small); color: var(--color-onDark); }
 .rowLink { color: inherit; text-decoration: none; }
 .rowLink:hover { text-decoration: underline; }
+/* WCAG 2.5.8: padding on an inline box grows the 24px target without moving the row. */
+.rowLink { padding-block: 4px; }
 .linkBtn { display: inline-block; vertical-align: top; padding: 0; margin-block: -1px; background: none; border: 0; font: var(--text-body); color: var(--color-muted); text-align: left; cursor: pointer; min-height: 24px; line-height: 22px; }
 .linkBtn:hover { text-decoration: underline; color: var(--color-ink); }
 .signals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-20); }

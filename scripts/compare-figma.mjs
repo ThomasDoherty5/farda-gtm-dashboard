@@ -3,6 +3,9 @@
 // Usage: node scripts/compare-figma.mjs <url-path> <capture.png> [threshold] [max-percent]
 // An optional crop-height compares only the top of the page, for a screen that is taller on purpose.
 // With max-percent, exits 1 if the page size differs or more pixels than that differ.
+// A page that is taller on purpose can be judged in aligned parts: SEGMENTS="0-840;1008-1200@-58" compares render rows
+// 0-840 with Figma rows 0-840, then render rows 1008-1200 with Figma rows 950-1142 (the @ offset is added to the render row
+// to find the Figma row). The result adds `segments`, the pixels differing over those rows only. The size check is skipped.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { chromium } from "@playwright/test";
 import pixelmatch from "pixelmatch";
@@ -32,5 +35,23 @@ const mismatched = pixelmatch(a.data, b.data, diff.data, width, height, { thresh
 writeFileSync(`${out}/render.png`, PNG.sync.write(shot));
 writeFileSync(`${out}/diff.png`, PNG.sync.write(diff));
 const pct = +((100 * mismatched) / (width * height)).toFixed(3);
-console.log(JSON.stringify({ path, figma: [figma.width, figma.height], render: [shot.width, shot.height], mismatched, pct, fonts }, null, 1));
-if (maxPercent !== undefined && (pct > Number(maxPercent) || figma.width !== shot.width || figma.height !== shot.height)) process.exitCode = 1;
+let segments;
+if (process.env.SEGMENTS) {
+  let bad = 0;
+  let area = 0;
+  for (const part of process.env.SEGMENTS.split(";")) {
+    const [rows, offset = "0"] = part.split("@");
+    const [from, to] = rows.split("-").map(Number);
+    const h = Math.min(to - from, shot.height - from, figma.height - (from + Number(offset)));
+    const cut = (src, y) => { const dst = new PNG({ width, height: h }); PNG.bitblt(src, dst, 0, y, width, h, 0, 0); return dst; };
+    const f = cut(figma, from + Number(offset));
+    const r = cut(shot, from);
+    bad += pixelmatch(f.data, r.data, null, width, h, { threshold: Number(threshold) });
+    area += width * h;
+  }
+  segments = { mismatched: bad, rows: area / width, pct: +((100 * bad) / area).toFixed(3) };
+}
+console.log(JSON.stringify({ path, figma: [figma.width, figma.height], render: [shot.width, shot.height], mismatched, pct, ...(segments ? { segments } : {}), fonts }, null, 1));
+const judged = segments ? segments.pct : pct;
+const sizeDiffers = !segments && (figma.width !== shot.width || figma.height !== shot.height);
+if (maxPercent !== undefined && maxPercent !== "" && (judged > Number(maxPercent) || sizeDiffers)) process.exitCode = 1;

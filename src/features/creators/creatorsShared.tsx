@@ -134,11 +134,11 @@ export function CumulativeChart({ title, series, unit, scaleMax }: { title: stri
           <span key={i} className={styles.day} style={{ left: i === 13 ? 734 : x(i) }} aria-hidden="true">{CUMULATIVE_DAYS[i]}</span>
         ))}
       </div>
-      <table className="visually-hidden">
+      <div className="visually-hidden"><table>
         <caption>{title} by day ({unit})</caption>
         <thead><tr><th scope="col">Day</th><th scope="col">Cumulative {unit}</th></tr></thead>
         <tbody>{series.map((v, i) => <tr key={i}><th scope="row">{CUMULATIVE_DAYS[i]}</th><td>{v.toLocaleString("en-US")}</td></tr>)}</tbody>
-      </table>
+      </table></div>
     </div>
   );
 }

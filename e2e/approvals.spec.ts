@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { openSection } from "./support/nav";
 
 function watchErrors(page: Page) {
   const errors: string[] = [];
@@ -48,7 +49,7 @@ test("unknown outcome: send, recover through evidence, and see the original rece
 test("leaving with unsaved edits asks first; Keep task preserves them and returns focus (CTRL-177)", async ({ page }) => {
   await page.goto("/approvals/demo-approval-exact");
   await page.getByLabel("Reason").fill("Half-written reason");
-  await page.getByRole("link", { name: "Finance" }).click();
+  await openSection(page, "Finance");
 
   const dialog = page.getByRole("dialog", { name: "Discard your edits?" });
   await expect(dialog).toBeVisible();
@@ -57,7 +58,7 @@ test("leaving with unsaved edits asks first; Keep task preserves them and return
   await expect(dialog).toBeHidden();
   await expect(page.getByLabel("Reason")).toHaveValue("Half-written reason");
 
-  await page.getByRole("link", { name: "Finance" }).click();
+  await openSection(page, "Finance");
   await dialog.getByRole("button", { name: "Discard and leave" }).click();
   await expect(page).toHaveURL(/\/finance$/);
 });
@@ -65,7 +66,7 @@ test("leaving with unsaved edits asks first; Keep task preserves them and return
 test("Escape on the leave dialog keeps the edits", async ({ page }) => {
   await page.goto("/approvals/demo-approval-exact");
   await page.getByLabel("Reason").fill("Keep me");
-  await page.getByRole("link", { name: "Finance" }).click();
+  await openSection(page, "Finance");
   await expect(page.getByRole("dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toBeHidden();

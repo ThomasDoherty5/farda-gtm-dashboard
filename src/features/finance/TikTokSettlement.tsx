@@ -101,10 +101,10 @@ export function TikTokSettlement({ s }: { res: ReadResponse<SettlementRecord>; s
           </Panel>
           <Panel large roomy title="Missing API action routes to a validated browser task." subtitle="Supported Open requests can use a verified API. Other authorized actions may use a validated native browser route; denied permission requires owner handoff." testId="browser-route">
             <ul className={styles.chips} aria-label="Browser task route">
-              <li><Badge width={232}>API or connector missing</Badge></li>
-              <li><Badge tone="violet" width={246}>Browser capability check</Badge></li>
-              <li><Badge width={246}>Exact approved decision</Badge></li>
-              <li><Badge tone="success" width={172}>Native receipt</Badge></li>
+              <li style={{ minWidth: "min(232px, 100%)" }}><Badge width={232}>API or connector missing</Badge></li>
+              <li style={{ minWidth: "min(246px, 100%)" }}><Badge tone="violet" width={246}>Browser capability check</Badge></li>
+              <li style={{ minWidth: "min(246px, 100%)" }}><Badge width={246}>Exact approved decision</Badge></li>
+              <li style={{ minWidth: "min(172px, 100%)" }}><Badge tone="success" width={172}>Native receipt</Badge></li>
             </ul>
             <p className={styles.footnote}>Use the actual request/program deadline; three-day automatic behavior applies only to the relevant native program. Login/MFA or UI drift needs takeover. Verify ambiguous submissions before repeating.</p>
             <div className={styles.actionsRow}>
