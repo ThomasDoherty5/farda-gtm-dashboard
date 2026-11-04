@@ -358,6 +358,41 @@ Pending Kevon Baha's confirmation.
 | Source buttons | Open source, Open Intercom, Open selected case, View conversation | Handoff dialogs saying no verified link exists | The links are fictional. Nothing replies to, reopens or reassigns a case: Intercom owns that, and the capability reads unsupported |
 | Linked shipment | Plain text | A link, in ink with an underline | It reaches the shipment exception |
 
+## Settlement comparison (sources 65:1037, 66:252, 66:447, 9:551)
+
+Same capture settings and build as the Operations comparison. Measured 2026-11-03 at threshold 0.1. All four match the page size. See the table.
+
+| Source | Route | Size | Pixels different |
+| -- | -- | -- | -- |
+| 65:1037 Commission ledger | `/finance/commissions` | Matches (1440×2185) | 0.435% |
+| 66:252 Collabs payout reconciliation | `/finance/settlements/COMM-DEMO-D` | Matches (1440×2111) | 0.576% |
+| 66:447 TikTok native settlement | `/finance/settlements/TT-NATIVE-DEMO` | Matches (1440×2194) | 1.037% |
+| 9:551 Historical manual fee settlement | `/finance/payables/PAY-0012` | Matches (1440×1506) | 0.601% |
+
+Only the ledger meets the proposed 0.5% mark. The other three are within about 1% and the remaining difference is text and row offsets of a few pixels, plus the items below. Layout was calibrated against each frame's node geometry (`get_metadata`), so panel sizes match exactly. The waterfall's bar heights are computed from the data at Figma's scale (224px for net sales) and match.
+
+## Settlement: intentional differences from Figma
+
+Pending Kevon Baha's confirmation.
+
+| Item | Figma | Code | Why |
+| -- | -- | -- | -- |
+| Export ledger | A button | A dialog that states the scope (rows, currency, as-of, revision) and builds a UTF-8 CSV in the browser from the loaded snapshot. It is blocked, and never called complete, while the snapshot is partial. Formula-like cells are neutralized | CTRL-117 asks for a server-side snapshot export. With no server, the demo builds the same file from the data it holds and says so. No customer data is in it |
+| Review hold, dispute, eligibility | Ghost buttons | Open a read-only evidence dialog | CTRL-119: viewing evidence confirms and changes nothing |
+| View receipt, source buttons | Buttons | Handoff dialogs saying no verified link exists | The links are fictional. A paid receipt is immutable |
+| Reconcile payout, View payout | Buttons | Links to the Collabs settlement | They lead to the reconciliation screen |
+| Match statement | A button | A preview of candidate statement lines. A duplicate or conflicting line can't be selected and stays unresolved. Submitting asks for a review and reports "Approval required"; nothing is marked reconciled | CTRL-118: a versioned submission, and the paid receipt stays immutable |
+| Open crosswalk, Review identity | Buttons | Read-only dialogs | CTRL-120 and CTRL-121: no automatic merge, no mapping edit |
+| Tabs | Commissions, Payouts, Economics, Provider access | Payouts goes to the Collabs settlement, Economics to the contribution section of the ledger, Provider access to capabilities | There is no separate route for Economics |
+| TikTok tabs | Rates & terms, Samples, Native settlement, Exceptions | A tab is `?tab=`. Samples, Native settlement and Exceptions show a labeled panel with no records | Only Rates & terms has a Figma source. Switching never mutates (CTRL-122, CTRL-124) |
+| Historical offer models | Three tabs | Three disabled tabs whose accessible description is the section's "read only" sentence | CTRL-127 and CTRL-128: no selection can create an offer |
+| Native rate | Unverified | The value is an unknown (never a number) | A rate not read from the source is not 0% |
+| Review historical terms, Review adjustment | Buttons | Read-only dialogs | CTRL-126 and CTRL-129 |
+| Shell navigation | Creators highlighted on the TikTok settlement | Finance. The fee settlement highlights Creators, as in Figma | The route is shared with the Collabs settlement, which highlights Finance |
+| Title-row buttons on the fee settlement | 60px in from the right edge | Right-aligned | Figma's heading is a fixed 850px |
+| Founder review | A button | A link to the archived fee approval sample | CTRL-041: navigation only; it neither approves nor pays |
+| Execution | "Execution blocked" badge | The same, with the Pay capability unsupported in the adapter | The provider owns payout. No screen offers a manual Pay action |
+
 ## Shared page components
 
 `src/components/Panels.tsx` holds the page furniture the operations, support and finance screens share: PageHeader, Panel, Notice, FactList, Steps, FlatTable and Meter. Measurements come from Figma frames such as 4:6, 4:171 and 4:317. Panels keep a 24px padding and a 1px border. Figma's content width ignores the border, but using 23px padding made the pixel difference worse, so it is left at 24.

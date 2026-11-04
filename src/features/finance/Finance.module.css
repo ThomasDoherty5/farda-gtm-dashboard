@@ -1,0 +1,62 @@
+/* Finance screens (Figma 65:1037, 66:252, 66:447, 9:551). */
+.headRow { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--space-16); }
+.headRow > :first-child { flex: 1 1 320px; min-width: 0; }
+.statusBar { display: flex; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+.statusBar li { display: flex; align-items: center; justify-content: center; min-width: 0; height: 36px; border-radius: var(--space-8); font: var(--text-label); white-space: nowrap; overflow: hidden; }
+.statusBar li[data-state="held"] { background: var(--color-violet); color: var(--color-onDark); }
+.statusBar li[data-state="disputed"] { background: var(--color-warningSoft); color: var(--color-ink); }
+.statusBar li[data-state="awaitingProvider"] { background: var(--color-violetSoft); color: var(--color-ink); }
+.statusBar li[data-state="paid"] { background: var(--color-ink); color: var(--color-onDark); }
+.footnote { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.plotScroll { position: relative; overflow-x: auto; }
+.waterfall { position: relative; height: 320px; min-width: 760px; }
+.wfLine { position: absolute; left: 0; right: 0; height: 1px; background: var(--color-border); }
+.wfBar { position: absolute; border-radius: 6px; background: var(--color-violetSoft); }
+.wfBar[data-kind="total"] { background: var(--color-violet); }
+.wfValue { position: absolute; margin: 0; font: var(--text-label); color: var(--color-ink); white-space: nowrap; }
+.wfValue[data-kind="total"] { color: var(--color-violet); }
+.wfLabel { position: absolute; top: 270px; margin: 0; font: var(--text-micro); color: var(--color-muted); white-space: nowrap; }
+.lanes { display: grid; grid-template-columns: minmax(0, 600fr) minmax(0, 624fr); gap: var(--space-24); align-items: start; }
+.lane { display: flex; flex-direction: column; gap: var(--space-20); padding: var(--space-24); border: 1px solid var(--color-border); border-radius: var(--space-24); min-width: 0; }
+.lane[data-tone="violet"] { background: var(--color-violetSoft); }
+.lane[data-tone="subtle"] { background: var(--color-subtle); }
+.lane h3 { margin: 0; font: var(--text-h3); }
+.rateLanes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-24); align-items: start; }
+.rateKpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.actionsRow { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.paymentRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
+.paymentRow p { margin: 0; color: var(--color-muted); }
+.paymentRow .spacer { flex: 0 1 420px; height: 1px; }
+.stages { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-12); margin: 0; padding: 0; list-style: none; }
+.stage { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-16); background: var(--color-subtle); border-radius: var(--space-16); }
+.stage[aria-current="step"] { background: var(--color-violetSoft); }
+.stage[data-done="true"] { background: var(--color-successSoft); }
+.stage p { margin: 0; }
+.stageTitle { font: var(--text-label); }
+.stageNote { font: var(--text-small); color: var(--color-muted); }
+.payGrid { display: grid; grid-template-columns: minmax(0, 760fr) minmax(0, 516fr); gap: var(--space-20); align-items: start; }
+.payGrid > * { min-width: 0; }
+.dark { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-ink); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-onDark); }
+.dark h2 { margin: 0; font: var(--text-h2); }
+.dark p { margin: 0; }
+.dark .bodyText { font: var(--text-body); }
+.dark .smallText { font: var(--text-small); }
+.stackCol { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
+.closing { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-violetSoft); border-radius: var(--space-24); }
+.closing h2 { margin: 0; font: var(--text-h2); }
+.closing p { margin: 0; font: var(--text-body); }
+.disabledTabs { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+.linkBtn { background: none; border: 0; padding: 0; font: inherit; color: var(--color-violet); text-decoration: underline; cursor: pointer; }
+.form { display: flex; flex-direction: column; gap: var(--space-16); width: 100%; }
+.candidates { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; padding: 0; border: 0; width: 100%; }
+.candidates legend { padding: 0; margin-bottom: var(--space-8); font: var(--text-label); }
+.candidate { display: flex; align-items: flex-start; gap: var(--space-12); padding: var(--space-12); border: 1px solid var(--color-border); border-radius: var(--space-16); font: var(--text-small); }
+.candidate input { width: 20px; height: 20px; margin-top: 2px; accent-color: var(--color-violet); }
+.candidate strong { display: block; font: var(--text-label); }
+.status { margin: 0; font: var(--text-small); }
+@media (max-width: 1179px) {
+  .lanes, .rateLanes, .payGrid { grid-template-columns: minmax(0, 1fr); }
+  .stages { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) { .stages, .rateKpis { grid-template-columns: minmax(0, 1fr); } }

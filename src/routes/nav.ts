@@ -33,7 +33,7 @@ export const workspaceLinks = [
 ] as const;
 
 /** Analytics screens that Figma shows under Operations or Finance rather than under Overview. */
-const SECTION_OVERRIDES: Record<string, string> = { "analytics/fulfillment": "operations", "analytics/finance": "finance" };
+const SECTION_OVERRIDES: Record<string, string> = { "analytics/fulfillment": "operations", "analytics/finance": "finance", "finance/payables": "creators" };
 
 /** The primary-navigation section a path belongs to. */
 export const sectionOf = (pathname: string) => {
