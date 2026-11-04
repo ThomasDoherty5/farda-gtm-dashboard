@@ -329,3 +329,57 @@ describe("states shared by every view", () => {
     await waitFor(() => expect(adapter.calls.map((c) => c.filters)).toEqual([{ network: "all" }, { network: "tiktok" }]));
   });
 });
+
+describe("acquisition source, publishing network, checkout and payout owner stay separate (FE02-03)", () => {
+  const fields = () => within(screen.getByTestId("channel-route"));
+  const field = (name: string) => screen.getByTestId("channel-route").querySelector(`[data-field="${name}"]`)!.textContent;
+
+  it("the Social Cat dashboard names all four, and says a TikTok post is not a TikTok Shop order", async () => {
+    await open("/creators/social-cat?view=dashboard", "Linked-post views");
+    expect(field("acquisition-source")).toBe("Source: Social Cat");
+    expect(field("publishing-network")).toBe("Publishing: Instagram + TikTok");
+    expect(field("checkout")).toBe("Checkout: Shopify website");
+    expect(field("payout-owner")).toBe("Payout: Collabs provider (illustrative)");
+    expect(screen.getByTestId("route-note")).toHaveTextContent("A TikTok post is not a TikTok Shop order.");
+    expect(fields().getByText(/Publishing: Instagram \+ TikTok/)).toBeInTheDocument();
+  });
+
+  it("the TikTok dashboard names all four, with the source different from the publishing network and the checkout", async () => {
+    await open("/creators/tiktok?view=dashboard", "Post views");
+    expect(field("acquisition-source")).toBe("Source: Affiliate Center");
+    expect(field("publishing-network")).toBe("Publishing: TikTok");
+    expect(field("checkout")).toBe("Checkout: TikTok Shop");
+    expect(field("payout-owner")).toBe("Payout: TikTok native settlement");
+    const values = ["acquisition-source", "publishing-network", "checkout", "payout-owner"].map((n) => field(n)!.split(": ")[1]);
+    expect(new Set(values).size).toBe(4);
+  });
+
+  it("the Social Cat dashboard keeps four distinct values too", async () => {
+    await open("/creators/social-cat?view=dashboard", "Linked-post views");
+    const values = ["acquisition-source", "publishing-network", "checkout", "payout-owner"].map((n) => field(n)!.split(": ")[1]);
+    expect(new Set(values).size).toBe(4);
+  });
+});
+
+describe("daily acquisition and hourly monitoring are distinct destinations (FE02-05)", () => {
+  const link = (name: string) => (screen.getByRole("link", { name }) as HTMLAnchorElement).getAttribute("href");
+
+  it.each([
+    ["Social Cat dashboard", "/creators/social-cat?view=dashboard", "Linked-post views"],
+    ["TikTok dashboard", "/creators/tiktok?view=dashboard", "Post views"],
+    ["Social Cat board", "/creators/social-cat?view=board", "Active collaborations"],
+    ["TikTok board", "/creators/tiktok?view=board", "Creators in funnel"],
+  ])("the %s links daily sourcing and hourly monitoring separately", async (_name, path, ready) => {
+    await open(path, ready);
+    expect(link("Daily sourcing")).toBe("/creators/discovery");
+    expect(link("Hourly monitoring")).toBe("/runs/demo-run-hourly");
+    expect(link("Daily sourcing")).not.toBe(link("Hourly monitoring"));
+  });
+
+  it("the hourly destination is the read-only run, not the sourcing plan", async () => {
+    const { router, user } = await open("/creators/tiktok?view=dashboard", "Post views");
+    await user.click(screen.getByRole("link", { name: "Hourly monitoring" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/runs/demo-run-hourly"));
+    expect(await screen.findByRole("heading", { level: 1 })).toBeInTheDocument();
+  });
+});
