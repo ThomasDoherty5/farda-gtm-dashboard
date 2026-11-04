@@ -2,6 +2,7 @@ import { Navigate, type RouteObject } from "react-router-dom";
 import { RouteError, ShellError } from "@/components/RenderError";
 import { Shell } from "@/components/Shell";
 import { sourceScreens } from "./manifest.generated";
+import { extraRoutes } from "./extraRoutes";
 import { navSections } from "./nav";
 import { implementedPages, pageOr, sectionPageLoaders } from "./pages";
 import { RoutePlaceholder, SectionIndex } from "./RoutePlaceholder";
@@ -12,6 +13,7 @@ export function buildRoutes(): RouteObject[] {
     { index: true, element: <Navigate to="/overview" replace /> },
     ...paths.map((path) => ({ path, element: pageOr(implementedPages[path], <RoutePlaceholder path={path} />) })),
     ...navSections.filter((s) => !paths.includes(s.path)).map((s) => ({ path: s.path, element: pageOr(sectionPageLoaders[s.seg], <SectionIndex seg={s.seg} />) })),
+    ...extraRoutes,
     { path: "*", element: <NotFound /> },
   ];
   // A pathless layout holds the screens, so a screen that throws is replaced inside the shell's main region and navigation survives.

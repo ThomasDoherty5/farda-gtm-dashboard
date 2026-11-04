@@ -330,6 +330,19 @@ describe("states shared by every view", () => {
   });
 });
 
+describe("FE02-05 commission-only policy and historical terms (links are covered by the daily and hourly destinations tests)", () => {
+  it.each([["/creators/social-cat?view=dashboard", "Linked-post views"], ["/creators/tiktok?view=dashboard", "Post views"]])("%s says new acquisition is commission-only", async (path, ready) => {
+    await open(path, ready);
+    expect(screen.getByText("Commission-only acquisition")).toBeInTheDocument();
+    expect(screen.getByText(/No upfront content fee; product and shipping are approved separately/)).toBeInTheDocument();
+  });
+
+  it.each(["/creators/social-cat?view=board", "/creators/tiktok?view=board"])("%s keeps accepted historical terms valid", async (path) => {
+    renderRoute(path, createDemoAdapter());
+    expect(await screen.findByText(/New offers are commission-only; accepted historical terms remain valid/)).toBeInTheDocument();
+  });
+});
+
 describe("acquisition source, publishing network, checkout and payout owner stay separate (FE02-03)", () => {
   const fields = () => within(screen.getByTestId("channel-route"));
   const field = (name: string) => screen.getByTestId("channel-route").querySelector(`[data-field="${name}"]`)!.textContent;
