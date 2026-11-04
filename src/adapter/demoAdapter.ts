@@ -3,6 +3,7 @@ import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadReque
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
 import { isAnalyticsView, readAnalyticsView } from "./demoAnalytics";
+import { isMonitorView, readMonitorView, retryMonitorProfile } from "./demoMonitor";
 import { createDemoOffers, readAssessment } from "./demoScorecards";
 import { createDemoBatch } from "./demoBatch";
 import { COMMANDS, createDemoCollaboration } from "./demoCollaboration";
@@ -40,6 +41,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }] }) as ReadResponse<T>;
+      if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerDraft") return offers.read<T>(request as ReadRequest<{ offerId: string }>, fixture);
       if (isAnalyticsView(request.viewKey)) return readAnalyticsView<T>(request, fixture);
@@ -58,6 +60,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       await wait(latencyMs, options?.signal);
+      if (request.actionKind === "retryMonitorProfile") return retryMonitorProfile(request as ActionRequest<{ profile: string }>);
       if (COMMANDS.includes(request.actionKind)) return collaboration.submit(request);
       if (request.actionKind === "pauseBatch" || request.actionKind === "cancelUnsent") return batch.submit(request);
       return approvals.submit(request);
