@@ -38,6 +38,7 @@ const CODE_TO_CATEGORY: Record<string, ErrorCategory> = {
   SOURCE_UNAVAILABLE: "unavailable",
   TIMEOUT: "unavailable",
   INTEGRATION_PENDING: "unavailable",
+  OFFLINE_NOT_SENT: "unavailable",
   OUTCOME_UNCERTAIN: "outcomeUncertain",
 };
 
