@@ -21,6 +21,9 @@ const criterion = z.object({ label: text, rating, weight: percent });
 const history = z.array(z.object({ version: text, model: text, policy: text, offer: text, at: calendarDate, reason: text }));
 const coveragePct = percent.nullable();
 
+/** What an assessment was made against, and what is current. A difference in media, terms or policy invalidates readiness. */
+const basis = z.object({ media: text, terms: text, policy: text });
+
 const scorecard = z.object({
   kind: z.enum(["content-v2", "tiktok-commerce-v2"]),
   assessmentId: text,
@@ -37,6 +40,8 @@ const scorecard = z.object({
   decisionNote: text,
   modelNote: text,
   history,
+  assessedBasis: basis.optional(),
+  currentBasis: basis.optional(),
 });
 
 const commerceScorecard = z.object({
@@ -52,6 +57,8 @@ const commerceScorecard = z.object({
   evidenceRows: z.array(z.object({ evidence: text, window: text, coverage: text, action: text, target: z.enum(["evidence", "cohort", "offer"]) })),
   gates: z.array(z.object({ badge: text, tone, title: text, detail: text })),
   history,
+  assessedBasis: basis.optional(),
+  currentBasis: basis.optional(),
 });
 
 const assessmentRecord = z.discriminatedUnion("kind", [scorecard.extend({ kind: z.literal("content-v2") }), scorecard.extend({ kind: z.literal("tiktok-commerce-v2") }), commerceScorecard]);
@@ -79,4 +86,24 @@ const offerDraft = z.object({
   assumptions: z.object({ netSaleMinor: minorUnits, commerceCostMinor: minorUnits, processingPctOfCommission: percent, baseOrders: count, downsideOrders: count }),
 });
 
-export const scorecardsViewSchemas: Record<string, z.ZodTypeAny> = { assessmentRecord, offerDraft };
+const tierId = z.enum(["tech", "phone", "vacation"]);
+/** The reward ladder (Creator Offer Economics v1). A recommendation pending owner approval. A null redemption amount is unknown, never 0. */
+const offerRewards = z.object({
+  offerId: text,
+  version: text,
+  ownerApproval: z.literal("pending"),
+  scenarios: z.array(z.object({ scenarioId: text, label: text })).min(1),
+  scenario: z.object({
+    scenarioId: text,
+    label: text,
+    description: text,
+    batches: z.array(z.object({ rowId: text, canonicalId: text, source: z.enum(["shopify", "tiktok-shop", "shopify-mirror"]), orders: count, netMinor: minorUnits, refundedMinor: minorUnits, status: z.enum(["matured", "pending", "excluded"]), exclusionReason: text.optional() })),
+    events: z.array(z.object({ eventId: text, tier: tierId, at: instant })),
+    selections: z.array(z.object({ tier: tierId, state: z.enum(["selected", "notSelected"]), item: text.nullable(), selectedAt: instant.nullable() })),
+    redemptions: z.array(z.object({ tier: tierId, amountMinor: minorUnits.nullable(), at: instant })),
+    costEvidence: z.enum(["complete", "incomplete"]),
+    newCommitmentsPaused: z.boolean(),
+  }),
+});
+
+export const scorecardsViewSchemas: Record<string, z.ZodTypeAny> = { assessmentRecord, offerDraft, offerRewards };

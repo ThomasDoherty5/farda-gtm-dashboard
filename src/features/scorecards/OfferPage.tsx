@@ -167,6 +167,7 @@ function Offer({ record }: { record: OfferDraftRecord }) {
         <div className={s.actionsRow}>
           <Button style={{ minWidth: 242 }} aria-haspopup="dialog" onClick={() => setDialog("payload")}>Review approval payload</Button>
           <LinkButton variant="secondary" to="/settings/capabilities" style={{ minWidth: 208 }}>Open channel access</LinkButton>
+          <LinkButton variant="secondary" to={`/offers/${record.offerId}/rewards`} style={{ minWidth: 208 }}>Milestone rewards</LinkButton>
           <p id={HISTORY_REASON}>New acquisition uses commission-only terms. Historical paid, gifted and hybrid records remain available; editing or duplicating them cannot create a new upfront fee offer.</p>
         </div>
       </Card>
@@ -175,6 +176,8 @@ function Offer({ record }: { record: OfferDraftRecord }) {
         rows={[
           { label: "Offer", value: `${record.offerCode} · version ${record.version}${dirty ? " (saved; your edits are not included)" : ""}` },
           { label: "Provider and account", value: `${PROVIDERS.find((p) => p.value === base.provider)!.label} · no verified account in this build` },
+          { label: "Rate, base and currency", value: `${base.commissionPct}% of eligible merchandise · USD only, no conversion` },
+          { label: "Provider compatibility", value: chosenCompat(base.provider) },
           { label: "Sample + shipping authorization", value: `${usdAuto(base.sampleShippingMinor / 100)} · approval reference not attached` },
           { label: "Earned commission", value: `${base.commissionPct}% of eligible merchandise · nothing earned yet` },
           { label: "Historical obligations", value: "Shown separately; none in this fixture" },
@@ -195,5 +198,8 @@ function Offer({ record }: { record: OfferDraftRecord }) {
     </>
   );
 }
+
+/** What the chosen provider route is known to support. Anything not documented stays unverified. */
+export const chosenCompat = (p: Provider) => (p === "shopify-website" ? "Percentage documented; fixed per qualified sale not supported on this route" : "Percentage and fixed per sale unverified in this build");
 
 const trim3 = (n: number) => `$${(Math.round(n * 1000) / 1000).toString()}`;

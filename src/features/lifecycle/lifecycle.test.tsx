@@ -292,3 +292,19 @@ describe("activation and retention (11:852)", () => {
     await waitFor(() => expect(screen.queryByText("0.0%")).not.toBeInTheDocument());
   });
 });
+
+describe("FE12-05 event handling on a flow", () => {
+  it("shows what the paused flow does with withdrawn consent, duplicate, replayed and missing events, claims and outages", async () => {
+    const user = userEvent.setup();
+    renderRoute("/customers/flows/early-access", createDemoAdapter());
+    await user.click(await screen.findByRole("button", { name: "Event handling" }));
+    const panel = await screen.findByTestId("event-handling");
+    expect(within(panel).getByTestId("scenario-withdrawn")).toHaveTextContent("Consent was withdrawn after enrollment. The flow stops and nothing more is sent.");
+    expect(within(panel).getByTestId("scenario-duplicate")).toHaveTextContent("Duplicate ignored");
+    expect(within(panel).getByTestId("scenario-replayed")).toHaveTextContent("Replay ignored");
+    expect(within(panel).getByTestId("scenario-replayed")).toHaveTextContent("1 send");
+    expect(within(panel).getByTestId("scenario-missing")).toHaveTextContent("held for review, not guessed");
+    expect(within(panel).getByTestId("scenario-claim")).toHaveTextContent("Blocked");
+    expect(within(panel).getByTestId("scenario-outage")).toHaveTextContent("Each held send went out once");
+  });
+});

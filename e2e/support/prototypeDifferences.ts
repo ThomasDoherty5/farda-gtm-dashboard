@@ -5,7 +5,6 @@ export type DifferenceKind = "acts-in-place" | "dialog-is-filter-not-nav" | "dif
 export const DIFFERENCES: Record<string, DifferenceKind> = {
  "28:594|Review proposals>41:1637": "different-destination",
  "28:1391|All homes>O51:1955": "not-built",
- "28:1391|Shipping>28:3212": "acts-in-place",
  "28:1391|Open issues>O42:1709": "not-built",
  "28:1391|View sample>41:1781": "different-destination",
  "28:1391|Last 7 days · synthetic samp>O51:1955": "not-built",

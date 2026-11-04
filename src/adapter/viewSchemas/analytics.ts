@@ -1,6 +1,6 @@
 /**
  * Runtime schemas for the view data of the Overview summary and the analytics views
- * (launchSnapshot, launchControl, attribution, paidMedia, campaignFunnel, customerJourney).
+ * (launchReconciliation, launchSnapshot, launchControl, attribution, paidMedia, campaignFunnel, customerJourney).
  * They validate `ReadResponse.data` only; the envelope is `readResponseSchema(...)` in contract.ts.
  *
  * Choices:
@@ -187,8 +187,47 @@ export const customerJourneySchema = z.object({
   provenance: provenanceDisclosure,
 });
 
+/* ---------- Source freshness and reconciliation ---------- */
+
+/** One place a figure appears. Exact values (cents for money) are integers, so a fraction is refused. A null value is a figure the page does not state, which makes its row "unknown", never a match. */
+const matrixCell = z.object({ page: z.string(), route: z.string(), value: z.number().int().nullable(), note: z.string().optional() });
+
+export const launchReconciliationSchema = z.object({
+  datasetKey: z.literal("reconciliation-demo"),
+  asOf: z.string(),
+  freshness: z.array(z.object({ sourceId: z.string(), label: z.string(), feeds: z.string(), lastSourceSuccessAt: z.string().nullable(), staleReasonCode: z.string().nullable() })),
+  matrix: z.array(z.object({
+    metric: z.string(),
+    unit: z.enum(["usd", "count"]),
+    cells: z.array(matrixCell).min(2),
+    status: z.enum(["matches", "differs", "unknown"]),
+    reason: z.string().nullable(),
+  })),
+  provenance: provenanceDisclosure,
+});
+
+/* ---------- Metric dictionary ---------- */
+
+const caveat = z.enum(["LANDED_COST_INCOMPLETE", "RETENTION_IMMATURE"]);
+const nullableCount = z.number().int().nonnegative().nullable();
+const nullableMinor = z.number().int().nonnegative().nullable();
+const caseInput = z.object({ netReceiptsMinor: nullableMinor, validOrders: nullableCount, acquisitionCostMinor: nullableMinor, newRetainedCustomers: nullableCount, marketingSpendMinor: nullableMinor, caveat: caveat.nullable() });
+
+export const metricDictionarySchema = z.object({
+  datasetKey: z.literal("headline-metrics-cases"),
+  version: z.string(),
+  effective: date,
+  stage: z.literal("fixture-complete"),
+  entries: z.array(z.object({ key: z.enum(["aov", "blendedCac", "mer", "platformRoas"]), label: z.string(), numerator: z.string(), denominator: z.string(), source: z.string(), currency: z.string(), window: z.string(), costBuckets: z.string(), refundTreatment: z.string() })),
+  related: z.array(z.object({ label: z.string(), basis: z.string() })),
+  buckets: z.array(z.object({ key: z.string(), label: z.string(), basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative(), alsoInCash: z.boolean(), note: z.string() })),
+  cases: z.array(z.object({ id: z.string(), label: z.string(), input: caseInput, expected: z.object({ aov: z.string(), cac: z.string(), mer: z.string() }), handCalculation: z.string() })),
+  sourceNote: z.string(),
+});
+
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
+  launchReconciliation: launchReconciliationSchema,
   overviewSummary: overviewSummarySchema,
   launchSnapshot: launchSnapshotSchema,
   launchControl: launchControlSchema,
@@ -196,4 +235,5 @@ export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
   paidMedia: paidMediaSchema,
   campaignFunnel: campaignFunnelSchema,
   customerJourney: customerJourneySchema,
+  metricDictionary: metricDictionarySchema,
 };
