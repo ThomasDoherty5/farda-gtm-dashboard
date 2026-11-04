@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import type { FardaAdapter } from "@/adapter/adapter";
-import { financeDashboardDemo, periodCloseDemo, runwayOf } from "@/fixtures/finance";
+import { financeDashboardDemo, runwayOf } from "@/fixtures/finance";
+import { periodCloseDemo } from "@/fixtures/financeClose";
 import { renderRoute } from "@/test/renderWithAdapter";
 
 beforeAll(() => {
@@ -118,9 +119,9 @@ describe("close and reconciliation", () => {
   it("derives progress from the checks and never closes the period itself", async () => {
     open(PATH);
     expect(await screen.findByTestId("metric-Close progress")).toHaveTextContent("4 / 7");
-    expect(screen.getByText("Reconciling · 4 of 7 checks complete")).toBeInTheDocument();
+    expect(screen.getByText("Open month · 4 of 7 checks complete")).toBeInTheDocument();
     expect(screen.getByText("Not requested")).toBeInTheDocument();
-    expect(screen.getByText("Reconciling", { selector: "dd" })).toBeInTheDocument();
+    expect(screen.getByText("Open", { selector: "dd" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /close (the )?(period|month|books)|sign off|approve/i })).not.toBeInTheDocument();
     const d = periodCloseDemo("2026-10")!;
     expect(d.checks.filter((c) => c.state === "complete")).toHaveLength(4);

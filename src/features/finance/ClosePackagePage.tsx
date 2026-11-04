@@ -5,7 +5,7 @@ import { LinkButton } from "@/components/Button";
 import { formatMoneyExact, MetricValue } from "@/components/MetricValue";
 import { FactList, FlatTable, Note, Notice, PageHeader, Panel } from "@/components/Panels";
 import { RecordShell } from "@/features/operations/RecordShell";
-import { differenceResolved, PERIOD_STATUSES, PERIOD_STATUS_LABEL, REPORT_STATUS_LABEL, referenceState, type ClosePackage, type PackageVersion, type PeriodStatus, type ReportStatus } from "@/fixtures/financeClose";
+import { ADJUSTMENT_DIRECTION_LABEL, differenceResolved, PERIOD_STATUSES, PERIOD_STATUS_LABEL, REPORT_STATUS_LABEL, referenceState, type ClosePackage, type PackageVersion, type PeriodStatus, type ReportStatus } from "@/fixtures/financeClose";
 import { usd } from "@/fixtures/values";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
@@ -41,6 +41,7 @@ function Body({ p }: { p: ClosePackage }) {
       <Notice tone="violet" label="Synthetic" title={`Period status: ${PERIOD_STATUS_LABEL[p.status]}`} testId="package-notice">
         Fixture scenario “{p.scenario}”. This detail is not in the Figma source, so it uses the shared components and makes no fidelity claim. Nothing here closes the period, signs off, exports or pays.
       </Notice>
+      <Notice tone="violet" label="Dataset" title={`Commission figures: ${p.commissionCohort.label}`} testId="cohort-notice">{p.commissionCohort.note}</Notice>
       <Panel title="Close states" subtitle="The current state is derived from the evidence below" testId="lifecycle">
         <ol className={styles.chips} aria-label="Close states">
           {PERIOD_STATUSES.map((s) => (
@@ -51,7 +52,7 @@ function Body({ p }: { p: ClosePackage }) {
         </ol>
         {p.blockers.length > 0 ? (
           <ul aria-label="Why the period is not closed" data-testid="blockers">
-            {p.blockers.map((b) => <li key={b.code + b.text} data-code={b.code}>{b.text}</li>)}
+            {p.blockers.map((b) => <li key={b.reason + b.text} data-reason={b.reason}>{b.text}</li>)}
           </ul>
         ) : (
           <Note>Nothing outstanding in this fixture scenario.</Note>
@@ -61,6 +62,7 @@ function Body({ p }: { p: ClosePackage }) {
           ["Landed cost", p.landedCost.complete ? "Complete" : `Incomplete: ${p.landedCost.missingSkus.join(", ")}`],
         ]} />
       </Panel>
+      <FiguresPanel p={p} />
       {p.versions.map((v) => <VersionPanel key={v.version} v={v} latest={v === p.versions[p.versions.length - 1]} />)}
       <Panel title="Reconciliation differences" subtitle="Each needs an owner, a reason, a linked correction and a resolved time" testId="differences">
         <FlatTable
@@ -84,7 +86,9 @@ function Body({ p }: { p: ClosePackage }) {
       {p.adjustment && (
         <Panel title="Late adjustment" subtitle={`Reopened review as ${p.adjustment.newVersion}; ${p.adjustment.priorVersion} is preserved`} testId="adjustment">
           <FactList label="Late adjustment" rows={[
-            ["Adjustment", `${p.adjustment.id} · ${exact(p.adjustment.amount.minorUnits)} · posted ${when(p.adjustment.postedAt)}`],
+            ["Adjustment", `${p.adjustment.id} · ${p.adjustment.direction === "reversal" ? "−" : "+"}${exact(p.adjustment.amount.minorUnits)} · posted ${when(p.adjustment.postedAt)}`],
+            ["Direction", ADJUSTMENT_DIRECTION_LABEL[p.adjustment.direction]],
+            ["Effect on figures", `${p.adjustment.priorVersion} stays as closed. ${p.adjustment.newVersion} shows the adjusted figures above.`],
             ["Reason", p.adjustment.reason],
             ["Source evidence", p.adjustment.sourceEvidence],
             ["Linked paid receipt", `${p.adjustment.linkedReceipt} (unchanged)`],
@@ -124,11 +128,34 @@ function VersionPanel({ v, latest }: { v: PackageVersion; latest: boolean }) {
   );
 }
 
+const FIGURE_ROWS: { label: string; key: keyof PackageVersion["figures"] }[] = [
+  { label: "Accrued commission", key: "accrual" },
+  { label: "Reversals", key: "reversals" },
+  { label: "Net commission expense", key: "netCommissionExpense" },
+  { label: "Paid to creators", key: "creatorPaid" },
+  { label: "Outstanding liability", key: "outstandingLiability" },
+  { label: "Pending recovery after payout", key: "pendingRecovery" },
+];
+
+/** The ledger figures behind each package version. A frozen version never changes; a later adjustment shows up in the next version only. */
+function FiguresPanel({ p }: { p: ClosePackage }) {
+  return (
+    <Panel title="Figures by package version" subtitle={`Commission ledger · ${p.commissionCohort.label}`} testId="figures">
+      <FlatTable
+        caption="Figures by package version"
+        columns={[{ label: "Measure", width: 260 }, ...p.versions.map((v) => ({ label: `${v.version}${v.frozen ? " (frozen)" : ""}`, width: 170 }))]}
+        rows={FIGURE_ROWS.map((r) => ({ key: r.key, cells: [r.label, ...p.versions.map((v) => exact(v.figures[r.key]))] }))}
+      />
+      <Note>Expense is recognized at accrual, so cash paid does not reduce it again. A reversal after payout cannot lower what was paid: the receipt is immutable, so the amount waits as pending recovery until the source says how it is settled.</Note>
+    </Panel>
+  );
+}
+
 const pv = (value: Parameters<typeof MetricValue<number>>[0]["value"]): ReactNode => <MetricValue value={value} format={exact} />;
 
 function SplitPanel({ p }: { p: ClosePackage }) {
   return (
-    <Panel title="Commission reporting split" subtitle="By provider, currency and period. Unknown is N/A, never $0" testId="split">
+    <Panel title="Commission reporting split" subtitle={`By provider, currency and period · ${p.commissionCohort.label}. Unknown is N/A, never $0`} testId="split">
       <FlatTable
         caption="Commission reporting split"
         columns={[{ label: "Provider", width: 170 }, { label: "Currency · period", width: 120 }, { label: "Accrual expense", width: 130 }, { label: "Reversals", width: 110 }, { label: "Processing fees", width: 120 }, { label: "Merchant billed", width: 130 }, { label: "Merchant paid", width: 130 }, { label: "Creator payout", width: 120 }, { label: "Outstanding liability", width: 140 }, { label: "Unresolved inside outstanding", width: 220 }]}

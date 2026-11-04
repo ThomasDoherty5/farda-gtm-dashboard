@@ -1,8 +1,8 @@
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse } from "./contract";
 import { AdapterError, type AdapterErrorBody } from "./errors";
 import { respondWith } from "./demoViews";
-import { financeDashboardDemo, ledgerDemo, payableDemo, periodCloseDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
-import { closePackageDemo, type ClosePackage } from "@/fixtures/financeClose";
+import { financeDashboardDemo, ledgerDemo, payableDemo, settlementDemo, type CommissionLedger, type FinanceDashboard, type PayableDetail, type PeriodClose, type SettlementRecord } from "@/fixtures/finance";
+import { closePackageDemo, isCloseScenario, manifestDemo, monthsDemo, periodCloseDemo, type ClosePackage } from "@/fixtures/financeClose";
 
 const fail = (code: string, message: string, requestId: string, extra: Partial<AdapterErrorBody> = {}): never => {
   throw new AdapterError({ code, message, requestId, correlationId: `demo-${requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", ...extra });
@@ -58,15 +58,27 @@ export function createDemoFinance() {
     return respondWith(request, data, { dataVersion: data.version, dataState: scenario === "stale" ? "stale" : scenario === "insufficient" ? "partial" : "ready" });
   }
 
+  /** One read of the package serves both close views, so the summary and the package can't be built from different evidence. An unknown scenario is refused, never shown as another one. */
+  function packageFor(request: ReadRequest<{ period: string; scenario?: string }>): ClosePackage {
+    const { period, scenario } = request.filters;
+    if (scenario !== undefined && !isCloseScenario(scenario)) fail("VALIDATION_FAILED", `"${scenario}" is not a close scenario.`, request.requestId, { fieldErrors: { scenario: `"${scenario}" is not a close scenario.` } });
+    return closePackageDemo(period, scenario) ?? fail("RECORD_NOT_FOUND", "This accounting period does not exist or was removed.", request.requestId);
+  }
+
+  // Closing, signing off and exporting belong to their owners and stay unavailable here. A held capability always says why.
+  const closeCapabilities = (p: ClosePackage): ReadResponse<unknown>["capabilities"] => [
+    { actionKind: "closePeriod", state: p.status === "closed" ? "unsupported" : "held", reasonCodes: p.status === "closed" ? ["ALREADY_CLOSED"] : p.blockers.length > 0 ? p.blockers.map((b) => b.reason) : ["CLOSE_OWNER_ACTION_REQUIRED"] },
+  ];
+
   function close(request: ReadRequest<{ period: string; scenario?: string }>): ReadResponse<PeriodClose> {
-    const data = periodCloseDemo(request.filters.period, request.filters.scenario) ?? fail("RECORD_NOT_FOUND", "This accounting period does not exist or was removed.", request.requestId);
-    return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "closePeriod", state: "held", reasonCodes: ["CPA_SIGN_OFF_REQUIRED", "RECONCILIATION_OPEN"] }] });
+    const p = packageFor(request);
+    const data = periodCloseDemo(p.period, p.scenario)!;
+    return respondWith(request, data, { dataVersion: data.version, capabilities: closeCapabilities(p) });
   }
 
   function closePackage(request: ReadRequest<{ period: string; scenario?: string }>): ReadResponse<ClosePackage> {
-    const data = closePackageDemo(request.filters.period, request.filters.scenario) ?? fail("RECORD_NOT_FOUND", "This accounting period does not exist or was removed.", request.requestId);
-    // The package is read-only evidence. Closing, signing off and exporting belong to their owners and stay unavailable here.
-    return respondWith(request, data, { dataVersion: data.version, capabilities: [{ actionKind: "closePeriod", state: data.status === "closed" ? "unsupported" : "held", reasonCodes: data.status === "closed" ? ["ALREADY_CLOSED"] : data.blockers.map((b) => b.code) }] });
+    const data = packageFor(request);
+    return respondWith(request, data, { dataVersion: data.version, capabilities: closeCapabilities(data) });
   }
 
   function reconcile(request: ActionRequest<ReconcilePayload>): ActionResponse {
@@ -115,6 +127,10 @@ export function createDemoFinance() {
           return dashboard(request as ReadRequest<{ scenario?: string }>);
         case "periodClose":
           return close(request as ReadRequest<{ period: string; scenario?: string }>);
+        case "monthsHistory":
+          return respondWith(request, { datasetKey: "finance-months-demo" as const, months: monthsDemo() }, { dataVersion: "months-demo@1" });
+        case "reportManifest":
+          return respondWith(request, manifestDemo(), { dataVersion: "manifest-demo@1" });
         case "closePackage":
           return closePackage(request as ReadRequest<{ period: string; scenario?: string }>);
         default:

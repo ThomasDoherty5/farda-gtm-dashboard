@@ -224,32 +224,3 @@ export type PeriodClose = {
   reports: { name: string; state: string }[];
   exportFailed: boolean;
 };
-
-export const periodCloseDemo = (period: string, scenario?: string): PeriodClose | null => {
-  if (period !== "2026-10") return null;
-  const failed = scenario === "exportfailed";
-  return {
-    datasetKey: "finance-demo",
-    version: "close1",
-    period,
-    label: "October",
-    checks: [
-      { check: "Sales, fees and refunds posted", owner: "Finance", state: "complete", label: "Complete" },
-      { check: "Inventory & sample COGS checked", owner: "Finance", state: "complete", label: "Complete" },
-      { check: "Creator and media costs posted", owner: "Finance", state: "complete", label: "Complete" },
-      { check: "Sales tax reviewed", owner: "CPA", state: "complete", label: "Complete" },
-      { check: "Payouts matched to bank", owner: "Finance", state: "unmatched", label: "2 unmatched" },
-      { check: "Reports exported to Drive", owner: "Finance", state: failed ? "blocked" : "waiting", label: failed ? "Export failed" : "Waiting" },
-      { check: "CPA sign-off and period close", owner: "CPA", state: "blocked", label: "Blocked" },
-    ],
-    closeOwner: "Finance lead",
-    cpaReview: "Not requested",
-    status: failed ? "failed" : "reconciling",
-    exceptions: [
-      { payout: "TEST-PO-SH-021", expected: 148640, difference: 1200 },
-      { payout: "TEST-PO-TT-018", expected: 64275, difference: 625 },
-    ],
-    reports: ["Profit & loss", "Balance sheet", "Cash flow", "Sales tax", "Inventory valuation", "Payout reconciliation"].map((name) => ({ name, state: failed ? "Export failed: rerun pending" : "Awaiting close" })),
-    exportFailed: failed,
-  };
-};

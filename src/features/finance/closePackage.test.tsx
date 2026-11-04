@@ -26,7 +26,7 @@ describe("close package", () => {
 
   it("states the period status, the nine states and why the period is not closed", async () => {
     open();
-    expect(await screen.findByTestId("package-notice")).toHaveTextContent("Period status: Reconciling");
+    expect(await screen.findByTestId("package-notice")).toHaveTextContent("Period status: Open");
     const states = within(screen.getByRole("list", { name: "Close states" })).getAllByRole("listitem");
     expect(states.map((s) => s.textContent?.replace(" (current)", ""))).toEqual(["Open", "Reconciling", "Blocked", "Awaiting CPA", "Ready to export", "Exporting", "Failed", "Closed", "Reopened"]);
     expect(states.filter((s) => s.getAttribute("aria-current") === "step")).toHaveLength(1);
@@ -48,6 +48,14 @@ describe("close package", () => {
 
   it("shows a failed export as failed with receipts only for what exported", async () => {
     open("exportfailed");
+    expect(await screen.findByTestId("package-notice")).toHaveTextContent("Period status: Failed");
+    const table = screen.getByRole("table", { name: "Report package v1" });
+    expect(within(table).getAllByText("Export failed")).toHaveLength(7);
+    expect(screen.queryByText(/TEST-EXPORT/)).not.toBeInTheDocument();
+  });
+
+  it("shows a partly failed export with receipts only for what exported", async () => {
+    open("partialexport");
     expect(await screen.findByTestId("package-notice")).toHaveTextContent("Period status: Failed");
     const table = screen.getByRole("table", { name: "Report package v1" });
     expect(within(table).getAllByText("Export failed")).toHaveLength(5);
@@ -85,13 +93,41 @@ describe("close package", () => {
     open("lateadjustment");
     expect(await screen.findByTestId("package-notice")).toHaveTextContent("Period status: Reopened");
     const adjustment = screen.getByTestId("adjustment");
-    expect(adjustment).toHaveTextContent("TEST-ADJ-0001 · $30.00");
+    expect(adjustment).toHaveTextContent("TEST-ADJ-0001 · −$30.00");
+    expect(adjustment).toHaveTextContent("Reversal (reduces commission)");
     expect(adjustment).toHaveTextContent("TEST-RCPT-0090 (unchanged)");
     expect(adjustment).toHaveTextContent("The prior close and its reports are not rewritten");
     expect(screen.getByTestId("package-v1")).toHaveTextContent("Preserved prior package");
     expect(within(screen.getByTestId("package-v1")).getAllByText("Exported")).toHaveLength(7);
     expect(within(screen.getByTestId("package-v2")).getAllByText("Not generated")).toHaveLength(7);
     expect(within(screen.getByTestId("receipts")).getByText("Immutable")).toBeInTheDocument();
+  });
+
+  it("shows v2 figures beside a frozen v1, with the $30 reversal moving expense and leaving what was paid alone", async () => {
+    open("lateadjustment");
+    const table = await screen.findByRole("table", { name: "Figures by package version" });
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Measure", "v1 (frozen)", "v2"]);
+    const row = (name: string) => within(table).getByText(name).closest("tr")!;
+    expect(row("Net commission expense")).toHaveTextContent("$270.00$240.00");
+    expect(row("Reversals")).toHaveTextContent("$30.00$60.00");
+    expect(row("Paid to creators")).toHaveTextContent("$90.00$90.00");
+    expect(row("Pending recovery after payout")).toHaveTextContent("$0.00$30.00");
+  });
+
+  it("labels the commission dataset as pilot cohort B and keeps it apart from the $12,596 example", async () => {
+    open();
+    const note = await screen.findByTestId("cohort-notice");
+    expect(note).toHaveTextContent("Affiliate pilot · synthetic cohort B");
+    expect(note).toHaveTextContent("50 orders");
+    expect(note).toHaveTextContent("$12,596");
+    expect(note).toHaveTextContent("never added together");
+    expect(screen.getByTestId("split")).toHaveTextContent("Affiliate pilot · synthetic cohort B");
+  });
+
+  it("refuses an unknown scenario instead of showing another one", async () => {
+    open("recon");
+    expect(await screen.findByRole("alert", {}, { timeout: 4000 })).toHaveTextContent(/could not be loaded/i);
+    expect(screen.queryByTestId("lifecycle")).not.toBeInTheDocument();
   });
 
   it("splits commission reporting by provider, currency and period and never turns unknown into zero", async () => {
@@ -106,7 +142,7 @@ describe("close package", () => {
     const tiktok = within(table).getByText("TikTok Shop").closest("tr")!;
     expect(within(tiktok).getAllByText(/N\/A/)).toHaveLength(7);
     expect(tiktok).not.toHaveTextContent("$0");
-    expect(within(table).getByText("Historical fixed fee (read-only)").closest("tr")).toHaveTextContent("Awaiting founder approval $150.00");
+    expect(within(table).getByText("Historical fixed fee (read-only)").closest("tr")).toHaveTextContent("Payment awaiting founder approval $150.00");
   });
 
   it("offers no control that closes, signs off, exports or pays", async () => {
