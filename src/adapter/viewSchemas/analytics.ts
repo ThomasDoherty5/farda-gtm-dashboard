@@ -189,8 +189,8 @@ export const customerJourneySchema = z.object({
 
 /* ---------- Source freshness and reconciliation ---------- */
 
-/** A source that has never synced has no timestamp (null), which is not the same as an old one. Exact cents are integers, so a fraction is refused. */
-const matrixCell = z.object({ page: z.string(), route: z.string(), value: z.number().int().nonnegative().nullable(), note: z.string().optional() });
+/** One place a figure appears. Exact values (cents for money) are integers, so a fraction is refused. A null value is a figure the page does not state, which makes its row "unknown", never a match. */
+const matrixCell = z.object({ page: z.string(), route: z.string(), value: z.number().int().nullable(), note: z.string().optional() });
 
 export const launchReconciliationSchema = z.object({
   datasetKey: z.literal("reconciliation-demo"),
@@ -199,7 +199,7 @@ export const launchReconciliationSchema = z.object({
   matrix: z.array(z.object({
     metric: z.string(),
     unit: z.enum(["usd", "count"]),
-    cells: z.array(matrixCell),
+    cells: z.array(matrixCell).min(2),
     status: z.enum(["matches", "differs", "unknown"]),
     reason: z.string().nullable(),
   })),
@@ -208,8 +208,8 @@ export const launchReconciliationSchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
-  overviewSummary: overviewSummarySchema,
   launchReconciliation: launchReconciliationSchema,
+  overviewSummary: overviewSummarySchema,
   launchSnapshot: launchSnapshotSchema,
   launchControl: launchControlSchema,
   attribution: attributionSchema,

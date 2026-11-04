@@ -217,7 +217,7 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["unknown matrix status", (d) => (d.matrix[0].status = "close")],
       ["unknown unit", (d) => (d.matrix[0].unit = "eur")],
       ["fractional cents in a cell", (d) => (d.matrix[0].cells[0].value = 12596.5)],
-      ["negative cell value", (d) => (d.matrix[0].cells[0].value = -1)],
+      ["a row that compares one page only", (d) => (d.matrix[0].cells = d.matrix[0].cells.slice(0, 1))],
       ["a cell value as a string", (d) => (d.matrix[0].cells[0].value = "12596")],
       ["a freshness timestamp that is undefined instead of null", (d) => delete d.freshness[0].lastSourceSuccessAt],
     ],
