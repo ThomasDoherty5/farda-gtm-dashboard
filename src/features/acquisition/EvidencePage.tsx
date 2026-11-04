@@ -11,12 +11,11 @@ import { Dialog } from "@/components/Dialog";
 import { SkeletonCard } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { Kpi } from "@/components/Kpi";
-import { SectionTabs } from "@/components/SectionTabs";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, LeaveGuard, blockedReason } from "@/features/approvals/shared";
-import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
 import { CATEGORY_LABEL, MODEL_FOR_ROUTE, ROUTE_LABEL, coveredSeconds, formatTime, parseTime, validateMediaUrl, validateObservation } from "./evidenceRules";
 import type { CheckoutRoute, EvidenceDraft, EvidenceRecord, Observation, ObservationCategory } from "./evidenceTypes";
+import { AcquisitionTabs } from "./AcquisitionTabs";
 import styles from "./Acquisition.module.css";
 
 type Res = ReadResponse<EvidenceRecord>;
@@ -35,11 +34,10 @@ export function EvidencePage() {
   const filters = useMemo(() => ({ creatorId, evidenceId }), [creatorId, evidenceId]);
   const query = useView<{ creatorId: string; evidenceId: string }, EvidenceRecord>("evidenceRecord", filters);
   const record = query.data?.data ?? null;
-  const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`;
   return (
     <section aria-labelledby="evidence-title" data-figma-source="102:364" className={styles.page}>
       {record ? (
-        <Review key={record.evidenceRef} res={query.data as Res} record={record} evidencePath={evidencePath} />
+        <Review key={record.evidenceRef} res={query.data as Res} record={record} />
       ) : (
         <>
           <div className={styles.titleRow}>
@@ -55,7 +53,7 @@ export function EvidencePage() {
   );
 }
 
-function Review({ res, record, evidencePath }: { res: Res; record: EvidenceRecord; evidencePath: string }) {
+function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
   const [mediaUrl, setMediaUrl] = useState(record.mediaUrl ?? "");
   const [route, setRoute] = useState<CheckoutRoute>(record.checkoutRoute);
   const [observations, setObservations] = useState<Observation[]>(record.observations);
@@ -110,14 +108,7 @@ function Review({ res, record, evidencePath }: { res: Res; record: EvidenceRecor
         <Button variant="secondary" style={{ minWidth: 180 }} loading={save.isPending} disabledReason={saveBlocked} onClick={onSave}>Save partial review</Button>
         <Button style={{ minWidth: 164 }} disabledReason={watchedBlocked} reasonFor={watchedReasonId}>Mark watched</Button>
       </div>
-      <SectionTabs label="Acquisition sections" tabs={[
-        { label: "Pipeline", to: "/creators/pipeline", width: 100 },
-        { label: "Daily sourcing", to: "/creators/discovery", width: 130 },
-        { label: "Video evidence", to: evidencePath, width: 130, current: true },
-        { label: "Social Cat", to: "/creators/social-cat?view=dashboard", width: 102 },
-        { label: "TikTok Shop", to: "/creators/tiktok?view=dashboard", width: 109 },
-        { label: "Content monitor", to: "/content", width: 137 },
-      ]} />
+      <AcquisitionTabs current="Video evidence" />
       <div className={styles.context}>
         <p className={styles.contextTitle}>A caption is context. Playback is evidence.</p>
         <p className={styles.small}>Review actual GRWM, workday, organizing, travel or product-in-routine footage. Clinical lectures, IVF explainers and generic medical education do not qualify.</p>
