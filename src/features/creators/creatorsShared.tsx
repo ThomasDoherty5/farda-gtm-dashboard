@@ -34,7 +34,7 @@ export function SourceButton({ label, title, width, variant = "secondary" }: { l
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button variant={variant} aria-haspopup="dialog" style={{ minWidth: width }} onClick={() => setOpen(true)}>{label}</Button>
+      <Button variant={variant} aria-haspopup="dialog" style={{ minWidth: `min(${width}px, 100%)` }} onClick={() => setOpen(true)}>{label}</Button>
       <SourceDialog open={open} title={title} url={null} onClose={() => setOpen(false)} />
     </>
   );

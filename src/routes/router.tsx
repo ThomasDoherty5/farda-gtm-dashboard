@@ -3,6 +3,7 @@ import { Shell } from "@/components/Shell";
 import { EvidencePage } from "@/features/acquisition/EvidencePage";
 import { DiscoveryPage } from "@/features/acquisition/DiscoveryPage";
 import { PipelinePage } from "@/features/acquisition/PipelinePage";
+import { CollaborationPage } from "@/features/collaboration/CollaborationPage";
 import { BatchPage } from "@/features/recruitment/BatchPage";
 import { InvitationPage } from "@/features/recruitment/InvitationPage";
 import { RecruitmentPage } from "@/features/recruitment/RecruitmentPage";
@@ -26,6 +27,7 @@ const implemented: Record<string, JSX.Element> = {
   "/creators/social-cat/recruitment": <RecruitmentPage />,
   "/creators/tiktok/invitations/new": <InvitationPage />,
   "/batches/:batchId": <BatchPage />,
+  "/collaborations/:collaborationId": <CollaborationPage />,
   "/creators/:creatorId/evidence/:evidenceId": <EvidencePage />,
   "/approvals/:approvalId": <ApprovalPage />,
   "/runs/:runId": <RunPage />,
