@@ -7,7 +7,7 @@ import { OWNERS } from "@/fixtures/creators";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { PIPELINE_STAGES, pipelineDemo } from "@/fixtures/pipeline";
 import { invitationDemo, recruitmentDemo } from "@/fixtures/recruitment";
-import { filterPipeline } from "@/fixtures/pipeline";
+import { DEFAULT_PIPELINE_FILTERS, filterPipeline } from "@/fixtures/pipeline";
 import type { BatchData } from "@/fixtures/batch";
 
 const combos = <A extends string, B extends string>(a: readonly A[], b: readonly B[]) => a.flatMap((x) => b.map((y) => [x, y] as const));
@@ -22,8 +22,8 @@ const batchBase: BatchData = {
 };
 
 describe("recruitment view schemas", () => {
-  it("covers exactly the five recruitment, invitation, batch, pipeline and discovery view keys", () => {
-    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineSummary", "recruitmentQueue"]);
+  it("covers exactly the recruitment, invitation, batch, pipeline, pipeline-branches and discovery view keys", () => {
+    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineBranches", "pipelineSummary", "recruitmentQueue"]);
   });
 
   describe("every demo variant parses unchanged", () => {
@@ -148,8 +148,17 @@ describe("recruitment view schemas", () => {
     });
   });
 
+  describe("pipelineSummary and the inbound route", () => {
+    it("keeps the inbound route's missing dispatch and confirmed-send stage as null, never 0", () => {
+      const data = filterPipeline({ ...DEFAULT_PIPELINE_FILTERS, route: "inbound" });
+      const parsed = schemas.pipelineSummary!.parse(data) as typeof data;
+      expect(parsed.sources[0]!.current.dispatch).toBeNull();
+      expect(parsed.sources[0]!.reached[4]).toBeNull();
+    });
+  });
+
   describe("pipelineSummary rejects", () => {
-    const data = filterPipeline({ source: "both", network: "tiktok", checkout: "all", window: "oct" });
+    const data = filterPipeline({ ...DEFAULT_PIPELINE_FILTERS, source: "both", network: "tiktok", window: "oct" });
     expectRejections(schemas.pipelineSummary!, data, [
       ["missing sources", "sources", REMOVE],
       ["an unknown source", "sources.0.source", "instagram"],
@@ -164,7 +173,7 @@ describe("recruitment view schemas", () => {
       ["a median-days list that is too short", "sources.0.medianDays", [null, 1]],
       ["negative median days", "sources.0.medianDays.1", -1],
       ["a missing current-stage bucket", "sources.0.current.dispatch", REMOVE],
-      ["a null current-stage bucket", "sources.0.current.dispatch", null],
+      ["a null current-stage bucket", "sources.0.current.videoReview", null],
       ["an unknown native milestone", "sources.0.nativeMilestone", "signed"],
       ["negative merchandise minor units", "sources.0.outcomes.merchandise.minorUnits", -48_000],
       ["fractional refund minor units", "sources.0.outcomes.refunds.minorUnits", 3_000.5],
