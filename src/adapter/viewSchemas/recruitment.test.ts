@@ -2,7 +2,7 @@ import { recruitmentViewSchemas as schemas } from "./recruitment";
 import { REMOVE, expectAllParse, expectRejections, readRequest, readVariants, scope } from "./acquisitionTestKit";
 import { SCHEMA_VERSION, type ActionRequest } from "../contract";
 import { createDemoAdapter } from "../demoAdapter";
-import { BATCH_ID, seedItems, seedSamples, heldReasons } from "@/fixtures/batch";
+import { BATCH_ID, seedItems, heldReasons } from "@/fixtures/batch";
 import { OWNERS } from "@/fixtures/creators";
 import { discoveryDemo } from "@/fixtures/discovery";
 import { PIPELINE_STAGES, pipelineDemo } from "@/fixtures/pipeline";
