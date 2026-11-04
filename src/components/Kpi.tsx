@@ -13,7 +13,7 @@ export function Kpi({ label, children, context, testId, hug = false }: { label: 
   );
 }
 
-/** `keepColumns` holds the column count down to phone width, for the Operations 1024 design, which keeps three. */
-export function KpiRow({ children, columns = 4, keepColumns = false }: { children: ReactNode; columns?: number; keepColumns?: boolean }) {
-  return <div className={styles.row} data-keep-columns={keepColumns || undefined} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
+/** `keepColumns` holds the column count down to phone width, for the Operations 1024 design, which keeps three. `align="start"` lets cards keep their own heights, as Figma's content-sized rows do; the default stretches them to one height. */
+export function KpiRow({ children, columns = 4, keepColumns = false, align = "stretch" }: { children: ReactNode; columns?: number; keepColumns?: boolean; align?: "stretch" | "start" }) {
+  return <div className={align === "start" ? `${styles.row} ${styles.start}` : styles.row} data-keep-columns={keepColumns || undefined} style={{ "--kpi-columns": columns } as React.CSSProperties}>{children}</div>;
 }
