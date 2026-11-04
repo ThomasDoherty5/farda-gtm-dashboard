@@ -144,6 +144,23 @@ describe("full acquisition pipeline", () => {
     expect(screen.getByText(/applicants are never invited by us/)).toBeInTheDocument();
   });
 
+  it("CF-01: the inbound route prints N/A, with a reason, wherever there is no send data", async () => {
+    await open("/creators/pipeline?route=inbound");
+    const reason = /inbound application has no outbound send/;
+    expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/approvals resolve to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/attempts across/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("send-balance")).not.toBeInTheDocument();
+    expect(screen.getByText("Uncertain · N/A")).toBeInTheDocument();
+    expect(screen.getByText("Queued · N/A")).toBeInTheDocument();
+    expect(screen.getByText("Replies · N/A")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-Dispatch")).not.toHaveTextContent(/\b0 queued/);
+    expect(screen.getByText("N/A · no outbound dispatch")).toBeInTheDocument();
+    expect(screen.getByTestId("metric-Confirmed invitations")).not.toHaveTextContent(/\b0 attempts/);
+    const reconcile = screen.getByRole("button", { name: "Reconcile uncertain sends" });
+    expect(reconcile).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("CF-01: a selection with no cells is an empty state, not a zero funnel", async () => {
     await open("/creators/pipeline?route=inbound");
     const { user } = { user: userEvent.setup() };
@@ -338,6 +355,28 @@ describe("CF-08 and CF-10 across pipeline and monitor", () => {
     expect(screen.getByText(/Hourly monitoring/)).toBeInTheDocument();
     expect(screen.getByText(/New-creator discovery and lifestyle evidence review are separate daily workflows/)).toBeInTheDocument();
     expect(screen.queryByText(/Independent demo cohort/)).not.toBeInTheDocument();
+  });
+
+  it("carries the source, route and network filters through Paths and branches and back, and says which apply", async () => {
+    const q = "?source=social-cat&route=inbound&network=instagram";
+    const { user, router } = await (async () => {
+      const r = renderRoute(`/creators/pipeline${q}`, createDemoAdapter());
+      await screen.findByTestId("metric-Confirmed invitations");
+      return { router: r, user: userEvent.setup() };
+    })();
+    const link = screen.getByRole("link", { name: "Paths and branches" });
+    expect(link).toHaveAttribute("href", "/creators/pipeline?view=branches&source=social-cat&route=inbound&network=instagram");
+    await user.click(link);
+    await screen.findByTestId("terminal-paths");
+    const note = screen.getByTestId("branches-filters");
+    expect(note).toHaveTextContent(/source: Social Cat/);
+    expect(note).toHaveTextContent(/route: Inbound/);
+    expect(note).toHaveTextContent(/split by source only, so route, publishing network do not change them/);
+    const back = screen.getByRole("link", { name: "Back to pipeline" });
+    expect(back).toHaveAttribute("href", "/creators/pipeline?source=social-cat&route=inbound&network=instagram");
+    await user.click(back);
+    await screen.findByTestId("metric-Confirmed invitations");
+    expect(router.state.location.search).toBe(q);
   });
 
   it("CF-10: the pipeline's drilldowns reach the run recovery, work queue, evidence and branches", async () => {

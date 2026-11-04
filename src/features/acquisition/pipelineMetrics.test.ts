@@ -17,17 +17,26 @@ describe("pipeline fixture", () => {
   });
 
   it("resolves approvals into confirmed, uncertain and queued with nothing left over", () => {
-    for (const s of pipelineSources) expect(s.sends.confirmed + s.sends.uncertain + s.sends.queued).toBe(s.sends.approved);
-    const total = sendTotals(pipelineSources);
+    for (const s of pipelineSources) expect(s.sends!.confirmed + s.sends!.uncertain + s.sends!.queued).toBe(s.sends!.approved);
+    const total = sendTotals(pipelineSources)!;
     expect(total).toMatchObject({ approved: 60, confirmed: 54, uncertain: 2, queued: 4, attempts: 58, opportunities: 56 });
     expect(stageRows(pipelineSources).find((r) => r.key === "confirmedSent")!.reached).toBe(total.confirmed);
   });
 
   it("ties dispatch and closed counts to the exclusive stages", () => {
     for (const s of pipelineSources) {
-      expect(s.dispatch.queued + s.dispatch.toReconcile).toBe(s.current.dispatch);
+      expect(s.dispatch!.queued + s.dispatch!.toReconcile).toBe(s.current.dispatch);
       expect(s.closed.waiting + s.closed.declined + s.closed.expired).toBe(s.current.matchPending);
-      expect(s.dispatch.toReconcile).toBe(s.sends.uncertain);
+      expect(s.dispatch!.toReconcile).toBe(s.sends!.uncertain);
+    }
+  });
+
+  it("CF-01: an inbound cohort has no send or dispatch data, so totals are null rather than zeros", () => {
+    const inbound = filterPipeline({ ...DEFAULT_PIPELINE_FILTERS, route: "inbound" }).sources;
+    expect(sendTotals(inbound)).toBeNull();
+    for (const s of inbound) {
+      expect(s.sends).toBeNull();
+      expect(s.dispatch).toBeNull();
     }
   });
 

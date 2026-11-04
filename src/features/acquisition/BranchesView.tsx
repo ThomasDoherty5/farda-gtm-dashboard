@@ -11,7 +11,9 @@ import { formatCount } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import { DEMO_COLLABORATION_ID } from "@/fixtures/ids";
 import type { BranchesData, TerminalKind } from "@/fixtures/pipelineBranches";
+import { DEFAULT_PIPELINE_FILTERS, type PipelineFilters } from "@/fixtures/pipeline";
 import { AcquisitionTabs } from "./AcquisitionTabs";
+import { carriedSearch, FACET_NAMES, FACETS, parseFilters } from "./pipelineFilters";
 import { contentTotals, sampleTotals, terminalTotals } from "./branchMetrics";
 import acquisition from "./Acquisition.module.css";
 import styles from "./Pipeline.module.css";
@@ -23,7 +25,10 @@ const KIND: Record<TerminalKind, string> = { declined: "Declined", optOut: "Opt-
 export function BranchesView() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
-  const source = search.get("source") === "social-cat" || search.get("source") === "tiktok-shop" ? search.get("source")! : "both";
+  const filters = parseFilters(search);
+  const source = filters.source;
+  const back = carriedSearch(filters);
+  const ignored = (Object.keys(DEFAULT_PIPELINE_FILTERS) as (keyof PipelineFilters)[]).filter((k) => k !== "source" && filters[k] !== DEFAULT_PIPELINE_FILTERS[k]);
   const query = useView<{ source: string }, BranchesData>("pipelineBranches", { source });
   const demo = adapter.kind === "demo";
   return (
@@ -33,9 +38,15 @@ export function BranchesView() {
           <h1 id="branches-title">Closed paths and optional branches.</h1>
           <p>Terminal outcomes keep their suppression · samples and content are optional unless the terms say otherwise</p>
         </div>
-        <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 156 }}>Back to pipeline</LinkButton>
+        <LinkButton variant="secondary" to={back ? `/creators/pipeline?${back}` : "/creators/pipeline"} style={{ minWidth: 156 }}>Back to pipeline</LinkButton>
       </div>
       <AcquisitionTabs current="Pipeline" />
+      {back && (
+        <p className={acquisition.small} role="status" data-testid="branches-filters">
+          Filters carried from the pipeline: {(Object.keys(DEFAULT_PIPELINE_FILTERS) as (keyof PipelineFilters)[]).filter((k) => filters[k] !== DEFAULT_PIPELINE_FILTERS[k]).map((k) => `${FACET_NAMES[k]}: ${FACETS[k].find((o) => o.value === filters[k])?.label}`).join(" · ")}.{" "}
+          {ignored.length > 0 ? `These branch counts are split by source only, so ${ignored.map((k) => FACET_NAMES[k]).join(", ")} ${ignored.length > 1 ? "do" : "does"} not change them.` : "Source is applied to these counts."}
+        </p>
+      )}
       {query.isPending && <SkeletonCard label="Loading paths and branches…" />}
       {query.isError && <ViewError error={query.error} subject="The pipeline branches" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&
