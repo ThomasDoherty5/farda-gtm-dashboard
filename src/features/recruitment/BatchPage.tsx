@@ -201,7 +201,7 @@ function DetailTab({ data, counts, approved, unsent, held, heldTotal, maxHeld, n
   const sentence = [`${counts.confirmed} confirmed`, ...COUNTED.slice(1).map((c) => `${counts[c.state]} ${c.word}`)].join(" + ");
   return (
     <>
-      <ContextBox title="Illustrative batch · current model not published" text="This finite execution example assumes valid evidence, terms and approval. Production acquisition must bind the current commission-only policy and published checkout model; no actual creators are approved or queued here.">
+      <ContextBox title="Illustrative batch · current model not published" text={<>This finite execution example assumes valid evidence, terms and approval. Production acquisition must bind the current commission-only policy and published checkout model; no actual creators are approved or queued <br className="wide-break" />here.</>}>
         <div className={creators.contextActions}>
           <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
           <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
