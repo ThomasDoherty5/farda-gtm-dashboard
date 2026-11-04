@@ -16,6 +16,7 @@ import {
 import { AdapterError, categorize, type AdapterErrorBody, type ErrorCategory } from "./errors";
 import { pendingTransport, TransportFailure, type Transport, type TransportRequest } from "./transport";
 import { adapterErrorBodySchema, saveResourceResponseSchema } from "./wire";
+import { viewSchemas, type ViewSchemas } from "./viewSchemas";
 
 /**
  * The live adapter (THO-283, front-end half). It carries typed envelopes over an injected `Transport` and checks every
@@ -32,6 +33,11 @@ export type LiveAdapterOptions = {
   /** Total attempts for a write that may not have reached the server. Every attempt carries the same idempotency key. */
   writeAttempts?: number;
   retryDelayMs?: number;
+  /**
+   * The schema for each view's data, by view key. A read whose data is present is checked against its key's schema, and a
+   * key with no schema is rejected, because an answer the app cannot check is not shown. Defaults to the registry.
+   */
+  viewSchemas?: ViewSchemas;
 };
 
 const DEFAULTS = { timeoutMs: 30_000, writeAttempts: 2, retryDelayMs: 300 };
@@ -45,6 +51,7 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">, opt
   const writeAttempts = Math.max(1, options.writeAttempts ?? DEFAULTS.writeAttempts);
   const retryDelayMs = options.retryDelayMs ?? DEFAULTS.retryDelayMs;
   const readSchema = readResponseSchema(z.unknown());
+  const schemas = options.viewSchemas ?? viewSchemas;
 
   async function exchange(req: TransportRequest, callerSignal: AbortSignal | undefined): Promise<unknown> {
     const attempts = isWrite(req.kind) ? writeAttempts : 1;
@@ -76,6 +83,14 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">, opt
       const res = parsed.data;
       if (res.requestId !== request.requestId) throw unreadable(request.requestId, false);
       if (!sameScope(res.scope, request.requestedScope)) throw scopeMismatch(request.requestId, false);
+      // Empty, denied and pending answers carry no data and nothing to check. Anything else must fit its view's schema.
+      if (res.data !== null && res.data !== undefined) {
+        const schema = schemas[request.viewKey];
+        if (!schema) throw unreadable(request.requestId, false);
+        const checked = schema.safeParse(res.data);
+        if (!checked.success) throw unreadable(request.requestId, false);
+        return { ...res, data: checked.data } as ReadResponse<T>;
+      }
       return res as ReadResponse<T>;
     },
 
