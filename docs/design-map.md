@@ -207,12 +207,9 @@ Owner THO-306, a development-only reference. Same capture settings and method as
 | Development footnote | None | "Development reference · these are examples of patterns, not live states" | The cards aren't real states |
 | `/design-system/states` in the nav | Automations highlighted | The same | Matches Figma; the route stays out of the menu |
 
-## Mobile and tablet Operations (12:653, 12:708): not built
+## Mobile and tablet Operations (12:653, 12:708)
 
-The native 390 and 1024 designs belong to `/operations`, which THO-301 owns in another session, so they are not built here. Two parts do not need that page, and neither is built either:
-
-- **Shell.** Both designs collapse the shell: at 390 the navigation is replaced by a "Menu" button, and at 1024 it ends in "More". Doing that changes how every screen is reached on narrow screens, and several existing browser tests click the primary navigation at 390. It needs Kevon's decision and a pass over those tests, so it is left as the current wrapping header (an implementation adaptation noted above).
-- **Content.** The mobile layout stacks KPI cards two across, "Ship next" cards each ending in "View source record", a stock warning card with "View transfer", and a refresh footnote. The tablet layout is a three-card KPI row, a table, and a stock and exceptions pair.
+The native 390 and 1024 Operations designs are built with `/operations` under THO-301 (see "Operations comparison" below), not under THO-306. The shell part is still open: both designs collapse the navigation ("Menu" at 390, "More" at 1024), which would change how every screen is reached on narrow screens, and several existing browser tests click the primary navigation at 390. It needs Kevon's decision, so the shell still wraps, and the Operations comparison below attributes most of its remaining difference to that.
 
 `e2e/responsive.spec.ts` checks the screens built under THO-304, THO-305 and THO-306 at 390, 720 (200% zoom of 1440), 768, 1024 and 1920px for page overflow, a visible H1, and a table that scrolls inside a labeled region.
 
