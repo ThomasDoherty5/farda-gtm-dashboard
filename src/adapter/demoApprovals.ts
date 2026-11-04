@@ -27,7 +27,18 @@ const countItems = (items: RunItem[]): RunCounts => {
  */
 const isHistoricalLiability = (v: { policyVersion: string }) => v.policyVersion.startsWith("historical-liability");
 
-export function createDemoApprovals(opts: { actorRole?: string; /** Test seam: replaces the seeded approvals. */ approvals?: ApprovalDetail[] } = {}) {
+export function createDemoApprovals(
+  opts: {
+    actorRole?: string;
+    /** Test seam: replaces the seeded approvals. */
+    approvals?: ApprovalDetail[];
+    /** Runs when a dispatch is about to execute for the first time. It is skipped for a replay and for an approval that already ran. */
+    beforeDispatch?: (request: ActionRequest<unknown>) => void;
+    /** Runs when an approval is granted, so a policy layer can remember what was in force. */
+    onApproved?: (approvalRef: string) => void;
+  } = {},
+) {
+  const hooks = opts;
   const actorRole = opts.actorRole ?? DEMO_ACTOR_ROLE;
   /** A founder holds every role's authority. Nobody else can decide above their role. */
   const canDecide = (required: string) => actorRole === required || actorRole === "founder";
@@ -151,6 +162,7 @@ export function createDemoApprovals(opts: { actorRole?: string; /** Test seam: r
     current.reason = reasonText || null;
     current.decisionReceiptRef = `demo-decision-receipt-${a.approvalRef}-${current.version}`;
     a.status = decision;
+    if (decision === "approved") hooks.onApproved?.(a.approvalRef);
     if (decision === "rejected") return actionResponse(request, "canceled", { receiptRefs: [current.decisionReceiptRef] });
     // The contract has no "approved" state. Blocked-awaiting-dispatch is the closest truthful one; raised for the THO-283 freeze.
     return actionResponse(request, "blocked", {
@@ -164,6 +176,7 @@ export function createDemoApprovals(opts: { actorRole?: string; /** Test seam: r
     if (a.status !== "approved") fail("APPROVAL_REQUIRED", "This action has no valid approval.", request.requestId);
     expectVersion(request, a.currentVersion);
     if (a.execution) return actionResponse(request, a.execution.state, { runRef: a.execution.runRef, receiptRefs: a.execution.receiptRefs });
+    hooks.beforeDispatch?.(request);
 
     stats.dispatches += 1;
     const recipient = a.versions[a.versions.length - 1]!.payload.recipients[0]!;
@@ -245,6 +258,10 @@ export function createDemoApprovals(opts: { actorRole?: string; /** Test seam: r
       if (approvalId === "demo-approval-forbidden") fail("FORBIDDEN", "You do not have access to this approval.", request.requestId);
       const a = approvals.get(approvalId) ?? fail("RECORD_NOT_FOUND", "This approval does not exist or was removed.", request.requestId);
       return respond(request, structuredClone(a), a.currentVersion, approvalCapabilities(a));
+    },
+    /** A copy of an approval for internal checks. Throws RECORD_NOT_FOUND when there is none. */
+    peekApproval(approvalRef: string, requestId: string): ApprovalDetail {
+      return structuredClone(approvals.get(approvalRef) ?? fail("RECORD_NOT_FOUND", "This approval does not exist.", requestId));
     },
     readRun(request: ReadRequest<{ runId: string }>) {
       const r = runs.get(request.filters.runId) ?? fail("RECORD_NOT_FOUND", "This run does not exist or was removed.", request.requestId);
