@@ -57,12 +57,19 @@ test("the real agent persists its assessment and the existing evidence screen re
   const machine = await apiRequest.newContext({ baseURL: service, extraHTTPHeaders: { authorization: `Bearer ${reviewer}` } });
   try {
     const packet = syntheticAgentEvidence({ creatorId, evidenceRevision: "synthetic-browser-evidence-1", ratings: { routine: 0, demo: 4 } });
-    const seeded = await machine.put(`/v1/creators/${creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash: null, packet } });
+    const capabilities = await machine.get("/v1/capabilities");
+    expect(capabilities.status()).toBe(200);
+    const available = await capabilities.json() as { models: { modelId: string; configHash: string | null }[] };
+    const configHash = available.models.find((model) => model.modelId === "WEBSITE-AFFILIATE-v3")?.configHash;
+    expect(configHash).toBe("048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6");
+    const seeded = await machine.put(`/v1/creators/${creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash, packet } });
     expect(seeded.status()).toBe(200);
     const receipt = await seeded.json();
     expect(receipt.runId).toMatch(/^[0-9a-f-]{36}$/);
     expect(receipt.assessment.criteria.routine).toBe(0);
-    expect(receipt.assessment.config.status).toBe("unbound");
+    expect(receipt.assessment.config).toMatchObject({ status: "bound", version: "2026-11-04.launch-v1", hash: configHash });
+    expect(receipt.assessment.state).toBe("hold");
+    expect(receipt.assessment.score.total).toBeNull(); // No noncritical source proof or verified sales are supplied.
 
     const signIn = async () => {
       const answer = await context.request.get(`${service}/v1/session`, { headers: { authorization: `Basic ${Buffer.from(`reader:${reader}`).toString("base64")}` } });
@@ -82,13 +89,17 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(envelope.data.agentEvidence.creatorId).toBe(creatorId);
     await expect(page.getByTestId("metric-Routine compatibility")).toHaveText("0 / 5");
     await expect(page.getByTestId("metric-Creative quality")).toHaveText("4 / 5");
-    await expect(page.getByTestId("metric-Published model")).toHaveText("Pending");
+    await expect(page.getByTestId("metric-Published model")).toHaveText("Bound");
     await expect(page.getByTestId("metric-Commerce confidence")).toHaveText("Unknown");
     await expect(page.getByRole("button", { name: "Mark watched" }).first()).toHaveAttribute("aria-disabled", "true");
     await page.getByRole("button", { name: "Inspect model status" }).click();
     const dialog = page.getByRole("dialog", { name: "Model status" });
     await expect(dialog.getByTestId("agent-qualification")).toContainText("Hold");
     await expect(dialog.getByRole("region", { name: "Agent assessment versions" })).toContainText(POLICY_VERSION);
+    await expect(dialog.getByRole("region", { name: "Agent assessment versions" })).toContainText("2026-11-04.launch-v1");
+    await expect(dialog.getByRole("region", { name: "Bound current criterion weights" })).toContainText("Contextual / routine fit");
+    await expect(dialog.getByRole("region", { name: "Bound current criterion weights" })).toContainText("25%");
+    await expect(dialog.getByRole("region", { name: "Bound current aggregate bands" })).toContainText("priorityReview");
     await expect(dialog.getByRole("region", { name: "Server-selected recent metadata baseline" })).toContainText("40 · exact");
     await expect(dialog.getByRole("region", { name: `Observed comment rows ${evidenceId}` })).toContainText("Prompted keyword");
     await expect(dialog.getByRole("region", { name: "Server video review provenance" })).toContainText("3 sampled points · 0s continuous coverage");
@@ -98,7 +109,7 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(afterRead.runId).toBe(receipt.runId);
     expect(afterRead.revision).toBe(1);
     const receiptPath = testInfo.outputPath("actual-agent-receipt.json");
-    writeFileSync(receiptPath, JSON.stringify({ runId: receipt.runId, revision: receipt.revision, evidenceRevision: packet.evidenceRevision, policyVersion: POLICY_VERSION, configStatus: receipt.assessment.config.status, workspaceId, accountId, source: "actual Node/SQLite service with synthetic reviewed evidence" }, null, 2));
+    writeFileSync(receiptPath, JSON.stringify({ runId: receipt.runId, revision: receipt.revision, evidenceRevision: packet.evidenceRevision, policyVersion: POLICY_VERSION, configStatus: receipt.assessment.config.status, configVersion: receipt.assessment.config.version, configHash, baselineHash: receipt.assessment.config.baselineHash, numericHash: receipt.assessment.config.numericHash, score: receipt.assessment.score.total, state: receipt.assessment.state, workspaceId, accountId, source: "actual Node/SQLite service with synthetic reviewed evidence" }, null, 2));
     await testInfo.attach("actual-agent-receipt", { contentType: "application/json", path: receiptPath });
     console.info(`Actual agent sandbox receipt: ${receipt.runId}; revision ${receipt.revision}; policy ${POLICY_VERSION}.`);
 
