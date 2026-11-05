@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReadOptions } from "@/adapter/adapter";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
+import { readShippingHub } from "@/adapter/demoShippingHub";
 import type { ReadRequest, ReadResponse } from "@/adapter/contract";
-import { renderRoute } from "@/test/renderWithAdapter";
+import { renderRoute, scriptedAdapter } from "@/test/renderWithAdapter";
 import type { ShippingHubData } from "./types";
 
 const path = "/operations?view=hub";
@@ -40,6 +41,54 @@ describe("unified shipping hub", () => {
     expect(await screen.findByRole("region", { name: "Approval draft preview", hidden: true })).toHaveTextContent("Draft preview · not submitted");
     expect(submit).not.toHaveBeenCalled();
   });
+  it("keeps duplicate tracking holds when the sibling parcel is filtered out", async () => {
+    const user = userEvent.setup();
+    renderRoute(`${path}&scenario=edge&ship-query=DEMO-SHIP-1043-P1`, createDemoAdapter());
+    const table = await screen.findByRole("table", { name: "Shared shipment queue" });
+    expect(within(table).getAllByRole("row")).toHaveLength(2);
+    expect(screen.getByTestId("hub-ready").closest("dl")).toHaveTextContent("0 reviewable · 1 held");
+    await user.click(within(table).getByRole("checkbox", { name: "Select DEMO-SHIP-1043-P1" }));
+    await user.click(screen.getByRole("button", { name: "Review 1 selected" }));
+    expect(screen.getByText("1 selected · 0 reviewable · 1 blocked", { selector: "h3" })).toBeInTheDocument();
+    expect(screen.getByText(/Tracking identity is shared by multiple parcels/)).toBeInTheDocument();
+  });
+  it("advances live ETA and quote displays, details and filters without another source read", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-11-04T18:42:00.000Z"));
+    try {
+      const user = userEvent.setup();
+      const scripted = scriptedAdapter(async request => {
+        const result = readShippingHub(request) as ReadResponse<ShippingHubData> | null;
+        if (!result?.data) throw new Error("Expected a scripted shipping read");
+        result.data.shipments.find(s => s.id === "DEMO-SHIP-1041")!.eta = "2026-11-04T18:42:10.000Z";
+        result.data.shipments.find(s => s.id === "DEMO-SHIP-1042")!.quote!.expiresAt = "2026-11-04T18:42:10.000Z";
+        return result;
+      }, "live");
+      const adapter = { ...scripted, environment: "sandbox" as const };
+      const router = renderRoute(path, adapter);
+      await screen.findByRole("table", { name: "Shared shipment queue" });
+      expect(within(screen.getByTestId("hub-late")).getByText("0", { exact: true })).toBeInTheDocument();
+      const ready = screen.getByTestId("shipment-DEMO-SHIP-1042");
+      expect(ready).toHaveTextContent("Valid until 10:42 PT");
+      await user.click(within(ready).getByRole("button", { name: "Review label proposal" }));
+      const detail = screen.getByText("Shipment details", { selector: "h2" }).closest("dialog")!;
+      expect(detail).toHaveTextContent("Valid until 10:42 PT");
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(within(screen.getByTestId("hub-late")).getByText("1", { exact: true })).toBeInTheDocument();
+      expect(screen.getByTestId("shipment-DEMO-SHIP-1041")).toHaveTextContent("ETA Nov 4 · late");
+      expect(ready).toHaveTextContent("Expired");
+      expect(detail).toHaveTextContent("Expired");
+      await user.click(within(detail).getByRole("button", { name: "Close Shipment details", hidden: true }));
+      await act(() => router.navigate(`${path}&ship-date=late`));
+      const filtered = screen.getByRole("table", { name: "Shared shipment queue" });
+      expect(within(filtered).getAllByRole("row")).toHaveLength(2);
+      expect(within(filtered).getByText("Customer · C-1041")).toBeInTheDocument();
+      expect(adapter.calls.filter(r => r.viewKey === "shippingHub")).toHaveLength(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
   it("refresh invalidates the selected proposal when source capability changes", async () => {
     const user = userEvent.setup(); const adapter = createDemoAdapter(); const original = adapter.readView.bind(adapter); let changed = false;
     adapter.readView = (async (request: ReadRequest<unknown>, options?: ReadOptions) => {
@@ -63,6 +112,25 @@ describe("unified shipping hub", () => {
     expect(await screen.findByText("Posting deadline · read-only")).toBeInTheDocument();
     expect(screen.getByText(/DEMO-CLOCK-C020/)).toBeInTheDocument();
     expect(screen.getByText(/no commerce order/)).toBeInTheDocument();
+  });
+  it.each([
+    { timezone: "America/New_York", dueAt: "2026-11-12T01:00:00.000Z", expected: "Nov 11, 8:00 PM · America/New_York", day: "Nov 11" },
+    { timezone: "America/New_York", dueAt: "2026-11-12T05:30:00.000Z", expected: "Nov 12, 12:30 AM · America/New_York", day: "Nov 12" },
+    { timezone: "Mars/Olympus", dueAt: "2026-11-12T01:00:00.000Z", expected: "Nov 12, 1:00 AM · UTC (unrecognized source timezone: Mars/Olympus)", day: "Nov 12 · UTC" },
+  ])("labels the posting deadline truthfully for $timezone", async ({ timezone, dueAt, expected, day }) => {
+    const user = userEvent.setup();
+    const adapter = scriptedAdapter(async request => {
+      const result = readShippingHub(request) as ReadResponse<ShippingHubData> | null;
+      if (!result?.data) throw new Error("Expected a scripted shipping read");
+      const posting = result.data.shipments.find(s => s.postingClock)!.postingClock!;
+      posting.timezone = timezone;
+      posting.dueAt = dueAt;
+      return result;
+    });
+    renderRoute(path, adapter);
+    await user.click(await screen.findByRole("button", { name: "Open creator details" }));
+    expect(screen.getByText(/DEMO-CLOCK-C020/)).toHaveTextContent(expected);
+    expect(screen.getByTestId("shipment-DEMO-SHIP-C020")).toHaveTextContent(`Posting due ${day}`);
   });
   it("an unknown label outcome exposes reconciliation rather than another purchase", async () => {
     const user = userEvent.setup(); renderRoute(`${path}&scenario=edge`, createDemoAdapter());
