@@ -254,8 +254,8 @@ function QualificationDetails({ assessment: a, packet }: { assessment: NonNullab
       ["Evidence revision", a.evidenceRevision], ["Terms revision", a.termsRevision],
     ]} />
     {a.configuration ? <>
-      <DataTable caption="Bound current criterion weights" columns={[{ label: "Criterion / ID" }, { label: "Unchanged weight" }, { label: "Server rating" }]} rows={a.configuration.criteria.map((criterion) => [
-        `${criterion.label} · ${criterion.id}`, `${criterion.weight}%`, rating(criterion.rating),
+      <DataTable caption="Bound current criterion weights" columns={[{ label: "Criterion / ID" }, { label: "Unchanged weight" }, { label: "Server rating" }, { label: "Evidence" }]} rows={a.configuration.criteria.map((criterion) => [
+        `${criterion.label} · ${criterion.id}`, `${criterion.weight}%`, rating(criterion.rating), packet?.criterionEvidenceRefs?.[criterion.id]?.join(", ") || "No criterion-specific refs returned; see source packet",
       ])} />
       <DataTable caption="Bound current aggregate bands" columns={[{ label: "Band" }, { label: "Approved minimum" }]} rows={a.configuration.bands.map((band) => [band.id, band.min])} />
       <p className={styles.small}>Bound arithmetic: {a.configuration.arithmetic}. Values are the server's immutable configuration; this screen cannot change or publish them.</p>

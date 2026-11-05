@@ -195,6 +195,10 @@ describe("immutable current configuration binding", () => {
     expect(result.score).toMatchObject({ earned: 48, total: null, unknownCount: 1, band: null });
     const packet = syntheticPacket();
     packet.criterionRatings["synthetic-extra"] = 4;
+    const unsupported = assessCreator(packet, binding);
+    expect(unsupported.score).toMatchObject({ earned: 48, total: null, unknownCount: 1 });
+    expect(unsupported.configuration?.criteria.find((criterion) => criterion.id === "synthetic-extra")?.rating).toBeNull();
+    packet.criterionEvidenceRefs["synthetic-extra"] = ["synthetic:extra-criterion-proof"];
     expect(assessCreator(packet, binding).score?.total).toBe(64);
   });
 
@@ -208,6 +212,26 @@ describe("immutable current configuration binding", () => {
     expect(incomplete.state).toBe("prospectiveInviteEligible");
     expect(incomplete.reasonCodes).toContain("ACTIVATION_NUMERIC_RULES");
     packet.criterionRatings["synthetic-extra"] = 4;
+    expect(assessCreator(packet, binding).state).toBe("prospectiveInviteEligible");
+    packet.criterionEvidenceRefs["synthetic-extra"] = ["synthetic:extra-criterion-proof"];
     expect(assessCreator(packet, binding).state).toBe("activationReady");
+  });
+
+  it("excludes unsupported noncritical numbers from the bound coverage rule without changing their weights", () => {
+    const config = syntheticConfig();
+    config.criteria = [{ ...config.criteria[0]!, weight: 31 }, { ...config.criteria[1]!, weight: 49 }, { id: "synthetic-extra", label: "Synthetic extra criterion", weight: 20 }];
+    config.decisionRules!.minCoveragePct = 100;
+    const binding = bindConfig(config, config, digest(config));
+    const packet = syntheticPacket();
+    packet.criterionRatings["synthetic-extra"] = 0;
+    const unsupported = assessCreator(packet, binding);
+    expect(unsupported.state).toBe("reviewNeeded");
+    expect(unsupported.reasonCodes).toContain("INVITE_NUMERIC_RULES");
+    expect(unsupported.configuration?.criteria.find((criterion) => criterion.id === "synthetic-extra")).toMatchObject({ weight: 20, rating: null });
+    packet.criterionEvidenceRefs["synthetic-extra"] = ["synthetic:verified-zero-rating-proof"];
+    const supported = assessCreator(packet, binding);
+    expect(supported.state).toBe("prospectiveInviteEligible");
+    expect(supported.score).toMatchObject({ total: 48, unknownCount: 0 });
+    expect(supported.configuration?.criteria.find((criterion) => criterion.id === "synthetic-extra")).toMatchObject({ weight: 20, rating: 0 });
   });
 });

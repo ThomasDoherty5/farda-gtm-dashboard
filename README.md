@@ -81,4 +81,4 @@ node scripts/compare-figma.mjs /overview .handoff/figma/overview-10-217.png   # 
 
 ## Creator agent
 
-The persistent reviewed-evidence runtime is separate from the demo/reference server. See [runtime operations, configuration and Zapier connection](docs/creator-agent.md). Run `npm run creator-agent` with server-only credentials and scope. Without an approved immutable weight binding, numerical scoring stays unbound; historical fixtures are never used as a fallback.
+The persistent reviewed-evidence runtime is separate from the demo/reference server. See [runtime operations, configuration and Zapier connection](docs/creator-agent.md). Run `npm run creator-agent` with server-only credentials and scope. The launcher loads the owner-approved immutable launch weight bindings by default; explicit unbound instances remain unknown and historical fixtures are never a fallback.

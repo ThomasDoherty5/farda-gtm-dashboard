@@ -158,6 +158,8 @@ const packetShapeSchema = z.object({
   ratings: z.object({ routine: rating, demo: rating }).strict(),
   /** Extra configured criteria remain absent/unknown unless supplied; these never invent missing weights. */
   criterionRatings: z.record(id, rating).default({}),
+  /** Noncritical ratings count only alongside source-linked evidence, never as unsupported numbers. */
+  criterionEvidenceRefs: z.record(id, z.array(sourceRef).min(1)).default({}),
   invitationGates: z.array(gateSchema).max(100),
   activationGates: z.array(gateSchema).max(100),
 }).strict().superRefine((packet, ctx) => {

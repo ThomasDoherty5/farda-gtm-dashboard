@@ -6,6 +6,7 @@ import { evidencePacketSchema } from "./evidence.ts";
 import type { ConfigBinding } from "./config.ts";
 import { AGENT_SCHEMA_VERSION, POLICY_VERSION, AGENT_VERSION } from "./assessmentSchema.ts";
 import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
+import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
 
@@ -81,6 +82,7 @@ export function createAgentServer(options: AgentServerOptions) {
         if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== auth.session.csrf)
           return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "notApplied" });
       }
+      if (path === "/v1/policy" && req.method === "GET") return reply(res, 200, ratingPolicy);
       if (path === "/v1/capabilities" && req.method === "GET") return reply(res, 200, {
         schemaVersion: AGENT_SCHEMA_VERSION, policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION,
         storageSchema: 1, environment: "sandbox", mode: "reviewedEvidence", sourceAutomation: "notConnected",
@@ -114,7 +116,7 @@ export function createAgentServer(options: AgentServerOptions) {
         const data = {
           evidenceRef: first.postId, creatorHandle: record.packet.creatorId, version: `v${record.revision}`, mediaUrl: first.sourceUrl, checkoutRoute: record.packet.checkoutRoute,
           observations: [], savedAt: record.recordedAt, reviewerRole: "Authenticated evidence reviewer",
-          modelPublication: { label: record.assessment.config.status === "bound" ? record.assessment.config.version : "Configuration unbound", note: "Approved evidence policy is implemented; numeric baseline must be explicitly bound." },
+          modelPublication: { label: record.assessment.config.status === "bound" ? record.assessment.config.version : "Configuration unbound", note: record.assessment.config.status === "bound" ? "Approved immutable baseline verified; numerical configuration preserved." : "Approved evidence policy is implemented; numeric baseline must be explicitly bound." },
           assessments: { creative: unknown("NO_CREATIVE_WEIGHT_BINDING"), routine: unknown("SEE_AGENT_QUALIFICATION"), commerce: unknown("NO_VERIFIED_ORDER_EVIDENCE") },
           firstReview: null, disputes: [], readiness: { state: "notReady", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] },
           qualification: record.assessment, agentEvidence: record.packet,

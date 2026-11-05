@@ -386,14 +386,19 @@ export async function startReferenceServer(options: ReferenceServerOptions = {})
     return reply;
   };
 
-  const sessionReply = (session: Session) =>
-    new Reply(200, {
-      principal: { id: session.user.id, displayName: session.user.displayName, role: session.user.role },
+  const sessionReply = (session: Session) => {
+    const grant = session.user.grants.find((g) => g.workspaceId && g.accountIds.length > 0);
+    return new Reply(200, {
+      referenceServer: true,
+      principal: session.user.id,
+      referencePrincipal: { id: session.user.id, displayName: session.user.displayName, role: session.user.role },
+      scope: grant ? { workspaceId: grant.workspaceId, accountIds: grant.accountIds, environment, authorizationScopeVersion: "reference-scope-v1" } : null,
       allowedScopes: session.user.grants.map((g) => ({ workspaceId: g.workspaceId, accountIds: g.accountIds, environment })),
       csrfToken: session.csrf,
       expiresAt: new Date(session.createdAt + SESSION_LIFETIME_MS).toISOString(),
       idleExpiresAt: new Date(session.lastSeenAt + SESSION_IDLE_MS).toISOString(),
     });
+  };
 
   const signIn = (url: URL, body: Record<string, unknown> | null): Reply => {
     const wanted = body && typeof body.user === "string" ? body.user : url.searchParams.get("user");

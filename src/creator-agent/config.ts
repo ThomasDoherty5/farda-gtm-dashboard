@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 
-/** No production weights ship in this repository. A binding must carry an independently pinned digest. */
+/** Approved baseline files and private overrides both require an immutable, pinned numeric binding. */
 const criterion = z.object({ id: z.string().min(1), label: z.string().min(1), weight: z.number().finite().positive().max(100) }).strict();
 export const modelConfigSchema = z.object({
   modelId: z.enum(["WEBSITE-AFFILIATE-v3", "TIKTOK-SHOP-AFFILIATE-v3"]),
@@ -50,4 +51,10 @@ export function loadBindings(path: string | undefined): ConfigBinding[] {
   const bindings = input.map((x) => bindConfig(x.current, x.baseline, x.expectedBaselineHash));
   if (new Set(bindings.map((b) => b.current.modelId)).size !== bindings.length) throw new Error("DUPLICATE_MODEL_BINDING");
   return bindings;
+}
+
+/** First owner-approved launch baselines. Explicit overrides still go through the same immutable validator. */
+export function loadApprovedBindings(): ConfigBinding[] {
+  return ["website-affiliate-v3.2026-11-04.json", "tiktok-shop-affiliate-v3.2026-11-04.json"]
+    .flatMap((name) => loadBindings(fileURLToPath(new URL(`./configurations/${name}`, import.meta.url))));
 }

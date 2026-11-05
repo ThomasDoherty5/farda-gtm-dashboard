@@ -1,0 +1,125 @@
+[
+  {
+    "current": {
+      "modelId": "TIKTOK-SHOP-AFFILIATE-v3",
+      "version": "2026-11-04.launch-v1",
+      "approvalRef": "https://linear.app/thomas-doherty/document/creator-scorecards-approved-v3-baseline-2026-11-04-6e0addc459fd",
+      "baselineUri": "https://github.com/ThomasDoherty5/farda-gtm-dashboard/blob/scorecards-v3-2026-11-04-v1/src/creator-agent/configurations/tiktok-shop-affiliate-v3.2026-11-04.json",
+      "criteria": [
+        {
+          "id": "routineFit",
+          "label": "Contextual / routine fit",
+          "weight": 25
+        },
+        {
+          "id": "demonstrationStorytelling",
+          "label": "Demonstration / storytelling",
+          "weight": 20
+        },
+        {
+          "id": "verifiedCommerce",
+          "label": "Verified comparable commerce",
+          "weight": 20
+        },
+        {
+          "id": "audienceAlignment",
+          "label": "Audience alignment",
+          "weight": 15
+        },
+        {
+          "id": "reliability",
+          "label": "Collaboration reliability",
+          "weight": 10
+        },
+        {
+          "id": "offerEconomics",
+          "label": "Offer economics",
+          "weight": 10
+        }
+      ],
+      "routineCriterionId": "routineFit",
+      "demoCriterionId": "demonstrationStorytelling",
+      "arithmetic": "weight*rating/5;round-complete-total;no-rescaling",
+      "decisionRules": {
+        "invitationMinScore": null,
+        "activationMinScore": 80,
+        "minCoveragePct": 0
+      },
+      "bands": [
+        {
+          "id": "hold",
+          "min": 0
+        },
+        {
+          "id": "manualReview",
+          "min": 65
+        },
+        {
+          "id": "priorityReview",
+          "min": 80
+        }
+      ]
+    },
+    "baseline": {
+      "modelId": "TIKTOK-SHOP-AFFILIATE-v3",
+      "version": "2026-11-04.launch-v1",
+      "approvalRef": "https://linear.app/thomas-doherty/document/creator-scorecards-approved-v3-baseline-2026-11-04-6e0addc459fd",
+      "baselineUri": "https://github.com/ThomasDoherty5/farda-gtm-dashboard/blob/scorecards-v3-2026-11-04-v1/src/creator-agent/configurations/tiktok-shop-affiliate-v3.2026-11-04.json",
+      "criteria": [
+        {
+          "id": "routineFit",
+          "label": "Contextual / routine fit",
+          "weight": 25
+        },
+        {
+          "id": "demonstrationStorytelling",
+          "label": "Demonstration / storytelling",
+          "weight": 20
+        },
+        {
+          "id": "verifiedCommerce",
+          "label": "Verified comparable commerce",
+          "weight": 20
+        },
+        {
+          "id": "audienceAlignment",
+          "label": "Audience alignment",
+          "weight": 15
+        },
+        {
+          "id": "reliability",
+          "label": "Collaboration reliability",
+          "weight": 10
+        },
+        {
+          "id": "offerEconomics",
+          "label": "Offer economics",
+          "weight": 10
+        }
+      ],
+      "routineCriterionId": "routineFit",
+      "demoCriterionId": "demonstrationStorytelling",
+      "arithmetic": "weight*rating/5;round-complete-total;no-rescaling",
+      "decisionRules": {
+        "invitationMinScore": null,
+        "activationMinScore": 80,
+        "minCoveragePct": 0
+      },
+      "bands": [
+        {
+          "id": "hold",
+          "min": 0
+        },
+        {
+          "id": "manualReview",
+          "min": 65
+        },
+        {
+          "id": "priorityReview",
+          "min": 80
+        }
+      ]
+    },
+    "expectedBaselineHash": "27749895dd5e81032ad1bb569c7f91cc08b24c6e9079c906c8160ce8e8eff808"
+  }
+]

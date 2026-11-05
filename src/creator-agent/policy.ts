@@ -2,12 +2,20 @@ import { creatorAssessmentSchema, POLICY_VERSION, AGENT_VERSION, AGENT_SCHEMA_VE
 import type { CreatorAssessment } from "./assessmentSchema.ts";
 import { deriveCommentStats, deriveMetadataBaseline } from "./evidence.ts";
 import type { EvidencePacket, PostEvidence } from "./evidence.ts";
-import type { ConfigBinding } from "./config.ts";
+import type { ConfigBinding, ModelConfig } from "./config.ts";
 import { scoreOf } from "../features/scorecards/scorecardMath.ts";
 
 export const MODEL_FOR_ROUTE = { website: "WEBSITE-AFFILIATE-v3", "tiktok-shop": "TIKTOK-SHOP-AFFILIATE-v3" } as const;
 export function likeGate(post: PostEvidence): "pass" | "fail" | "unknown" {
   return post.nativeLikes.status !== "known" || !post.nativeLikes.exact ? "unknown" : post.nativeLikes.value > 200 ? "pass" : "fail";
+}
+/** Critical ratings use the reviewed post packet; every other numeric rating needs its own source proof. */
+export function configuredRating(packet: EvidencePacket, config: ModelConfig, criterionId: string): number | null {
+  if (criterionId === config.routineCriterionId) return packet.ratings.routine;
+  if (criterionId === config.demoCriterionId) return packet.ratings.demo;
+  const refs = packet.criterionEvidenceRefs?.[criterionId];
+  if (!refs?.length || refs.some((ref) => !ref.trim())) return null;
+  return packet.criterionRatings[criterionId] ?? null;
 }
 function secondsOf(intervals: { startSec: number; endSec: number }[]): number {
   let end = 0, total = 0;
@@ -66,13 +74,13 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   let score: CreatorAssessment["score"] = null;
   if (binding) {
     const c = binding.current;
-    const rows = c.criteria.map((criterion) => ({ ...criterion, rating: criterion.id === c.routineCriterionId ? packet.ratings.routine : criterion.id === c.demoCriterionId ? packet.ratings.demo : packet.criterionRatings[criterion.id] ?? null }));
+    const rows = c.criteria.map((criterion) => ({ ...criterion, rating: configuredRating(packet, c, criterion.id) }));
     const numeric = scoreOf(rows);
     score = { earned: numeric.earned, max: numeric.max, total: numeric.total, unknownCount: numeric.unknownCount, band: numeric.total === null ? null : [...c.bands].sort((a, b) => b.min - a.min).find((b) => numeric.total! >= b.min)?.id ?? null };
   }
   // Numeric readiness is governed only by explicit bound rules, never guessed from a band's label.
   const rules = binding?.current.decisionRules;
-  const rowsForCoverage = binding?.current.criteria.map((c) => ({ weight: c.weight, rating: c.id === binding.current.routineCriterionId ? packet.ratings.routine : c.id === binding.current.demoCriterionId ? packet.ratings.demo : packet.criterionRatings[c.id] ?? null })) ?? [];
+  const rowsForCoverage = binding?.current.criteria.map((c) => ({ weight: c.weight, rating: configuredRating(packet, binding.current, c.id) })) ?? [];
   const coverage = rowsForCoverage.reduce((sum, c) => sum + (c.rating === null ? 0 : c.weight), 0);
   if (!rules) {
     add("DECISION_RULES_BOUND", "unknown", "No approved numeric stage/coverage decision rules are bound");
@@ -90,7 +98,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
     schemaVersion: AGENT_SCHEMA_VERSION, policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION,
     creatorId: packet.creatorId, briefId: packet.briefId, evidenceRevision: packet.evidenceRevision, termsRevision: packet.termsRevision, modelId,
     config: { status: binding ? "bound" : "unbound", version: binding?.current.version ?? null, hash: binding?.hash ?? null, baselineHash: binding?.baselineHash ?? null, numericHash: binding?.numericHash ?? null },
-    configuration: binding ? { criteria: binding.current.criteria.map((c) => ({ ...c, rating: c.id === binding.current.routineCriterionId ? packet.ratings.routine : c.id === binding.current.demoCriterionId ? packet.ratings.demo : packet.criterionRatings[c.id] ?? null })), bands: binding.current.bands, arithmetic: binding.current.arithmetic } : null,
+    configuration: binding ? { criteria: binding.current.criteria.map((c) => ({ ...c, rating: configuredRating(packet, binding.current, c.id) })), bands: binding.current.bands, arithmetic: binding.current.arithmetic } : null,
     state, contentQualification, gates, packet: { qualifyingPosts: posts.length, publicationDates: dates.size, meaningfulUsePosts: usePosts.length, postIds: posts.map((p) => p.postId) }, criteria: packet.ratings, score,
     metadata: { sampleSize: baseline.selected.length, coverage: baseline.coverage, reasonCodes: baseline.coverageReasons, postIds: baseline.selected.map((p) => p.postId), medianViews: baseline.viewStats.median, minViews: baseline.viewStats.min, maxViews: baseline.viewStats.max, comparableViewCount: baseline.viewStats.knownCount },
     comments, reviews: packet.posts.map((p) => ({ postId: p.postId, status: p.review.status, visualMethod: p.review.visualMethod, audioMethod: p.review.audioMethod, sampledPointCount: p.review.sampledPoints.length, continuousSeconds: secondsOf(p.review.watchedIntervals), likeGate: likeGate(p) })),

@@ -55,7 +55,7 @@ export class AgentStore {
       if ((latest?.revision ?? 0) !== expectedVersion) throw new AgentConflict("VERSION_CONFLICT");
       // A revision label cannot be reused to conceal materially changed evidence or terms.
       if (latest) {
-        const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, invitationGates: p.invitationGates });
+        const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates });
         const termsDomain = (p: EvidencePacket) => p.activationGates;
         if (digest(evidenceDomain(latest.packet)) !== digest(evidenceDomain(packet)) && latest.packet.evidenceRevision === packet.evidenceRevision)
           throw new AgentConflict("EVIDENCE_REVISION_REUSED");
