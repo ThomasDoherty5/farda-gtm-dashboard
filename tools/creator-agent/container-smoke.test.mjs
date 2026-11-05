@@ -52,6 +52,13 @@ test("API container preserves authenticated synthetic evidence across restart an
   // Credentials are generated in memory, passed by environment name and never echoed or written to a file.
   const docker = (args, options = {}) => command("docker", args, { env, ...options });
   let origin;
+  const readPublishedOrigin = async () => {
+    const ports = JSON.parse((await docker(["inspect", "--format", "{{json .NetworkSettings.Ports}}", container])).stdout);
+    const binding = ports["8787/tcp"]?.[0];
+    assert.equal(binding?.HostIp, "127.0.0.1");
+    assert.match(binding.HostPort, /^\d+$/);
+    origin = `http://127.0.0.1:${binding.HostPort}`;
+  };
   const request = async (path, { token = env.FARDA_AGENT_READ_TOKEN, ...init } = {}) => {
     const headers = new Headers(init.headers);
     if (token !== null) headers.set("authorization", `Bearer ${token}`);
@@ -81,11 +88,7 @@ test("API container preserves authenticated synthetic evidence across restart an
       // This is private loopback CI with simulated TLS ingress configuration, not public HTTPS verification.
       "--env", "FARDA_AGENT_ORIGIN=https://agent.invalid", "--env", "FARDA_AGENT_SECURE_COOKIES=true",
       "--env", "PORT=8787", process.env.FARDA_CONTAINER_IMAGE ?? "farda-creator-agent:ci"]);
-    const ports = JSON.parse((await docker(["inspect", "--format", "{{json .NetworkSettings.Ports}}", container])).stdout);
-    const binding = ports["8787/tcp"]?.[0];
-    assert.equal(binding?.HostIp, "127.0.0.1");
-    assert.match(binding.HostPort, /^\d+$/);
-    origin = `http://127.0.0.1:${binding.HostPort}`;
+    await readPublishedOrigin();
     await waitHealthy();
     await docker(["exec", container, "node", "tools/creator-agent/healthcheck.mjs"]);
     assert.equal((await request("/v1/capabilities", { token: null })).status, 401);
@@ -124,6 +127,8 @@ test("API container preserves authenticated synthetic evidence across restart an
     assert.equal(replay.body.revision, 1);
 
     await docker(["restart", "--time", "10", container]);
+    // An ephemeral host publication may be allocated again when Docker starts the container.
+    await readPublishedOrigin();
     await waitHealthy();
     const persisted = await request(path);
     assert.equal(persisted.status, 200);
