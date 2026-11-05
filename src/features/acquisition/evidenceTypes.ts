@@ -4,6 +4,8 @@
  * THO-283 and THO-326 freeze the real schemas.
  */
 import type { ProvenanceValue } from "@/adapter/contract";
+import type { CreatorAssessment } from "@/creator-agent/assessmentSchema";
+import type { EvidencePacket } from "@/creator-agent/evidence";
 
 export type ObservationCategory = "hook" | "demonstration" | "framing" | "audio";
 export type Modality = "visual" | "audio";
@@ -73,6 +75,10 @@ export type EvidenceRecord = {
   firstReview: FirstReview | null;
   disputes: Dispute[];
   readiness: Readiness;
+  /** Optional server-owned current qualification; absent on historical/demo evidence and never inferred by this screen. */
+  qualification?: CreatorAssessment | null;
+  /** The source packet behind the assessment, kept distinct from the editable legacy partial-review draft. */
+  agentEvidence?: EvidencePacket | null;
 };
 
 /** What a save sends: the full desired draft. There is no "watched" field, by design. */

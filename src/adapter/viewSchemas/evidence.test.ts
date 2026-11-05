@@ -5,6 +5,7 @@ import { createDemoAdapter } from "../demoAdapter";
 import type { EvidenceDraft } from "@/features/acquisition/evidenceTypes";
 import { DEMO_EVIDENCE_PARTIAL_ID, DEMO_MEDIA_URL, seedEvidence } from "@/fixtures/evidence";
 import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
+import { syntheticAgentEvidence, syntheticQualification } from "@/test/creatorQualification";
 
 const [empty, partial] = seedEvidence() as [ReturnType<typeof seedEvidence>[number], ReturnType<typeof seedEvidence>[number]];
 const filters = (evidenceId: string) => ({ creatorId: DEMO_CREATOR_ID, evidenceId });
@@ -85,6 +86,26 @@ describe("evidence view schemas", () => {
 
     it("accepts the empty record with no media and no observations", () => {
       expect(schemas.evidenceRecord!.safeParse(empty).success).toBe(true);
+    });
+  });
+
+  describe("optional server-owned creator qualification", () => {
+    const current = () => ({ ...partial, qualification: syntheticQualification(), agentEvidence: syntheticAgentEvidence() });
+    it("preserves the actual typed server assessment and packet while historical records remain valid", () => {
+      expect(schemas.evidenceRecord!.parse(current())).toMatchObject({ qualification: syntheticQualification(), agentEvidence: syntheticAgentEvidence() });
+      expect(schemas.evidenceRecord!.parse(partial)).not.toHaveProperty("qualification");
+    });
+    it("rejects mismatched creator/evidence revisions and a checkout model from another packet", () => {
+      for (const over of [{ creatorId: "other-creator" }, { evidenceRevision: "other-revision" }, { termsRevision: "other-terms" }, { modelId: "TIKTOK-SHOP-AFFILIATE-v3" }]) {
+        const value = current();
+        expect(schemas.evidenceRecord!.safeParse({ ...value, qualification: { ...value.qualification, ...over } }).success).toBe(false);
+      }
+    });
+    it("refuses forged eligibility keys and sampled frames represented as continuous coverage", () => {
+      const value = current();
+      expect(schemas.evidenceRecord!.safeParse({ ...value, qualification: { ...value.qualification, eligible: true } }).success).toBe(false);
+      value.agentEvidence.posts[0]!.review.watchedIntervals = [{ startSec: 0, endSec: 12 }];
+      expect(schemas.evidenceRecord!.safeParse(value).success).toBe(false);
     });
   });
 });

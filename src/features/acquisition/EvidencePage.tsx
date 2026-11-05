@@ -57,6 +57,7 @@ export function EvidencePage() {
 }
 
 function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
+  const qualification = record.qualification;
   const [mediaUrl, setMediaUrl] = useState(record.mediaUrl ?? "");
   const [route, setRoute] = useState<CheckoutRoute>(record.checkoutRoute);
   const [observations, setObservations] = useState<Observation[]>(record.observations);
@@ -106,7 +107,7 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
       <div className={styles.titleRow}>
         <div className={styles.heading}>
           <h1 id="evidence-title">Watch the routine. Keep the evidence.</h1>
-          <p>Selected review · lifestyle-only Instagram or TikTok Shop footage · source access to validate</p>
+          <p>{qualification ? "Selected review · server-owned creator evidence · partial draft kept separate" : "Selected review · lifestyle-only Instagram or TikTok Shop footage · source access to validate"}</p>
         </div>
         <Button variant="secondary" style={{ minWidth: 180 }} loading={save.isPending} disabledReason={saveBlocked} onClick={onSave}>Save partial review</Button>
         <Button style={{ minWidth: 164 }} disabledReason={watchedBlocked} reasonFor={watchedReasonId}>Mark watched</Button>
@@ -153,10 +154,10 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
           </div>
           <SelectField label="Checkout route" helpText="Recruitment and publishing network remain independent." value={route} onChange={(v) => setRoute(v as CheckoutRoute)} options={ROUTES} />
           <div><Badge tone="violet" width={258} testId="model-badge">{MODEL_FOR_ROUTE[route]}</Badge></div>
-          <Kpi hug label="Published model" context={record.modelPublication.note} testId="metric-Published model">{record.modelPublication.label}</Kpi>
+          <Kpi hug label="Published model" context={qualification ? `${qualification.modelId} · configuration ${qualification.config.version ?? "Unknown"}` : "Current agent configuration not returned."} testId="metric-Published model">{qualification ? (qualification.config.status === "bound" ? "Bound" : "Pending") : record.modelPublication.label}</Kpi>
           <div className={styles.pairTight}>
-            <Kpi hug label="Creative quality" context="Actual framing, hook and story" testId="metric-Creative quality">{record.assessments.creative.state === "known" ? record.assessments.creative.value : "Unknown"}</Kpi>
-            <Kpi hug label="Routine compatibility" context="Observed product format + use" testId="metric-Routine compatibility">{record.assessments.routine.state === "known" ? record.assessments.routine.value : "Unknown"}</Kpi>
+            <Kpi hug label={qualification ? "Demonstration / story" : "Creative quality"} context={qualification ? "Agent rating · independent floor ≥3" : "Actual framing, hook and story"} testId="metric-Creative quality">{qualification ? rating(qualification.criteria.demo) : record.assessments.creative.state === "known" ? record.assessments.creative.value : "Unknown"}</Kpi>
+            <Kpi hug label="Routine compatibility" context={qualification ? "Agent rating · independent floor ≥3" : "Observed product format + use"} testId="metric-Routine compatibility">{qualification ? rating(qualification.criteria.routine) : record.assessments.routine.state === "known" ? record.assessments.routine.value : "Unknown"}</Kpi>
           </div>
           <Kpi hug label="Commerce confidence" context="Comparable attributed outcomes; views alone are not sales proof." testId="metric-Commerce confidence">{record.assessments.commerce.state === "known" ? record.assessments.commerce.value : "Unknown"}</Kpi>
           <p className={styles.small}>TikTok Shop checkout uses TIKTOK-SHOP-AFFILIATE-v3. Earlier 84/82/86 examples are prior proposed snapshots, not validated sales predictions.</p>
@@ -226,13 +227,100 @@ function Review({ res, record }: { res: Res; record: EvidenceRecord }) {
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>
-        <p>Checkout route: {ROUTE_LABEL[route]}. Current model: {MODEL_FOR_ROUTE[route]}. Publication: {record.modelPublication.label}. Version: none published.</p>
-        <p>{record.modelPublication.note} Weights stay unpublished until the lifestyle video research is complete (THO-286). Earlier v2 examples are historical and can't authorize new acquisition.</p>
+        {qualification ? <QualificationDetails assessment={qualification} packet={record.agentEvidence} /> : <>
+          <p>Checkout route: {ROUTE_LABEL[route]}. Current model: {MODEL_FOR_ROUTE[route]}. Publication: {record.modelPublication.label}. Version: not returned.</p>
+          <p>The evidence policy is approved. A current agent assessment and bound configuration have not been returned for this record. Earlier v2 snapshots remain historical and cannot authorize new acquisition.</p>
+        </>}
+        {qualification && <p className={styles.small}>This is the saved server assessment, independent of this partial-review draft. Editing the clip, route or observations here does not change its qualification or authorize an action.</p>}
         <p>Evidence coverage: visual {coverage(visual).toLowerCase()}, audio {coverage(audio).toLowerCase()}.</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
     </>
   );
+}
+
+const rating = (value: number | null) => value === null ? "Unknown" : `${value} / 5`;
+const known = (value: number | null) => value === null ? "Unknown" : value.toLocaleString("en-US");
+const decisionLabel = { reviewNeeded: "Review needed", hold: "Hold", prospectiveInviteEligible: "Prospective invite eligible", activationReady: "Activation ready" } as const;
+
+/** Renders the server result; this screen has no scoring, configuration publication or eligibility override. */
+function QualificationDetails({ assessment: a, packet }: { assessment: NonNullable<EvidenceRecord["qualification"]>; packet: EvidenceRecord["agentEvidence"] }) {
+  return <div className={styles.stack} data-testid="agent-qualification">
+    <p><Badge tone={a.state === "hold" ? "warning" : "violet"}>{decisionLabel[a.state]}</Badge> · Assigned brief: {a.briefId} · Content qualification: {a.contentQualification}</p>
+    <DataTable caption="Agent assessment versions" columns={[{ label: "Reference" }, { label: "Server value" }]} rows={[
+      ["Policy", a.policyVersion], ["Agent / schema", `${a.agentVersion} / ${a.schemaVersion}`], ["Model", a.modelId],
+      ["Configuration", `${a.config.status} · ${a.config.version ?? "Unknown"}`], ["Configuration hash", a.config.hash ?? "Unknown"],
+      ["Approved baseline hash", a.config.baselineHash ?? "Unknown"], ["Unchanged numerical configuration hash", a.config.numericHash ?? "Unknown"],
+      ["Evidence revision", a.evidenceRevision], ["Terms revision", a.termsRevision],
+    ]} />
+    {a.configuration ? <>
+      <DataTable caption="Bound current criterion weights" columns={[{ label: "Criterion / ID" }, { label: "Unchanged weight" }, { label: "Server rating" }]} rows={a.configuration.criteria.map((criterion) => [
+        `${criterion.label} · ${criterion.id}`, `${criterion.weight}%`, rating(criterion.rating),
+      ])} />
+      <DataTable caption="Bound current aggregate bands" columns={[{ label: "Band" }, { label: "Approved minimum" }]} rows={a.configuration.bands.map((band) => [band.id, band.min])} />
+      <p className={styles.small}>Bound arithmetic: {a.configuration.arithmetic}. Values are the server's immutable configuration; this screen cannot change or publish them.</p>
+    </> : <p className={styles.small}>Current weight and band tables not returned. Historical v2 values are not substituted.</p>}
+    <div className={styles.pairTight}>
+      <Kpi hug label="Qualifying posts" context={`${a.packet.publicationDates} publication dates · at least 2 required`}>{a.packet.qualifyingPosts} / 3</Kpi>
+      <Kpi hug label="Meaningful-use posts" context="At least 2 qualifying posts must support the assigned brief">{a.packet.meaningfulUsePosts} / 2</Kpi>
+    </div>
+    <DataTable caption="Server qualification gates" columns={[{ label: "Gate" }, { label: "State" }, { label: "Evidence / unresolved proof" }]} rows={a.gates.map((g) => [g.id, <Badge key={g.id} tone={g.state === "pass" ? "success" : g.state === "fail" ? "warning" : "neutral"}>{g.state}</Badge>, g.reason])} />
+    <p>Server score: {a.score ? `weighted ${known(a.score.earned)} / ${known(a.score.max)} · total ${known(a.score.total)} · band ${a.score.band ?? "Unknown"} · ${a.score.unknownCount} unknown criteria` : "Unknown — no bound current score returned"}. Existing weights and aggregate bands remain server-owned; no historical v2 fallback is applied.</p>
+    <DataTable caption="Metadata baseline summary" columns={[{ label: "Measure" }, { label: "Source-backed value" }]} rows={[
+      ["Recent unpinned coverage", `${a.metadata.sampleSize} / 10 · ${a.metadata.coverage}`], ["Comparable view rows", a.metadata.comparableViewCount],
+      ["Median views", known(a.metadata.medianViews)], ["View spread", `${known(a.metadata.minViews)}–${known(a.metadata.maxViews)}`],
+      ["Baseline post IDs", a.metadata.postIds.join(", ") || "None returned"], ["Baseline caveats", a.metadata.reasonCodes.join(", ") || "None reported"],
+    ]} />
+    <DataTable caption="Buyer response sampling summary" columns={[{ label: "Post / status" }, { label: "Observed rows / authors" }, { label: "Sampling and categories" }]} rows={a.comments.map((c) => [
+      `${c.postId} · ${c.status}`, `${known(c.rowCount)} rows · ${known(c.uniqueAuthors)} unique authors · ${known(c.unknownAuthorRows)} unknown-author rows`,
+      `${c.ordering ?? "Ordering unknown"} · ${known(c.promptedRows)} prompted · ${known(c.creatorRows)} creator · ${known(c.promotionalRows)} promotional · ${c.categoryCounts ? Object.entries(c.categoryCounts).map(([category, count]) => `${category}: ${count}`).join(", ") : "Categories unknown"}${c.reason ? ` · ${c.reason}` : ""}`,
+    ])} />
+    <DataTable caption="Server video review provenance" columns={[{ label: "Post / completion" }, { label: "Visual / audio method" }, { label: "Actual review coverage" }]} rows={a.reviews.map((r) => [
+      `${r.postId} · ${r.status} · like gate ${r.likeGate}`, `${r.visualMethod} / ${r.audioMethod}`, `${r.sampledPointCount} sampled points · ${r.continuousSeconds}s continuous coverage`,
+    ])} />
+    {packet ? <AgentEvidenceDetails assessment={a} packet={packet} /> : <p>Source packet not returned. Baseline rows, comment text and timestamped source observations remain unavailable.</p>}
+    <p className={styles.small}>Sampled points are not continuous watched intervals. Comment questions, prompted replies and reported ownership are not verified Farda orders. Missing audio/comments remain unknown.</p>
+    {a.reasonCodes.length > 0 && <p>Unresolved proof: {a.reasonCodes.join(", ")}</p>}
+  </div>;
+}
+
+const categoryLabel: Record<string, string> = {
+  generalReaction: "General reaction", routineApplication: "Routine application", productUnderstanding: "Product understanding",
+  practicalObjection: "Practical objection", purchaseEvaluation: "Purchase evaluation / source ask", promptedKeyword: "Prompted keyword",
+  selfReportedOwnership: "Reported ownership",
+};
+
+function AgentEvidenceDetails({ assessment, packet }: { assessment: NonNullable<EvidenceRecord["qualification"]>; packet: NonNullable<EvidenceRecord["agentEvidence"]> }) {
+  const nativeLikes = (likes: typeof packet.recentPosts[number]["nativeLikes"]) => likes.status === "known" ? `${known(likes.value)} · ${likes.exact ? "exact" : "approximate / rounded"}` : `${likes.status}: ${likes.reason}`;
+  return <>
+    <DataTable caption="Server-selected recent metadata baseline" columns={[{ label: "Post / publication" }, { label: "Native likes / pinned / paid" }, { label: "Views and comparable basis" }]} rows={assessment.metadata.postIds.map((postId) => {
+      const p = packet.recentPosts.find((post) => post.postId === postId);
+      return p ? [
+        `${p.postId} · ${p.publishedAt ?? "Publication unknown"}`,
+        `${nativeLikes(p.nativeLikes)} · pinned ${p.pinned === null ? "unknown" : p.pinned ? "yes" : "no"} · paid ${p.paid}`,
+        p.views.status === "known" ? `${known(p.views.value)} · ${p.views.definition} · ${p.views.window}` : `${p.views.status}: ${p.views.reason}`,
+      ] : [postId, "Source row not returned", "Unknown"];
+    })} />
+    <p className={styles.small}>These are the server-selected metadata rows, including ordinary and lower-like posts. Metadata inclusion does not give deep-review or qualifying-post credit.</p>
+    {packet.posts.map((post) => <section key={post.postId} className={styles.stack} aria-label={`Source packet ${post.postId}`}>
+      <p><a href={post.sourceUrl} target="_blank" rel="noreferrer">{post.postId} · original {post.network} post</a> · Native likes: {nativeLikes(post.nativeLikes)} · Published: {post.publishedAt ?? "Unknown"} · Observed: {post.observedAt}</p>
+      <DataTable caption={`Timestamped source review ${post.postId}`} columns={[{ label: "Provenance" }, { label: "Recorded source evidence" }]} rows={[
+        ["Review completion / modality", `${post.review.status} · visual ${post.review.visualMethod} · audio ${post.review.audioMethod}`],
+        ["Sampled points", post.review.sampledPoints.length ? post.review.sampledPoints.map(formatTime).join(", ") : "None recorded"],
+        ["Continuous intervals", post.review.watchedIntervals.length ? post.review.watchedIntervals.map((range) => `${formatTime(range.startSec)}–${formatTime(range.endSec)}`).join(", ") : "None recorded"],
+        ["Observed actions", post.review.observedActions.length ? post.review.observedActions.map((action) => `${formatTime(action.atSec)} · ${action.action} · meaningful use ${action.meaningfulUse ? "yes" : "no"}`).join("; ") : "None recorded"],
+        ["Narrated claims", post.review.claims.length ? post.review.claims.map((claim) => `${formatTime(claim.atSec)} · ${claim.text} · ${claim.method}`).join("; ") : "None recorded"],
+        ["Reviewer inferences", post.review.inferences.join("; ") || "None recorded"], ["Review receipt", post.review.sourceRef ?? "Unknown"],
+      ]} />
+      {post.comments.status === "observed" ? <>
+        <p className={styles.small}>Comment sample: {post.comments.ordering} · observed {post.comments.observedAt}. Convenience sample; tags can overlap.</p>
+        <DataTable caption={`Observed comment rows ${post.postId}`} columns={[{ label: "Comment / author" }, { label: "Source text" }, { label: "Flags / response tags" }]} rows={post.comments.rows.map((comment) => [
+          `${comment.commentId} · ${comment.authorRef ?? "Author unknown"}`, comment.text,
+          `${comment.creator ? "Creator" : "Audience"} · ${comment.promotional ? "promotional" : "not flagged promotional"} · ${comment.prompted ? "prompted" : "not prompted"} · ${comment.categories.map((tag) => categoryLabel[tag] ?? tag).join(", ")}`,
+        ])} />
+      </> : <p>Comments {post.comments.status}: {post.comments.reason}. Response categories and author counts remain unknown.</p>}
+    </section>)}
+  </>;
 }
 
 function ObservationDialog({ open, mediaUrl, onClose, onAdd }: { open: boolean; mediaUrl: string | null; onClose: () => void; onAdd: (o: Observation) => void }) {

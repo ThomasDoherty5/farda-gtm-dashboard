@@ -3,6 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { DEMO_EVIDENCE_PARTIAL_ID, DEMO_MEDIA_URL } from "@/fixtures/evidence";
 import { renderRoute } from "@/test/renderWithAdapter";
+import { syntheticAgentEvidence, syntheticQualification } from "@/test/creatorQualification";
+import type { ReadRequest, ReadResponse } from "@/adapter/contract";
+import type { EvidenceRecord } from "./evidenceTypes";
 
 const NEW_URL = "https://www.instagram.com/reel/NEWREEL0001/";
 const open = async (id = "demo-evidence-1", adapter = createDemoAdapter()) => {
@@ -15,6 +18,18 @@ const urlField = () => screen.getByLabelText("Original video URL");
 const saves = () => screen.getAllByRole("button", { name: "Save partial review" });
 // jsdom has no modal <dialog>, so it is never "open" to the accessibility tree: find it by its heading instead.
 const dialog = (title: string) => within(screen.getAllByRole("dialog", { hidden: true }).find((d) => within(d).queryByRole("heading", { name: title, hidden: true }))!);
+
+/** Models an adapter answer, not a local scoring path. The real service integration is tested separately. */
+function withAgent(qualification = syntheticQualification(), agentEvidence = syntheticAgentEvidence()) {
+  const adapter = createDemoAdapter();
+  const read = adapter.readView.bind(adapter);
+  const answer = async (request: ReadRequest<unknown>): Promise<ReadResponse<unknown>> => {
+    const response = await read(request);
+    return request.viewKey === "evidenceRecord" ? { ...response, data: { ...response.data as EvidenceRecord, qualification, agentEvidence } } : response;
+  };
+  vi.spyOn(adapter, "readView").mockImplementation(answer as typeof adapter.readView);
+  return adapter;
+}
 
 describe("video evidence review", () => {
   it("starts with nothing reviewed, and every unknown left unknown", async () => {
@@ -141,6 +156,68 @@ describe("video evidence review", () => {
     const { user } = await open();
     await user.click(screen.getByRole("button", { name: "Inspect model status" }));
     expect(dialog("Model status").getByText(/Publication: Pending/)).toBeInTheDocument();
+    expect(dialog("Model status").getByText(/The evidence policy is approved/)).toBeInTheDocument();
+    expect(screen.queryByText(/Weights stay unpublished until/)).not.toBeInTheDocument();
+  });
+
+  it("reads server zero/unknown critical ratings without replacing them with historical values or enabling actions", async () => {
+    const qualification = syntheticQualification({ state: "hold", contentQualification: "hold", criteria: { routine: 0, demo: null } });
+    const adapter = withAgent(qualification);
+    const send = vi.spyOn(adapter, "submitAction");
+    const { user } = await open("demo-evidence-1", adapter);
+    expect(metric("Routine compatibility")).toHaveTextContent("0 / 5");
+    expect(metric("Creative quality")).toHaveTextContent("Unknown");
+    expect(metric("Published model")).toHaveTextContent("Pending");
+    await user.click(screen.getByRole("button", { name: "Inspect model status" }));
+    const details = screen.getByTestId("agent-qualification");
+    expect(details).toHaveTextContent("Hold");
+    expect(details).toHaveTextContent("2026-11-04");
+    expect(details).toHaveTextContent("synthetic-evidence-1");
+    expect(details).toHaveTextContent("Unknown — no bound current score returned");
+    expect(screen.getAllByRole("button", { name: "Mark watched" })[0]).toHaveAttribute("aria-disabled", "true");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("separates low-like metadata, sampled visual evidence and prompted comments in the server inspection", async () => {
+    const { user } = await open("demo-evidence-1", withAgent());
+    await user.click(screen.getByRole("button", { name: "Inspect model status" }));
+    const details = within(screen.getByTestId("agent-qualification"));
+    const baseline = details.getByRole("region", { name: "Server-selected recent metadata baseline", hidden: true });
+    expect(baseline).toHaveTextContent("40 · exact");
+    expect(details.getByText("1 / 3")).toBeInTheDocument();
+    expect(details.getByText(/Metadata inclusion does not give deep-review/)).toBeInTheDocument();
+    expect(details.getByRole("region", { name: "Server video review provenance", hidden: true })).toHaveTextContent("3 sampled points · 0s continuous coverage");
+    const comments = details.getByRole("region", { name: "Observed comment rows synthetic-post-1", hidden: true });
+    expect(comments).toHaveTextContent("How does the container open?");
+    expect(comments).toHaveTextContent("Product understanding");
+    expect(comments).toHaveTextContent("Prompted keyword");
+    expect(comments).toHaveTextContent("Author unknown");
+    expect(details.getByText(/not verified Farda orders/)).toBeInTheDocument();
+  });
+
+  it("keeps missing comments and baseline views unknown, and never rescores when the legacy draft route changes", async () => {
+    const qualification = syntheticQualification({
+      config: { status: "bound", version: "synthetic-config-7", hash: "synthetic-hash", baselineHash: "synthetic-baseline", numericHash: "synthetic-numeric" },
+      configuration: { criteria: [{ id: "synthetic-routine", label: "Synthetic routine", weight: 43, rating: 3 }, { id: "synthetic-demo", label: "Synthetic demonstration", weight: 57, rating: 4 }], bands: [{ id: "Synthetic baseline", min: 0 }], arithmetic: "weight*rating/5;round-complete-total;no-rescaling" },
+      metadata: { ...syntheticQualification().metadata, coverage: "partial", medianViews: null, minViews: null, maxViews: null, comparableViewCount: 0, reasonCodes: ["VIEWS_UNAVAILABLE"] },
+      comments: [{ postId: "synthetic-post-1", status: "unavailable", rowCount: null, uniqueAuthors: null, unknownAuthorRows: null, promptedRows: null, creatorRows: null, promotionalRows: null, categoryCounts: null, ordering: null, reason: "Comments inaccessible" }],
+    });
+    const packet = syntheticAgentEvidence();
+    packet.posts[0]!.comments = { status: "unavailable", reason: "Comments inaccessible" };
+    const { user } = await open("demo-evidence-1", withAgent(qualification, packet));
+    expect(metric("Published model")).toHaveTextContent("Bound");
+    await user.selectOptions(screen.getByLabelText("Checkout route"), "tiktok-shop");
+    await user.click(screen.getByRole("button", { name: "Inspect model status" }));
+    const details = within(screen.getByTestId("agent-qualification"));
+    expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("WEBSITE-AFFILIATE-v3");
+    expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("synthetic-config-7");
+    expect(details.getByRole("region", { name: "Bound current criterion weights", hidden: true })).toHaveTextContent("43%");
+    expect(details.getByRole("region", { name: "Bound current criterion weights", hidden: true })).toHaveTextContent("57%");
+    expect(details.getByRole("region", { name: "Bound current aggregate bands", hidden: true })).toHaveTextContent("Synthetic baseline");
+    expect(details.getByRole("region", { name: "Metadata baseline summary", hidden: true })).toHaveTextContent("Unknown–Unknown");
+    expect(details.getByRole("region", { name: "Buyer response sampling summary", hidden: true })).toHaveTextContent("Unknown rows · Unknown unique authors");
+    expect(details.getByText(/Comments unavailable: Comments inaccessible/)).toBeInTheDocument();
+    expect(dialog("Model status").getByText(/Editing the clip, route or observations here does not change its qualification/)).toBeInTheDocument();
   });
 
   it("reports an unknown record honestly", async () => {

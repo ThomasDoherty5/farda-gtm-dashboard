@@ -19,6 +19,7 @@ export default defineConfig({
   reporter: [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]],
   use: {
     baseURL: `http://localhost:${port}`,
+    channel: process.env.E2E_BROWSER_CHANNEL || undefined,
     timezoneId: "America/Los_Angeles",
     locale: "en-US",
     colorScheme: "light",
