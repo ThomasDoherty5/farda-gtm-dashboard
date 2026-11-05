@@ -284,7 +284,8 @@ function Funnel({ rows, scaleMax }: { rows: StageRow[]; scaleMax: number }) {
         })}
         <ol className={styles.columns}>
           {rows.map((r, i) => {
-            const height = r.reached === null ? 0 : (r.reached / scaleMax) * plot;
+            // A known-zero cohort has no positive range; keep its bars at the baseline.
+            const height = r.reached === null || scaleMax === 0 ? 0 : (r.reached / scaleMax) * plot;
             const top = baseline - height;
             return (
               <li key={r.key} className={styles.column} style={{ left: 42 + i * 120 }} data-testid={`funnel-${r.key}`}>
