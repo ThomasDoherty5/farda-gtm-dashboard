@@ -12,19 +12,24 @@ export type PortfolioScope = z.infer<typeof scopeSchema>;
 export const portfolioWriteSchema = z.object({ scope: scopeSchema, expectedVersion: z.number().int().nonnegative(), packet: portfolioPacketSchema }).strict();
 export const portfolioDecisionRequestSchema = z.object({ scope: scopeSchema, expectedVersion: z.number().int().positive(), reviewHash: hash, linearDecisionRef: ref }).strict();
 export const verifiedPortfolioDecisionSchema = z.object({
+  scope: scopeSchema,
   linearDecisionRef: ref, reviewKey: hash, revision: z.number().int().positive(), reviewHash: hash,
   decision: z.enum(["approved", "rejected"]), decidedAt: z.string().datetime({ offset: true }), founderRef: ref,
   creatorDecisions: z.array(z.object({ creatorId: ref, action: portfolioActionSchema }).strict()).max(100),
 }).strict();
 export type VerifiedPortfolioDecision = z.infer<typeof verifiedPortfolioDecisionSchema>;
+export const verifiedPortfolioOnDemandApprovalSchema = z.object({
+  scope: scopeSchema, approvalRef: ref, eventId: ref, approved: z.boolean(),
+}).strict();
+export type VerifiedPortfolioOnDemandApproval = z.infer<typeof verifiedPortfolioOnDemandApprovalSchema>;
 /** Only trusted server-side resolution may return a verified founder decision. No body flag grants authority. */
 export interface PortfolioDecisionAuthority {
-  resolveDecision(linearDecisionRef: string): Promise<VerifiedPortfolioDecision | null>;
-  resolveOnDemandApproval(approvalRef: string, eventId: string): Promise<boolean>;
-  resolveParticipation?(sourceReceiptRef: string): Promise<VerifiedPortfolioParticipation | null>;
+  resolveDecision(linearDecisionRef: string, scope: PortfolioScope): Promise<VerifiedPortfolioDecision | null>;
+  resolveOnDemandApproval(approvalRef: string, eventId: string, scope: PortfolioScope): Promise<VerifiedPortfolioOnDemandApproval | null>;
+  resolveParticipation?(sourceReceiptRef: string, scope: PortfolioScope): Promise<VerifiedPortfolioParticipation | null>;
 }
-const unavailableAuthority: PortfolioDecisionAuthority = { resolveDecision: async () => null, resolveOnDemandApproval: async () => false };
-export type StoredPortfolioReview = { reviewKey: string; runId: string; revision: number; recordedAt: string; packetHash: string; reviewHash: string; packet: PortfolioPacket; proposal: PortfolioProposal };
+const unavailableAuthority: PortfolioDecisionAuthority = { resolveDecision: async () => null, resolveOnDemandApproval: async () => null };
+export type StoredPortfolioReview = { scope: PortfolioScope; reviewKey: string; runId: string; revision: number; recordedAt: string; packetHash: string; reviewHash: string; packet: PortfolioPacket; proposal: PortfolioProposal };
 export type StoredPortfolioDecision = VerifiedPortfolioDecision & {
   decisionId: string; recordedAt: string; executionState: "approved-awaiting-existing-workflow" | "rejected";
   handoffs: { creatorId: string; jobs: string[] }[]; dispatchAuthorized: false;
@@ -102,8 +107,15 @@ export class PortfolioRepository {
     const requestHash = digest({ operation: "portfolio.review", input });
     const replay = this.replay<StoredPortfolioReview>(idempotencyKey, requestHash);
     if (replay) return replay;
-    if (input.packet.trigger.kind === "approved-on-demand" && !await this.authority.resolveOnDemandApproval(input.packet.trigger.approvalRef, input.packet.trigger.eventId))
-      throw new PortfolioAuthorityUnavailable("ON_DEMAND_APPROVAL_UNVERIFIED");
+    if (input.packet.trigger.kind === "approved-on-demand") {
+      const trigger = input.packet.trigger;
+      const resolved = await this.authority.resolveOnDemandApproval(trigger.approvalRef, trigger.eventId, this.scope);
+      if (!resolved) throw new PortfolioAuthorityUnavailable("ON_DEMAND_APPROVAL_UNVERIFIED");
+      const approval = verifiedPortfolioOnDemandApprovalSchema.parse(resolved);
+      this.checkScope(approval.scope);
+      if (approval.approvalRef !== trigger.approvalRef || approval.eventId !== trigger.eventId) throw new AgentConflict("ON_DEMAND_APPROVAL_BINDING_MISMATCH");
+      if (!approval.approved) throw new PortfolioAuthorityUnavailable("ON_DEMAND_APPROVAL_UNVERIFIED");
+    }
     return this.transactional(() => {
       const retry = this.replay<StoredPortfolioReview>(idempotencyKey, requestHash);
       if (retry) return retry;
@@ -120,7 +132,7 @@ export class PortfolioRepository {
       if ((latest?.revision ?? 0) !== input.expectedVersion) throw new AgentConflict("VERSION_CONFLICT");
       if (latest && latest.packet.evidenceRevision === input.packet.evidenceRevision) throw new AgentConflict("EVIDENCE_REVISION_REUSED");
       const proposal = reviewPortfolio(input.packet);
-      const record: StoredPortfolioReview = { reviewKey, runId: randomUUID(), revision: input.expectedVersion + 1, recordedAt: new Date().toISOString(), packetHash, reviewHash: digest({ packetHash, proposal }), packet: input.packet, proposal };
+      const record: StoredPortfolioReview = { scope: this.scope, reviewKey, runId: randomUUID(), revision: input.expectedVersion + 1, recordedAt: new Date().toISOString(), packetHash, reviewHash: digest({ scope: this.scope, packetHash, proposal }), packet: input.packet, proposal };
       const body = JSON.stringify(record);
       this.database.prepare("INSERT INTO portfolio_reviews VALUES(?,?,?,?)").run(reviewKey, record.revision, packetHash, body);
       this.database.prepare("INSERT INTO portfolio_events VALUES(?,?,?,?)").run(input.packet.trigger.eventId, reviewKey, packetHash, body);
@@ -134,9 +146,10 @@ export class PortfolioRepository {
     const requestHash = digest({ operation: "portfolio.decide", reviewKey, input });
     const replay = this.replay<StoredPortfolioDecision>(idempotencyKey, requestHash);
     if (replay) return replay;
-    const resolved = await this.authority.resolveDecision(input.linearDecisionRef);
+    const resolved = await this.authority.resolveDecision(input.linearDecisionRef, this.scope);
     if (!resolved) throw new PortfolioAuthorityUnavailable("LINEAR_DECISION_UNVERIFIED");
     const decision = verifiedPortfolioDecisionSchema.parse(resolved);
+    this.checkScope(decision.scope);
     if (decision.linearDecisionRef !== input.linearDecisionRef || decision.reviewKey !== reviewKey || decision.revision !== input.expectedVersion || decision.reviewHash !== input.reviewHash)
       throw new AgentConflict("DECISION_SCOPE_MISMATCH");
     return this.transactional(() => {
@@ -178,9 +191,10 @@ export class PortfolioRepository {
     const requestHash = digest({ operation: "portfolio.participation", reviewKey, input });
     const replay = this.replay<StoredPortfolioParticipation>(idempotencyKey, requestHash);
     if (replay) return replay;
-    const resolved = await this.authority.resolveParticipation?.(input.sourceReceiptRef);
+    const resolved = await this.authority.resolveParticipation?.(input.sourceReceiptRef, this.scope);
     if (!resolved) throw new PortfolioAuthorityUnavailable("PARTICIPATION_RECEIPT_UNVERIFIED");
     const verified = verifiedParticipationSchema.parse(resolved);
+    this.checkScope(verified.participation.scope);
     if (verified.reviewKey !== reviewKey || digest(verified.participation) !== digest(input)) throw new AgentConflict("PARTICIPATION_RECEIPT_SCOPE_MISMATCH");
     return this.transactional(() => {
       const replay = this.replay<StoredPortfolioParticipation>(idempotencyKey, requestHash);
