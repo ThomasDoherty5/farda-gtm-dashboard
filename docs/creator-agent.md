@@ -8,10 +8,10 @@ Use Node 24 or later and `npm ci`. Configure these **server-only** variables out
 
 - `FARDA_AGENT_READ_TOKEN` and `FARDA_AGENT_REVIEW_TOKEN`: different random values, at least 32 characters each. The reader cannot write.
 - `FARDA_AGENT_WORKSPACE_ID` / `FARDA_AGENT_ACCOUNT_ID`: the exact authorized dashboard scope.
-- Optional `FARDA_AGENT_DATABASE` (default `.agent-data/evidence.sqlite`), `FARDA_AGENT_PORT` (default8787), `FARDA_AGENT_CONFIG` (private binding file).
+- Optional `FARDA_AGENT_DATABASE` (default `.agent-data/evidence.sqlite`), `FARDA_AGENT_HOST` (default `127.0.0.1`), `FARDA_AGENT_PORT` (overrides platform `PORT`, then defaults to8787), `FARDA_AGENT_CONFIG` (private binding file).
 - Behind a same-origin TLS reverse proxy, set `FARDA_AGENT_ORIGIN` to the public origin and `FARDA_AGENT_SECURE_COOKIES=true`.
 
-Run `npm run creator-agent`. It binds loopback only. SQLite and configuration records must live on a private durable volume with backups; do not commit them. Test sessions expire after an hour and are invalidated on restart.
+Run `npm run creator-agent`. It defaults to loopback. Explicit wildcard binding requires a configured HTTPS origin and secure cookies behind a trusted TLS proxy. SQLite and configuration records must live on a private durable volume with backups; do not commit them. Test sessions expire after an hour and are invalidated on restart. The [API-only hosting guide](creator-agent-hosting.md) covers the Node24 container, private volume, health probes, shutdown and verified online backups.
 
 The service is not deployed by this script. Hosting, source permissions, authenticated production scope bootstrap, operational monitoring and a production release remain separate. A deployment must not expose a bare HTTP listener or place its machine tokens in the browser.
 

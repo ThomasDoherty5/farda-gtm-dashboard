@@ -1,0 +1,24 @@
+# Allowlisted API artifact: never upload private workspaces, credentials, databases or a local dependency tree.
+**
+!package.json
+!package-lock.json
+!src/
+!src/creator-agent/
+!src/creator-agent/*.ts
+!src/creator-agent/configurations/
+!src/creator-agent/configurations/*.json
+!src/features/
+!src/features/scorecards/
+!src/features/scorecards/scorecardMath.ts
+!tools/
+!tools/creator-agent/
+!tools/creator-agent/*.mjs
+!tools/creator-agent/Dockerfile
+**/*.test.*
+**/testFixtures.ts
+**/.env*
+**/*.sqlite*
+**/node_modules/**
+**/.git/**
+**/.handoff/**
+**/.agent-data/**
