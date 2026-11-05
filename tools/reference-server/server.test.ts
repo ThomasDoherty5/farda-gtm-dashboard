@@ -4,6 +4,7 @@ import { SCHEMA_VERSION } from "@/adapter/contract";
 import { AdapterError, mustClearProtectedData } from "@/adapter/errors";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { createHttpTransport } from "@/adapter/httpTransport";
+import { loadSessionScope } from "@/adapter/sessionScope";
 import { COOKIE_NAME, startReferenceServer, type ReferenceServer } from "./server";
 import { cookieFetch, freshState, liveOverHttp } from "./testKit";
 
@@ -63,9 +64,26 @@ describe("sign-in and the session cookie", () => {
     expect(auth.setCookie).toMatch(/SameSite=Lax/);
     const value = auth.cookie.split("=")[1]!;
     const session = await json(await fetch(`${server.url}/v1/session`, { headers: { cookie: auth.cookie } }));
-    expect(session.principal).toMatchObject({ role: "reviewer" });
+    expect(session.referenceServer).toBe(true);
+    expect(session.principal).toBe("ref-reviewer");
+    expect(session.referencePrincipal).toMatchObject({ id: "ref-reviewer", role: "reviewer" });
+    expect(session.scope).toEqual({ workspaceId: "demo-workspace", accountIds: ["demo-account-farda"], environment: "sandbox", authorizationScopeVersion: "reference-scope-v1" });
     expect(JSON.stringify(session)).not.toContain(value);
     expect(session.allowedScopes).toEqual([{ workspaceId: "demo-workspace", accountIds: ["demo-account-farda"], environment: "sandbox" }]);
+  });
+  it("bootstraps from actual synthetic session grants and refuses to invent a missing scope", async () => {
+    const own = await start({ users: [
+      { id: "ref-scoped-viewer", displayName: "Reference scoped viewer", role: "viewer", grants: [{ workspaceId: "reference-other-workspace", accountIds: ["reference-other-account"] }] },
+      { id: "ref-no-grants", displayName: "Reference user without grants", role: "operator", grants: [] },
+    ] });
+    await expect(loadSessionScope(own.url, "sandbox", cookieFetch(own.url, { user: "viewer" }))).resolves.toEqual({
+      principal: "ref-scoped-viewer", scope: { workspaceId: "reference-other-workspace", accountIds: ["reference-other-account"], environment: "sandbox" },
+    });
+    const noGrants = cookieFetch(own.url, { user: "operator" });
+    const body = await json(await noGrants(`${own.url}/v1/session`));
+    expect(body.scope).toBeNull();
+    expect(body.allowedScopes).toEqual([]);
+    await expect(loadSessionScope(own.url, "sandbox", noGrants)).rejects.toThrow();
   });
   it("refuses an unknown user", async () => {
     expect((await fetch(`${server.url}/dev/sign-in?user=root`, { redirect: "manual" })).status).toBe(422);

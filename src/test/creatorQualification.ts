@@ -22,7 +22,7 @@ export function syntheticAgentEvidence(over: Partial<EvidencePacket> = {}): Evid
       nativeLikes: { status: "known" as const, value: i === 0 ? 40 : 240 + i, exact: true, sourceRef: `synthetic-likes-${i}` },
       views: { status: "known" as const, value: 1_000 + i * 100, definition: "Native views", window: "At observation" }, paid: "unknown" as const,
     })),
-    ratings: { routine: 3, demo: 4 }, criterionRatings: {}, invitationGates: [], activationGates: [], ...over,
+    ratings: { routine: 3, demo: 4 }, criterionRatings: {}, criterionEvidenceRefs: {}, invitationGates: [], activationGates: [], ...over,
   };
 }
 

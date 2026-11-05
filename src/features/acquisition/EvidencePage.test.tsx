@@ -6,6 +6,10 @@ import { renderRoute } from "@/test/renderWithAdapter";
 import { syntheticAgentEvidence, syntheticQualification } from "@/test/creatorQualification";
 import type { ReadRequest, ReadResponse } from "@/adapter/contract";
 import type { EvidenceRecord } from "./evidenceTypes";
+import { bindConfig } from "@/creator-agent/config";
+import approvedWebsiteManifest from "@/creator-agent/configurations/website-affiliate-v3.2026-11-04.json";
+import { assessCreator } from "@/creator-agent/policy";
+import { syntheticPacket, withActivationEvidence } from "@/creator-agent/testFixtures";
 
 const NEW_URL = "https://www.instagram.com/reel/NEWREEL0001/";
 const open = async (id = "demo-evidence-1", adapter = createDemoAdapter()) => {
@@ -224,5 +228,32 @@ describe("video evidence review", () => {
     renderRoute("/creators/demo-creator-1/evidence/nope", createDemoAdapter());
     expect(await screen.findByRole("heading", { name: /not found|couldn't|can't/i })).toBeInTheDocument();
     expect(screen.queryByTestId("metric-Visual coverage")).not.toBeInTheDocument();
+  });
+
+  it("reads the approved bound weight table, actual server score and supplied criterion proof without a local decision", async () => {
+    const packet = withActivationEvidence(syntheticPacket("website"));
+    packet.creatorId = "demo-creator-1";
+    packet.ratings = { routine: 5, demo: 4 };
+    packet.criterionRatings = { verifiedCommerce: 3, audienceAlignment: 4, reliability: 4, offerEconomics: 4 };
+    packet.criterionEvidenceRefs = Object.fromEntries(Object.keys(packet.criterionRatings).map((id) => [id, [`synthetic:approved-proof:${id}`]]));
+    // Static JSON import works in jsdom; filesystem-based loadApprovedBindings is exercised by the real Node HTTP suite.
+    const manifest = approvedWebsiteManifest[0]!;
+    const binding = bindConfig(manifest.current, manifest.baseline, manifest.expectedBaselineHash);
+    const qualification = assessCreator(packet, binding);
+    expect(qualification.score!.total).toBe(82);
+    const { user } = await open("demo-evidence-1", withAgent(qualification, packet));
+    expect(metric("Published model")).toHaveTextContent("Bound");
+    expect(metric("Routine compatibility")).toHaveTextContent("5 / 5");
+    expect(metric("Creative quality")).toHaveTextContent("4 / 5");
+    await user.click(screen.getByRole("button", { name: "Inspect model status" }));
+    const details = within(screen.getByTestId("agent-qualification"));
+    expect(details.getByText(/Activation ready/)).toBeInTheDocument();
+    expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("2026-11-04.launch-v1");
+    const weights = details.getByRole("region", { name: "Bound current criterion weights", hidden: true });
+    expect(weights).toHaveTextContent("25%");
+    expect(weights).toHaveTextContent("20%");
+    expect(weights).toHaveTextContent("synthetic:approved-proof:verifiedCommerce");
+    expect(details.getByText(/total82|total 82/)).toHaveTextContent("priorityReview");
+    expect(screen.getAllByRole("button", { name: "Mark watched" })[0]).toHaveAttribute("aria-disabled", "true");
   });
 });

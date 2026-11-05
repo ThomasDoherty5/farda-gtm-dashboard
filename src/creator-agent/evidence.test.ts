@@ -23,7 +23,7 @@ const post = (n = 1): PostEvidence => ({
 const packet = (): EvidencePacket => ({
   creatorId: "synthetic-creator", briefId: "synthetic-travel-brief", checkoutRoute: "website",
   evidenceRevision: "synthetic-evidence-v1", termsRevision: "synthetic-terms-v1", posts: [post()], recentPosts: [],
-  ratings: { routine: 3, demo: 3 }, criterionRatings: {}, invitationGates: [], activationGates: [],
+  ratings: { routine: 3, demo: 3 }, criterionRatings: {}, criterionEvidenceRefs: {}, invitationGates: [], activationGates: [],
 });
 const metadata = (n: number): RecentPostMetadata => ({
   postId: `synthetic-metadata-${n}`, canonicalMediaId: `synthetic-media-${n}`,
@@ -42,7 +42,16 @@ describe("creator evidence packets", () => {
   it("retains unknown data and defaults unspecified extra criterion ratings without inventing scores", () => {
     const parsed = evidencePacketSchema.parse({ ...packet(), criterionRatings: undefined, ratings: { routine: null, demo: 0 } });
     expect(parsed.criterionRatings).toEqual({});
+    expect(evidencePacketSchema.parse({ ...packet(), criterionEvidenceRefs: undefined }).criterionEvidenceRefs).toEqual({});
     expect(parsed.ratings).toEqual({ routine: null, demo: 0 });
+  });
+
+  it("requires nonempty source references for any supplied noncritical evidence entry", () => {
+    for (const refs of [[], [""], ["   "], [123], ["synthetic:source", null]]) {
+      expect(evidencePacketSchema.safeParse({ ...packet(), criterionEvidenceRefs: { "synthetic-extra": refs } }).success).toBe(false);
+    }
+    expect(evidencePacketSchema.parse({ ...packet(), criterionEvidenceRefs: { "synthetic-extra": [" synthetic:source "] } }).criterionEvidenceRefs)
+      .toEqual({ "synthetic-extra": ["synthetic:source"] });
   });
 
   it.each([199, 200, 201])("keeps the native %i boundary value for the policy evaluator rather than rewriting it", (value) => {
