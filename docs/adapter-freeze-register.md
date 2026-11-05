@@ -81,6 +81,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `operationsOverview` | `scenario?` | OperationsOverview | `operations/OperationsPage` | `demoOps` | proposed + conflict | C-06. |
 | `nightlyReconciliation` | none | ReconciliationData | `settings/ReconciliationPage` | `demoReconciliation` | proposed | Nightly pairs, conflicts that name the authoritative side, and an append-only audit trail. Distinct from `launchReconciliation`. |
 | `operationsShipping` | none | shipments, exceptions, chain | `operations/ShippingPanels` | `demoOps` | proposed | In transit is counted on the screen from carrier states. |
+| `shippingHub` | optional demo scenario | recipient/origin-separated parcel queue, source freshness, label and physical state, bounded review | `operations/shippingHub/ShippingHubPage` | `demoShippingHub`; authenticated service pending sources | proposed | No label purchase endpoint; draft review only until shipping executor integration. |
 | `orderCustomer` | `orderId` | OrderCustomerData | `operations/CustomerReveal` | `demoOps` | proposed | Restricted. Details appear only for an allowed role after an audited reveal. |
 | `opsHealth` | none | OpsHealth | `operations/OpsHealthPage` (route `/analytics/fulfillment?view=health`) | `demoOps` | proposed | No Figma source. Derived in `adapter/opsHealth.ts` from the shipment ledger. |
 | `orderDetail` | `orderId` | OrderDetail | `operations/OrderPage` | `demoOps` | proposed |  |

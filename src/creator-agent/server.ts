@@ -9,6 +9,11 @@ import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
+import { PortfolioRepository, type PortfolioDecisionAuthority } from "./portfolioStore.ts";
+import { handlePortfolioRoute } from "./portfolioRoutes.ts";
+import { AssetRepository } from "./assetStore.ts";
+import { handleAssetRoute } from "./assetRoutes.ts";
+import type { AssetAuthority } from "./assets.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
@@ -16,7 +21,7 @@ const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256")
 const versionOfData = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
-export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string };
+export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
 /** First real agent service; independent of all demo adapters and reference-server fixtures. */
@@ -24,6 +29,8 @@ export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
+  const portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
+  const assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
   const sessions = new Map<string, Session>();
   const bindings = options.bindings ?? [];
   const modelBinding = (route: "website" | "tiktok-shop") => bindings.find((b) => b.current.modelId === MODEL_FOR_ROUTE[route]) ?? null;
@@ -51,6 +58,7 @@ export function createAgentServer(options: AgentServerOptions) {
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -94,10 +102,30 @@ export function createAgentServer(options: AgentServerOptions) {
         if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== auth.session.csrf)
           return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "notApplied" });
       }
+      if (path === "/v1/portfolio" || path.startsWith("/v1/portfolio/")) {
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handlePortfolioRoute({ method: req.method ?? "GET", path: req.url ?? path,
+          role: auth.role, body: req.method === "POST" ? await bodyOf(req) : undefined,
+          idempotencyKey: typeof key === "string" ? key : undefined }, portfolio);
+        if (result) return reply(res, result.status, result.body);
+      }
+      if (path === "/v1/assets" || path.startsWith("/v1/assets/")) {
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handleAssetRoute({ method: req.method ?? "GET", path: req.url ?? path,
+          role: auth.role, body: req.method === "POST" ? await bodyOf(req) : undefined,
+          idempotencyKey: typeof key === "string" ? key : undefined }, assets);
+        if (result) return reply(res, result.status, result.body);
+      }
       if (path === "/v1/policy" && req.method === "GET") return reply(res, 200, ratingPolicy);
       if (path === "/v1/capabilities" && req.method === "GET") return reply(res, 200, {
         schemaVersion: AGENT_SCHEMA_VERSION, policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION,
         storageSchema: 1, environment: "sandbox", mode: "reviewedEvidence", sourceAutomation: "notConnected",
+        portfolioReview: { storage: "durable", decisionAuthority: options.portfolioAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
+        assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });
       const match = /^\/v1\/creators\/([^/]+)$/.exec(path);
@@ -119,6 +147,7 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "Shipping source and label executor are not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const listing = store.listLatest();
           const records = listing.records.map((stored) => current(stored));

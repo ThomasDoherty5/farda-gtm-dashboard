@@ -20,9 +20,10 @@ import { monitorViewSchemas } from "./monitor";
 import { opsActionSchemas, opsViewSchemas } from "./ops";
 import { recruitmentViewSchemas } from "./recruitment";
 import { scorecardsViewSchemas } from "./scorecards";
+import { shippingHubViewSchemas } from "./shippingHub";
 import { settingsViewSchemas } from "./settings";
 
-const AREAS = [analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas];
+const AREAS = [analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
 let n = 0;
 const read = (viewKey: string, filters: unknown = {}): ReadRequest<unknown> => ({
