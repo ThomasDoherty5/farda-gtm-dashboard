@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +32,13 @@ describe("creator operations use the existing authenticated durable service", ()
   beforeEach(() => { directory = mkdtempSync(join(tmpdir(), "farda-ops-integration-")); });
   afterEach(async () => { await stop(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("initializes the launcher service in native Node without a TypeScript transform", () => {
+    const moduleUrl = new URL("./server.ts", import.meta.url).href;
+    const program = `const { createAgentServer } = await import(${JSON.stringify(moduleUrl)});
+const app = createAgentServer(${JSON.stringify({ databasePath: ":memory:", readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, ...assetTestScope })});
+app.store.close(); console.log("native-service-initialized");`;
+    expect(execFileSync(process.execPath, ["--input-type=module", "--eval", program], { encoding: "utf8", timeout: 30_000 })).toContain("native-service-initialized");
+  });
   it("rejects unauthenticated and reader writes across both namespaces", async () => {
     await start();
     for (const path of ["/v1/assets/ingest", "/v1/portfolio/reviews"]) {

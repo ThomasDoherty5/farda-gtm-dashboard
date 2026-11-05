@@ -28,16 +28,20 @@ export function shippingHubDemo(scenario = "default"): ShippingHubData {
   transit.freshness[0] = { field: "tracking", state: "stale", observedAt: transit.lastEventAt, sourceRef: "demo-carrier-1041" };
   const held = base("DEMO-SHIP-C018");
   Object.assign(held, { recipient: creator("river", "C018"), origin: allocation("C018"), purpose: "sample", location: "H2", owner: "Sam", carrier: null, readiness: "address-pending", addressVerified: false, addressRef: null, quote: null, etaSource: "Accepted allocation", exception: { kind: "address-pending", message: "Verify the creator address before reviewing a label." }, nextAction: "Verify address" });
+  held.freshness[1]!.observedAt = SHIPPING_DEMO_NOW;
   held.freshness[2] = { field: "address", state: "unknown", observedAt: null, sourceRef: "demo-address-C018" };
   const ready = base("DEMO-SHIP-1042");
   ready.requestedAt = "2026-11-02T18:00:00.000Z";
   const printed = base("DEMO-SHIP-C019");
   Object.assign(printed, { recipient: creator("ash", "C019"), origin: allocation("C019"), purpose: "sample", location: "H2", owner: "Sam", pipeline: "label", carrierState: "pre-transit", carrier: "FedEx", trackingRef: "DEMO019", quote: null, label: label("019", 710), nextAction: "Open label / print" });
+  printed.lastEventAt = "2026-11-04T18:30:00.000Z";
   const delivered = base("DEMO-SHIP-C020");
   Object.assign(delivered, { recipient: creator("mica", "C020"), origin: allocation("C020"), purpose: "sample", location: "H3", owner: "Lee", readiness: "dispatched", reservationRef: null, pipeline: "delivered", carrierState: "delivered", trackingRef: "DEMO020", quote: null, deliveredAt: "2026-11-04T18:20:00.000Z", label: label("020", 690), nextAction: "Open creator details", postingClock: { dueAt: "2026-11-12T01:00:00.000Z", timezone: "America/Los_Angeles", recordRef: "DEMO-CLOCK-C020", observedAt: "2026-11-04T18:36:00.000Z", acceptedTermsVersion: "v3", brief: "1 native review + 2 supporting clips" } });
+  delivered.freshness[0]!.observedAt = "2026-11-04T18:35:00.000Z";
   delivered.timeline = [{ id: "demo-event-delivered", occurredAt: delivered.deliveredAt!, title: "Delivered / carrier evidence", evidenceRef: "demo-delivery-020" }, { id: "demo-event-accepted", occurredAt: "2026-11-01T23:40:00.000Z", title: "Carrier accepted", evidenceRef: "demo-acceptance-020" }, { id: "demo-event-label", occurredAt: "2026-11-01T17:00:00.000Z", title: "Label created", evidenceRef: "demo-label-020" }];
   const returned = base("DEMO-SHIP-R041");
   Object.assign(returned, { recipient: { type: "customer", ref: "C-1040", display: "C-1040" }, origin: { kind: "replacement", ref: "DEMO-R041", parentOriginRef: "DEMO-1040", parentShipmentId: "DEMO-SHIP-1040", approvalRef: null }, purpose: "replacement", readiness: "return-hold", pipeline: "returns", carrierState: "returning", trackingRef: "DEMOR041", quote: null, eta: "2026-11-06T20:00:00.000Z", etaSource: "Carrier estimate", label: label("R041", 680), nextAction: "Open return case" });
+  returned.freshness[0]!.observedAt = "2026-11-04T18:32:00.000Z";
   const shipments = [transit, held, ready, printed, delivered, returned];
   if (scenario === "edge") {
     const replacement = base("DEMO-SHIP-C021");

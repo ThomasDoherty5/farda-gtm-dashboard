@@ -43,3 +43,13 @@ test("mobile filters and desktop filters keep typed creator records discoverable
   await expect(creator).toContainText("no commerce order");
   expect(await creator.evaluate(el => el.getBoundingClientRect().width <= innerWidth)).toBe(true);
 });
+
+
+test("mobile demo labeling survives an unavailable shipping read", async ({ page }, info) => {
+  test.skip(!info.project.name.startsWith("mobile"), "The scoped mobile header is the affected composition.");
+  await page.goto(`${route}&scenario=unavailable`);
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByTestId("demo-banner")).toBeVisible();
+  await expect(page.getByTestId("shipping-demo-banner")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});

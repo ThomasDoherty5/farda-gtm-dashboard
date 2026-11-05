@@ -1,4 +1,4 @@
-import { screen, within, waitFor } from "@testing-library/react";
+import { act, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ReadOptions } from "@/adapter/adapter";
@@ -20,6 +20,14 @@ describe("unified shipping hub", () => {
     expect(screen.getByRole("button", { name: "Review 2 selected" })).toBeInTheDocument();
     await user.type(screen.getByRole("searchbox", { name: "Search shipments" }), "C020");
     expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(2);
+  });
+  it("applies the shipping shell variant only to the new hub route", async () => {
+    const router = renderRoute(path, createDemoAdapter());
+    await screen.findByRole("table", { name: "Shared shipment queue" });
+    expect(document.querySelector('[data-shell-variant="shipping-hub"]')).toBeInTheDocument();
+    await act(() => router.navigate("/operations?view=shipping"));
+    await waitFor(() => expect(document.querySelector('[data-shell-variant="shipping-hub"]')).not.toBeInTheDocument());
+    expect(screen.getByTestId("demo-banner")).toHaveTextContent("Demo workspace");
   });
   it("reviews a mixed batch with one unknown cost, and never submits a purchase or approval", async () => {
     const user = userEvent.setup(); const adapter = createDemoAdapter(); const submit = vi.spyOn(adapter, "submitAction"); renderRoute(path, adapter);
@@ -75,9 +83,16 @@ describe("unified shipping hub", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/not connected|not available|pending/i);
     expect(screen.queryByRole("table", { name: "Shared shipment queue" })).not.toBeInTheDocument();
   });
-  it("a stale source envelope blocks review even when individual fields claim current", async () => {
+  it.each(["stale-envelope", "expired-window"])("%s blocks review even when individual fields claim current", async scenario => {
     const user = userEvent.setup(); const adapter = createDemoAdapter(); const read = adapter.readView.bind(adapter);
-    adapter.readView = (async (request: ReadRequest<unknown>, options?: ReadOptions) => { const result = await read(request, options); return request.viewKey === "shippingHub" ? { ...result, dataState: "stale" } : result; }) as typeof adapter.readView;
+    adapter.readView = (async (request: ReadRequest<unknown>, options?: ReadOptions) => {
+      const result = await read(request, options);
+      if (request.viewKey !== "shippingHub") return result;
+      if (scenario === "stale-envelope") return { ...result, dataState: "stale" };
+      const copy = structuredClone(result) as ReadResponse<ShippingHubData>;
+      copy.data!.reviewValidUntil = "2026-11-04T18:41:00.000Z";
+      return copy;
+    }) as typeof adapter.readView;
     renderRoute(path, adapter);
     await user.click(await screen.findByRole("button", { name: "Review 2 selected" }));
     expect(screen.getByText("2 selected · 0 reviewable · 2 blocked", { selector: "h3" })).toBeInTheDocument();

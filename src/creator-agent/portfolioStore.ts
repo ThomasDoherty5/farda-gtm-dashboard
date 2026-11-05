@@ -49,7 +49,13 @@ export class PortfolioAuthorityUnavailable extends Error {}
 
 /** Uses the already scoped AgentStore connection. No second CRM, scheduler or database connection. */
 export class PortfolioRepository {
-  constructor(private readonly database: DatabaseSync, private readonly scope: PortfolioScope, private readonly authority: PortfolioDecisionAuthority = unavailableAuthority) {
+  private readonly database: DatabaseSync;
+  private readonly scope: PortfolioScope;
+  private readonly authority: PortfolioDecisionAuthority;
+  constructor(database: DatabaseSync, scope: PortfolioScope, authority: PortfolioDecisionAuthority = unavailableAuthority) {
+    this.database = database;
+    this.scope = scope;
+    this.authority = authority;
     scopeSchema.parse(scope);
     const persistedScope = database.prepare("SELECT workspace_id, account_id FROM agent_scope WHERE id=1").get();
     if (persistedScope?.workspace_id !== scope.workspaceId || persistedScope.account_id !== scope.accountId) throw new Error("DATABASE_SCOPE_MISMATCH");

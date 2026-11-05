@@ -13,7 +13,12 @@ import type {
 } from "./assets.ts";
 
 export class AssetError extends Error {
-  constructor(public code: string, public status = 409, public reasons: string[] = []) { super(code); }
+  code: string;
+  status: number;
+  reasons: string[];
+  constructor(code: string, status = 409, reasons: string[] = []) {
+    super(code); this.code = code; this.status = status; this.reasons = reasons;
+  }
 }
 export const assetIngestSchema = z.object({ scope: assetScopeSchema, expectedVersion: z.number().int().nonnegative(), submission: assetSubmissionSchema }).strict();
 export const assetUseRequestSchema = z.object({ scope: assetScopeSchema, use: assetUseSchema }).strict();
@@ -37,8 +42,13 @@ const enrichedSearchSchema = assetSearchSchema.extend({
 
 /** Tables share the authenticated service's existing SQLite handle and scope. Owns no files or rights. */
 export class AssetRepository {
-  constructor(private db: DatabaseSync, readonly scope: AssetScope,
-    private authority: AssetAuthority = unavailableAssetAuthority, private clock = () => new Date().toISOString()) {
+  private db: DatabaseSync;
+  readonly scope: AssetScope;
+  private authority: AssetAuthority;
+  private clock: () => string;
+  constructor(db: DatabaseSync, scope: AssetScope,
+    authority: AssetAuthority = unavailableAssetAuthority, clock = () => new Date().toISOString()) {
+    this.db = db; this.scope = scope; this.authority = authority; this.clock = clock;
     assetScopeSchema.parse(scope);
     const bound = db.prepare("SELECT workspace_id,account_id FROM agent_scope WHERE id=1").get();
     if (bound?.workspace_id !== scope.workspaceId || bound.account_id !== scope.accountId) throw new AssetError("DATABASE_SCOPE_MISMATCH", 403);
