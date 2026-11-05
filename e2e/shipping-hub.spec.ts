@@ -6,6 +6,13 @@ test("shared shipping queue and exact review remain accessible without dispatch"
   await page.goto(route);
   await expect(page.getByRole("heading", { name: "Shipping hub", exact: true })).toBeVisible();
   const mobile = info.project.name.startsWith("mobile");
+  if (!mobile) {
+    const table = page.getByRole("table", { name: "Shared shipment queue" });
+    await expect(table.getByRole("columnheader")).toHaveCount(8);
+    await expect(table.getByRole("columnheader", { name: "Recipient / origin" })).toBeVisible();
+    await expect(table.getByRole("rowheader")).toHaveCount(6);
+    await expect(table.getByRole("rowheader", { name: /Customer · C-1041/ })).toBeVisible();
+  }
   await expect(page.getByRole("checkbox", { name: "Select DEMO-SHIP-C018", exact: true })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Select DEMO-SHIP-1042", exact: true })).toBeChecked();
   await expect(page.getByRole("button", { name: mobile ? "Review selected labels" : "Review 2 selected", exact: true })).toBeVisible();
