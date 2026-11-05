@@ -14,6 +14,7 @@ import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { SourceDialog } from "@/features/approvals/shared";
 import { HOMES, homeLabel, type Home, type OperationsOverview, type QueueRow } from "@/fixtures/operations";
+import { ShippingHubPage } from "./shippingHub/ShippingHubPage";
 import { OpsTabs } from "./OpsTabs";
 import { ShippingPanels } from "./ShippingPanels";
 import { MobileOperations, TabletOperations } from "./OperationsCompact";
@@ -35,6 +36,11 @@ const parseView = (raw: string | null): View => (VIEWS.includes(raw as View) ? (
  * Read work only. Operational records are changed in their source and come back through the mirror.
  */
 export function OperationsPage() {
+  const [search] = useSearchParams();
+  return search.get("view") === "hub" ? <ShippingHubPage /> : <OperationsOverviewPage />;
+}
+
+function OperationsOverviewPage() {
   const { adapter } = useScope();
   const [search, setSearch] = useSearchParams();
   const [sourceOpen, setSourceOpen] = useState(false);

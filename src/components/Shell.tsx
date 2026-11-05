@@ -67,13 +67,14 @@ export function Shell() {
   const mainRef = useRef<HTMLElement>(null);
   useRouteAnnouncement(mainRef, pathname);
   const section = sectionOf(pathname);
+  const shippingHub = pathname === "/operations" && new URLSearchParams(search).get("view") === "hub";
   const demo = adapter.environment === "demo";
   const crumbs = breadcrumbsFor(pathname, search);
 
   return (
     <div className={styles.canvas}>
       <a className="skip-link" href="#main">Skip to main content</a>
-      <div className={styles.frame}>
+      <div className={`${styles.frame} ${shippingHub ? styles.shippingHub : ""}`} data-shell-variant={shippingHub ? "shipping-hub" : undefined}>
         <header className={styles.header}>
           <span className={styles.brand}><span className={styles.mark} aria-hidden="true">f</span>farda</span>
           <nav aria-label="Primary" className={styles.primary}>

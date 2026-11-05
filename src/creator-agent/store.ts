@@ -116,5 +116,7 @@ export class AgentStore {
       return record;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
+  /** Domain repositories share this scoped connection; only AgentStore closes it. */
+  get database(): DatabaseType { return this.db; }
   close() { this.db.close(); }
 }

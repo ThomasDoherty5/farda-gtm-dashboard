@@ -6,6 +6,7 @@ import { createDemoPolicy } from "./demoPolicy";
 import { guardTermsOf } from "./commissionPolicy";
 import { createDemoLifecycle } from "./demoLifecycle";
 import { createDemoFinance } from "./demoFinance";
+import { readShippingHub } from "./demoShippingHub";
 import { createDemoOps } from "./demoOps";
 import { createDemoDiscovery } from "./demoDiscovery";
 import { createDemoReconciliation } from "./demoReconciliation";
@@ -74,6 +75,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.viewKey === "approvalDetail") return approvals.readApproval(request as ReadRequest<{ approvalId: string }>) as ReadResponse<T>;
       if (request.viewKey === "runDetail") return approvals.readRun(request as ReadRequest<{ runId: string }>) as ReadResponse<T>;
       if (request.viewKey === "evidenceRecord") return evidence.read(request as ReadRequest<{ creatorId: string; evidenceId: string }>) as ReadResponse<T>;
+      const shippingHubView = readShippingHub(request);
+      if (shippingHubView) return shippingHubView as ReadResponse<T>;
       const opsView = ops.read(request);
       if (opsView) return opsView as ReadResponse<T>;
       const financeView = finance.read(request);

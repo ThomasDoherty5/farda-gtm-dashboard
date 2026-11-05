@@ -1,10 +1,11 @@
 import { LinkButton } from "@/components/Button";
 import styles from "./Operations.module.css";
 
-export type OpsSection = "overview" | "orders" | "shipping" | "stock" | "support";
+export type OpsSection = "hub" | "overview" | "orders" | "shipping" | "stock" | "support";
 const TABS: { key: OpsSection; label: string; to: string }[] = [
   { key: "overview", label: "Overview", to: "/operations" },
   { key: "orders", label: "Orders", to: "/operations?view=orders" },
+  { key: "hub", label: "Shipping hub", to: "/operations?view=hub" },
   { key: "shipping", label: "Shipping", to: "/operations?view=shipping" },
   { key: "stock", label: "Stock", to: "/inventory" },
   { key: "support", label: "Support", to: "/support/cases/TEST-ISS-021" },
