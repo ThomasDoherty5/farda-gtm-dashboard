@@ -5,6 +5,10 @@
 !src/
 !src/creator-agent/
 !src/creator-agent/*.ts
+!src/creator-agent/connections/
+!src/creator-agent/connections/*.ts
+!src/creator-agent/jobs/
+!src/creator-agent/jobs/*.ts
 !src/creator-agent/configurations/
 !src/creator-agent/configurations/*.json
 !src/features/
