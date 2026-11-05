@@ -1,0 +1,70 @@
+name: Creator agent deployment
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/creator-agent-deployment.yml
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - render.yaml
+      - deploy/**
+      - tools/creator-agent/**
+      - src/creator-agent/**
+      - src/features/scorecards/scorecardMath.ts
+      - src/test/creatorQualification.ts
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/creator-agent-deployment.yml
+      - .dockerignore
+      - package.json
+      - package-lock.json
+      - render.yaml
+      - deploy/**
+      - tools/creator-agent/**
+      - src/creator-agent/**
+      - src/features/scorecards/scorecardMath.ts
+      - src/test/creatorQualification.ts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: creator-agent-deployment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-deployment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FARDA_CONTAINER_IMAGE: farda-creator-agent:ci
+      FARDA_CONTAINER_SMOKE_ROOT: /tmp/farda-creator-agent-container-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Verify deployment configuration, lifecycle and online backups
+        run: node --test --test-concurrency=1 tools/creator-agent/deployment.test.mjs
+      - name: Build the API-only deployment image
+        run: docker build --file tools/creator-agent/Dockerfile --tag "$FARDA_CONTAINER_IMAGE" .
+      - name: Verify container authentication, approved bindings, persistence and backup
+        env:
+          FARDA_RUN_CONTAINER_SMOKE: '1'
+        run: node --test --test-concurrency=1 tools/creator-agent/container-smoke.test.mjs
+      - name: Remove synthetic container and private test data
+        if: always()
+        shell: bash
+        run: |
+          docker ps --all --quiet --filter label=com.farda.creator-agent.ci=true | xargs --no-run-if-empty docker rm --force || true
+          if [[ -d "$FARDA_CONTAINER_SMOKE_ROOT" ]]; then
+            sudo rm --recursive --force -- "$FARDA_CONTAINER_SMOKE_ROOT"
+          fi
+          docker image rm --force "$FARDA_CONTAINER_IMAGE" || true
