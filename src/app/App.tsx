@@ -16,7 +16,8 @@ export function App({ adapter, queryClient }: { adapter: FardaAdapter; queryClie
     <AppErrorBoundary>
       <QueryClientProvider client={client}>
         <ScopeProvider adapter={adapter} scope={scope} principal={adapter.kind === "demo" ? "demo-user" : "session"}>
-          <RouterProvider router={router} />
+          {/* React Router 7 wraps navigation state in React.startTransition by default. URL-backed controlled inputs (search boxes, filter radios) then lose keystrokes and clicks, so keep the synchronous v6 behavior. */}
+          <RouterProvider router={router} useTransitions={false} />
         </ScopeProvider>
       </QueryClientProvider>
     </AppErrorBoundary>
