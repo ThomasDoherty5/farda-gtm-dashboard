@@ -119,7 +119,7 @@ describe("historical scorecards (37:74, 37:251)", () => {
     open(CONTENT);
     await user.click(await screen.findByRole("button", { name: "Rating anchors" }));
     let dialog = await openDialog();
-    expect(within(dialog).getByText(/Current v3 weights and bands are unpublished/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/These anchors describe the historical model/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Close", hidden: true }));
     await user.click(screen.getByRole("button", { name: "Assessment history" }));
     await waitFor(async () => expect(within(await openDialog()).getByText(/Earlier versions are immutable/)).toBeInTheDocument());

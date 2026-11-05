@@ -38,6 +38,21 @@ export class AgentStore {
     const row = this.db.prepare("SELECT body FROM assessments WHERE creator_id=? ORDER BY revision DESC LIMIT 1").get(creatorId);
     return row ? JSON.parse(String(row.body)) as StoredAssessment : null;
   }
+  findRun(creatorId: string, runId: string): StoredAssessment | null {
+    const row = this.db.prepare("SELECT body FROM assessments WHERE creator_id=? AND run_id=?").get(creatorId, runId);
+    return row ? JSON.parse(String(row.body)) as StoredAssessment : null;
+  }
+  /** A bounded list of actual latest records, never a count of discovered profiles or provider capacity. */
+  listLatest(limit = 100): { records: StoredAssessment[]; total: number; partial: boolean } {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_LIST_LIMIT");
+    const total = Number(this.db.prepare("SELECT COUNT(DISTINCT creator_id) AS total FROM assessments").get()?.total ?? 0);
+    const rows = this.db.prepare(`SELECT a.body FROM assessments a
+      INNER JOIN (SELECT creator_id,MAX(revision) AS revision FROM assessments GROUP BY creator_id) latest
+        ON a.creator_id=latest.creator_id AND a.revision=latest.revision
+      ORDER BY a.recorded_at DESC,a.run_id DESC LIMIT ?`).all(limit);
+    const records = rows.map((row) => JSON.parse(String(row.body)) as StoredAssessment);
+    return { records, total, partial: total > records.length };
+  }
   history(creatorId: string): StoredAssessment[] {
     return this.db.prepare("SELECT body FROM assessments WHERE creator_id=? ORDER BY revision").all(creatorId).map((row) => JSON.parse(String(row.body)) as StoredAssessment);
   }
