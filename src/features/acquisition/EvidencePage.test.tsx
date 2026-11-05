@@ -171,13 +171,13 @@ describe("video evidence review", () => {
     const { user } = await open("demo-evidence-1", adapter);
     expect(metric("Routine compatibility")).toHaveTextContent("0 / 5");
     expect(metric("Creative quality")).toHaveTextContent("Unknown");
-    expect(metric("Published model")).toHaveTextContent("Pending");
+    expect(metric("Saved model")).toHaveTextContent("Unbound when assessed");
     await user.click(screen.getByRole("button", { name: "Inspect model status" }));
     const details = screen.getByTestId("agent-qualification");
     expect(details).toHaveTextContent("Hold");
     expect(details).toHaveTextContent("2026-11-04");
     expect(details).toHaveTextContent("synthetic-evidence-1");
-    expect(details).toHaveTextContent("Unknown — no bound current score returned");
+    expect(details).toHaveTextContent("Unknown — no bound score returned for this saved assessment");
     expect(screen.getAllByRole("button", { name: "Mark watched" })[0]).toHaveAttribute("aria-disabled", "true");
     expect(send).not.toHaveBeenCalled();
   });
@@ -209,19 +209,44 @@ describe("video evidence review", () => {
     const packet = syntheticAgentEvidence();
     packet.posts[0]!.comments = { status: "unavailable", reason: "Comments inaccessible" };
     const { user } = await open("demo-evidence-1", withAgent(qualification, packet));
-    expect(metric("Published model")).toHaveTextContent("Bound");
+    expect(metric("Saved model")).toHaveTextContent("Bound when assessed");
     await user.selectOptions(screen.getByLabelText("Checkout route"), "tiktok-shop");
     await user.click(screen.getByRole("button", { name: "Inspect model status" }));
     const details = within(screen.getByTestId("agent-qualification"));
     expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("WEBSITE-AFFILIATE-v3");
     expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("synthetic-config-7");
-    expect(details.getByRole("region", { name: "Bound current criterion weights", hidden: true })).toHaveTextContent("43%");
-    expect(details.getByRole("region", { name: "Bound current criterion weights", hidden: true })).toHaveTextContent("57%");
-    expect(details.getByRole("region", { name: "Bound current aggregate bands", hidden: true })).toHaveTextContent("Synthetic baseline");
+    expect(details.getByRole("region", { name: "Saved criterion weights", hidden: true })).toHaveTextContent("43%");
+    expect(details.getByRole("region", { name: "Saved criterion weights", hidden: true })).toHaveTextContent("57%");
+    expect(details.getByRole("region", { name: "Saved aggregate bands", hidden: true })).toHaveTextContent("Synthetic baseline");
     expect(details.getByRole("region", { name: "Metadata baseline summary", hidden: true })).toHaveTextContent("Unknown–Unknown");
     expect(details.getByRole("region", { name: "Buyer response sampling summary", hidden: true })).toHaveTextContent("Unknown rows · Unknown unique authors");
     expect(details.getByText(/Comments unavailable: Comments inaccessible/)).toBeInTheDocument();
     expect(dialog("Model status").getByText(/Editing the clip, route or observations here does not change its qualification/)).toBeInTheDocument();
+  });
+
+  it("labels a stale assessment's former binding as saved, without claiming it is the current published model", async () => {
+    const qualification = syntheticQualification({
+      state: "reviewNeeded",
+      config: { status: "bound", version: "synthetic-previous-config", hash: "synthetic-previous-hash", baselineHash: "synthetic-baseline", numericHash: "synthetic-numeric" },
+      configuration: {
+        criteria: [{ id: "synthetic-routine", label: "Synthetic routine", weight: 43, rating: 3 }, { id: "synthetic-demo", label: "Synthetic demonstration", weight: 57, rating: 4 }],
+        bands: [{ id: "Synthetic saved band", min: 0 }], arithmetic: "weight*rating/5;round-complete-total;no-rescaling",
+      },
+      gates: [{ id: "currentBasis", state: "unknown", reason: "The current configuration changed or is unavailable; this saved assessment needs a fresh review." }],
+      reasonCodes: ["CURRENT_CONFIG_CHANGED"],
+    });
+    const { user } = await open("demo-evidence-1", withAgent(qualification));
+    expect(metric("Saved model")).toHaveTextContent("Bound when assessed");
+    expect(screen.queryByTestId("metric-Published model")).not.toBeInTheDocument();
+    expect(screen.getByText(/as-assessed configuration synthetic-previous-config/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Inspect model status" }));
+    const details = within(screen.getByTestId("agent-qualification"));
+    expect(details.getByText("Review needed", { exact: false })).toBeInTheDocument();
+    expect(details.getByRole("region", { name: "Saved criterion weights", hidden: true })).toHaveTextContent("43%");
+    expect(details.getByRole("region", { name: "Saved aggregate bands", hidden: true })).toHaveTextContent("Synthetic saved band");
+    expect(details.queryByRole("region", { name: "Bound current criterion weights", hidden: true })).not.toBeInTheDocument();
+    expect(details.getByRole("region", { name: "Server qualification gates", hidden: true })).toHaveTextContent("current configuration changed or is unavailable");
+    expect(dialog("Model status").getByText(/current model publications are listed in daily sourcing/)).toBeInTheDocument();
   });
 
   it("reports an unknown record honestly", async () => {
@@ -242,14 +267,14 @@ describe("video evidence review", () => {
     const qualification = assessCreator(packet, binding);
     expect(qualification.score!.total).toBe(82);
     const { user } = await open("demo-evidence-1", withAgent(qualification, packet));
-    expect(metric("Published model")).toHaveTextContent("Bound");
+    expect(metric("Saved model")).toHaveTextContent("Bound when assessed");
     expect(metric("Routine compatibility")).toHaveTextContent("5 / 5");
     expect(metric("Creative quality")).toHaveTextContent("4 / 5");
     await user.click(screen.getByRole("button", { name: "Inspect model status" }));
     const details = within(screen.getByTestId("agent-qualification"));
     expect(details.getByText(/Activation ready/)).toBeInTheDocument();
     expect(details.getByRole("region", { name: "Agent assessment versions", hidden: true })).toHaveTextContent("2026-11-04.launch-v1");
-    const weights = details.getByRole("region", { name: "Bound current criterion weights", hidden: true });
+    const weights = details.getByRole("region", { name: "Saved criterion weights", hidden: true });
     expect(weights).toHaveTextContent("25%");
     expect(weights).toHaveTextContent("20%");
     expect(weights).toHaveTextContent("synthetic:approved-proof:verifiedCommerce");

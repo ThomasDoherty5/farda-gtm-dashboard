@@ -32,7 +32,7 @@ export function QualificationDetails({ assessment: a, packet, savedConfiguration
       <Kpi hug label="Meaningful-use posts" context="At least 2 qualifying posts must support the assigned brief">{a.packet.meaningfulUsePosts} / 2</Kpi>
     </div>
     <DataTable caption="Server qualification gates" columns={[{ label: "Gate" }, { label: "State" }, { label: "Evidence / unresolved proof" }]} rows={a.gates.map((g) => [g.id, <Badge key={g.id} tone={g.state === "pass" ? "success" : g.state === "fail" ? "warning" : "neutral"}>{g.state}</Badge>, g.reason])} />
-    <p>Server score: {a.score ? `weighted ${known(a.score.earned)} / ${known(a.score.max)} · total ${known(a.score.total)} · band ${a.score.band ?? "Unknown"} · ${a.score.unknownCount} unknown criteria` : "Unknown — no bound current score returned"}. Existing weights and aggregate bands remain server-owned; no historical v2 fallback is applied.</p>
+    <p>Server score: {a.score ? `weighted ${known(a.score.earned)} / ${known(a.score.max)} · total ${known(a.score.total)} · band ${a.score.band ?? "Unknown"} · ${a.score.unknownCount} unknown criteria` : savedConfiguration ? "Unknown — no bound score returned for this saved assessment" : "Unknown — no bound current score returned"}. Existing weights and aggregate bands remain server-owned; no historical v2 fallback is applied.</p>
     <DataTable caption="Metadata baseline summary" columns={[{ label: "Measure" }, { label: "Source-backed value" }]} rows={[
       ["Recent unpinned coverage", `${a.metadata.sampleSize} / 10 · ${a.metadata.coverage}`], ["Comparable view rows", a.metadata.comparableViewCount],
       ["Median views", known(a.metadata.medianViews)], ["View spread", `${known(a.metadata.minViews)}–${known(a.metadata.maxViews)}`],

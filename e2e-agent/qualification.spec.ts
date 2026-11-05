@@ -130,7 +130,7 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(envelope.data.agentEvidence.creatorId).toBe(creatorId);
     await expect(page.getByTestId("metric-Routine compatibility")).toHaveText("0 / 5");
     await expect(page.getByTestId("metric-Creative quality")).toHaveText("4 / 5");
-    await expect(page.getByTestId("metric-Published model")).toHaveText("Bound");
+    await expect(page.getByTestId("metric-Saved model")).toHaveText("Bound when assessed");
     await expect(page.getByTestId("metric-Commerce confidence")).toHaveText("Unknown");
     await expect(page.getByRole("button", { name: "Mark watched" }).first()).toHaveAttribute("aria-disabled", "true");
     await page.getByRole("button", { name: "Inspect model status" }).click();
@@ -138,10 +138,10 @@ test("the real agent persists its assessment and the existing evidence screen re
     await expect(dialog.getByTestId("agent-qualification")).toContainText("Hold");
     await expect(dialog.getByRole("region", { name: "Agent assessment versions" })).toContainText(POLICY_VERSION);
     await expect(dialog.getByRole("region", { name: "Agent assessment versions" })).toContainText("2026-11-04.launch-v1");
-    await expect(dialog.getByRole("region", { name: "Bound current criterion weights" })).toContainText("Contextual / routine fit");
-    await expect(dialog.getByRole("region", { name: "Bound current criterion weights" })).toContainText("25%");
-    await expect(dialog.getByRole("region", { name: "Bound current aggregate bands" })).toContainText("priorityReview");
-    await expect(dialog.getByRole("region", { name: "Bound current criterion weights" }).locator("input, select, textarea, button")).toHaveCount(0);
+    await expect(dialog.getByRole("region", { name: "Saved criterion weights" })).toContainText("Contextual / routine fit");
+    await expect(dialog.getByRole("region", { name: "Saved criterion weights" })).toContainText("25%");
+    await expect(dialog.getByRole("region", { name: "Saved aggregate bands" })).toContainText("priorityReview");
+    await expect(dialog.getByRole("region", { name: "Saved criterion weights" }).locator("input, select, textarea, button")).toHaveCount(0);
     await expect(dialog.getByRole("region", { name: "Server qualification gates" })).toContainText("ROUTINE_FLOOR");
     await expect(dialog.getByRole("region", { name: "Server qualification gates" })).toContainText("fail");
     await expect(dialog.getByRole("region", { name: "Server qualification gates" }).locator("input, select, textarea, button")).toHaveCount(0);

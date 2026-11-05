@@ -156,7 +156,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
           </div>
           <SelectField label="Checkout route" helpText="Recruitment and publishing network remain independent." value={route} onChange={(v) => setRoute(v as CheckoutRoute)} options={ROUTES} />
           <div><Badge tone="violet" width={258} testId="model-badge">{MODEL_FOR_ROUTE[route]}</Badge></div>
-          <Kpi hug label="Published model" context={qualification ? `${qualification.modelId} · configuration ${qualification.config.version ?? "Unknown"}` : "Current agent configuration not returned."} testId="metric-Published model">{qualification ? (qualification.config.status === "bound" ? "Bound" : "Pending") : record.modelPublication.label}</Kpi>
+          <Kpi hug label={qualification ? "Saved model" : "Published model"} context={qualification ? `${qualification.modelId} · as-assessed configuration ${qualification.config.version ?? "Unknown"}` : "Current agent configuration not returned."} testId={qualification ? "metric-Saved model" : "metric-Published model"}>{qualification ? (qualification.config.status === "bound" ? "Bound when assessed" : "Unbound when assessed") : record.modelPublication.label}</Kpi>
           <div className={styles.pairTight}>
             <Kpi hug label={qualification ? "Demonstration / story" : "Creative quality"} context={qualification ? "Agent rating · independent floor ≥3" : "Actual framing, hook and story"} testId="metric-Creative quality">{qualification ? rating(qualification.criteria.demo) : record.assessments.creative.state === "known" ? record.assessments.creative.value : "Unknown"}</Kpi>
             <Kpi hug label="Routine compatibility" context={qualification ? "Agent rating · independent floor ≥3" : "Observed product format + use"} testId="metric-Routine compatibility">{qualification ? rating(qualification.criteria.routine) : record.assessments.routine.state === "known" ? record.assessments.routine.value : "Unknown"}</Kpi>
@@ -229,11 +229,11 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>
-        {qualification ? <QualificationDetails assessment={qualification} packet={record.agentEvidence} /> : <>
+        {qualification ? <QualificationDetails assessment={qualification} packet={record.agentEvidence} savedConfiguration /> : <>
           <p>Checkout route: {ROUTE_LABEL[route]}. Current model: {MODEL_FOR_ROUTE[route]}. Publication: {record.modelPublication.label}. Version: not returned.</p>
           <p>The evidence policy is approved. A current agent assessment and bound configuration have not been returned for this record. Earlier v2 snapshots remain historical and cannot authorize new acquisition.</p>
         </>}
-        {qualification && <p className={styles.small}>This is the saved server assessment, independent of this partial-review draft. Editing the clip, route or observations here does not change its qualification or authorize an action.</p>}
+        {qualification && <p className={styles.small}>This is the saved server assessment, independent of this partial-review draft. Editing the clip, route or observations here does not change its qualification or authorize an action. Its configuration is the one used when assessed; current model publications are listed in daily sourcing.</p>}
         <p>Evidence coverage: visual {coverage(visual).toLowerCase()}, audio {coverage(audio).toLowerCase()}.</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
