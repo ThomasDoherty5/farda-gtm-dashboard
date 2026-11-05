@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { evidencePacketSchema } from "./evidence.ts";
 import type { ConfigBinding } from "./config.ts";
@@ -14,6 +14,15 @@ import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 const versionOfData = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
+const CURSOR_TTL_MS = 15 * 60_000;
+class InvalidCursor extends Error {}
+const cursorPayloadSchema = z.object({
+  version: z.literal(1), workspaceId: z.string(), accountId: z.string(), environment: z.literal("sandbox"), contextHash: z.string().regex(/^[a-f0-9]{64}$/),
+  snapshotId: z.string().uuid(), asOf: z.string().datetime({ offset: true }), expiresAt: z.number().int().nonnegative().safe(),
+  rowId: z.number().int().positive().safe(), anchorRunId: z.string().min(1), total: z.number().int().positive().safe(),
+  offset: z.number().int().positive().safe(), limit: z.number().int().min(1).max(100),
+  after: z.object({ recordedAt: z.string().datetime({ offset: true }), runId: z.string().min(1) }).strict(),
+}).strict();
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string };
@@ -27,6 +36,32 @@ export function createAgentServer(options: AgentServerOptions) {
   const sessions = new Map<string, Session>();
   const bindings = options.bindings ?? [];
   const modelBinding = (route: "website" | "tiktok-shop") => bindings.find((b) => b.current.modelId === MODEL_FOR_ROUTE[route]) ?? null;
+  const cursorKey = createHmac("sha256", options.readToken).update("farda.creator-sourcing.cursor.v1").digest();
+  const cursorContext = () => versionOfData({ policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION, agentSchemaVersion: AGENT_SCHEMA_VERSION,
+    models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], hash: modelBinding(route)?.hash ?? null })) });
+  const encodeCursor = (payload: z.infer<typeof cursorPayloadSchema>) => {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", cursorKey, iv);
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(payload), "utf8"), cipher.final()]);
+    return `sc1.${Buffer.concat([iv, encrypted, cipher.getAuthTag()]).toString("base64url")}`;
+  };
+  const decodeCursor = (token: string, limit: number) => {
+    let payload: z.infer<typeof cursorPayloadSchema>;
+    try {
+      if (!/^sc1\.[A-Za-z0-9_-]{40,4096}$/.test(token)) throw new InvalidCursor();
+      const encoded = token.slice(4);
+      const bytes = Buffer.from(encoded, "base64url");
+      if (bytes.toString("base64url") !== encoded || bytes.length < 29) throw new InvalidCursor();
+      const decipher = createDecipheriv("aes-256-gcm", cursorKey, bytes.subarray(0, 12));
+      decipher.setAuthTag(bytes.subarray(-16));
+      const plaintext = Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()]).toString("utf8");
+      payload = cursorPayloadSchema.parse(JSON.parse(plaintext));
+      if (payload.workspaceId !== options.workspaceId || payload.accountId !== options.accountId || payload.limit !== limit) throw new InvalidCursor();
+    } catch { throw new InvalidCursor(); }
+    if (payload.expiresAt <= Date.now()) throw new AgentConflict("CURSOR_EXPIRED");
+    if (payload.contextHash !== cursorContext()) throw new AgentConflict("CURSOR_STALE");
+    return payload;
+  };
   const authorize = (req: IncomingMessage): { role: Role; session: Session | null } | null => {
     const auth = req.headers.authorization;
     if (auth?.startsWith("Bearer ")) {
@@ -46,7 +81,7 @@ export function createAgentServer(options: AgentServerOptions) {
   const readBase = z.object({
     schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
     requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
-    period: z.unknown(), sort: z.array(z.unknown()), page: z.unknown(),
+    period: z.unknown(), sort: z.array(z.unknown()), page: z.object({ cursor: z.string().max(4100).nullable(), limit: z.number().int().min(1).max(100) }).strict(),
   }).strict();
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
@@ -120,8 +155,17 @@ export function createAgentServer(options: AgentServerOptions) {
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
         if (input.viewKey === "discoverySummary") {
-          const listing = store.listLatest();
-          const records = listing.records.map((stored) => current(stored));
+          const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
+          const listing = store.listLatestPage({ limit: input.page.limit, snapshot: cursor ? { rowId: cursor.rowId, anchorRunId: cursor.anchorRunId } : undefined, after: cursor?.after });
+          const offset = cursor?.offset ?? 0;
+          if (cursor && (cursor.total !== listing.total || offset >= listing.total || offset + listing.records.length > listing.total || listing.hasMore !== (offset + listing.records.length < listing.total))) throw new AgentConflict("CURSOR_SNAPSHOT_UNAVAILABLE");
+          const records = listing.records.map((stored) => ({ ...current(stored, stored.superseded), superseded: stored.superseded }));
+          const now = Date.now();
+          const snapshot = { id: cursor?.snapshotId ?? randomUUID(), asOf: cursor?.asOf ?? new Date(now).toISOString(), expiresAt: new Date(cursor?.expiresAt ?? now + CURSOR_TTL_MS).toISOString(), offset, limit: input.page.limit, returnedCount: records.length, total: listing.total };
+          const nextCursor = listing.hasMore && listing.lastPosition ? encodeCursor({ version: 1, workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox", contextHash: cursorContext(),
+            snapshotId: snapshot.id, asOf: snapshot.asOf, expiresAt: Date.parse(snapshot.expiresAt), rowId: listing.snapshot.rowId, anchorRunId: listing.snapshot.anchorRunId!, total: listing.total,
+            offset: offset + records.length, limit: input.page.limit, after: listing.lastPosition }) : null;
+          const partial = listing.total > records.length;
           const models = (["website", "tiktok-shop"] as const).map((route) => {
             const binding = modelBinding(route);
             return {
@@ -134,16 +178,16 @@ export function createAgentServer(options: AgentServerOptions) {
           });
           const data = agentSourcingSchema.parse({
             kind: "agent-sourcing", policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION, agentSchemaVersion: AGENT_SCHEMA_VERSION,
-            records: records.map((record) => ({ creatorId: record.packet.creatorId, runId: record.runId, evidenceId: record.packet.posts[0]?.postId ?? null,
-              briefId: record.packet.briefId, checkoutRoute: record.packet.checkoutRoute, state: record.assessment.state, recordedAt: record.recordedAt, revision: record.revision, stale: record.stale })),
-            models, total: listing.total, partial: listing.partial,
+            records: records.map((record) => ({ creatorId: record.packet.creatorId, runId: record.runId, evidenceId: record.superseded ? null : record.packet.posts[0]?.postId ?? null,
+              briefId: record.packet.briefId, checkoutRoute: record.packet.checkoutRoute, state: record.assessment.state, recordedAt: record.recordedAt, revision: record.revision, stale: record.stale, superseded: record.superseded })),
+            models, total: listing.total, partial, snapshot,
           });
           const dataVersion = versionOfData(data);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
-            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion, dataState: listing.partial ? "partial" : records.some((record) => record.stale) ? "stale" : "ready", data,
-            sourceFreshness: [], coverage: { expectedCount: listing.total, observedCount: records.length, missingCount: listing.total - records.length, complete: !listing.partial, reasonCodes: listing.partial ? ["LATEST_RECORD_LIMIT"] : [] },
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion, dataState: partial ? "partial" : records.some((record) => record.stale) ? "stale" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: listing.total, observedCount: records.length, missingCount: listing.total - records.length, complete: !partial, reasonCodes: partial ? ["SNAPSHOT_PAGE_PARTIAL"] : [] },
             capabilities: [{ actionKind: "startLiveDiscovery", state: "held", reasonCodes: ["SOURCE_AUTOMATION_NOT_CONNECTED"] }],
-            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
+            page: { nextCursor, hasMore: listing.hasMore }, refresh: { nextPollAfterMs: null },
           });
         }
         if (input.viewKey === "assessmentRecord") {
@@ -185,6 +229,7 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof InvalidCursor) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
       if (error instanceof AgentConflict) return reply(res, 409, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof z.ZodError || error instanceof SyntaxError) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
       if (error instanceof Error && error.message === "BODY_TOO_LARGE") return reply(res, 413, { code: "BODY_TOO_LARGE", executionCertainty: "notApplied" });

@@ -9,6 +9,8 @@ import { digest } from "./config.ts";
 
 export class AgentConflict extends Error {}
 export type StoredAssessment = { runId: string; revision: number; recordedAt: string; packetHash: string; packet: EvidencePacket; assessment: CreatorAssessment };
+export type SourcingSnapshot = { rowId: number; anchorRunId: string | null };
+export type SourcingPosition = { recordedAt: string; runId: string };
 
 /** Append-only evidence and assessment revisions. A retry returns its original receipt; history is never overwritten. */
 export class AgentStore {
@@ -52,6 +54,35 @@ export class AgentStore {
       ORDER BY a.recorded_at DESC,a.run_id DESC LIMIT ?`).all(limit);
     const records = rows.map((row) => JSON.parse(String(row.body)) as StoredAssessment);
     return { records, total, partial: total > records.length };
+  }
+  /** Fixed append-only watermark/keyset membership; current supersession is observed separately. */
+  listLatestPage({ limit, snapshot, after }: { limit: number; snapshot?: SourcingSnapshot; after?: SourcingPosition }): {
+    records: (StoredAssessment & { superseded: boolean })[]; total: number; snapshot: SourcingSnapshot; hasMore: boolean; lastPosition: SourcingPosition | null;
+  } {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_LIST_LIMIT");
+    this.db.exec("BEGIN");
+    try {
+      const maxRowId = Number(this.db.prepare("SELECT COALESCE(MAX(rowid),0) AS watermark FROM assessments").get()?.watermark ?? 0);
+      const rowId = snapshot?.rowId ?? maxRowId;
+      if (!Number.isSafeInteger(rowId) || rowId < 0 || rowId > maxRowId) throw new AgentConflict("CURSOR_SNAPSHOT_UNAVAILABLE");
+      const anchorRunId = rowId ? String(this.db.prepare("SELECT run_id FROM assessments WHERE rowid=?").get(rowId)?.run_id ?? "") : null;
+      if ((rowId > 0 && !anchorRunId) || (snapshot && snapshot.anchorRunId !== anchorRunId)) throw new AgentConflict("CURSOR_SNAPSHOT_UNAVAILABLE");
+      const total = Number(this.db.prepare("SELECT COUNT(DISTINCT creator_id) AS total FROM assessments WHERE rowid<=?").get(rowId)?.total ?? 0);
+      const positionClause = after ? "WHERE (a.recorded_at < ? OR (a.recorded_at = ? AND a.run_id < ?))" : "";
+      const values: (number | string)[] = [rowId];
+      if (after) values.push(after.recordedAt, after.recordedAt, after.runId);
+      values.push(limit + 1);
+      const rows = this.db.prepare(`WITH latest AS (
+        SELECT creator_id,MAX(revision) AS revision FROM assessments WHERE rowid<=? GROUP BY creator_id
+      ) SELECT a.body,EXISTS(SELECT 1 FROM assessments newer WHERE newer.creator_id=a.creator_id AND newer.revision>a.revision) AS superseded
+        FROM assessments a INNER JOIN latest ON a.creator_id=latest.creator_id AND a.revision=latest.revision
+        ${positionClause} ORDER BY a.recorded_at DESC,a.run_id DESC LIMIT ?`).all(...values);
+      const hasMore = rows.length > limit;
+      const records = rows.slice(0, limit).map((row) => ({ ...JSON.parse(String(row.body)) as StoredAssessment, superseded: Boolean(row.superseded) }));
+      const last = records.at(-1);
+      this.db.exec("COMMIT");
+      return { records, total, snapshot: { rowId, anchorRunId }, hasMore, lastPosition: last ? { recordedAt: last.recordedAt, runId: last.runId } : null };
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
   history(creatorId: string): StoredAssessment[] {
     return this.db.prepare("SELECT body FROM assessments WHERE creator_id=? ORDER BY revision").all(creatorId).map((row) => JSON.parse(String(row.body)) as StoredAssessment);

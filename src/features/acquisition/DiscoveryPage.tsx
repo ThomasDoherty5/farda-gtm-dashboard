@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
+import { AdapterError } from "@/adapter/errors";
 import { useScope } from "@/adapter/scope";
-import { useView } from "@/adapter/useView";
+import { usePagedView } from "@/adapter/usePagedView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
@@ -40,15 +41,39 @@ const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`
 type DiscoveryReadData = DiscoveryData | AgentSourcingData;
 const isAgentSourcing = (data: DiscoveryReadData): data is AgentSourcingData => "kind" in data && data.kind === "agent-sourcing";
 
+/** A portfolio combines only pages from the same fixed server snapshot, deduplicated by saved run. */
+function sourcingPortfolio(pages: ReadResponse<DiscoveryReadData>[]) {
+  const first = pages[0]?.data;
+  if (!first || !isAgentSourcing(first)) return null;
+  if (!first.snapshot) return pages.length === 1 ? { data: first, records: first.records } : null;
+  const records = new Map<string, AgentSourcingData["records"][number]>();
+  for (const page of pages) {
+    const data = page.data;
+    if (!data || !isAgentSourcing(data) || data.snapshot?.id !== first.snapshot.id || data.total !== first.total || data.snapshot.asOf !== first.snapshot.asOf) return null;
+    for (const record of data.records) records.set(record.runId, record);
+  }
+  return { data: first, records: [...records.values()] };
+}
+
 /** Daily sourcing and invitation plan (Figma source 102:555, owner THO-287). Read work only: nothing here starts a source action. */
 export function DiscoveryPage() {
   const { adapter } = useScope();
-  const query = useView<Record<string, never>, DiscoveryReadData>("discoverySummary", {});
+  const query = usePagedView<Record<string, never>, DiscoveryReadData>("discoverySummary", {});
   const demo = adapter.kind === "demo";
-  const data = query.data?.data;
+  const response = query.data?.pages[0];
+  const data = response?.data;
   const current = data && isAgentSourcing(data) ? data : null;
-  const firstEvidence = current?.records.find((record) => record.evidenceId !== null);
+  const portfolio = query.data ? sourcingPortfolio(query.data.pages) : null;
+  const snapshotMismatch = Boolean(current && !portfolio);
+  const firstEvidence = portfolio?.records.find((record) => record.evidenceId !== null);
   const reviewPath = firstEvidence?.evidenceId ? evidenceReviewPath(firstEvidence.creatorId, firstEvidence.evidenceId) : demo && !current ? evidencePath : null;
+  const partial = portfolio ? portfolio.records.length < portfolio.data.total : false;
+  const aggregateResponse = portfolio && response ? {
+    ...response, dataState: partial ? "partial" as const : portfolio.records.some((record) => record.stale) ? "stale" as const : "ready" as const,
+    coverage: { expectedCount: portfolio.data.total, observedCount: portfolio.records.length, missingCount: Math.max(0, portfolio.data.total - portfolio.records.length), complete: !partial, reasonCodes: partial ? ["MORE_SAVED_CREATORS"] : [] },
+  } : response;
+  const restartSnapshot = query.error instanceof AdapterError && ["INVALID_CURSOR", "CURSOR_EXPIRED", "CURSOR_SNAPSHOT_UNAVAILABLE", "CURSOR_STALE"].includes(query.error.body.code);
+  const retry = () => { void (query.isFetchNextPageError && !restartSnapshot ? query.fetchNextPage() : query.refetch()); };
   return (
     <section aria-labelledby="discovery-title" data-figma-source="102:555" className={styles.page}>
       <div className={styles.titleRow}>
@@ -60,38 +85,45 @@ export function DiscoveryPage() {
         <LinkButton to="/settings/capabilities" style={{ minWidth: 162 }}>Validate access</LinkButton>
       </div>
       <AcquisitionTabs current="Daily sourcing" evidencePath={reviewPath} />
-      <ReadState res={query.data} subject="Daily sourcing" only={["stale", "partial"]} />
+      <ReadState res={aggregateResponse} subject="Daily sourcing" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading daily sourcing…" />}
-      {query.isError && <ViewError error={query.error} subject="Daily sourcing" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data &&
-        (data ? isAgentSourcing(data) ? <AgentSourcing data={data} /> : demo ? <Body res={query.data as ReadResponse<DiscoveryData>} data={data} demo /> : <EmptyState state="Empty" title="Saved sourcing records unavailable"><p>This source has not returned the current creator records. Review evidence when a saved record is available.</p></EmptyState> : <EmptyState state="Empty" title="No sourcing plan yet"><p>The source responded, but no daily plan is configured.</p></EmptyState>)}
+      {query.isError && <ViewError error={query.error} subject="Daily sourcing" hasPriorData={Boolean(response)} onRetry={retry} />}
+      {restartSnapshot && <p role="status" className={styles.small}>The saved queue snapshot is no longer available. Try again or refresh the queue to start a fresh snapshot.</p>}
+      {snapshotMismatch && <EmptyState state="Error" title="Saved queue snapshot mismatch" alert><p>These pages do not belong to one saved snapshot. No combined records are shown.</p><Button variant="secondary" onClick={() => void query.refetch()}>Refresh queue</Button></EmptyState>}
+      {response && !snapshotMismatch &&
+        (data ? isAgentSourcing(data) && portfolio ? <AgentSourcing data={data} records={portfolio.records} hasMore={Boolean(query.hasNextPage)} loading={query.isFetchingNextPage} refreshing={query.isRefetching && !query.isFetchingNextPage} onLoadMore={() => void query.fetchNextPage()} onRefresh={() => void query.refetch()} /> : demo ? <Body res={response as ReadResponse<DiscoveryData>} data={data as DiscoveryData} demo /> : <EmptyState state="Empty" title="Saved sourcing records unavailable"><p>This source has not returned the current creator records. Review evidence when a saved record is available.</p></EmptyState> : <EmptyState state="Empty" title="No sourcing plan yet"><p>The source responded, but no daily plan is configured.</p></EmptyState>)}
     </section>
   );
 }
 
 /** Actual saved source packets and current model publication; no illustrative batch or capacity is substituted. */
-function AgentSourcing({ data }: { data: AgentSourcingData }) {
+function AgentSourcing({ data, records, hasMore, loading, refreshing, onLoadMore, onRefresh }: { data: AgentSourcingData; records: AgentSourcingData["records"]; hasMore: boolean; loading: boolean; refreshing: boolean; onLoadMore: () => void; onRefresh: () => void }) {
+  const partial = records.length < data.total;
   return <>
     <KpiRow>
-      <Kpi label="Saved creators" context={`${data.records.length} displayed${data.partial ? ` of ${data.total}` : ""}`}>{data.total}</Kpi>
+      <Kpi label="Saved creators" context={`${records.length} displayed of ${data.total} in snapshot`}>{data.total}</Kpi>
       <Kpi label="Published models" context="Independent website and TikTok Shop configurations">{data.models.filter((model) => model.status === "bound").length} / 2</Kpi>
       <Kpi label="Policy" context={`Agent ${data.agentVersion} · schema ${data.agentSchemaVersion}`}>{data.policyVersion}</Kpi>
     </KpiRow>
     <section className={styles.card} aria-labelledby="saved-sourcing-title">
       <div className={styles.sectionTitle}>
         <h2 id="saved-sourcing-title" className={styles.h2}>Saved creator sourcing</h2>
-        <p className={styles.small}>Latest saved assessment per creator. Open a saved run to inspect its evidence and qualification. This list does not send invitations.</p>
+        <p className={styles.small}>Latest saved assessment per creator{data.snapshot ? <> as of <time dateTime={data.snapshot.asOf}>{data.snapshot.asOf}</time></> : "; no snapshot reference returned"}. New assessments appear after refreshing. Readiness is checked when each page is read; open the exact saved run for its latest status. This list does not send invitations.</p>
       </div>
-      {data.records.length ? <DataTable caption="Saved creator sourcing records" columns={[{ label: "Creator / brief" }, { label: "Checkout route / state" }, { label: "Saved run" }, { label: "Review" }]} rows={data.records.map((record) => [
+      {records.length ? <DataTable caption="Saved creator sourcing records" columns={[{ label: "Creator / brief" }, { label: "Checkout route / state" }, { label: "Saved run" }, { label: "Review" }]} rows={records.map((record) => [
         <span key={record.creatorId}>{record.creatorId}<br />{record.briefId}</span>,
-        <span key={`${record.creatorId}-state`}>{record.checkoutRoute === "website" ? "Website" : "TikTok Shop"}<br /><Badge tone={record.stale || record.state === "hold" ? "warning" : "violet"}>{record.stale ? "Review needed · stale" : decisionLabel[record.state]}</Badge></span>,
+        <span key={`${record.creatorId}-state`}>{record.checkoutRoute === "website" ? "Website" : "TikTok Shop"}<br /><Badge tone={record.stale || record.state === "hold" ? "warning" : "violet"}>{record.superseded ? "Review needed · superseded" : record.stale ? "Review needed · stale" : decisionLabel[record.state]}</Badge></span>,
         <span key={record.runId}>{record.runId}<br />Revision {record.revision} · <time dateTime={record.recordedAt}>{record.recordedAt}</time></span>,
         <div key={`${record.runId}-links`} className={styles.actions}>
           <LinkButton variant="secondary" to={creatorAssessmentPath(record.creatorId, record.runId)}>View assessment</LinkButton>
           {record.evidenceId !== null ? <LinkButton variant="secondary" to={evidenceReviewPath(record.creatorId, record.evidenceId)}>Review source evidence</LinkButton> : <span className={styles.small}>Source link unavailable for this saved run.</span>}
         </div>,
       ])} /> : <EmptyState state="Empty" title="No saved creators yet"><p>No reviewed creator packets have been saved in this workspace.</p></EmptyState>}
-      {data.partial && <p className={styles.small}>Showing {data.records.length} of {data.total} saved creators. This is a partial list.</p>}
+      <p className={styles.small} role="status">Showing {records.length} of {data.total} saved creators. {partial ? "This is a partial list." : "All saved creators in this snapshot are loaded."}</p>
+      <div className={styles.actions}>
+        {hasMore && <Button variant="secondary" loading={loading} disabledReason={refreshing ? "The queue is refreshing." : null} onClick={onLoadMore}>Load more creators</Button>}
+        <Button variant="secondary" loading={refreshing} disabledReason={loading ? "A page is loading." : null} onClick={onRefresh}>Refresh queue</Button>
+      </div>
     </section>
     {data.models.map((model) => <PublishedModel key={model.modelId} model={model} />)}
   </>;
