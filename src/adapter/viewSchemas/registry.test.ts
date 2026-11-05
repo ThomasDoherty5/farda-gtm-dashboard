@@ -185,12 +185,21 @@ describe("no screen reads a view the live adapter cannot check", () => {
       return /\.tsx?$/.test(name) && !/\.test\./.test(name) ? [full] : [];
     });
   }
+  const literalViewReads = (source: string) => [...source.matchAll(/\buse(?:Paged)?View<[\s\S]*?>\(\s*"([A-Za-z0-9]+)"/g)].map((match) => match[1]!);
   const used = new Set<string>();
   for (const file of sourceFiles(join(process.cwd(), "src/features"))) {
     const text = readFileSync(file, "utf8");
-    for (const m of text.matchAll(/useView<[\s\S]*?>\(\s*"([A-Za-z0-9]+)"/g)) used.add(m[1]!);
+    for (const viewKey of literalViewReads(text)) used.add(viewKey);
   }
 
+  it("detects literal reads through both ordinary and paged hooks, including nested generic types", () => {
+    const source = `
+      useView<{ creatorId: string }, Result>("evidenceRecord", filters);
+      usePagedView<Record<string, never>, Result>("discoverySummary", {});
+      usePagedPreview<Record<string, never>, Result>("notAView", {});
+    `;
+    expect(literalViewReads(source)).toEqual(["evidenceRecord", "discoverySummary"]);
+  });
   it("finds the views the screens read", () => {
     expect(used.size).toBeGreaterThan(30);
   });

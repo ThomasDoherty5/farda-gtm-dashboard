@@ -53,6 +53,7 @@ test.beforeAll(() => { directory = mkdtempSync(join(tmpdir(), "farda-agent-brows
 test.afterAll(async () => { await stopService(); if (directory) rmSync(directory, { recursive: true, force: true }); });
 
 test("the real agent persists its assessment and the existing evidence screen reads it without browser credentials or invented sales", async ({ page, context }, testInfo) => {
+  test.setTimeout(60_000); // Bounded allowance for 201 sequential synthetic HTTP seeds and five browser pages.
   await startService();
   const machine = await apiRequest.newContext({ baseURL: service, extraHTTPHeaders: { authorization: `Bearer ${reviewer}` } });
   try {
@@ -62,6 +63,21 @@ test("the real agent persists its assessment and the existing evidence screen re
     const available = await capabilities.json() as { models: { modelId: string; configHash: string | null }[] };
     const configHash = available.models.find((model) => model.modelId === "WEBSITE-AFFILIATE-v3")?.configHash;
     expect(configHash).toBe("048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6");
+    const expectedRuns = new Set<string>();
+    let oldestQueueRecord: { creatorId: string; runId: string } | undefined;
+    // These are synthetic reviewed packets, not discovered or qualified live creators.
+    // Seed the journey's main creator last so it remains visible on the first page.
+    for (let index = 0; index < 200; index++) {
+      const queueCreatorId = `synthetic-browser-queue-${String(index).padStart(3, "0")}`;
+      const queuePacket = syntheticAgentEvidence({ creatorId: queueCreatorId, evidenceRevision: "synthetic-browser-pagination-1", ratings: { routine: 0, demo: 4 } });
+      const result = await machine.put(`/v1/creators/${queueCreatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash, packet: queuePacket } });
+      expect(result.status()).toBe(200);
+      const saved = await result.json();
+      expect(saved.runId).toMatch(/^[0-9a-f-]{36}$/);
+      expectedRuns.add(saved.runId);
+      oldestQueueRecord ??= { creatorId: queueCreatorId, runId: saved.runId };
+      await result.dispose();
+    }
     const seeded = await machine.put(`/v1/creators/${creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash, packet } });
     expect(seeded.status()).toBe(200);
     const receipt = await seeded.json();
@@ -70,6 +86,8 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(receipt.assessment.config).toMatchObject({ status: "bound", version: "2026-11-04.launch-v1", hash: configHash });
     expect(receipt.assessment.state).toBe("hold");
     expect(receipt.assessment.score.total).toBeNull(); // No noncritical source proof or verified sales are supplied.
+    expectedRuns.add(receipt.runId);
+    expect(expectedRuns.size).toBe(201);
 
     const signIn = async () => {
       const answer = await context.request.get(`${service}/v1/session`, { headers: { authorization: `Basic ${Buffer.from(`reader:${reader}`).toString("base64")}` } });
@@ -87,6 +105,69 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(sourcingEnvelope.scope).toMatchObject({ workspaceId, accountIds: [accountId], environment: "sandbox" });
     expect(sourcingEnvelope.data.kind).toBe("agent-sourcing");
     expect(sourcingEnvelope.data.records).toContainEqual(expect.objectContaining({ creatorId, runId: receipt.runId, evidenceId }));
+    expect(sourcing.request().postDataJSON().page).toEqual({ cursor: null, limit: 50 });
+    expect(sourcingEnvelope.data.snapshot).toMatchObject({ offset: 0, limit: 50, returnedCount: 50, total: 201 });
+    expect(sourcingEnvelope.data.records).toHaveLength(50);
+    expect(sourcingEnvelope.data.partial).toBe(true);
+    expect(sourcingEnvelope.page.hasMore).toBe(true);
+    const snapshot = sourcingEnvelope.data.snapshot;
+    const snapshotRows = [...sourcingEnvelope.data.records];
+    const pageSizes = [snapshotRows.length];
+    await expect(page.getByText("Showing 50 of 201 saved creators. This is a partial list.")).toBeVisible();
+
+    // A new revision after page one must not change snapshot membership/order/run identity.
+    // When its old saved run is reached, the server must withhold current evidence navigation.
+    expect(oldestQueueRecord).toBeDefined();
+    const oldest = oldestQueueRecord!;
+    const revisedPacket = syntheticAgentEvidence({ creatorId: oldest.creatorId, evidenceRevision: "synthetic-browser-pagination-2", ratings: { routine: 0, demo: 3 } });
+    const revisedAnswer = await machine.put(`/v1/creators/${oldest.creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 1, policyVersion: POLICY_VERSION, configHash, packet: revisedPacket } });
+    expect(revisedAnswer.status()).toBe(200);
+    const revisedReceipt = await revisedAnswer.json();
+    expect(revisedReceipt.revision).toBe(2);
+    expect(revisedReceipt.runId).not.toBe(oldest.runId);
+    await revisedAnswer.dispose();
+
+    let nextCursor = sourcingEnvelope.page.nextCursor;
+    for (const loaded of [100, 150, 200, 201]) {
+      expect(typeof nextCursor).toBe("string");
+      expect(nextCursor.length).toBeGreaterThan(32);
+      const requestedCursor = nextCursor;
+      const nextAnswer = page.waitForResponse((response) => response.url() === `${app}/v1/read` && response.request().method() === "POST" && response.request().postDataJSON().viewKey === "discoverySummary" && response.request().postDataJSON().page.cursor === requestedCursor);
+      await page.getByRole("button", { name: "Load more creators" }).click();
+      const next = await nextAnswer;
+      expect(next.status()).toBe(200);
+      expect(next.request().headers().authorization).toBeUndefined();
+      expect(next.request().postDataJSON().page).toEqual({ cursor: requestedCursor, limit: 50 });
+      expect(next.request().postDataJSON().requestedScope).toEqual({ workspaceId, accountIds: [accountId], environment: "sandbox" });
+      const nextEnvelope = await next.json();
+      const count = loaded === 201 ? 1 : 50;
+      expect(nextEnvelope.scope).toMatchObject({ workspaceId, accountIds: [accountId], environment: "sandbox" });
+      expect(nextEnvelope.data.snapshot).toEqual({ ...snapshot, offset: snapshotRows.length, returnedCount: count });
+      expect(nextEnvelope.data.records).toHaveLength(count);
+      expect(nextEnvelope.data.total).toBe(201);
+      expect(nextEnvelope.data.partial).toBe(true); // Each page is a partial response even when the UI finishes accumulating.
+      expect(nextEnvelope.coverage).toMatchObject({ expectedCount: 201, observedCount: count, missingCount: 201 - count, complete: false });
+      expect(nextEnvelope.page.hasMore).toBe(loaded < 201);
+      if (loaded === 201) expect(nextEnvelope.page.nextCursor).toBeNull();
+      snapshotRows.push(...nextEnvelope.data.records);
+      pageSizes.push(count);
+      nextCursor = nextEnvelope.page.nextCursor;
+      await expect(page.getByText(`Showing ${loaded} of 201 saved creators. ${loaded === 201 ? "All saved creators in this snapshot are loaded." : "This is a partial list."}`)).toBeVisible();
+    }
+    expect(snapshotRows).toHaveLength(201);
+    expect(new Set(snapshotRows.map((record) => record.runId))).toEqual(expectedRuns);
+    expect(new Set(snapshotRows.map((record) => record.creatorId)).size).toBe(201);
+    expect(snapshotRows.some((record) => record.runId === revisedReceipt.runId)).toBe(false);
+    expect(snapshotRows.find((record) => record.runId === oldest.runId)).toMatchObject({ state: "reviewNeeded", stale: true, superseded: true, evidenceId: null });
+    const sourceTable = page.getByRole("region", { name: "Saved creator sourcing records" });
+    const savedLinks = sourceTable.locator('a[href*="/assessments/"]');
+    await expect(savedLinks).toHaveCount(201);
+    expect(new Set(await savedLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href")))).size).toBe(201);
+    await expect(page.getByRole("button", { name: "Load more creators" })).toHaveCount(0);
+    const supersededPath = `/creators/${oldest.creatorId}/assessments/${oldest.runId}`;
+    const supersededRow = sourceTable.getByRole("row").filter({ has: page.locator(`a[href="${supersededPath}"]`) });
+    await expect(supersededRow).toContainText("Review needed · superseded");
+    await expect(supersededRow.getByRole("link", { name: "Review source evidence" })).toHaveCount(0);
 
     const assessmentPath = `/creators/${creatorId}/assessments/${receipt.runId}`;
     const assessmentLink = page.locator(`a[href="${assessmentPath}"]`).first();
@@ -154,7 +235,7 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(afterRead.runId).toBe(receipt.runId);
     expect(afterRead.revision).toBe(1);
     const receiptPath = testInfo.outputPath("actual-agent-receipt.json");
-    writeFileSync(receiptPath, JSON.stringify({ runId: receipt.runId, revision: receipt.revision, evidenceRevision: packet.evidenceRevision, policyVersion: POLICY_VERSION, configStatus: receipt.assessment.config.status, configVersion: receipt.assessment.config.version, configHash, baselineHash: receipt.assessment.config.baselineHash, numericHash: receipt.assessment.config.numericHash, score: receipt.assessment.score.total, state: receipt.assessment.state, workspaceId, accountId, assessmentPath, evidencePath: route, journey: "sourcing to exact saved assessment to evidence", source: "actual Node/SQLite service with synthetic reviewed evidence" }, null, 2));
+    writeFileSync(receiptPath, JSON.stringify({ runId: receipt.runId, revision: receipt.revision, evidenceRevision: packet.evidenceRevision, policyVersion: POLICY_VERSION, configStatus: receipt.assessment.config.status, configVersion: receipt.assessment.config.version, configHash, baselineHash: receipt.assessment.config.baselineHash, numericHash: receipt.assessment.config.numericHash, score: receipt.assessment.score.total, state: receipt.assessment.state, workspaceId, accountId, assessmentPath, evidencePath: route, pagination: { snapshotId: snapshot.id, asOf: snapshot.asOf, creators: snapshotRows.length, pageCount: pageSizes.length, pageSizes, uniqueRunCount: new Set(snapshotRows.map((record) => record.runId)).size, supersededRunId: oldest.runId, excludedLaterRunId: revisedReceipt.runId }, journey: "201-creator snapshot to exact saved assessment to evidence", source: "actual Node/SQLite service with synthetic reviewed evidence" }, null, 2));
     await testInfo.attach("actual-agent-receipt", { contentType: "application/json", path: receiptPath });
     console.info(`Actual agent sandbox receipt: ${receipt.runId}; revision ${receipt.revision}; policy ${POLICY_VERSION}.`);
 
