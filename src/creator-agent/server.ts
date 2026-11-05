@@ -9,9 +9,11 @@ import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
+import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+const versionOfData = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string };
@@ -36,11 +38,21 @@ export function createAgentServer(options: AgentServerOptions) {
     if (session && session.expiresAt > Date.now()) return { role: session.role, session };
     return null;
   };
-  const current = (record: StoredAssessment) => {
+  const current = (record: StoredAssessment, superseded = false) => {
     const binding = modelBinding(record.packet.checkoutRoute);
-    const stale = record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
-    return { ...record, stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...record.assessment.reasonCodes, "STALE_ASSESSMENT"] } : record.assessment };
+    const stale = superseded || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
+    return { ...record, stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
   };
+  const readBase = z.object({
+    schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
+    requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
+    period: z.unknown(), sort: z.array(z.unknown()), page: z.unknown(),
+  }).strict();
+  const readSchema = z.discriminatedUnion("viewKey", [
+    readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
+  ]);
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
     res.end(JSON.stringify(body));
@@ -106,7 +118,51 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, store.save(input.packet, assessment, input.expectedVersion, key));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const input = z.object({ schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), viewKey: z.literal("evidenceRecord"), requestId: z.string().min(1), requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict(), period: z.unknown(), sort: z.array(z.unknown()), page: z.unknown() }).strict().parse(await bodyOf(req));
+        const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "discoverySummary") {
+          const listing = store.listLatest();
+          const records = listing.records.map((stored) => current(stored));
+          const models = (["website", "tiktok-shop"] as const).map((route) => {
+            const binding = modelBinding(route);
+            return {
+              modelId: MODEL_FOR_ROUTE[route], status: binding ? "bound" as const : "unbound" as const,
+              configVersion: binding?.current.version ?? null, configHash: binding?.hash ?? null,
+              baselineHash: binding?.baselineHash ?? null, numericHash: binding?.numericHash ?? null,
+              criteria: binding?.current.criteria ?? null, bands: binding?.current.bands ?? null,
+              arithmetic: binding?.current.arithmetic ?? null, decisionRules: binding?.current.decisionRules ?? null,
+            };
+          });
+          const data = agentSourcingSchema.parse({
+            kind: "agent-sourcing", policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION, agentSchemaVersion: AGENT_SCHEMA_VERSION,
+            records: records.map((record) => ({ creatorId: record.packet.creatorId, runId: record.runId, evidenceId: record.packet.posts[0]?.postId ?? null,
+              briefId: record.packet.briefId, checkoutRoute: record.packet.checkoutRoute, state: record.assessment.state, recordedAt: record.recordedAt, revision: record.revision, stale: record.stale })),
+            models, total: listing.total, partial: listing.partial,
+          });
+          const dataVersion = versionOfData(data);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion, dataState: listing.partial ? "partial" : records.some((record) => record.stale) ? "stale" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: listing.total, observedCount: records.length, missingCount: listing.total - records.length, complete: !listing.partial, reasonCodes: listing.partial ? ["LATEST_RECORD_LIMIT"] : [] },
+            capabilities: [{ actionKind: "startLiveDiscovery", state: "held", reasonCodes: ["SOURCE_AUTOMATION_NOT_CONNECTED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
+          });
+        }
+        if (input.viewKey === "assessmentRecord") {
+          const stored = store.findRun(input.filters.creatorId, input.filters.assessmentId);
+          if (!stored) return reply(res, 404, { code: "RECORD_NOT_FOUND" });
+          const superseded = store.latest(input.filters.creatorId)?.runId !== stored.runId;
+          const record = current(stored, superseded);
+          const data = agentAssessmentRecordSchema.parse({
+            kind: "creator-v3", creatorId: stored.packet.creatorId, assessmentId: stored.runId, runId: stored.runId,
+            evidenceId: superseded ? null : stored.packet.posts[0]?.postId ?? null,
+            qualification: record.assessment, assessedQualification: stored.assessment, agentEvidence: stored.packet,
+            recordedAt: stored.recordedAt, revision: stored.revision, stale: record.stale, superseded,
+          });
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data), dataState: record.stale ? "stale" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: 3, observedCount: record.assessment.packet.qualifyingPosts, missingCount: Math.max(0, 3 - record.assessment.packet.qualifyingPosts), complete: record.assessment.contentQualification === "pass", reasonCodes: record.assessment.reasonCodes },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
+          });
+        }
         const stored = store.latest(input.filters.creatorId);
         if (!stored) return reply(res, 404, { code: "RECORD_NOT_FOUND" });
         const record = current(stored);
@@ -122,7 +178,7 @@ export function createAgentServer(options: AgentServerOptions) {
           qualification: record.assessment, agentEvidence: record.packet,
         };
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
-          scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: `v${record.revision}`, dataState: record.stale ? "stale" : "ready", data,
+          scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data), dataState: record.stale ? "stale" : "ready", data,
           sourceFreshness: [], coverage: { expectedCount: 3, observedCount: record.assessment.packet.qualifyingPosts, missingCount: Math.max(0, 3 - record.assessment.packet.qualifyingPosts), complete: record.assessment.contentQualification === "pass", reasonCodes: record.assessment.reasonCodes },
           capabilities: [{ actionKind: "saveEvidenceDraft", state: "held", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] }, { actionKind: "markWatched", state: "held", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] }], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
         });

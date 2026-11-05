@@ -4,12 +4,12 @@ import { useIsDemo } from "@/features/analytics/parts";
 import type { Criterion, HistoryEntry } from "@/fixtures/scorecards";
 import a from "@/features/analytics/Analytics.module.css";
 
-/** The model's displayed anchors, shown as historical and proposed (CTRL-066). Current v3 weights are unpublished, so none are invented. */
+/** The displayed anchors belong to the historical proposed model (CTRL-066), separate from saved current-v3 assessments. */
 export function RatingAnchorsDialog({ open, onClose, modelId, criteria }: { open: boolean; onClose: () => void; modelId: string; criteria: Criterion[] }) {
   const demo = useIsDemo();
   return (
     <Dialog open={open} title={`Rating anchors · ${modelId}`} badge={demo ? "Demo" : "Historical"} onClose={onClose}>
-      <p>Historical, proposed anchors. Integer ratings 0 to 5; points = weight × rating ÷ 5. Current v3 weights and bands are unpublished, and these don't define them.</p>
+      <p>Historical, proposed anchors. Integer ratings 0 to 5; points = weight × rating ÷ 5. These anchors describe the historical model; current v3 configuration is shown in its saved agent assessment.</p>
       <dl className={a.defs}>
         {criteria.map((c) => <div key={c.label}><dt>{c.label}</dt><dd>Weight {c.weight} · anchor wording isn't part of this fixture</dd></div>)}
         <div><dt>Bands</dt><dd>80–100 priority · 65–79 manual review · below 65 hold</dd></div>

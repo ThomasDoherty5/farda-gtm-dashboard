@@ -71,7 +71,7 @@ function PipelineView() {
       </div>
       <div className={acquisition.context}>
         <p className={acquisition.contextTitle}>Commission-only acquisition</p>
-        <p className={acquisition.small}>No upfront content fee. Product and shipping need separate approval. This example assumes a validated model; current v3 publication remains pending.</p>
+        <p className={acquisition.small}>No upfront content fee. Product and shipping need separate approval. Funnel eligibility follows the recorded model and evidence versions.</p>
       </div>
       {query.isPending && <SkeletonCard label="Loading the acquisition pipeline…" />}
       {query.isError && <ViewError error={query.error} subject="The acquisition pipeline" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}

@@ -99,7 +99,7 @@ function Offer({ record }: { record: OfferDraftRecord }) {
       </div>
       <section className={s.hist} aria-label="Draft scenario">
         <p className={a.label}>Commission-only draft · no Farda rate is approved</p>
-        <p className={a.small}>{record.offerCode} is a new illustrative affiliate offer: no upfront content fee, separately approved product and shipping, and external provider settlement. The current website v3 model is unpublished; prior proposed scores do not authorize this offer.</p>
+        <p className={a.small}>{record.offerCode} is a new illustrative affiliate offer: no upfront content fee, separately approved product and shipping, and external provider settlement. Current website v3 qualification is separate; prior proposed scores do not authorize this offer.</p>
       </section>
       <Card labelledBy="deal-title" className={a.card20}>
         <div className={s.heading54}><h2 id="deal-title">Define the agreement</h2><p>Deal type, publishing network and payout ownership are independent.</p></div>

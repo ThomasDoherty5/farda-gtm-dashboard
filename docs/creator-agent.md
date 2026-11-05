@@ -23,9 +23,19 @@ The service is not deployed by this script. Hosting, source permissions, authent
 - `PUT /v1/creators/:creatorId`: reviewer bearer credential, JSON content type and a unique `Idempotency-Key` header. Body: `{expectedVersion, policyVersion, configHash, packet}`. First expectedVersion is0. The policy revision is `2026-11-04`; the config hash must match capabilities (null while unbound).
 - `GET /v1/creators/:creatorId`: reader/reviewer authentication; returns the persisted packet, run ID, revision, source hash and assessment. Changed runtime/configuration invalidates old readiness on read; old rows remain intact.
 - `GET /v1/session`: reader Basic authentication (`reader:<read credential>`) can establish an HttpOnly/SameSite read session. Machine bearer credentials stay in the server/Zapier connection. No fake role-select sign-in is used.
-- `POST /v1/read`: existing dashboard `evidenceRecord` envelope; exact sandbox workspace/account scope, creator ID and post ID required. Projects real SQLite packet/assessment into the existing adapter. Unknown resources are404; no demo fallback. Other dashboard operations remain unsupported here.
+- `POST /v1/read`: existing authenticated dashboard read envelope, with exact sandbox workspace/account scope. Supported read models are listed below. Unknown resources are404; no demo fallback. Other dashboard operations remain unsupported here.
 
 The existing draft/mark-watched controls are held for projected records. Review packets are submitted through the authenticated review workflow; a frontend draft cannot manufacture a completed review or override a decision.
+
+### Current sourcing and saved assessments
+
+`discoverySummary` with filters `{}` returns `kind: "agent-sourcing"`: the actual latest saved assessment per creator and the current website/TikTok model bindings. It lists at most100 records and reports the actual total and partial coverage. This is a queue of saved reviews, not a claim of new discovery, provider capacity or an activated schedule.
+
+`assessmentRecord` with filters `{creatorId, assessmentId}` uses the exact saved run ID as `assessmentId`. Its `kind: "creator-v3"` record contains the immutable original assessment/packet and the effective current readiness. A newer revision or changed runtime/configuration marks an old run stale/review-needed without replacing its saved decision or recalculating it in the browser. Superseded runs have no evidence-navigation shortcut that could silently open a newer packet.
+
+`evidenceRecord` with filters `{creatorId, evidenceId}` projects the matching post from that creator's latest saved packet into the existing evidence-review screen. Current sourcing links use actual creator/run/post IDs. Existing historical v2/demo contracts retain their separate views.
+
+All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
 ## Weight binding
 
@@ -53,4 +63,4 @@ No Zap, schedule, provider connection, source-video browser permission or outrea
 
 ## Verification
 
-`npm run verify`, `npm run test:e2e`, and `npm run test:e2e:agent`. Tests use synthetic identities, source records and deliberately synthetic weight configurations. The agent browser suite uses the actual HTTP/SQLite service through a loopback-only same-origin proxy, one browser worker and a fresh temporary database.
+`npm run verify`, `npm run test:e2e`, and `npm run test:e2e:agent`. Tests use synthetic identities and source records, exercising the approved first active bindings as well as isolated custom/unbound configuration cases. The agent browser suite uses the actual HTTP/SQLite service through a loopback-only same-origin proxy, one browser worker and a fresh temporary database. It follows actual saved sourcing, assessment and evidence links and verifies authentication, persistence and outage behavior.

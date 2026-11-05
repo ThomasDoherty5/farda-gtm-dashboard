@@ -15,6 +15,7 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
+import { agentSourcingSchema } from "@/creator-agent/readViews";
 import { provenanceValueSchema } from "../contract";
 import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
 
@@ -156,7 +157,7 @@ const pipelineBranches = z.object({
 
 /* ---------- discoverySummary ---------- */
 
-const discoverySummary = z.object({
+const historicalDiscoverySummary = z.object({
   datasetKey: text,
   schedule: z.object({ label: text, context: text }),
   /** Unknown until the account is read. */
@@ -177,6 +178,8 @@ const discoverySummary = z.object({
   if (d.currentPhase >= d.phases.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["currentPhase"], message: "currentPhase must index a phase" });
   if (d.batch.eligible > d.batch.selected) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["batch", "eligible"], message: "Eligible cannot exceed selected" });
 });
+
+const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchema]);
 
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   recruitmentQueue,

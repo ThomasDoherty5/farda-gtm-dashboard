@@ -1,10 +1,11 @@
 /**
- * Runtime schemas for assessmentRecord (historical v2 scorecards) and offerDraft.
+ * Runtime schemas for assessmentRecord (saved current runs and historical v2 scorecards) and offerDraft.
  *
- * assessmentRecord is a union on `kind`: content-v2, tiktok-commerce-v2 and sc-commerce-v2. These are read-only,
+ * Historical kinds are content-v2, tiktok-commerce-v2 and sc-commerce-v2. These are read-only,
  * labeled snapshots of prior proposed models. A criterion `rating` is an integer 0 to 5 or null; null means the
  * evidence is missing and is never read as 0. `coveragePct` follows the same rule. The empty-filter fixture
  * returns `data: null`, which the response envelope allows, so it is not part of this data schema.
+ * Current creator-v3 records use the shared agent schema and identify an exact saved run.
  *
  * Strictness: the offer `payload` is strict. It holds every commercial term (commission, upfront fee,
  * compensation type, sample shipping). A stripped unknown key there could hide a term nobody reviewed, such as a
@@ -12,6 +13,7 @@
  * zero upfront fee) is the server's policy decision and is not decided by this shape.
  */
 import { z } from "zod";
+import { agentAssessmentRecordSchema } from "@/creator-agent/readViews";
 import { calendarDate, count, instant, minorUnits, percent, text } from "./acquisitionPrimitives";
 
 const tone = z.enum(["success", "violet", "warning", "neutral"]);
@@ -61,7 +63,8 @@ const commerceScorecard = z.object({
   currentBasis: basis.optional(),
 });
 
-const assessmentRecord = z.discriminatedUnion("kind", [scorecard.extend({ kind: z.literal("content-v2") }), scorecard.extend({ kind: z.literal("tiktok-commerce-v2") }), commerceScorecard]);
+const historicalAssessmentRecord = z.discriminatedUnion("kind", [scorecard.extend({ kind: z.literal("content-v2") }), scorecard.extend({ kind: z.literal("tiktok-commerce-v2") }), commerceScorecard]);
+const assessmentRecord = z.union([historicalAssessmentRecord, agentAssessmentRecordSchema]);
 
 const offerPayload = z.object({
   commissionPct: z.number().min(0).max(100),
