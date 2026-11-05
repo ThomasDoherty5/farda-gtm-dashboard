@@ -5,7 +5,7 @@ const scope = { workspaceId: "private-workspace", accountIds: ["private-account"
 describe("authenticated session scope", () => {
   it("uses only a verified server scope and cookie credentials", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(makeResponse(scope));
-    expect(await loadSessionScope("http://127.0.0.1:8787", "sandbox", request)).toEqual({ scope, principal: "authenticated-reader" });
+    expect(await loadSessionScope("http://127.0.0.1:8787", "sandbox", request)).toEqual({ scope: { workspaceId: scope.workspaceId, accountIds: scope.accountIds, environment: scope.environment }, principal: "authenticated-reader" });
     expect(request).toHaveBeenCalledWith("http://127.0.0.1:8787/v1/session", expect.objectContaining({ credentials: "include", cache: "no-store", redirect: "error" }));
   });
   it("rejects denied, absent and mismatched session scope without fixture fallback", async () => {

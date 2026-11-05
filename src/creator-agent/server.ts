@@ -65,7 +65,7 @@ export function createAgentServer(options: AgentServerOptions) {
           const [name, token] = Buffer.from(req.headers.authorization.slice(6), "base64").toString("utf8").split(":");
           if (name === "reader" && token && safeEqual(token, options.readToken)) authenticated = { role: "reader", session: null };
         }
-        if (!authenticated) return reply(res, 401, { code: "AUTH_REQUIRED" }, { "www-authenticate": 'Basic realm="Farda agent reader", charset="UTF-8"' });
+        if (!authenticated) return reply(res, 401, { code: "AUTH_REQUIRED" }, req.headers.accept?.includes("text/html") ? { "www-authenticate": 'Basic realm="Farda agent reader", charset="UTF-8"' } : {});
         for (const [key, session] of sessions) if (session.expiresAt <= Date.now()) sessions.delete(key);
         if (sessions.size >= 1000) return reply(res, 429, { code: "SESSION_CAPACITY" });
         const token = randomBytes(32).toString("hex");

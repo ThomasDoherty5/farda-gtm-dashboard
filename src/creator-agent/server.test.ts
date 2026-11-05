@@ -251,4 +251,13 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     const allowed = await request("/v1/creators/synthetic-creator", { method: "PUT", headers: { "content-type": "application/json", cookie: reviewerCookie, origin, "x-csrf-token": reviewerSession.body.csrfToken, "idempotency-key": "synthetic-cookie-write" }, body: JSON.stringify(writeBody(packet, 1)) }, null);
     expect(allowed.status).toBe(200);
   });
+  it("returns an immediate unauthenticated answer to background session reads and challenges only explicit browser navigation", async () => {
+    const background = await request("/v1/session", { headers: { accept: "application/json" } }, null);
+    expect(background.status).toBe(401);
+    expect(background.headers.get("www-authenticate")).toBeNull();
+    const navigation = await request("/v1/session", { headers: { accept: "text/html" } }, null);
+    expect(navigation.status).toBe(401);
+    expect(navigation.headers.get("www-authenticate")).toContain("Basic");
+  });
+
 });
