@@ -38,8 +38,8 @@ export function syntheticRights(asset: StoredAsset, overrides: Partial<AssetRigh
 export function syntheticAssetAuthority() {
   const state: {
     availability: "available" | "unavailable" | "quarantined"; checksum: string;
-    rights: Map<string, Partial<AssetRights> | null>; withdrawalOutcome: WithdrawalEvidence["outcome"];
-  } = { availability: "available", checksum: syntheticChecksum, rights: new Map(), withdrawalOutcome: "uncertain" };
+    rights: Map<string, Partial<AssetRights> | null>; withdrawalOutcome: WithdrawalEvidence["outcome"]; withdrawalSourceVersion: number;
+  } = { availability: "available", checksum: syntheticChecksum, rights: new Map(), withdrawalOutcome: "uncertain", withdrawalSourceVersion: 1 };
   const authority: AssetAuthority = {
     resolveSource: async (submission, scope) => ({ scope, submissionHash: digest(submission), authorizationRef: "synthetic-source-receipt", observedAt: assetTestNow, availability: state.availability, checksum: state.checksum }),
     currentRights: async (asset) => state.rights.get(asset.submission.assetId) === null ? null : syntheticRights(asset, state.rights.get(asset.submission.assetId) ?? {}),
@@ -47,7 +47,7 @@ export function syntheticAssetAuthority() {
     verifyDeployment: async (request, scope) => ({ scope, assetId: request.assetId, assetVersion: request.version, exportId: request.exportId,
       receiptRef: request.receiptRef, destination: request.exportId ? syntheticUse().destination : { provider: "instagram", accountId: "synthetic-creator-account", sourceId: "synthetic-post" },
       observedAt: assetTestNow, sourceVersion: 1, kind: request.exportId ? "reuse" : "creator_publication", state: "active" }),
-    verifyWithdrawal: async (intent, receiptRef, scope) => ({ scope, intentId: intent.id, deploymentId: intent.deploymentId, deploymentSourceVersion: intent.deploymentSourceVersion, receiptRef, observedAt: assetTestNow, outcome: state.withdrawalOutcome }),
+    verifyWithdrawal: async (intent, receiptRef, scope) => ({ scope, intentId: intent.id, deploymentId: intent.deploymentId, deploymentSourceVersion: intent.deploymentSourceVersion, attemptId: `${intent.id}:attempt-1`, sourceVersion: state.withdrawalSourceVersion, receiptRef, observedAt: assetTestNow, outcome: state.withdrawalOutcome }),
   };
   return { state, authority };
 }

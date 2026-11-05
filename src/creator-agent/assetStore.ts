@@ -238,12 +238,20 @@ export class AssetRepository {
     const evidence = deploymentEvidenceSchema.parse(observed);
     if (!sameAssetScope(evidence.scope, this.scope) || evidence.assetId !== input.deployment.assetId || evidence.assetVersion !== input.deployment.version || evidence.exportId !== input.deployment.exportId || digest(evidence.receiptRef) !== digest(input.deployment.receiptRef)) throw new AssetError("DEPLOYMENT_BINDING_MISMATCH", 403);
     if (Date.parse(evidence.observedAt) > Date.parse(this.clock())) throw new AssetError("DEPLOYMENT_OBSERVATION_INVALID");
+    const id = digest({ scope: this.scope, assetId: evidence.assetId, version: evidence.assetVersion, kind: evidence.kind, destination: evidence.destination });
     if (evidence.kind === "reuse") {
       if (!evidence.exportId) throw new AssetError("EXPORT_REQUIRED");
       const exp = this.export(evidence.exportId);
       if (exp.assetId !== evidence.assetId || exp.version !== evidence.assetVersion || digest(exp.use.destination) !== digest(evidence.destination)) throw new AssetError("EXPORT_DESTINATION_MISMATCH");
-      const reasons = await this.destinationReasons(exp.use);
-      if (reasons.length) throw new AssetError("DEPLOYMENT_DESTINATION_UNVERIFIED", 409, reasons);
+      const existingRow = this.db.prepare("SELECT body FROM creator_asset_deployment_state WHERE id=?").get(id);
+      const existing = existingRow ? JSON.parse(String(existingRow.body)) as AssetDeployment : null;
+      // A deleted placement may no longer be queryable. Its verified removal is still a fact
+      // about the exact known deployment/export; recording it grants no future reuse permission.
+      const knownRemoval = evidence.state === "removed" && existing !== null && existing.exportId === exp.id;
+      if (!knownRemoval) {
+        const reasons = await this.destinationReasons(exp.use);
+        if (reasons.length) throw new AssetError("DEPLOYMENT_DESTINATION_UNVERIFIED", 409, reasons);
+      }
     } else if (evidence.exportId) throw new AssetError("CREATOR_PUBLICATION_IS_NOT_EXPORT");
     return this.write(key, operation, () => {
       const receiptKey = digest(evidence.receiptRef);
@@ -253,7 +261,6 @@ export class AssetRepository {
         if (digest(record) !== digest({ ...evidence, id: record.id })) throw new AssetError("DEPLOYMENT_RECEIPT_CONFLICT");
         return record;
       }
-      const id = digest({ scope: this.scope, assetId: evidence.assetId, version: evidence.assetVersion, kind: evidence.kind, destination: evidence.destination });
       const record: AssetDeployment = { ...evidence, id };
       const currentRow = this.db.prepare("SELECT body FROM creator_asset_deployment_state WHERE id=?").get(id);
       const current = currentRow ? JSON.parse(String(currentRow.body)) as AssetDeployment : null;
@@ -342,9 +349,19 @@ export class AssetRepository {
         if (existing.intent_id !== intentId || digest(JSON.parse(String(existing.body))) !== digest(evidence)) throw new AssetError("WITHDRAWAL_RECEIPT_CONFLICT");
         return current;
       }
+      if (current.reconciliationReceipts.some((receipt) => receipt.attemptId === evidence.attemptId
+        && receipt.sourceVersion === evidence.sourceVersion && receipt.outcome !== evidence.outcome))
+        throw new AssetError("WITHDRAWAL_SOURCE_VERSION_CONFLICT");
       current.reconciliationReceipts.push(evidence);
-      // A late uncertain/not-applied observation cannot erase a confirmed native withdrawal.
-      if (current.state !== "confirmed") current.state = evidence.outcome === "withdrawn" ? "confirmed" : evidence.outcome === "uncertain" ? "uncertain" : "proposed";
+      // Preserve every immutable receipt, but derive retry readiness from source ordering within
+      // each native attempt. Another attempt's non-application cannot resolve an uncertain one.
+      const attempts = new Map<string, typeof evidence>();
+      for (const receipt of current.reconciliationReceipts) {
+        const latest = attempts.get(receipt.attemptId);
+        if (!latest || receipt.sourceVersion > latest.sourceVersion) attempts.set(receipt.attemptId, receipt);
+      }
+      if (current.state === "confirmed" || current.reconciliationReceipts.some((receipt) => receipt.outcome === "withdrawn")) current.state = "confirmed";
+      else current.state = [...attempts.values()].some((receipt) => receipt.outcome === "uncertain") ? "uncertain" : "proposed";
       this.db.prepare("INSERT INTO creator_asset_withdrawal_events VALUES(?,?,?)").run(receiptKey, intentId, JSON.stringify(evidence));
       this.db.prepare("UPDATE creator_asset_withdrawals SET body=? WHERE id=?").run(JSON.stringify(current), intentId);
       return current;

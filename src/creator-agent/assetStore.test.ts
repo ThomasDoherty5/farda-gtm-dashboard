@@ -123,8 +123,10 @@ describe("durable scoped creator asset repository", () => {
     const receipt = (sourceId: string) => ({ scope: assetTestScope, receiptRef: { provider: "synthetic-ads", accountId: "synthetic-ad-account", sourceId } });
     expect((await repository.reconcileWithdrawal(intent.id, receipt("uncertain"), "uncertain")).state).toBe("uncertain");
     fixtures.state.withdrawalOutcome = "withdrawn";
+    fixtures.state.withdrawalSourceVersion = 2;
     expect((await repository.reconcileWithdrawal(intent.id, receipt("confirmed"), "confirmed")).state).toBe("confirmed");
     fixtures.state.withdrawalOutcome = "uncertain";
+    fixtures.state.withdrawalSourceVersion = 3;
     expect((await repository.reconcileWithdrawal(intent.id, receipt("late-uncertain"), "late")).state).toBe("confirmed");
     expect(repository.withdrawals("synthetic-asset")[0]?.reconciliationReceipts).toHaveLength(3);
     expect((await repository.reconcileRights({ scope: assetTestScope, assetId: "synthetic-asset" }, "repeat-reconcile")).intents).toHaveLength(1);
@@ -138,6 +140,74 @@ describe("durable scoped creator asset repository", () => {
     const result = await repository.reconcileRights({ scope: assetTestScope, assetId: "synthetic-asset" }, "ancestor-revoked");
     expect(result.intents[0]?.assetId).toBe("synthetic-crop");
     expect(result.impacts[0]?.eligibility.reasonCodes).toContain("RIGHTS_REVOKED");
+  });
+  it("orders withdrawal outcomes within native attempts and keeps every unresolved attempt uncertain", async () => {
+    await ingest();
+    const exp = await repository.prepareExport(use(), "withdrawal-order-export");
+    await repository.observeDeployment({ scope: assetTestScope, deployment: { assetId: "synthetic-asset", version: 1, exportId: exp.id,
+      receiptRef: { provider: "synthetic-ads", accountId: "synthetic-ad-account", sourceId: "withdrawal-order-active" } } }, "withdrawal-order-active");
+    fixtures.state.rights.set("synthetic-asset", { status: "revoked" });
+    const intent = (await repository.reconcileRights({ scope: assetTestScope, assetId: "synthetic-asset" }, "withdrawal-order-intent")).intents[0]!;
+    let attemptId = "synthetic-attempt-a";
+    let sourceVersion = 2;
+    let observedAt = assetTestNow;
+    const authority: AssetAuthority = { ...fixtures.authority, verifyWithdrawal: async (record, receiptRef, scope) => ({
+      ...(await fixtures.authority.verifyWithdrawal(record, receiptRef, scope))!, attemptId, sourceVersion, observedAt,
+    }) };
+    repository = new AssetRepository(db, assetTestScope, authority, clock);
+    const receipt = (sourceId: string) => ({ scope: assetTestScope, receiptRef: { provider: "synthetic-ads", accountId: "synthetic-ad-account", sourceId } });
+    const record = (sourceId: string) => repository.reconcileWithdrawal(intent.id, receipt(sourceId), sourceId);
+    const uncertain = await record("newer-uncertain");
+    expect(uncertain.state).toBe("uncertain");
+    expect(await record("newer-uncertain")).toEqual(uncertain);
+    fixtures.state.withdrawalOutcome = "not_applied"; sourceVersion = 1; observedAt = "2026-11-04T11:59:00.000Z";
+    const late = await record("older-unseen-not-applied");
+    expect(late.state).toBe("uncertain");
+    expect(late.reconciliationReceipts).toHaveLength(2);
+    // A different retry attempt cannot resolve the first attempt's uncertain outcome.
+    attemptId = "synthetic-attempt-b"; observedAt = assetTestNow;
+    expect((await record("other-attempt-not-applied")).state).toBe("uncertain");
+    attemptId = "synthetic-attempt-a"; sourceVersion = 3;
+    expect((await record("same-attempt-conclusively-not-applied")).state).toBe("proposed");
+    // A later retry on the same deployment generation is tracked independently.
+    attemptId = "synthetic-attempt-c"; sourceVersion = 1; fixtures.state.withdrawalOutcome = "uncertain";
+    expect((await record("retry-uncertain")).state).toBe("uncertain");
+    sourceVersion = 2; fixtures.state.withdrawalOutcome = "withdrawn";
+    const confirmed = await record("retry-confirmed");
+    expect(confirmed.state).toBe("confirmed");
+    expect(confirmed.reconciliationReceipts).toHaveLength(6);
+    fixtures.state.withdrawalOutcome = "not_applied";
+    await expect(record("conflicting-same-native-version")).rejects.toThrow("WITHDRAWAL_SOURCE_VERSION_CONFLICT");
+    await expect(repository.reconcileWithdrawal(intent.id, { ...receipt("forged-order"), attemptId: "caller-attempt", sourceVersion: 99 }, "forged-order")).rejects.toThrow();
+    const reopened = new AssetRepository(db, assetTestScope, authority, clock);
+    expect(reopened.withdrawals("synthetic-asset")[0]).toEqual(confirmed);
+  });
+  it("records an exact known removal when a deleted destination is unavailable without trusting a new use", async () => {
+    await ingest();
+    const exp = await repository.prepareExport(use(), "removal-export");
+    const otherExport = await repository.prepareExport(use(), "different-use-export");
+    const receipt = (sourceId: string, exportId = exp.id) => ({ scope: assetTestScope, deployment: { assetId: "synthetic-asset", version: 1, exportId,
+      receiptRef: { provider: "synthetic-ads", accountId: "synthetic-ad-account", sourceId } } });
+    const active = await repository.observeDeployment(receipt("known-active"), "known-active");
+    const authority: AssetAuthority = { ...fixtures.authority, resolveDestination: async () => null,
+      verifyDeployment: async (request, scope) => ({ ...(await fixtures.authority.verifyDeployment(request, scope))!, state: "removed", sourceVersion: 2 }),
+    };
+    repository = new AssetRepository(db, assetTestScope, authority, clock);
+    await expect(repository.observeDeployment(receipt("unbound-export-removal", otherExport.id), "unbound-export-removal")).rejects.toThrow("DEPLOYMENT_DESTINATION_UNVERIFIED");
+    const wrongScope: AssetAuthority = { ...authority, verifyDeployment: async (request, scope) => ({
+      ...(await authority.verifyDeployment(request, scope))!, scope: { ...scope, accountId: "synthetic-other-account" },
+    }) };
+    await expect(new AssetRepository(db, assetTestScope, wrongScope, clock).observeDeployment(receipt("cross-scope-removal"), "cross-scope-removal")).rejects.toThrow("DEPLOYMENT_BINDING_MISMATCH");
+    const wrongDestination: AssetAuthority = { ...authority, verifyDeployment: async (request, scope) => ({
+      ...(await authority.verifyDeployment(request, scope))!, destination: { ...syntheticUse().destination, sourceId: "synthetic-other-placement" },
+    }) };
+    await expect(new AssetRepository(db, assetTestScope, wrongDestination, clock).observeDeployment(receipt("wrong-destination-removal"), "wrong-destination-removal")).rejects.toThrow("EXPORT_DESTINATION_MISMATCH");
+    const removed = await repository.observeDeployment(receipt("confirmed-known-removal"), "confirmed-known-removal");
+    expect(removed).toMatchObject({ id: active.id, state: "removed", sourceVersion: 2 });
+    expect(repository.deployments("synthetic-asset")).toEqual([removed]);
+    expect(repository.deploymentObservations("synthetic-asset")).toEqual([active, removed]);
+    expect((await repository.eligibility(use())).reasonCodes).toContain("DESTINATION_AUTHORITY_UNAVAILABLE");
+    await expect(repository.prepareExport(use(), "reuse-still-blocked")).rejects.toThrow("ASSET_USE_BLOCKED");
   });
   it("keeps append-only receipts for one deployment and does not regress a newer removal", async () => {
     await ingest();

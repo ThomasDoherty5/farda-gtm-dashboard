@@ -96,6 +96,9 @@ export type WithdrawalIntent = { id: string; deploymentId: string; exportId: str
 export const withdrawalEvidenceSchema = z.object({
   scope: assetScopeSchema, intentId: assetIdSchema, deploymentId: assetIdSchema,
   deploymentSourceVersion: z.number().int().positive().safe(),
+  // Native executor attempt identity and its monotonic observation revision, resolved by the
+  // server authority. Arrival order and the request's idempotency key are not outcome ordering.
+  attemptId: assetIdSchema, sourceVersion: z.number().int().positive().safe(),
   receiptRef: sourceReferenceSchema, observedAt: timestamp,
   outcome: z.enum(["withdrawn", "not_applied", "uncertain"]),
 }).strict();
