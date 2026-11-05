@@ -1,0 +1,56 @@
+# Creator agent runtime
+
+This is the persistent reviewed-evidence agent, separate from the frontend demo and reference server. It evaluates structured, authenticated review packets; it does not autonomously watch media, obtain source permission, infer health traits, or contact creators.
+
+## Start locally
+
+Use Node 24 or later and `npm ci`. Configure these **server-only** variables outside the public repository:
+
+- `FARDA_AGENT_READ_TOKEN` and `FARDA_AGENT_REVIEW_TOKEN`: different random values, at least 32 characters each. The reader cannot write.
+- `FARDA_AGENT_WORKSPACE_ID` / `FARDA_AGENT_ACCOUNT_ID`: the exact authorized dashboard scope.
+- Optional `FARDA_AGENT_DATABASE` (default `.agent-data/evidence.sqlite`), `FARDA_AGENT_PORT` (default8787), `FARDA_AGENT_CONFIG` (private binding file).
+- Behind a same-origin TLS reverse proxy, set `FARDA_AGENT_ORIGIN` to the public origin and `FARDA_AGENT_SECURE_COOKIES=true`.
+
+Run `npm run creator-agent`. It binds loopback only. SQLite and configuration records must live on a private durable volume with backups; do not commit them. Test sessions expire after an hour and are invalidated on restart.
+
+The service is not deployed by this script. Hosting, source permissions, authenticated production scope bootstrap, operational monitoring and a production release remain separate. A deployment must not expose a bare HTTP listener or place its machine tokens in the browser.
+
+## Operations
+
+- `GET /health`: service/schema identity only.
+- `GET /v1/capabilities`: authenticated versions, storage schema and bound/unbound model hashes.
+- `GET /v1/policy`: the agent-held versioned0–5 anchors, brief contexts, critical floors and buyer/viewer evidence rules.
+- `PUT /v1/creators/:creatorId`: reviewer bearer credential, JSON content type and a unique `Idempotency-Key` header. Body: `{expectedVersion, policyVersion, configHash, packet}`. First expectedVersion is0. The policy revision is `2026-11-04`; the config hash must match capabilities (null while unbound).
+- `GET /v1/creators/:creatorId`: reader/reviewer authentication; returns the persisted packet, run ID, revision, source hash and assessment. Changed runtime/configuration invalidates old readiness on read; old rows remain intact.
+- `GET /v1/session`: reader Basic authentication (`reader:<read credential>`) can establish an HttpOnly/SameSite read session. Machine bearer credentials stay in the server/Zapier connection. No fake role-select sign-in is used.
+- `POST /v1/read`: existing dashboard `evidenceRecord` envelope; exact sandbox workspace/account scope, creator ID and post ID required. Projects real SQLite packet/assessment into the existing adapter. Unknown resources are404; no demo fallback. Other dashboard operations remain unsupported here.
+
+The existing draft/mark-watched controls are held for projected records. Review packets are submitted through the authenticated review workflow; a frontend draft cannot manufacture a completed review or override a decision.
+
+## Weight binding
+
+The owner-approved `2026-11-04.launch-v1` website and TikTok bindings are versioned under `src/creator-agent/configurations/` and loaded by the launcher by default. They preserve the explicitly adopted route percentages, existing arithmetic and80/65 bands. Historical v2 fixtures remain unchanged and are never a fallback. An explicitly unbound embedded/test instance still reports unknown numeric configuration and cannot activate.
+
+The approved phase rules allow preliminary invitation qualification from the required packet/floors/permission gates without a complete total. Activation requires complete source-supported ratings, all applicable stage evidence and a score of at least80. Noncritical numeric ratings without criterionEvidenceRefs stay unknown.
+
+An optional private override binding file is an array of `{current, baseline, expectedBaselineHash}`. Both model objects must satisfy `modelConfigSchema` in `src/creator-agent/config.ts`. Use `digest(baseline)` to obtain the immutable canonical SHA-256. Both numeric digests must match, covering route model ID, criterion IDs/order/weights, critical criterion mapping, arithmetic and aggregate bands. Labels/version/approval references may evolve without changing numeric semantics. Mismatched baseline or numeric changes prevent startup.
+
+The arithmetic calls the existing `scoreOf` function: weight × rating /5; no rescaling; incomplete evidence yields no total; complete totals use the existing rounding. Aggregate bands come only from the bound configuration. An actual approval reference and source baseline are required; synthetic test configurations do not authorize real acquisition.
+
+## Evidence and decisions
+
+The policy enforces exact source-native likes >200; three distinct independent posts over two publication dates; two meaningful on-brief use examples; and independent routine/demo floors of3/5. Missing data remains unknown. Content sourcing does not require a retail CTA or Shop anchor. Required identity/source/suppression/brief checks govern invitation; actual audience/terms/program/attribution/claims checks govern activation. Neither public interest nor a keyword comment is a verified order.
+
+Evidence retains sampled points versus continuous intervals, heard versus ASR/caption/unassessed audio, observed actions versus claims/inferences, comment ordering/authors/prompting/overlapping categories, and recent-ten relevant unpinned metadata including ordinary/lower-like posts. Comparable view groups are not pooled across different definitions, windows or paid context.
+
+SQLite writes are transactional, append-only, expected-version checked and idempotent. A key reused for different input is rejected. Revised evidence/terms must use a new revision label. Source evidence remains the reviewer's responsibility; schema validation is not a claim that the agent independently verified a native platform.
+
+## Zapier connection
+
+After deployment and login, use a server-side Zapier authenticated HTTP action to PUT a source-reviewed packet. Store the reviewer credential in the private connection, send the expected policy/config/revision and idempotency key, and retain the returned run ID. Retry the same request with the same key after uncertainty; reconcile a conflict before changing the key. A reader connection may inspect capabilities/results.
+
+No Zap, schedule, provider connection, source-video browser permission or outreach is activated by this code. Do not place the credential in `VITE_` variables, client code, URLs, public examples or Linear. Localhost is not reachable by Zapier; connect only after a reachable TLS endpoint is verified.
+
+## Verification
+
+`npm run verify`, `npm run test:e2e`, and `npm run test:e2e:agent`. Tests use synthetic identities, source records and deliberately synthetic weight configurations. The agent browser suite uses the actual HTTP/SQLite service through a loopback-only same-origin proxy, one browser worker and a fresh temporary database.

@@ -12,6 +12,8 @@ import { z } from "zod";
 import { provenanceValueSchema } from "../contract";
 import { MAX_DISPUTES, MAX_OBSERVATIONS, MAX_REASON, MAX_TEXT } from "@/features/acquisition/evidenceRules";
 import { instant, text } from "./acquisitionPrimitives";
+import { creatorAssessmentSchema } from "@/creator-agent/assessmentSchema";
+import { evidencePacketSchema } from "@/creator-agent/evidence";
 
 const seconds = z.number().finite().nonnegative();
 
@@ -82,6 +84,17 @@ const evidenceRecord = z.object({
   firstReview: firstReview.nullable(),
   disputes: z.array(dispute).max(MAX_DISPUTES),
   readiness,
+  qualification: creatorAssessmentSchema.nullable().optional(),
+  agentEvidence: evidencePacketSchema.nullable().optional(),
+}).superRefine((record, ctx) => {
+  const assessment = record.qualification;
+  const packet = record.agentEvidence;
+  if (!assessment || !packet) return;
+  for (const field of ["creatorId", "briefId", "evidenceRevision", "termsRevision"] as const) {
+    if (assessment[field] !== packet[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["qualification", field], message: "The assessment and source packet must identify the same saved input." });
+  }
+  const expectedModel = packet.checkoutRoute === "website" ? "WEBSITE-AFFILIATE-v3" : "TIKTOK-SHOP-AFFILIATE-v3";
+  if (assessment.modelId !== expectedModel) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["qualification", "modelId"], message: "The server assessment must use the source packet's checkout model." });
 });
 
 export const evidenceViewSchemas: Record<string, z.ZodTypeAny> = { evidenceRecord };

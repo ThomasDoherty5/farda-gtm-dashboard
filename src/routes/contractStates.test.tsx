@@ -97,7 +97,9 @@ describe.each(routes)("%s", (route) => {
 
   it("while loading, says so and shows no data", async () => {
     render("loading");
-    await settle();
+    // The source read is intentionally unresolved: wait for the real page module, not for its loading state to disappear.
+    await settle({ loaded: false });
+    await waitFor(() => expect(screen.queryByTestId("page-loading")).not.toBeInTheDocument(), { timeout: 6000 });
     expect(screen.getAllByRole("status").some((el) => /loading/i.test(el.textContent ?? ""))).toBe(true);
     expect(screen.queryAllByRole("alert")).toHaveLength(0);
     expect(dataIn(main())).toHaveLength(0);

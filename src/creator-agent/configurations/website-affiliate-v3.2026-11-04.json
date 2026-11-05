@@ -1,0 +1,125 @@
+[
+  {
+    "current": {
+      "modelId": "WEBSITE-AFFILIATE-v3",
+      "version": "2026-11-04.launch-v1",
+      "approvalRef": "https://linear.app/thomas-doherty/document/creator-scorecards-approved-v3-baseline-2026-11-04-6e0addc459fd",
+      "baselineUri": "https://github.com/ThomasDoherty5/farda-gtm-dashboard/blob/scorecards-v3-2026-11-04-v1/src/creator-agent/configurations/website-affiliate-v3.2026-11-04.json",
+      "criteria": [
+        {
+          "id": "routineFit",
+          "label": "Contextual / routine fit",
+          "weight": 25
+        },
+        {
+          "id": "demonstrationStorytelling",
+          "label": "Demonstration / storytelling",
+          "weight": 20
+        },
+        {
+          "id": "verifiedCommerce",
+          "label": "Verified comparable commerce",
+          "weight": 15
+        },
+        {
+          "id": "audienceAlignment",
+          "label": "Audience alignment",
+          "weight": 15
+        },
+        {
+          "id": "reliability",
+          "label": "Collaboration reliability",
+          "weight": 10
+        },
+        {
+          "id": "offerEconomics",
+          "label": "Offer economics",
+          "weight": 15
+        }
+      ],
+      "routineCriterionId": "routineFit",
+      "demoCriterionId": "demonstrationStorytelling",
+      "arithmetic": "weight*rating/5;round-complete-total;no-rescaling",
+      "decisionRules": {
+        "invitationMinScore": null,
+        "activationMinScore": 80,
+        "minCoveragePct": 0
+      },
+      "bands": [
+        {
+          "id": "hold",
+          "min": 0
+        },
+        {
+          "id": "manualReview",
+          "min": 65
+        },
+        {
+          "id": "priorityReview",
+          "min": 80
+        }
+      ]
+    },
+    "baseline": {
+      "modelId": "WEBSITE-AFFILIATE-v3",
+      "version": "2026-11-04.launch-v1",
+      "approvalRef": "https://linear.app/thomas-doherty/document/creator-scorecards-approved-v3-baseline-2026-11-04-6e0addc459fd",
+      "baselineUri": "https://github.com/ThomasDoherty5/farda-gtm-dashboard/blob/scorecards-v3-2026-11-04-v1/src/creator-agent/configurations/website-affiliate-v3.2026-11-04.json",
+      "criteria": [
+        {
+          "id": "routineFit",
+          "label": "Contextual / routine fit",
+          "weight": 25
+        },
+        {
+          "id": "demonstrationStorytelling",
+          "label": "Demonstration / storytelling",
+          "weight": 20
+        },
+        {
+          "id": "verifiedCommerce",
+          "label": "Verified comparable commerce",
+          "weight": 15
+        },
+        {
+          "id": "audienceAlignment",
+          "label": "Audience alignment",
+          "weight": 15
+        },
+        {
+          "id": "reliability",
+          "label": "Collaboration reliability",
+          "weight": 10
+        },
+        {
+          "id": "offerEconomics",
+          "label": "Offer economics",
+          "weight": 15
+        }
+      ],
+      "routineCriterionId": "routineFit",
+      "demoCriterionId": "demonstrationStorytelling",
+      "arithmetic": "weight*rating/5;round-complete-total;no-rescaling",
+      "decisionRules": {
+        "invitationMinScore": null,
+        "activationMinScore": 80,
+        "minCoveragePct": 0
+      },
+      "bands": [
+        {
+          "id": "hold",
+          "min": 0
+        },
+        {
+          "id": "manualReview",
+          "min": 65
+        },
+        {
+          "id": "priorityReview",
+          "min": 80
+        }
+      ]
+    },
+    "expectedBaselineHash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6"
+  }
+]

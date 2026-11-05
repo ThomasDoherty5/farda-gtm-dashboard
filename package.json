@@ -20,7 +20,9 @@
     "manifest:generate": "node scripts/generate-route-manifest.mjs",
     "reference-server": "node tools/reference-server/run.mjs",
     "adapter:register": "node scripts/adapter-freeze-extract.mjs",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "creator-agent": "node tools/creator-agent/run.mjs",
+    "test:e2e:agent": "playwright test -c playwright.agent.config.ts"
   },
   "dependencies": {
     "@fontsource/inter": "4.5.15",

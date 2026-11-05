@@ -12,3 +12,9 @@ test-results
 # Local snapshot of the private Linear handoff. Never commit: this repo is public.
 .handoff/
 dist-live
+
+# Private agent data and approved configuration stay outside the public repository.
+.agent-data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

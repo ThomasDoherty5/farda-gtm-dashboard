@@ -78,3 +78,7 @@ node scripts/compare-figma.mjs /overview .handoff/figma/overview-10-217.png   # 
 - Demo data is always labeled, and the app never silently falls back to it.
 - Accessibility targets WCAG 2.2 AA. Test at widths 390, 768, 1024, 1440 and 1920, at 200% zoom, and with 320px reflow.
 - Make no fidelity claims without a Figma comparison.
+
+## Creator agent
+
+The persistent reviewed-evidence runtime is separate from the demo/reference server. See [runtime operations, configuration and Zapier connection](docs/creator-agent.md). Run `npm run creator-agent` with server-only credentials and scope. The launcher loads the owner-approved immutable launch weight bindings by default; explicit unbound instances remain unknown and historical fixtures are never a fallback.
