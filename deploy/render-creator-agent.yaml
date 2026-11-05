@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://render.com/schema/render.yaml.json
+# API only. Creating this paid service requires the owner's hosting approval.
+# During Blueprint setup, select this file as the Blueprint path.
+previews:
+  generation: "off"
+
+services:
+  - type: web
+    name: farda-creator-agent
+    runtime: node
+    region: oregon
+    branch: main
+    plan: 0.5c-512mb
+    numInstances: 1
+    autoDeployTrigger: "off"
+    buildCommand: npm ci --omit=dev --ignore-scripts
+    startCommand: >-
+      exec env FARDA_AGENT_ORIGIN="${RENDER_EXTERNAL_URL:?Render public HTTPS URL is required}"
+      node tools/creator-agent/run.mjs
+    healthCheckPath: /health
+    disk:
+      name: farda-creator-evidence
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: "24.18.0"
+      - key: FARDA_AGENT_HOST
+        value: "0.0.0.0"
+      # The launcher reads Render's PORT; no fixed FARDA_AGENT_PORT overrides it.
+      - key: FARDA_AGENT_DATABASE
+        value: /var/data/farda/evidence.sqlite
+      - key: FARDA_AGENT_SECURE_COOKIES
+        value: "true"
+      # Independent generated 256-bit values, never sent to a browser bundle.
+      - key: FARDA_AGENT_READ_TOKEN
+        generateValue: true
+      - key: FARDA_AGENT_REVIEW_TOKEN
+        generateValue: true
+      # Private Farda authorization scope, not Shopify/TikTok/provider identifiers.
+      - key: FARDA_AGENT_WORKSPACE_ID
+        sync: false
+      - key: FARDA_AGENT_ACCOUNT_ID
+        sync: false
