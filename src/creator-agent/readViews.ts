@@ -28,11 +28,21 @@ export type AgentModelSummary = z.infer<typeof agentModelSummarySchema>;
 export const agentSourcingRecordSchema = z.object({
   creatorId: text, runId: text, evidenceId: text.nullable(), briefId: text,
   checkoutRoute: z.enum(["website", "tiktok-shop"]), state, recordedAt: instant, revision, stale: z.boolean(),
+  superseded: z.boolean().default(false),
+}).strict().superRefine((record, ctx) => {
+  if (record.superseded && (!record.stale || record.state !== "reviewNeeded" || record.evidenceId !== null))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A superseded snapshot row cannot claim current readiness or link silently to new evidence." });
+});
+export const agentSourcingSnapshotSchema = z.object({
+  id: text, asOf: instant, expiresAt: instant, offset: z.number().int().nonnegative().safe(),
+  limit: z.number().int().min(1).max(100), returnedCount: z.number().int().min(0).max(100), total: z.number().int().nonnegative().safe(),
 }).strict();
 export const agentSourcingSchema = z.object({
   kind: z.literal("agent-sourcing"), policyVersion: text, agentVersion: text, agentSchemaVersion: text,
   records: z.array(agentSourcingRecordSchema).max(100), models: z.array(agentModelSummarySchema).length(2),
   total: z.number().int().nonnegative(), partial: z.boolean(),
+  /** Membership/order/total are fixed at this snapshot; readiness is observed again on each page fetch. */
+  snapshot: agentSourcingSnapshotSchema.optional(),
 }).strict().superRefine((data, ctx) => {
   if (new Set(data.records.map((record) => record.creatorId)).size !== data.records.length)
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["records"], message: "Sourcing lists one latest saved record per creator." });
@@ -40,6 +50,8 @@ export const agentSourcingSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["models"], message: "Both independent checkout models must be represented." });
   if (data.total < data.records.length || data.partial !== (data.total > data.records.length))
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["partial"], message: "Saved-record coverage must reconcile with its actual total." });
+  if (data.snapshot && (data.snapshot.total !== data.total || data.snapshot.returnedCount !== data.records.length || data.snapshot.returnedCount > data.snapshot.limit || data.snapshot.offset + data.records.length > data.total))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["snapshot"], message: "Snapshot page metadata must reconcile with actual returned records." });
 });
 export type AgentSourcingData = z.infer<typeof agentSourcingSchema>;
 

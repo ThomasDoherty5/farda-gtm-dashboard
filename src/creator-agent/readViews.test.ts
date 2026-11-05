@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,10 +22,10 @@ describe("actual agent sourcing and immutable assessment read models", () => {
   let databasePath: string;
   let bindings: ConfigBinding[];
 
-  async function start(nextBindings = [syntheticBinding(), syntheticBinding("tiktok-shop")]) {
+  async function start(nextBindings = [syntheticBinding(), syntheticBinding("tiktok-shop")], scope = SYNTHETIC_SCOPE, readToken = SYNTHETIC_READ_TOKEN) {
     bindings = nextBindings;
-    app = createAgentServer({ databasePath, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings });
+    app = createAgentServer({ databasePath, readToken, reviewToken: SYNTHETIC_REVIEW_TOKEN,
+      workspaceId: scope.workspaceId, accountId: scope.accountIds[0]!, bindings });
     const server = app.server;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -44,15 +44,26 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     expect(response.status).toBe(200);
     return await response.json() as StoredAssessment;
   }
-  async function read<T>(viewKey: string, filters: object = {}, scope: object = SYNTHETIC_SCOPE, token: string | null = SYNTHETIC_READ_TOKEN) {
+  async function read<T>(viewKey: string, filters: object = {}, scope: object = SYNTHETIC_SCOPE, token: string | null = SYNTHETIC_READ_TOKEN, page: { cursor: string | null; limit: number } = { cursor: null, limit: 100 }) {
     const response = await fetch(`${origin}/v1/read`, { method: "POST",
       headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" },
-      body: JSON.stringify({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey, requestId: "synthetic-read-model-request", requestedScope: scope, filters, period: null, sort: [], page: { cursor: null, limit: 50 } }) });
+      body: JSON.stringify({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey, requestId: "synthetic-read-model-request", requestedScope: scope, filters, period: null, sort: [], page }) });
     return { status: response.status, body: await response.json() as ReadResponse<T> };
   }
 
   beforeEach(async () => { directory = mkdtempSync(join(tmpdir(), "farda-agent-read-views-")); databasePath = join(directory, "agent.sqlite"); await start(); });
-  afterEach(async () => { await stop(); rmSync(directory, { recursive: true, force: true }); });
+  afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await stop(); rmSync(directory, { recursive: true, force: true }); });
+
+  function seed(count: number, { prefix = "synthetic-page", at = "2026-01-01T12:00:00.000Z" } = {}): StoredAssessment[] {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(at));
+    try {
+      return Array.from({ length: count }, (_, index) => {
+        const packet = { ...syntheticPacket(), creatorId: `${prefix}-${index}` };
+        return app!.store.save(packet, assessCreator(packet, bindings[0]!), 0, `${prefix}-save-${index}`);
+      });
+    } finally { vi.useRealTimers(); }
+  }
 
   it("returns an actual empty reviewed-record queue and both immutable model projections without source-capacity claims", async () => {
     const response = await read<AgentSourcingData>("discoverySummary");
@@ -206,7 +217,127 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     expect(response.body.data).toMatchObject({ total: 101, partial: true });
     expect(response.body.data!.records).toHaveLength(100);
     expect(response.body.dataState).toBe("partial");
-    expect(response.body.coverage).toMatchObject({ expectedCount: 101, observedCount: 100, missingCount: 1, complete: false, reasonCodes: ["LATEST_RECORD_LIMIT"] });
+    expect(response.body.coverage).toMatchObject({ expectedCount: 101, observedCount: 100, missingCount: 1, complete: false, reasonCodes: ["SNAPSHOT_PAGE_PARTIAL"] });
+    expect(response.body.page).toMatchObject({ hasMore: true });
+    expect(response.body.page.nextCursor).toEqual(expect.any(String));
     expect(() => app!.store.listLatest(101)).toThrow("INVALID_LIST_LIMIT");
+  });
+
+  it.each([0, 1, 100, 101])("returns truthful snapshot/page/coverage boundaries for%i actual saved creators", async (count) => {
+    seed(count);
+    const result = await read<AgentSourcingData>("discoverySummary");
+    expect(result.status).toBe(200);
+    expect(agentSourcingSchema.safeParse(result.body.data).success).toBe(true);
+    expect(result.body.data!.snapshot).toMatchObject({ offset: 0, limit: 100, returnedCount: Math.min(count, 100), total: count });
+    expect(result.body.data!.total).toBe(count);
+    expect(result.body.data!.partial).toBe(count > 100);
+    expect(result.body.page.hasMore).toBe(count > 100);
+    expect(result.body.page.nextCursor === null).toBe(count <= 100);
+    expect(result.body.coverage).toMatchObject({ expectedCount: count, observedCount: Math.min(count, 100), missingCount: Math.max(0, count - 100), complete: count <= 100 });
+  });
+
+  it("traverses205 tied timestamps without duplicates/omissions while new creators and revisions arrive between pages", async () => {
+    const saved = seed(205);
+    const ordered = [...saved].sort((a, b) => a.recordedAt === b.recordedAt ? a.runId < b.runId ? 1 : -1 : a.recordedAt < b.recordedAt ? 1 : -1);
+    const first = await read<AgentSourcingData>("discoverySummary");
+    const initial = first.body.data!;
+    expect(initial.records.map((record) => record.runId)).toEqual(ordered.slice(0, 100).map((record) => record.runId));
+    expect(initial.snapshot!.offset).toBe(0);
+    const snapshotId = initial.snapshot!.id;
+    const unseen = ordered[150]!;
+    const revised = { ...structuredClone(unseen.packet), evidenceRevision: "synthetic-snapshot-later-revision", ratings: { routine: 4, demo: 3 } };
+    await save(revised, 1, "synthetic-snapshot-later-save");
+    // A clock rollback cannot insert a newly saved creator into the fixed snapshot's later pages.
+    seed(1, { prefix: "synthetic-created-after-snapshot", at: "2020-01-01T00:00:00.000Z" });
+    const cursor = first.body.page.nextCursor!;
+    const second = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 100 });
+    const retry = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 100 });
+    expect(retry.body.data).toEqual(second.body.data);
+    expect(retry.body.dataVersion).toBe(second.body.dataVersion);
+    expect(second.body.data!.snapshot).toMatchObject({ id: snapshotId, asOf: initial.snapshot!.asOf, expiresAt: initial.snapshot!.expiresAt, offset: 100, limit: 100, total: 205, returnedCount: 100 });
+    const superseded = second.body.data!.records.find((record) => record.creatorId === unseen.packet.creatorId)!;
+    expect(superseded).toMatchObject({ runId: unseen.runId, state: "reviewNeeded", stale: true, superseded: true, evidenceId: null });
+    const oldAssessment = await read<AgentAssessmentRecord>("assessmentRecord", { creatorId: superseded.creatorId, assessmentId: superseded.runId });
+    expect(oldAssessment.body.data!.assessedQualification).toEqual(unseen.assessment);
+    expect(oldAssessment.body.data!.agentEvidence).toEqual(unseen.packet);
+    const third = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: second.body.page.nextCursor!, limit: 100 });
+    expect(third.body.page).toEqual({ nextCursor: null, hasMore: false });
+    expect(third.body.data!.snapshot).toMatchObject({ id: snapshotId, offset: 200, returnedCount: 5, total: 205 });
+    expect(third.body.data!.partial).toBe(true);
+    expect(third.body.coverage).toMatchObject({ expectedCount: 205, observedCount: 5, missingCount: 200, complete: false });
+    const all = [...initial.records, ...second.body.data!.records, ...third.body.data!.records];
+    expect(all.map((record) => record.runId)).toEqual(ordered.map((record) => record.runId));
+    expect(new Set(all.map((record) => record.creatorId)).size).toBe(205);
+    const fresh = await read<AgentSourcingData>("discoverySummary");
+    expect(fresh.body.data!.total).toBe(206);
+    expect(fresh.body.data!.snapshot!.id).not.toBe(snapshotId);
+  });
+
+  it("rejects malformed/tampered/expired cursors, wrong page limits and unauthorized requests", async () => {
+    seed(3);
+    const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
+    const cursor = first.body.page.nextCursor!;
+    const index = Math.floor(cursor.length / 2);
+    const tampered = cursor.slice(0, index) + (cursor[index] === "A" ? "B" : "A") + cursor.slice(index + 1);
+    for (const invalid of ["", "not-a-cursor", "sc1.x", tampered]) {
+      const result = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: invalid, limit: 1 });
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({ code: "INVALID_CURSOR" });
+    }
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 2 })).body).toMatchObject({ code: "INVALID_CURSOR" });
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, null, { cursor, limit: 1 })).status).toBe(401);
+    expect((await read("discoverySummary", {}, { ...SYNTHETIC_SCOPE, accountIds: ["synthetic-forbidden-account"] }, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 })).status).toBe(400);
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 101 })).status).toBe(400);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(first.body.data!.snapshot!.expiresAt) + 1);
+    const expired = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
+    clock.mockRestore();
+    expect(expired.status).toBe(409);
+    expect(expired.body).toMatchObject({ code: "CURSOR_EXPIRED" });
+  });
+
+  it("rejects cursor continuation after current configuration context changes", async () => {
+    seed(3);
+    const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
+    const revised = bindings.map((binding) => bindConfig({ ...binding.current, version: "synthetic-pagination-config-next", approvalRef: "synthetic:pagination-next" }, binding.baseline, binding.baselineHash));
+    await stop(); await start(revised);
+    const result = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: first.body.page.nextCursor, limit: 1 });
+    expect(result.status).toBe(409);
+    expect(result.body).toMatchObject({ code: "CURSOR_STALE" });
+    const fresh = await read<AgentSourcingData>("discoverySummary");
+    expect(fresh.body.data!.models[0]!.configVersion).toBe("synthetic-pagination-config-next");
+  });
+
+  it("binds cursors to database identity, authorized scope and the current private credential", async () => {
+    seed(3);
+    const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
+    const cursor = first.body.page.nextCursor;
+    await stop(); databasePath = join(directory, "replacement.sqlite"); await start();
+    const replaced = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
+    expect(replaced.status).toBe(409);
+    expect(replaced.body).toMatchObject({ code: "CURSOR_SNAPSHOT_UNAVAILABLE" });
+    const otherScope = { ...SYNTHETIC_SCOPE, workspaceId: "synthetic-other-pagination-workspace" };
+    await stop(); databasePath = join(directory, "other-scope.sqlite"); await start(undefined, otherScope);
+    const foreign = await read("discoverySummary", {}, otherScope, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
+    expect(foreign.status).toBe(400);
+    expect(foreign.body).toMatchObject({ code: "INVALID_CURSOR" });
+    const rotatedToken = `${SYNTHETIC_READ_TOKEN}-rotated`;
+    await stop(); databasePath = join(directory, "rotated-reader.sqlite"); await start(undefined, SYNTHETIC_SCOPE, rotatedToken);
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 })).status).toBe(401);
+    const rotated = await read("discoverySummary", {}, SYNTHETIC_SCOPE, rotatedToken, { cursor, limit: 1 });
+    expect(rotated.status).toBe(400);
+    expect(rotated.body).toMatchObject({ code: "INVALID_CURSOR" });
+  });
+
+  it("does not let a valid cursor revive a revoked browser session after service restart", async () => {
+    seed(3);
+    const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
+    const session = await fetch(`${origin}/v1/session`, { headers: { authorization: `Bearer ${SYNTHETIC_READ_TOKEN}` } });
+    const cookie = session.headers.get("set-cookie")!.split(";")[0]!;
+    await stop(); await start();
+    const response = await fetch(`${origin}/v1/read`, { method: "POST", headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "discoverySummary", requestId: "synthetic-revoked-session", requestedScope: SYNTHETIC_SCOPE, filters: {}, period: null, sort: [], page: { cursor: first.body.page.nextCursor, limit: 1 } }) });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toMatchObject({ code: "AUTH_REQUIRED" });
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: first.body.page.nextCursor, limit: 1 })).status).toBe(200);
   });
 });
