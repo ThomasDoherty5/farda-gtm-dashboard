@@ -99,7 +99,7 @@ export const hourlyRunSchema = z.object({
 });
 
 export const postPerformanceSchema = z.object({
-  datasetKey: z.literal("post-demo"),
+  datasetKey: z.enum(["post-demo", "post-performance"]),
   postId: z.string(),
   handle: z.string(),
   network: z.enum(["TikTok", "Instagram"]),
@@ -110,9 +110,32 @@ export const postPerformanceSchema = z.object({
   interactions: interactions.extend({ saves: count.nullable(), uniqueReach: count.nullable() }).nullable(),
   orders: count.nullable(),
   netSales: nonNegativeMoney.nullable(),
+  gmv: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("reported"), amount: nonNegativeMoney, window: z.string().min(1), definition: z.string().min(1) }).strict(),
+    z.object({ state: z.literal("not-reported") }).strict(),
+    z.object({ state: z.literal("not-applicable") }).strict(),
+    z.object({ state: z.literal("unknown") }).strict(),
+    z.object({ state: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
+  ]).nullish().transform(value => value ?? { state: "unknown" as const }),
+  publicationProof: z.object({
+    postId: z.string().min(1), network: z.enum(["TikTok", "Instagram"]), nativePostRef: z.string().min(1),
+    publishedAt: z.string().datetime({ offset: true }), observedAt: z.string().datetime({ offset: true }),
+    sourceRef: z.string().min(1),
+  }).strict().nullish(),
+  attributionWindow: z.object({
+    startDate: z.string().date(), endDate: z.string().date(), sourceRef: z.string().min(1),
+  }).strict().refine(window => window.startDate <= window.endDate, "Invalid attribution window").nullish(),
   dailyDeltas: z.array(z.object({ label: z.string(), thousands: z.number().finite().nonnegative() })),
   details: z.object({ creatorId: z.string(), contentId: z.string(), intake: z.string(), metricSource: z.string(), salesSource: z.string() }),
   collaborationId: z.string(),
+}).superRefine((post, context) => {
+  const proof = post.publicationProof;
+  if (proof && (proof.postId !== post.postId || proof.network !== post.network || Date.parse(proof.observedAt) < Date.parse(proof.publishedAt))) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["publicationProof"], message: "Publication proof must identify this post and follow publication." });
+  }
+  if (post.gmv.state === "reported" && post.network !== "TikTok") {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["gmv"], message: "Reported TikTok GMV requires a TikTok post." });
+  }
 });
 
 /** View key to the schema of `ReadResponse.data` for that view. */

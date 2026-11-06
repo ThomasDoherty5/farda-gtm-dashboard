@@ -29,6 +29,8 @@ export function gmvSentence(gmv: PostGmv): string {
   switch (gmv.state) {
     case "reported": return `TikTok-reported GMV ${usd(gmv.amount)} (${gmv.definition}, ${gmv.window}) is retained separately.`;
     case "not-reported": return "TikTok has not reported GMV for this post. That is unknown, not $0, and it is retained separately from net sales.";
+    case "unknown": return "Platform GMV is unknown because this record has no GMV observation.";
+    case "unavailable": return `Platform GMV is unavailable. ${gmv.reason}`;
     case "not-applicable": return "TikTok Shop GMV does not apply to an Instagram post. It is retained separately from net sales.";
   }
 }
@@ -37,6 +39,14 @@ function Post({ data }: { data: PostPerformanceData }) {
   const demo = useIsDemo();
   const [dialog, setDialog] = useState<"source" | "attribution" | null>(null);
   const inter = data.interactions ? interactionsOf(data.interactions) : null;
+  const proof = data.publicationProof;
+  const reportingWindow = data.attributionWindow;
+  const windowLabel = reportingWindow
+    ? new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }).formatRange(new Date(reportingWindow.startDate), new Date(reportingWindow.endDate))
+    : "Unknown · no attribution window supplied";
+  const publicationLabel = proof
+    ? `published ${new Date(proof.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" })}`
+    : "Publication unverified";
   const deltas = data.dailyDeltas;
   const peak = Math.max(0, ...deltas.map((d) => d.thousands));
   const gained = deltas.reduce((s, d) => s + d.thousands, 0);
@@ -45,7 +55,7 @@ function Post({ data }: { data: PostPerformanceData }) {
       <div className={a.titleRow}>
         <div className={a.heading}>
           <h1 id="post-title">One post. Its evidence and impact.</h1>
-          <p>{data.handle} · {data.network} · {data.cohort} · {data.publishedLabel}</p>
+          <p>{data.handle} · {data.network} · {data.cohort} · {publicationLabel}</p>
         </div>
         <LinkButton variant="secondary" to="/content" style={{ minWidth: 176 }}>Back to monitor</LinkButton>
         <Button style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("source")}>Open source post</Button>
@@ -63,10 +73,10 @@ function Post({ data }: { data: PostPerformanceData }) {
       <div className={a.split} style={{ gridTemplateColumns: "832fr 440fr", gap: 24 }}>
         <Card labelledBy="growth-title" className={a.card20}>
           <h2 id="growth-title" className={a.cardH2} style={{ margin: 0 }}>Views gained since publication</h2>
-          <p className={a.small}>Daily deltas from consecutive snapshots · {deltas.length ? `Oct ${deltas[0]!.label}–${deltas.at(-1)!.label} · ${count(gained * 1000)} total` : "not available for this post"}</p>
-          {deltas.length === 0 ? <p className={a.label} role="status">Daily snapshots aren't available for this post in the demo. The views above are its latest count, not a series.</p> : (
+          <p className={a.small}>Daily deltas from consecutive snapshots · {deltas.length ? `${demo ? "Oct " : ""}${deltas[0]!.label}–${deltas.at(-1)!.label} · ${count(gained * 1000)} total` : "not available for this post"}</p>
+          {deltas.length === 0 ? <p className={a.label} role="status">Daily snapshots aren't available for this post{demo ? " in the demo" : ""}. The views above are its latest count, not a series.</p> : (
             <div className={a.tableWrap} role="region" aria-label="Daily view growth chart" tabIndex={0}>
-              <div className={m.bars} role="img" aria-label={`Daily views gained: ${deltas.map((d) => `Oct ${d.label} ${d.thousands}k`).join(", ")}`}>
+              <div className={m.bars} role="img" aria-label={`Daily views gained: ${deltas.map((d) => `${demo ? "Oct " : ""}${d.label} ${d.thousands}k`).join(", ")}`}>
                 {deltas.map((d) => (
                   <div key={d.label} className={m.barCol}><div className={m.bar} style={{ height: deltaHeight(d.thousands, peak) }} /><span className={m.n}>{d.thousands}k</span><span className={m.d}>{d.label}</span></div>
                 ))}
@@ -90,24 +100,24 @@ function Post({ data }: { data: PostPerformanceData }) {
       <div className={a.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="attribution-title" className={a.card20}>
           <h2 id="attribution-title" className={a.cardH2} style={{ margin: 0 }}>Sales require an order match</h2>
-          <p className={a.small}>{data.orders === null ? "No order match is available for this post." : `${data.orders} distinct paid order IDs join to this content through the recorded affiliate attribution.`} The net-sales calculation deducts discounts and refunds using the order ledger.</p>
+          <p className={a.small}>{data.orders === null ? "No order match is available for this post." : data.orders === 0 ? "The source reports 0 attributed orders." : `${data.orders} distinct paid order IDs join to this content through the recorded affiliate attribution.`} The net-sales calculation deducts discounts and refunds using the order ledger.{!reportingWindow && " The attribution window is unknown."}</p>
           <p className={a.small} data-testid="gmv-note">{gmvSentence(data.gmv)} It is never relabeled as net sales.</p>
           <div className={a.btnRow}><Button variant="secondary" style={{ minWidth: 280 }} aria-haspopup="dialog" onClick={() => setDialog("attribution")}>View attribution evidence</Button></div>
         </Card>
         <Card labelledBy="status-title" className={a.card20}>
           <h2 id="status-title" className={a.cardH2} style={{ margin: 0 }}>The conversation explains the next step</h2>
-          <div className={a.btnRow}><Badge tone="success" width={200}>Live post verified</Badge></div>
-          <p className={a.small}>Source post URL and publish time verified. The creator conversation is linked to collaboration {data.collaborationId}; new replies appear in Activity.</p>
+          <div className={a.btnRow}><Badge tone={proof ? "success" : "warning"} width={200}>{proof ? "Live post verified" : "Publication unverified"}</Badge></div>
+          <p className={a.small}>{proof ? "Native post and publish time verified." : "No verified native publication record is available."} The creator conversation is linked to collaboration {data.collaborationId}.</p>
           <p className={a.small}>Next: review reuse rights before republishing. Message claims alone cannot approve payment or confirm an order.</p>
           <div className={a.btnRow}><LinkButton variant="secondary" to={`/collaborations/${data.collaborationId}?tab=overview`} style={{ minWidth: 280 }}>Open collaboration</LinkButton></div>
         </Card>
       </div>
-      <p className={m.footer}>{demo ? "Demo · no live account or order data used" : "Post reporting"} · post reporting is a subset of the shared 240,000-view / 180-order creator cohort.</p>
-      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Source post" rows={[{ label: "Post", value: `${data.handle} · ${data.network} · ${data.postId}` }, { label: "Link", value: "No verified source URL in this build" }]}>
+      <p className={m.footer}>{demo ? "Demo · no live account or order data used · post reporting is a subset of the shared 240,000-view / 180-order creator cohort." : "Post reporting · publication and sales use their respective source records."}</p>
+      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Source post" rows={[{ label: "Post", value: `${data.handle} · ${data.network} · ${data.postId}` }, { label: "Link", value: "No verified source URL in this build" }, ...(proof ? [{ label: "Native post", value: proof.nativePostRef }, { label: "Published", value: proof.publishedAt }, { label: "Observed", value: proof.observedAt }, { label: "Source reference", value: proof.sourceRef }] : [{ label: "Publication", value: "Unknown · source proof unavailable" }])]}>
         <p>Source links come from the adapter, never from a guess. This opens nothing, and the post's counts are unchanged.</p>
       </HandoffDialog>
       <HandoffDialog open={dialog === "attribution"} onClose={() => setDialog(null)} title="Attribution evidence"
-        rows={[{ label: "Matched orders", value: data.orders === null ? "Unknown" : `${data.orders} distinct paid order IDs` }, { label: "Net sales", value: data.netSales === null ? "Unknown" : `${usd(data.netSales)} after discounts and refunds` }, { label: "Window", value: "Sep 30–Oct 29, 2026" }, { label: "Source", value: data.details.salesSource }, { label: "GMV", value: `${gmvSentence(data.gmv)} Never net sales.` }]}>
+        rows={[{ label: "Matched orders", value: data.orders === null ? "Unknown" : `${data.orders} distinct paid order IDs` }, { label: "Net sales", value: data.netSales === null ? "Unknown" : `${usd(data.netSales)} after discounts and refunds` }, { label: "Window", value: windowLabel }, ...(reportingWindow ? [{ label: "Window source", value: reportingWindow.sourceRef }] : []), { label: "Source", value: data.details.salesSource }, { label: "GMV", value: `${gmvSentence(data.gmv)} Never net sales.` }]}>
         <p>Order IDs aren't listed in this build. Reading this evidence doesn't assign or change an attribution.</p>
       </HandoffDialog>
     </>
