@@ -204,6 +204,7 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `CAPABILITY_UNVERIFIED` | capabilityHold | never raised |
 | `FORBIDDEN` | forbidden | `demoAdapter`, `demoAnalytics`, `demoApprovals`, `demoMonitor`, `demoScorecards`, `useView` |
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
+| `INVALID_CURSOR` | validation | `demoCollaborationEvidence` |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
 | `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |
