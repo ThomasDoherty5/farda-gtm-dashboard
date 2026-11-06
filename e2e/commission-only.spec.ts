@@ -19,9 +19,23 @@ test("the TikTok invitation refuses a flat fee beside the commission", async ({ 
 
 test("historical gifted, paid and hybrid stay readable, and cannot start new acquisition", async ({ page }) => {
   await page.goto("/creators/social-cat");
+  const current = page.getByRole("link", { name: "Affiliate", exact: true });
+  await expect(current).toHaveAttribute("aria-current", "page");
+  const startingUrl = page.url();
+  const mutations: string[] = [];
+  page.on("request", request => {
+    if (request.method() === "POST" && /^\/v1\/(save|actions?)(\/|$)/.test(new URL(request.url()).pathname)) mutations.push(request.url());
+  });
   for (const name of ["Gifted · history", "Paid · history", "Hybrid · history"]) {
-    const tab = page.getByText(name).first();
+    const tab = page.getByRole("button", { name, exact: true });
     await expect(tab).toHaveAttribute("aria-disabled", "true");
-    await expect(tab).toHaveAccessibleDescription(/no new gifted-only, paid or hybrid acquisition can start here/);
+    await expect(tab).toHaveAccessibleDescription("Read-only. Past fees payable. New offers commission-only.");
+    await tab.focus();
+    await expect(tab).toBeFocused();
+    await tab.press("Enter");
+    await expect(current).toHaveAttribute("aria-current", "page");
+    await expect(page).toHaveURL(startingUrl);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   }
+  expect(mutations).toEqual([]);
 });
