@@ -1,6 +1,8 @@
 /* Figma component set 6:424. */
 .tabs { display: flex; flex-wrap: wrap; gap: var(--space-8); }
 .tab { display: inline-flex; justify-content: center; min-height: 44px; padding: var(--space-12); background: var(--color-surface); border-radius: var(--space-12); font: var(--text-label); color: var(--color-ink); text-decoration: none; }
+.tab:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
+.tab:active:not([aria-disabled]) { color: var(--color-violet); background: var(--color-violetSoft); }
 .tab:hover { background: var(--color-subtle); }
 .tab[aria-current] { background: var(--color-violetSoft); color: var(--color-violet); }
 .tab[aria-disabled] { border: 0; color: var(--color-muted); cursor: not-allowed; }

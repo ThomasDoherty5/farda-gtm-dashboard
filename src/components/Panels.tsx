@@ -1,3 +1,4 @@
+import { Timeline } from "./Timeline";
 import type { ReactNode } from "react";
 import { Badge, type BadgeTone } from "./Badge";
 import styles from "./Panels.module.css";
@@ -33,7 +34,7 @@ export function SectionHeading({ id, title, subtitle, large = false }: { id?: st
   return (
     <div className={large ? `${styles.sectionHeading} ${styles.sectionLarge}` : styles.sectionHeading}>
       <h2 id={id}>{title}</h2>
-      {subtitle && <p>{subtitle}</p>}
+      {subtitle && (typeof subtitle === "string" ? <p>{subtitle}</p> : <div className={styles.sectionCopy}>{subtitle}</div>)}
     </div>
   );
 }
@@ -70,7 +71,7 @@ const STEP_STATE_WORD: Record<StepState, string> = { done: "Done", current: "Cur
 /** Lifecycle steps (Figma "Step / …"). The number or mark is decoration; the state is also in text for screen readers. */
 export function Steps({ steps, label }: { steps: { title: string; note: string; state: StepState }[]; label: string }) {
   return (
-    <ol className={styles.steps} aria-label={label}>
+    <Timeline label={label} className={styles.steps}>
       {steps.map((step, i) => (
         <li key={step.title} className={styles.step} aria-current={step.state === "current" ? "step" : undefined}>
           <span className={styles.stepMark} aria-hidden="true"><Badge tone={STEP_TONE[step.state]} width={40}>{STEP_MARK[step.state] || String(i + 1)}</Badge></span>
@@ -80,7 +81,7 @@ export function Steps({ steps, label }: { steps: { title: string; note: string; 
           </div>
         </li>
       ))}
-    </ol>
+    </Timeline>
   );
 }
 

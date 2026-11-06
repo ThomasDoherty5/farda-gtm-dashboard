@@ -7,7 +7,7 @@ import { useScope } from "@/adapter/scope";
 import { useSave } from "@/adapter/useSave";
 import type { SavedBindings } from "@/creator-agent/operationsView";
 import { SavedBindingPanel } from "./SavedOperations";
-import { useView } from "@/adapter/useView";
+import { useOperationsPages, useSavedDisplayFilters } from "./useOperationsPages";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
@@ -33,7 +33,8 @@ export function CapabilitiesPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab = (CAPABILITY_TABS as readonly string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as CapabilityTab) : "capabilities";
-  const query = useView<Record<string, never>, CapabilityData | SavedBindings>("channelCapabilities", {});
+  const filters = useSavedDisplayFilters(tab);
+  const query = useOperationsPages<CapabilityData | SavedBindings>("channelCapabilities", filters);
   const [planOpen, setPlanOpen] = useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
@@ -55,6 +56,7 @@ export function CapabilitiesPage() {
       {query.isPending && <SkeletonCard label="Loading capabilities…" />}
       {query.isError && <ViewError error={query.error} subject="Channel capabilities" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="capabilities" tab={tab} /> : data && demo ? <Body res={query.data as ReadResponse<CapabilityData>} data={data} tab={tab} demo={demo} planOpen={planOpen} closePlan={() => setPlanOpen(false)} /> : <EmptyState state="Empty" title="No capabilities listed"><p>No account-scoped capability data is available.</p></EmptyState>)}
+      {query.paging}
     </Page>
   );
 }

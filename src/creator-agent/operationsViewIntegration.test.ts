@@ -80,7 +80,7 @@ describe("native authenticated saved-operations read views", () => {
     expect(expired.data.records[0].id).toBe(ready.data.records[0].id);
   });
 
-  it("reports bounded saved coverage without fabricated cursors or hidden omitted rows", async () => {
+  it("continues the pinned saved collection and reports cumulative coverage", async () => {
     await start();
     for (const action of ["readPolicy", "readMetrics", "readOrders"]) app!.operations.ledger.register({ binding: binding(action), ownerRef: "owner:synthetic-owner",
       costBasis: { state: "unknown", reasonCode: "COST_UNKNOWN" } }, 0);
@@ -88,6 +88,11 @@ describe("native authenticated saved-operations read views", () => {
     const body = readResponseSchema(viewSchemas.connectionsOverview!).parse(await response.json());
     expect(body.dataState).toBe("partial"); expect(body.data).toMatchObject({ coverage: { total: 3, returned: 1, partial: true } });
     expect(body.coverage).toMatchObject({ expectedCount: 3, observedCount: 1, missingCount: 2, complete: false });
-    expect(body.page).toEqual({ nextCursor: null, hasMore: false });
+    expect(body.page.hasMore).toBe(true); expect(body.page.nextCursor).toBeTruthy();
+    const next = await (await request("connectionsOverview", { page: { cursor: body.page.nextCursor, limit: 1 } })).json();
+    expect(next.coverage).toMatchObject({ observedCount: 2, expectedCount: 3, complete: false });
+    const last = await (await request("connectionsOverview", { page: { cursor: next.page.nextCursor, limit: 1 } })).json();
+    expect(last.page).toEqual({ nextCursor: null, hasMore: false });
+    expect(last.coverage).toMatchObject({ observedCount: 3, expectedCount: 3, complete: true });
   });
 });

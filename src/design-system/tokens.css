@@ -54,15 +54,15 @@
 
   /* Farda text styles */
   --font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  --text-display: 600 40px/48px var(--font-family);
-  --text-h1: 600 30px/38px var(--font-family);
-  --text-h2: 600 22px/30px var(--font-family);
-  --text-h3: 600 17px/24px var(--font-family);
-  --text-body: 400 14px/22px var(--font-family);
-  --text-label: 500 14px/20px var(--font-family);
-  --text-small: 400 12px/18px var(--font-family);
-  --text-micro: 500 11px/16px var(--font-family);
-  --text-metric: 600 32px/40px var(--font-family);
+  --text-display: 600 2.5rem/3rem var(--font-family);
+  --text-h1: 600 1.875rem/2.375rem var(--font-family);
+  --text-h2: 600 1.375rem/1.875rem var(--font-family);
+  --text-h3: 600 1.0625rem/1.5rem var(--font-family);
+  --text-body: 400 0.875rem/1.375rem var(--font-family);
+  --text-label: 500 0.875rem/1.25rem var(--font-family);
+  --text-small: 400 0.75rem/1.125rem var(--font-family);
+  --text-micro: 500 0.6875rem/1rem var(--font-family);
+  --text-metric: 600 2rem/2.5rem var(--font-family);
 }
 
 /* The latin subset has no arrows, and the design uses them. These load only when an arrow appears. */

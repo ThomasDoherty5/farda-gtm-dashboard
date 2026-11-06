@@ -4,7 +4,7 @@ import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
 import type { SavedBindings } from "@/creator-agent/operationsView";
 import { SavedBindingPanel } from "./SavedOperations";
-import { useView } from "@/adapter/useView";
+import { useOperationsPages, useSavedDisplayFilters } from "./useOperationsPages";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
@@ -22,7 +22,8 @@ const DIALOG_TITLE = { openSource: "Source", openSetup: "Setup", viewDecision: "
 /** Connections and source health (Figma source 7:876, owner THO-305). Reads health; nothing here authenticates, enables or changes a provider. */
 export function ConnectionsPage() {
   const { adapter } = useScope();
-  const query = useView<Record<string, never>, ConnectionsData | SavedBindings>("connectionsOverview", {});
+  const filters = useSavedDisplayFilters();
+  const query = useOperationsPages<ConnectionsData | SavedBindings>("connectionsOverview", filters);
   const [outcome, setOutcome] = useState<"ok" | "failed" | null>(null);
   const [checking, setChecking] = useState(false);
   const demo = adapter.kind === "demo";
@@ -56,6 +57,7 @@ export function ConnectionsPage() {
       {query.isPending && <SkeletonCard label="Loading connections…" />}
       {query.isError && <ViewError error={query.error} subject="Connections" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="connections" /> : data && demo ? <Body res={query.data as ReadResponse<ConnectionsData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="Connection observations unavailable"><p>The account-scoped connection ledger has no displayable response.</p></EmptyState>)}
+      {query.paging}
     </Page>
   );
 }

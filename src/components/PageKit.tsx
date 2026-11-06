@@ -1,3 +1,4 @@
+import { Timeline } from "./Timeline";
 import type { CSSProperties, ReactNode } from "react";
 import { Badge, type BadgeTone } from "./Badge";
 import { LinkButton } from "./Button";
@@ -72,7 +73,7 @@ export type Step = { n: string; tone: BadgeTone; title: string; note: string };
 /** Numbered steps (Figma "Step" rows such as 7:1228). The number is a badge, and the list order carries the sequence. */
 export function Steps({ steps, divided = false }: { steps: readonly Step[]; divided?: boolean }) {
   return (
-    <ol className={`${styles.steps} ${divided ? styles.stepsDivided : ""}`}>
+    <Timeline label="Workflow steps" className={`${styles.steps} ${divided ? styles.stepsDivided : ""}`}>
       {steps.map((s) => (
         <li key={s.n} className={styles.step}>
           <Badge tone={s.tone} width={40}>{s.n}</Badge>
@@ -82,7 +83,7 @@ export function Steps({ steps, divided = false }: { steps: readonly Step[]; divi
           </div>
         </li>
       ))}
-    </ol>
+    </Timeline>
   );
 }
 

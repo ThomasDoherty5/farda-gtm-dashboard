@@ -59,7 +59,7 @@ export const operationsDemo: OperationsOverview = {
   needHumanResponse: 2,
   queue: {
     total: 18,
-    rows: [q("TEST-SH-1042", "H1", 57.6, 2), q("TEST-SC-0081", "H2", 50.4, 2), q("TEST-TT-1038", "H1", 31.2, 1), q("TEST-SH-1045", "H3", 16, 1), q("TEST-SC-0085", "H2", 8, 1)],
+    rows: [q("TEST-SH-1042", "H1", 57.6, 2), q("TEST-SC-0081", "H2", 50.4, 2), q("TEST-TT-1038", "H1", 31.2, 1), q("TEST-SH-1044", "H2", 18, 1), q("TEST-SH-1045", "H3", 16, 1), q("TEST-SC-0085", "H2", 8, 1)],
   },
   stock: HOME_STOCK.map((s) => ({ ...s })),
   transfers: [{ ref: "TEST-TR-012", toHome: "H2", state: "in transit" }],
@@ -131,6 +131,19 @@ export type ShippingExceptionDetail = {
 const unitPrice = known(usd(3499));
 
 export const orderDemo = (orderRef: string): OrderDetail | null => {
+  // The home H2 mobile source includes this order in the ready queue. No payment or carrier receipt accompanies that row.
+  if (orderRef === "TEST-SH-1044") {
+    return {
+      datasetKey: "operations-demo", kind: "order", orderRef, sourceKey: "SHOP-TEST-1044", home: "H2", channel: "Shopify",
+      collaboration: null, discountCode: null, attributionLabel: "Unknown", attributionContext: "No attribution receipt is available.",
+      notice: { tone: "violet", label: "Ready", title: "Order waiting at Home H2", text: "One unit in the ready queue." },
+      total: unknown("PAYMENT_RECEIPT_UNAVAILABLE"), totalContext: "No payment amount reported",
+      refunded: unknown("REFUND_RECEIPT_UNAVAILABLE"), refundedContext: "No refund amount reported",
+      mirror: { state: "upToDate", label: "Up to date", context: "Last synced 3 minutes ago" },
+      milestones: [{ key: "ready", title: "Ready to leave home", note: "Waiting 18 hours at Home H2", state: "current" }],
+      items: [], refundPath: [], shipmentRef: null,
+    };
+  }
   if (orderRef === "TEST-SH-1042")
     return {
       datasetKey: "operations-demo",

@@ -1,10 +1,11 @@
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { createDemoAdapter } from "./demoAdapter";
 import type { ReadRequest, ReadResponse, RequestedScope } from "./contract";
 import { AdapterError } from "./errors";
+import { usePagedView } from "./usePagedView";
 import { ScopeProvider } from "./scope";
-import { assertScopeMatches, useView } from "./useView";
+import { assertScopeMatches, dropProtectedData, protectedRead, useView } from "./useView";
 import { scriptedAdapter, testClient } from "@/test/renderWithAdapter";
 
 const response = (request: ReadRequest<unknown>, data: string, accountIds = request.requestedScope.accountIds): ReadResponse<unknown> => ({
@@ -37,6 +38,53 @@ function View() {
 const scope = (accountIds: string[]): RequestedScope => ({ workspaceId: "w", accountIds, environment: "demo" });
 
 describe("useView", () => {
+  it("cannot publish a 200 when scope authorization is lost between resolving the read and committing the cache", async () => {
+    const client = testClient(), root = ["protected","synthetic-scope"], key = [...root,"page"];
+    const commits: string[] = [];
+    const observer = new QueryObserver(client,{queryKey:key,retry:false,queryFn:async()=>{
+      const result = await protectedRead(client,root,"read",async()=>"old protected rows");
+      // This models a separate read or save learning of auth loss before TanStack commits the already-resolved response.
+      queueMicrotask(()=>dropProtectedData(client,root));
+      return result;
+    }});
+    const unsubscribe = observer.subscribe(s=>{if(s.data)commits.push(s.data);});
+    try {
+      await waitFor(()=>expect(observer.getCurrentResult().fetchStatus).toBe("idle"));
+      expect(client.getQueryData(key)).toBeUndefined();
+      expect(commits).not.toContain("old protected rows");
+    } finally {unsubscribe();client.clear();}
+  });
+  it.each(["UNAUTHENTICATED", "FORBIDDEN"])("a concurrent %s fences delayed ordinary and paged reads without poisoning fresh recovery", async code => {
+    const pending = new Map<string, () => void>();
+    let recovering = false;
+    const adapter = scriptedAdapter(async req => {
+      if (recovering) return response(req, "fresh after recovery");
+      return new Promise((resolve,reject) => pending.set(req.viewKey, () => req.viewKey === "deny"
+        ? reject(denied(code)) : resolve(response(req, "old protected rows"))));
+    });
+    const client = testClient();
+    function Concurrent() {
+      const one = useView<object,string>("regular", {});
+      const paged = usePagedView<object,string>("pages", {});
+      const deny = useView<object,string>("deny", {});
+      return <><p data-testid="regular-result">{one.data?.data ?? one.error?.message ?? "waiting"}</p>
+        <p data-testid="pages-result">{paged.data?.pages[0]?.data ?? paged.error?.message ?? "waiting"}</p>
+        <p data-testid="denial">{deny.error?.message}</p></>;
+    }
+    render(<QueryClientProvider client={client}><ScopeProvider adapter={adapter} scope={scope(["a"])} principal="p"><Concurrent/></ScopeProvider></QueryClientProvider>);
+    await waitFor(()=>expect(pending.size).toBe(3));
+    await act(async()=>pending.get("deny")!());
+    await waitFor(()=>expect(screen.getByTestId("denial")).toHaveTextContent(code));
+    await act(async()=>{pending.get("regular")!();pending.get("pages")!();});
+    await waitFor(()=>expect(screen.getByTestId("pages-result")).toHaveTextContent("Authorization changed"));
+    expect(screen.getByTestId("regular-result")).toHaveTextContent("Authorization changed");
+    expect(JSON.stringify(client.getQueryCache().getAll().map(q=>q.state.data))).not.toContain("old protected rows");
+    recovering = true;
+    await act(async()=>{await client.refetchQueries();});
+    await waitFor(()=>expect(screen.getByTestId("regular-result")).toHaveTextContent("fresh after recovery"));
+    expect(screen.getByTestId("pages-result")).toHaveTextContent("fresh after recovery");
+  });
+
   it("rejects a response whose verified scope differs from the request", async () => {
     const adapter = scriptedAdapter(async (request) => response(request, "other account's data", ["someone-else"]));
     render(

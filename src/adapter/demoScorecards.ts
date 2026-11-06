@@ -17,6 +17,8 @@ import {
 } from "@/fixtures/scorecards";
 import { DEMO_NOW, type OverviewFixtureKey } from "@/fixtures/overview";
 import { DEFAULT_REWARD_SCENARIO, rewardsRecord, type RewardsRecord } from "@/fixtures/rewards";
+import { BASE_POLICY, evaluateTerms, fieldErrorsOf, type PolicyConfig } from "./commissionPolicy";
+import { offerDraftPayloadSchema } from "./viewSchemas/scorecards";
 
 export type AssessmentData = ScorecardRecord | CommerceScorecardRecord;
 const ASSESSMENTS: Record<string, AssessmentData> = {
@@ -76,7 +78,7 @@ export function readRewards<T>(request: ReadRequest<{ offerId: string; scenario?
 }
 
 /** In-memory stand-in for the offer service. It enforces what the real server must: commission-only terms, supported compensation and the expected version. */
-export function createDemoOffers() {
+export function createDemoOffers(currentPolicy: () => PolicyConfig = () => BASE_POLICY) {
   const records = new Map<string, OfferDraftRecord>([[offerDraftSeed.offerId, structuredClone(offerDraftSeed)]]);
   const saves = new Map<string, { hash: string; result: Promise<SaveResourceResponse<OfferDraftRecord>> }>();
 
@@ -84,12 +86,21 @@ export function createDemoOffers() {
     const rid = request.requestId;
     const current = records.get(request.resourceRef ?? "") ?? fail("RECORD_NOT_FOUND", "This offer does not exist.", rid, { executionCertainty: "notApplied" });
     if (request.expectedVersion !== current.version) fail("STALE_VERSION", "This offer changed. Reload it before saving.", rid, { currentVersion: current.version, executionCertainty: "notApplied" });
-    const p = request.payload;
-    const fieldErrors: Record<string, string> = {};
-    if (p.upfrontFeeMinor !== 0) fieldErrors.upfrontFee = "New guaranteed or upfront content fees are not permitted.";
+    const parsed = offerDraftPayloadSchema.safeParse(request.payload);
+    if (!parsed.success) return fail("VALIDATION_FAILED", "The offer draft contains invalid or unrecognized terms.", rid, {
+      fieldErrors: Object.fromEntries(parsed.error.issues.map(issue => [issue.path.join(".") || "terms", issue.message])),
+      executionCertainty: "notApplied",
+    });
+    const p = parsed.data;
+    if (p.baseVerified) return fail("VALIDATION_FAILED", "An offer draft cannot verify its native eligible base.", rid, {
+      fieldErrors: { baseVerified: "The eligible base requires native source evidence." }, executionCertainty: "notApplied",
+    });
+    const eligibility = evaluateTerms({
+      relationship: "commissionOnly", upfrontFeeMinor: p.upfrontFeeMinor, guaranteedFeeMinor: 0, paidComponentMinor: 0,
+      commissionPct: p.commissionPct, perSaleFixedMinor: 0, sampleCostMinor: p.sampleShippingMinor,
+    }, currentPolicy());
+    const fieldErrors = fieldErrorsOf(eligibility);
     if (p.compensation !== "percentage") fieldErrors.compensation = "Fixed per qualified sale needs a verified compatible provider.";
-    if (!(p.commissionPct > 0 && p.commissionPct <= 100)) fieldErrors.commission = "The percentage must be above 0 and at most 100.";
-    if (!Number.isInteger(p.sampleShippingMinor) || p.sampleShippingMinor < 0) fieldErrors.sample = "Enter a non-negative amount.";
     if (Object.keys(fieldErrors).length) fail("POLICY_VIOLATION", "Fix the highlighted terms and save again.", rid, { fieldErrors, executionCertainty: "notApplied" });
     const same = JSON.stringify(p) === JSON.stringify(current.payload);
     const next: OfferDraftRecord = same ? current : { ...current, payload: structuredClone(p), version: `v${Number(current.version.slice(1)) + 1}`, savedAt: DEMO_NOW };

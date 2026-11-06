@@ -3,6 +3,25 @@ import { SCHEMA_VERSION, type Period, type ReadResponse } from "./contract";
 import { AdapterError, mustClearProtectedData } from "./errors";
 import { scopeKey, useScope } from "./scope";
 
+// A transport may ignore abort. A later denial invalidates reads already in flight for this principal and account scope.
+const authEpochs = new WeakMap<QueryClient, Map<string, number>>();
+function currentEpoch(client: QueryClient, root: readonly unknown[]) {
+  return authEpochs.get(client)?.get(JSON.stringify(root)) ?? 0;
+}
+export async function protectedRead<T>(client: QueryClient, root: readonly unknown[], requestId: string, read: () => Promise<T>, queryKey?: readonly unknown[]): Promise<T> {
+  const started = currentEpoch(client, root);
+  let value: T;
+  try { value = await read(); }
+  catch (error) {
+    if (error instanceof AdapterError && mustClearProtectedData(error.category) && started === currentEpoch(client, root))
+      dropProtectedData(client, root, queryKey);
+    throw error;
+  }
+  if (started !== currentEpoch(client, root)) throw new AdapterError({ code: "SESSION_EXPIRED", message: "Authorization changed while this read was in progress.",
+    requestId, correlationId: null, retryable: false, retryAfterMs: null });
+  return value;
+}
+
 let requestCounter = 0;
 
 /**
@@ -16,9 +35,10 @@ let requestCounter = 0;
 export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean } = {}) {
   const ctx = useScope();
   const client = useQueryClient();
+  const queryKey = [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period];
   return useQuery<ReadResponse<T>, Error>({
     ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
-    queryKey: [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period],
+    queryKey,
     // Opt-in: while a changed filter loads, keep the last data from the same scope on screen (flagged by isPlaceholderData).
     // Data from a different principal, environment, workspace or account set is never carried over.
     placeholderData: options.keepPrevious
@@ -30,7 +50,7 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
     retry: (count, error) => !(error instanceof AdapterError && (mustClearProtectedData(error.category) || !error.body.retryable)) && count < 2,
     queryFn: async ({ signal }) => {
       const requestId = `req-${++requestCounter}`;
-      try {
+      return protectedRead(client, scopeKey(ctx), requestId, async () => {
         const res = await ctx.adapter.readView<F, T>(
           {
             schemaVersion: SCHEMA_VERSION,
@@ -47,17 +67,26 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
         );
         assertScopeMatches(res, ctx.scope);
         return res;
-      } catch (error) {
-        if (error instanceof AdapterError && mustClearProtectedData(error.category)) dropProtectedData(client, scopeKey(ctx));
-        throw error;
-      }
+      }, queryKey);
     },
   });
 }
 
-export function dropProtectedData(client: QueryClient, root: readonly unknown[]) {
+export function dropProtectedData(client: QueryClient, root: readonly unknown[], denyingKey?: readonly unknown[]) {
+  const epochs = authEpochs.get(client) ?? new Map<string,number>();
+  epochs.set(JSON.stringify(root), currentEpoch(client, root) + 1);
+  authEpochs.set(client, epochs);
   client.removeQueries({ queryKey: root, type: "inactive" });
-  for (const query of client.getQueryCache().findAll({ queryKey: root })) query.setState({ data: undefined, dataUpdatedAt: 0 });
+  const denyingQuery = denyingKey && client.getQueryCache().find({queryKey:denyingKey,exact:true});
+  const expired = new AdapterError({code:"SESSION_EXPIRED",message:"Authorization changed while this read was in progress.",
+    requestId:null,correlationId:null,retryable:false,retryAfterMs:null});
+  for (const query of client.getQueryCache().findAll({queryKey:root})) {
+    // Cancel the query's publisher as well as its transport. Reverting would briefly restore previously authorized rows.
+    if (query !== denyingQuery && query.state.fetchStatus !== "idle") {
+      void query.cancel({silent:true,revert:false});
+      query.setState({data:undefined,dataUpdatedAt:0,fetchStatus:"idle",status:"error",error:expired});
+    } else query.setState({data:undefined,dataUpdatedAt:0});
+  }
 }
 
 export function assertScopeMatches(res: ReadResponse<unknown>, requested: { workspaceId: string; accountIds: string[]; environment: string }) {

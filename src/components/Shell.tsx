@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useScope } from "@/adapter/scope";
+import { HOMES } from "@/fixtures/operations";
 import { breadcrumbsFor } from "@/routes/breadcrumbs";
 import { primaryNav, sectionOf, workspaceLinks } from "@/routes/nav";
 import { Badge } from "./Badge";
@@ -68,13 +69,14 @@ export function Shell() {
   useRouteAnnouncement(mainRef, pathname);
   const section = sectionOf(pathname);
   const shippingHub = pathname === "/operations" && new URLSearchParams(search).get("view") === "hub";
+  const compactOperations = pathname === "/operations" && !shippingHub;
   const demo = adapter.environment === "demo";
   const crumbs = breadcrumbsFor(pathname, search);
 
   return (
     <div className={styles.canvas}>
       <a className="skip-link" href="#main">Skip to main content</a>
-      <div className={`${styles.frame} ${shippingHub ? styles.shippingHub : ""}`} data-shell-variant={shippingHub ? "shipping-hub" : undefined}>
+      <div className={`${styles.frame} ${shippingHub ? styles.shippingHub : compactOperations ? styles.compactOperations : ""}`} data-shell-variant={shippingHub ? "shipping-hub" : undefined}>
         <header className={styles.header}>
           <span className={styles.brand}><span className={styles.mark} aria-hidden="true">f</span>farda</span>
           <nav aria-label="Primary" className={styles.primary}>
@@ -122,6 +124,17 @@ export function Shell() {
             })}
           </ul>
         </nav>
+        {compactOperations && <nav aria-label="Operations home and health" className={styles.operationsControls}>
+          {["all", ...HOMES].map(home => {
+            const filters = new URLSearchParams(search);
+            const current = (filters.get("home") ?? "all") === home;
+            if (home === "all") filters.delete("home"); else filters.set("home", home);
+            const query = filters.toString();
+            return <LinkButton key={home} to={pathname + (query ? "?" + query : "")} variant={current ? "primary" : "secondary"}
+              aria-current={current ? "true" : undefined} onClick={() => setMenuOpen(false)}>{home === "all" ? "All homes" : "Home " + home}</LinkButton>;
+          })}
+          <LinkButton to="/analytics/fulfillment?view=health" onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton>
+        </nav>}
         {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}
         <Button variant="secondary" onClick={() => setMenuOpen(false)}>Close menu</Button>
       </Dialog>

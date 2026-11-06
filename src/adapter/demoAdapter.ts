@@ -53,9 +53,9 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   const evidence = createDemoEvidence();
   const ops = createDemoOps({ actorRole: opts.actorRole });
   const finance = createDemoFinance();
-  const offers = createDemoOffers();
+  const offers = createDemoOffers(() => policy.policy);
   const batch = createDemoBatch();
-  const discovery = createDemoDiscovery();
+  const discovery = createDemoDiscovery(() => policy.policy);
   const collaboration = createDemoCollaboration();
   const settings = createDemoSettings();
   const lifecycle = createDemoLifecycle();
@@ -84,7 +84,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       const financeView = finance.read(request);
       if (financeView) return financeView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
-        return respondWith(request, discoveryDemo, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
+        return respondWith(request, { ...discoveryDemo, versions: { ...discoveryDemo.versions, policyVersion: policy.policy.version } }, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerRewards") return readRewards<T>(request as ReadRequest<{ offerId: string; scenario?: string }>, fixture);

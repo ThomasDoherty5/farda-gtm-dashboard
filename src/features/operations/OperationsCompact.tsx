@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
 import { Kpi, KpiRow } from "@/components/Kpi";
@@ -8,6 +9,10 @@ import styles from "./Operations.module.css";
 
 export type CompactProps = {
   data: OperationsOverview;
+  demo: boolean;
+  view: "overview" | "orders" | "shipping";
+  overviewTo: string;
+  ordersTo: string;
   home: Home | "all";
   ready: QueueRow[];
   /** Whole minutes since the source last synced, or null when it never did. */
@@ -26,14 +31,14 @@ const scopeText = (home: Home | "all") => (home === "all" ? "All homes" : home);
 const syncText = (minutes: number | null) => (minutes === null ? "No successful sync recorded" : `Synced ${minutesAgoLabel(minutes)}`);
 
 /** Operations at 1024 (Figma 12:708). A shorter composition than 1440: three figures, three queue rows, stock and exceptions. */
-export function TabletOperations({ data, home, ready, syncedMinutesAgo, stale }: CompactProps) {
+export function TabletOperations({ data, demo, home, ready, syncedMinutesAgo, stale }: CompactProps) {
   const summary = home === "all" ? data.all : data.byHome[home];
   const stock = data.stock.filter((s) => home === "all" || s.home === home);
   const exceptions = data.exceptions.filter((e) => home === "all" || e.home === home);
   return (
     <>
-      <p className={styles.scope} data-testid="source-freshness" role={stale ? "status" : undefined}>
-        {scopeText(home)} · Demo workspace · {stale ? "Behind its source · " : ""}{syncText(syncedMinutesAgo)}
+      <p className={styles.scope} data-operations-demo={demo || undefined} data-testid="source-freshness" role={stale ? "status" : undefined}>
+        {scopeText(home)} · {demo ? "Demo workspace" : "Workspace"} · {stale ? "Behind its source · " : ""}{syncText(syncedMinutesAgo)}
       </p>
       <KpiRow columns={3} keepColumns>
         <Kpi label="To ship" context={`${figure(summary.waitingOverTwoDays, String)} overdue`} testId="metric-To ship">{figure(summary.toShip, String)}</Kpi>
@@ -69,7 +74,7 @@ export function TabletOperations({ data, home, ready, syncedMinutesAgo, stale }:
 }
 
 /** Operations at 390 (Figma 12:653): one column, queue as cards, low stock as a warning card. */
-export function MobileOperations({ data, home, ready, syncedMinutesAgo, stale }: CompactProps) {
+export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo, ready, syncedMinutesAgo, stale }: CompactProps) {
   const summary = home === "all" ? data.all : data.byHome[home];
   const stock = data.stock.filter((s) => home === "all" || s.home === home);
   const available = stock.reduce((sum, s) => sum + (s.onHand - s.reserved), 0);
@@ -78,11 +83,11 @@ export function MobileOperations({ data, home, ready, syncedMinutesAgo, stale }:
   const tab = (label: string, to: string, current = false) => <LinkButton key={label} to={to} variant={current ? "primary" : "ghost"} aria-current={current ? "page" : undefined}>{label}</LinkButton>;
   return (
     <>
-      <p className={styles.scope}>Demo workspace · {scopeText(home)}</p>
+      <p className={styles.scope} data-operations-demo={demo || undefined}>{demo ? "Demo workspace" : "Workspace"} · {scopeText(home)}</p>
       <nav aria-label="Operations sections" className={styles.compactTabs}>
-        {tab("Overview", "/operations", true)}
-        {tab("To ship", "/operations?view=orders")}
-        {tab("Stock", "/inventory")}
+        {tab("Overview", overviewTo, view === "overview")}
+        {tab("To ship", ordersTo, view === "orders")}
+        {tab("Stock", home === "all" ? "/inventory" : "/inventory?home=" + home)}
       </nav>
       <div className={styles.strip} data-stale={stale} data-testid="source-freshness" role={stale ? "status" : undefined}>
         <p>{data.source.label.split(" ")[0]} · {stale ? "behind its source, " : ""}{syncedMinutesAgo === null ? "no successful sync" : `synced ${minutesAgoLabel(syncedMinutesAgo).replace(" minutes", " min").replace(" minute", " min")}`}</p>
@@ -113,16 +118,13 @@ export function MobileOperations({ data, home, ready, syncedMinutesAgo, stale }:
             <p>{s.onHand - s.reserved} available · threshold {s.threshold}</p>
             {data.transfers.filter((t) => t.toHome === s.home).map((t) => <p key={t.ref}>Transfer {t.ref} is {t.state}.</p>)}
           </div>
-          <LinkButton to="/inventory" variant="secondary" style={{ minWidth: 180 }}>View transfer</LinkButton>
+          <LinkButton to={"/inventory?home=" + s.home} variant="secondary" style={{ minWidth: 180 }}>View transfer</LinkButton>
         </div>
       ))}
-      {exceptions.length > 0 && (
-        <div className={styles.card} data-testid="exceptions-card">
-          <p className={styles.h3}>{exceptions.length === 1 ? "1 shipment needs attention" : `${exceptions.length} shipments need attention`}</p>
-          <LinkButton to={`/shipments/${exceptions[0]!.shipmentRef}/exceptions/${exceptions[0]!.exceptionId}`} variant="secondary" style={{ minWidth: 180 }}>Review exceptions</LinkButton>
-        </div>
-      )}
-      <p className={styles.micro}>Last refreshed {syncedMinutesAgo === null ? "never" : minutesAgoLabel(syncedMinutesAgo)} · Operational data only.</p>
+      <p className={styles.micro}>
+        Last refreshed {syncedMinutesAgo === null ? "never" : minutesAgoLabel(syncedMinutesAgo)} · {exceptions[0] ?
+          <Link to={`/shipments/${exceptions[0].shipmentRef}/exceptions/${exceptions[0].exceptionId}`}>{exceptions.length} shipping exception{exceptions.length === 1 ? "" : "s"}</Link> : "Operational data only."}
+      </p>
     </>
   );
 }

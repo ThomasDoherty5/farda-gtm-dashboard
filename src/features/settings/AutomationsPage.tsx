@@ -4,8 +4,8 @@ import { AdapterError } from "@/adapter/errors";
 import { useScope } from "@/adapter/scope";
 import { useAction } from "@/adapter/useAction";
 import type { SavedRuns } from "@/creator-agent/operationsView";
-import { SavedRunsPanel } from "./SavedOperations";
-import { useView } from "@/adapter/useView";
+import { SavedRunFilters, SavedRunsPanel } from "./SavedOperations";
+import { useOperationsPages, useSavedDisplayFilters } from "./useOperationsPages";
 import type { TaskRequest } from "@/adapter/demoSettings";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -38,7 +38,8 @@ function RunsPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab: Tab = (TABS as string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as Tab) : "runs";
-  const query = useView<Record<string, never>, AutomationData | SavedRuns>("automationRuns", {});
+  const filters = useSavedDisplayFilters(tab);
+  const query = useOperationsPages<AutomationData | SavedRuns>("automationRuns", filters);
   const [taskOpen, setTaskOpen] = useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
@@ -57,10 +58,12 @@ function RunsPage() {
       <Notice kind="plain" title={demo ? "Demo · execution access is not validated" : "Saved automation evidence"}>
         {demo ? "Run states below are examples. A human approves the exact outbound action; the browser works inside its source platform and saves the result." : "Saved traces describe work in this workspace and account. External execution and schedules require separate source evidence."}
       </Notice>
+      {!demo && tab === "runs" && <SavedRunFilters data={data && "kind" in data && data.kind === "saved-runs" ? data : null}/>}
       <ReadState res={query.data} subject="Automation runs" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading runs…" />}
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedRunsPanel data={data} tab={tab} /> : data && demo ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>No account-scoped run data is available.</p></EmptyState>)}
+      {query.paging}
       {data && !("kind" in data) && demo && <TaskDialog open={taskOpen} data={data} demo={demo} onClose={() => setTaskOpen(false)} />}
     </Page>
   );

@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef } from "react";
+import { scopeKey, useScope } from "@/adapter/scope";
 import { useSearchParams } from "react-router-dom";
 import type { SavedBinding, SavedBindings, SavedRuns } from "@/creator-agent/operationsView";
 import { Badge } from "@/components/Badge";
@@ -17,7 +18,16 @@ const tone = (state: SavedBinding["state"]) => state === "Ready" ? "success" : s
 
 function useSelection(key: string) {
   const [params, setParams] = useSearchParams();
-  return { id: params.get(key), select: (id: string | null) => {
+  const ctx = useScope();
+  const context = JSON.stringify([scopeKey(ctx), params.get("tab"), params.get("savedSearch"), params.get("savedState")]);
+  const previous = useRef(context);
+  const changed = previous.current !== context;
+  useEffect(() => {
+    if (previous.current === context) return;
+    previous.current = context;
+    if (params.has(key)) setParams(p => { const next = new URLSearchParams(p); next.delete(key); return next; }, {replace:true});
+  }, [context, key, params, setParams]);
+  return { id: changed ? null : params.get(key), select: (id: string | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set(key, id); else next.delete(key);
     setParams(next, { replace: id === null });
@@ -38,7 +48,7 @@ export function SavedBindingPanel({ data, page, tab }: { data: SavedBindings; pa
       </Panel>;
   const freshness = <Panel title="Source freshness" headingId="saved-freshness">
         <DetailRows rows={[["Ledger read", stamp(data.observedAt)], ["Provider coverage", "Unknown"]]} />
-        <Small>Inspect a binding to see the permission check, source observation and last successful source read separately.</Small>
+        <Small>Each binding shows the state observed when its page was read. Refresh to recheck loaded permissions.</Small>
         <LinkButton variant="secondary" to={page === "connections" ? "/settings/capabilities" : "/settings/connections"}>{page === "connections" ? "Inspect available actions" : "View connections"}</LinkButton>
       </Panel>;
   return <>
@@ -59,16 +69,33 @@ export function SavedBindingPanel({ data, page, tab }: { data: SavedBindings; pa
   </>;
 }
 
+export function SavedRunFilters({data}:{data:SavedRuns|null}) {
+  const [params, updateParams] = useSearchParams();
+  const query = params.get("savedSearch") ?? "", state = params.get("savedState") ?? "all";
+  const filters = (q: string, st: string) => updateParams(p => {
+    const next = new URLSearchParams(p); next.delete("run");
+    if (q) next.set("savedSearch",q.slice(0,120)); else next.delete("savedSearch");
+    if (st !== "all") next.set("savedState",st); else next.delete("savedState");
+    return next;
+  },{replace:true});
+  return     <Row>
+      <SearchField id="saved-run-search" value={query} label="Search saved runs" placeholder="Run, job, correlation or state" onChange={v => filters(v,state)} />
+      <FilterButton name="State" title="Choose a run state" value={state} onChange={v => filters(query,v)} options={[{ value: "all", label: "All states" },
+        ...Array.from(new Set((data?.records ?? []).map(row => row.state).concat(state !== "all" ? [state] : []))).sort().map(value => ({ value, label: value }))]} />
+      <Button variant="ghost" onClick={() => filters("","all")}>Clear filters</Button>
+    </Row>;
+}
+
 export function SavedRunsPanel({ data, tab }: { data: SavedRuns; tab: "runs" | "zaps" | "reporting" }) {
-  const [query, setQuery] = useState("");
-  const [state, setState] = useState("all");
+  const [params] = useSearchParams();
+  const query = params.get("savedSearch") ?? "", state = params.get("savedState") ?? "all";
   const selection = useSelection("run");
   const selected = data.records.find(row => row.id === selection.id);
   if (tab === "reporting") return <Panel title="Reporting schedules" headingId="saved-reports"><p>Report destinations and delivery schedules are unavailable from this job registry.</p></Panel>;
   if (tab === "zaps") return <Panel title="Registered jobs" headingId="saved-jobs" note={counts(data.jobCoverage, "jobs")}>
     <Small>The registration state is local. Provider schedules and next run times are unknown.</Small>
     {data.jobs.length ? <DataTable variant="ledger" caption="Saved job definitions" columns={[{ label: "Job" }, { label: "Version" }, { label: "Mode" }, { label: "Local state" }]} rows={data.jobs.map(job =>
-      [job.id, job.version, job.mode, job.paused ? "Paused" : job.enabled ? "Enabled locally" : "Disabled"])} /> : <p>No jobs are registered in this workspace and account.</p>}
+      [job.scheduleRef ? <LinkButton key={job.id} variant="ghost" to={`/automations/${encodeURIComponent(job.scheduleRef)}/schedule`}>{job.id} schedule draft</LinkButton> : job.id, job.version, job.mode, job.paused ? "Paused" : job.enabled ? "Enabled locally" : "Disabled"])} /> : <p>No jobs are registered in this workspace and account.</p>}
   </Panel>;
   const visible = data.records.filter(row => (state === "all" || state === row.state) && [row.id, row.job, row.correlation, row.state].some(value => value.toLowerCase().includes(query.trim().toLowerCase())));
   return <>
@@ -78,12 +105,7 @@ export function SavedRunsPanel({ data, tab }: { data: SavedRuns; tab: "runs" | "
       <Kpi label="Displayed runs" context={data.coverage.partial ? "Partial coverage" : "Complete local read"}>{data.coverage.returned}</Kpi>
       <Kpi label="Provider run volume" context="Separate source required">Unknown</Kpi>
     </div>
-    <Row>
-      <SearchField id="saved-run-search" value={query} label="Search saved runs" placeholder="Run, job, correlation or state" onChange={setQuery} />
-      <FilterButton name="State" title="Choose a run state" value={state} onChange={setState} options={[{ value: "all", label: "All states" },
-        ...Array.from(new Set(data.records.map(row => row.state))).sort().map(value => ({ value, label: value }))]} />
-      <Button variant="ghost" onClick={() => { setState("all"); setQuery(""); }}>Clear filters</Button>
-    </Row>
+
     <Panel title="Automation runs" headingId="saved-runs-title" testId="saved-runs" note={counts(data.coverage, "runs")}>
     {visible.length ? <DataTable variant="dense" caption="Saved run traces" columns={[{ label: "Run / job" }, { label: "State" }, { label: "Observed" }, { label: "Next action" }]} rows={visible.map(run =>
       [<span key="run">{run.id}<br />{run.job} · v{run.version}</span>, run.state, stamp(run.observedAt), <Button key="detail" variant="secondary" aria-haspopup="dialog" onClick={() => selection.select(run.id)}>Inspect run</Button>])} />

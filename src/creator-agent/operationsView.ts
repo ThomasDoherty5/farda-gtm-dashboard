@@ -19,7 +19,7 @@ const binding = z.object({
   freshness: z.enum(["unknown", "current", "stale", "unavailable"]), lastSuccessAt: instant.nullable(), sourceHealth: sourceHealth.nullable(), blockers: z.array(z.string()),
 }).strict();
 export const savedBindingsSchema = z.object({ ...common, kind: z.literal("saved-bindings"), records: z.array(binding), coverage }).strict();
-const savedJob = z.object({ id: alias, version: count, mode: z.enum(["observe", "propose"]), enabled: z.boolean(), paused: z.boolean() }).strict();
+const savedJob = z.object({ id: alias, scheduleRef: z.string().max(1400).optional(), version: count, mode: z.enum(["observe", "propose"]), enabled: z.boolean(), paused: z.boolean() }).strict();
 const savedRun = z.object({
   id: alias, job: alias, correlation: alias, version: count, mode: z.enum(["observe", "propose"]), observedAt: instant, state: z.string(),
   items: count, completed: count, blockers: z.array(z.string()), receipt: alias.nullable(), receiptCount: count,

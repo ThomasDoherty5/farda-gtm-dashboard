@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { LeaveGuard } from "@/components/LeaveGuard";
+import { useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, LinkButton } from "@/components/Button";
 import { Field, SelectField, TextField } from "@/components/Field";
@@ -66,6 +67,7 @@ function ScenarioFields({label,scenario,onChange}:{label:"Base"|"Downside";scena
   </div></fieldset>;
 }
 export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}) {
+  const baseTerms=useRef(record.terms);
   const [draft,setDraft]=useState(record.terms), [editingVersion,setEditingVersion]=useState(record.version);
   const [errors,setErrors]=useState<string[]>([]), [review,setReview]=useState(false);
   const save=useSave<OfferTerms,OfferRecord>();
@@ -76,11 +78,12 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
     if(!parsed.success){setErrors(parsed.error.issues.map(i=>`${i.path.join(".")}: ${i.message}`));return;}
     setErrors([]);
     save.mutate({resourceKind:"actionDraft",resourceRef:record.offerId,expectedVersion:editingVersion,payload:parsed.data},
-      {onSuccess:r=>{setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
+      {onSuccess:r=>{baseTerms.current=r.record.terms;setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
   };
-  const reload=()=>{setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
+  const reload=()=>{baseTerms.current=record.terms;setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
   const provider=record.provider, saved=record.terms;
   return <>
+    <LeaveGuard dirty={JSON.stringify(draft)!==JSON.stringify(baseTerms.current)} subject="offer draft" />
     <div className={a.titleRow}><div className={a.heading}><h1 id="offer-title">Terms that make sense.</h1><p>{saved.creatorId} · {saved.recruitmentSource} · {saved.publishingNetwork} · {saved.checkoutRoute}</p></div>
       <Button variant="secondary" loading={save.isPending} disabledReason={canEdit?null:"Read-only access. A reviewer can save draft changes."} onClick={submit}>Save offer draft</Button>
       <Button aria-haspopup="dialog" onClick={()=>setReview(true)}>Review commitment</Button></div>
