@@ -157,7 +157,13 @@ function attemptOnce(transport: Transport, req: TransportRequest, timeoutMs: num
 function mayRetry(error: unknown): boolean {
   if (!(error instanceof TransportFailure)) return true;
   if (error.kind === "network" || error.kind === "timeout") return true;
-  if (error.kind === "http") return (error.status ?? 0) >= 500;
+  if (error.kind === "http") {
+    const response = adapterErrorBodySchema.safeParse(error.body);
+    // A source has explicitly reported an uncertain result. Preserve the receipt
+    // lookup boundary instead of treating this as an ordinary gateway outage.
+    if (response.success && (response.data.executionCertainty === "uncertain" || response.data.code === "OUTCOME_UNCERTAIN")) return false;
+    return (error.status ?? 0) >= 500;
+  }
   return false;
 }
 

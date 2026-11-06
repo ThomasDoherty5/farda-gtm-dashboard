@@ -32,6 +32,20 @@ test("source-owned content and separate rights/publication gates, immutable revi
   await expect(proposals).toContainText("Revise the source caption");await expect(proposals).toContainText("agent-reviewer");
   await expect(content).toContainText("No grant receipt");await expect(content).toContainText("Unverified");
 });
+function storedProposalCounts() {
+  return app.store.database.prepare(`SELECT
+    (SELECT COUNT(*) FROM collaboration_review_proposals) AS proposals,
+    (SELECT COUNT(*) FROM collaboration_review_requests) AS receipts`).get();
+}
+async function submitAndWaitForUncertainResponse(page:Page) {
+  // The pending marker is persisted before CSRF or the POST. Wait for the injected fault and for the client to settle.
+  const [fault] = await Promise.all([
+    page.waitForResponse(response => response.request().method()==="POST" && new URL(response.url()).pathname==="/v1/action" && response.status()===502),
+    page.getByRole("dialog",{name:"Request revision"}).getByRole("button",{name:"Save proposal for approval"}).click(),
+  ]);
+  expect(await fault.json()).toMatchObject({code:"OUTCOME_UNCERTAIN",executionCertainty:"uncertain"});
+  await expect(page.getByText("Proposal outcome unverified. Read the exact request receipt again before continuing.")).toBeVisible();
+}
 test("uncertain proposal outcome survives dialog close, full reload and failed reread; native source confirmation releases the hold",async({page})=>{
   await signIn(page);await page.goto("/collaborations/"+collabTestId+"?tab=content");
   let actionCount=0;
@@ -41,7 +55,9 @@ test("uncertain proposal outcome survives dialog close, full reload and failed r
   });
   await page.getByRole("button",{name:"Request revision"}).click();
   const dialog=page.getByRole("dialog",{name:"Request revision"});await dialog.getByLabel("Reason").fill("Check the exact revision");
-  await dialog.getByRole("button",{name:"Save proposal for approval"}).click();
+  await submitAndWaitForUncertainResponse(page);
+  expect(actionCount).toBe(1);
+  expect(storedProposalCounts()).toMatchObject({proposals:1,receipts:1});
   await expect(page.getByText("An unresolved proposal is holding new requests for this collaboration.")).toBeVisible();
   await dialog.getByRole("button",{name:"Return to source record"}).click();
   await expect(page.getByRole("button",{name:"Request revision"})).toBeDisabled();await page.reload();
@@ -55,6 +71,7 @@ test("uncertain proposal outcome survives dialog close, full reload and failed r
   await expect(page.getByRole("button",{name:"Request revision"})).toBeDisabled();expect(actionCount).toBe(1);
   await page.unroute("**/v1/read");await page.reload();await page.getByRole("button",{name:"Reconcile saved proposal"}).click();
   await expect(page.getByRole("status").filter({hasText:"is recorded for human approval"})).toBeVisible();expect(actionCount).toBe(1);
+  expect(storedProposalCounts()).toMatchObject({proposals:1,receipts:1});
 });
 test("an absent exact receipt permits only the original key and payload after reload",async({page})=>{
   await signIn(page);await page.goto("/collaborations/"+collabTestId+"?tab=content");
@@ -66,7 +83,9 @@ test("an absent exact receipt permits only the original key and payload after re
   });
   await page.getByRole("button",{name:"Request revision"}).click();
   const dialog=page.getByRole("dialog",{name:"Request revision"});await dialog.getByLabel("Reason").fill("Keep this exact caption");
-  await dialog.getByRole("button",{name:"Save proposal for approval"}).click();
+  await submitAndWaitForUncertainResponse(page);
+  expect(writes).toHaveLength(1);
+  expect(storedProposalCounts()).toMatchObject({proposals:0,receipts:0});
   await expect(page.getByText("An unresolved proposal is holding new requests for this collaboration.")).toBeVisible();await page.reload();
   await page.getByRole("button",{name:"Reconcile saved proposal"}).click();
   const original=page.getByLabel("Original proposal reason");await expect(original).toBeVisible();
@@ -74,6 +93,7 @@ test("an absent exact receipt permits only the original key and payload after re
   await expect(page.getByText("Enter the original proposal reason to retry this exact request.")).toBeVisible();expect(writes).toHaveLength(1);
   await original.fill("Keep this exact caption");await page.getByRole("button",{name:"Retry original request"}).click();
   await expect(page.getByRole("status").filter({hasText:"is recorded for human approval"})).toBeVisible();
+  expect(storedProposalCounts()).toMatchObject({proposals:1,receipts:1});
   expect(writes).toHaveLength(2);expect(writes[1]).toMatchObject({idempotencyKey:writes[0]!.idempotencyKey,expectedVersion:writes[0]!.expectedVersion,payload:writes[0]!.payload});
 });
 test("reader-only, voluntary and empty states; native desktop/mobile accessibility and geometry",async({page})=>{

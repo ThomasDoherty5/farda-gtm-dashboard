@@ -343,6 +343,20 @@ describe("timeouts and aborts", () => {
 });
 
 describe("retries and duplicate delivery keep one logical command", () => {
+  it.each(["action", "save"] as const)("does not automatically repeat a %s after an explicit uncertain HTTP response", async kind => {
+    for (const body of [
+      { code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" },
+      { code: "SOURCE_UNAVAILABLE", executionCertainty: "uncertain" },
+      { code: "OUTCOME_UNCERTAIN" },
+    ]) {
+      const calls: TransportRequest[] = [];
+      const transport: Transport = { send: async request => { calls.push(request); throw new TransportFailure("http", { status: 502, body }); } };
+      const adapter = live(transport, { writeAttempts: 3 });
+      const error = await fail(kind === "action" ? adapter.submitAction(act()) : adapter.saveResource(save()));
+      expect(calls).toHaveLength(1);
+      expect(error.body.executionCertainty).toBe("uncertain");
+    }
+  });
   it("a write retried after a lost answer carries the same idempotency key and is applied once", async () => {
     const log: TransportRequest[] = [];
     const lost = lostAnswerTransport(served(log));
