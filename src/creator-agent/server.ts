@@ -17,6 +17,14 @@ import type { AssetAuthority } from "./assets.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
 import { createOperations, operationsErrorStatus, type OperationsOptions } from "./operations.ts";
 
+import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
+import { handleOfferRoute } from "./offers/routes.ts";
+import { routeId as offerIdSchema } from "./offers/contract.ts";
+import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelStore.ts";
+import { funnelFilterSchema } from "./funnelContract.ts";
+import { readScorecardPreview, scorecardPreviewFilters } from "./scorecardPreview.ts";
+import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
+
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
 const versionOfData = (data: unknown) => createHash("sha256").update(JSON.stringify(data)).digest("hex");
@@ -31,7 +39,7 @@ const cursorPayloadSchema = z.object({
 }).strict();
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
-export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions };
+export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment"> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
 /** First real agent service; independent of all demo adapters and reference-server fixtures. */
@@ -42,7 +50,20 @@ export function createAgentServer(options: AgentServerOptions) {
   let operations: ReturnType<typeof createOperations>;
   let portfolio: PortfolioRepository;
   let assets: AssetRepository;
+  let funnel: FunnelRepository;
+  let offers: OfferRepository;
   try {
+    offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
+      ...options.offerAuthority,
+      assessment: creatorId => {
+        const record = store.latest(creatorId);
+        if (!record) return null;
+        const { stale, assessment } = current(record);
+        return { runId: record.runId, creatorId, route: record.packet.checkoutRoute, modelId: assessment.modelId, configHash: assessment.config.hash,
+          policyVersion: assessment.policyVersion, termsRevision: record.packet.termsRevision, stale };
+      },
+    });
+    funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
@@ -90,7 +111,9 @@ export function createAgentServer(options: AgentServerOptions) {
   };
   const current = (record: StoredAssessment, superseded = false) => {
     const binding = modelBinding(record.packet.checkoutRoute);
-    const stale = superseded || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
+    const terms = record.assessment.routeEvidence?.acceptedTerms;
+    const offerSuperseded = terms?.origin === "saved-offer" && !offers.matchesOfferVersion(terms.offerId, terms.version, terms.manifestHash);
+    const stale = superseded || offerSuperseded || isScorecardProofExpired(record.assessment) || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
     return { ...record, stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
   };
   const readBase = z.object({
@@ -98,7 +121,17 @@ export function createAgentServer(options: AgentServerOptions) {
     requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
     period: z.unknown(), sort: z.array(z.unknown()), page: z.object({ cursor: z.string().max(4100).nullable(), limit: z.number().int().min(1).max(100) }).strict(),
   }).strict();
+  const saveOfferSchema = z.object({
+    schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("saveResource"), requestId: z.string().min(1).max(240),
+    requestedScope: readBase.shape.requestedScope, resourceKind: z.literal("actionDraft"), resourceRef: offerIdSchema,
+    expectedVersion: z.string().min(1).max(180).nullable(), idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
+  }).strict();
   const readSchema = z.discriminatedUnion("viewKey", [
+    readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
+    readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ offerId: offerIdSchema }).strict() }),
+    readBase.extend({ viewKey: z.literal("offerRewards"), filters: z.object({ offerId: offerIdSchema }).strict() }),
+    readBase.extend({ viewKey: z.literal("pipelineSummary"), filters: funnelFilterSchema }),
+    readBase.extend({ viewKey: z.literal("pipelineBranches"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
@@ -168,11 +201,38 @@ export function createAgentServer(options: AgentServerOptions) {
           idempotencyKey: typeof key === "string" ? key : undefined }, assets);
         if (result) return reply(res, result.status, result.body);
       }
+      if (path.startsWith("/v1/offers/")) {
+        if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = handleOfferRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, offers);
+        if (result) return reply(res, result.status, result.body);
+      }
+      if (path === "/v1/save" && req.method === "POST") {
+        if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const input = saveOfferSchema.parse(await bodyOf(req));
+        const record = offers.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
+        return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+          scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: record.offerId,
+          resourceVersion: record.version, persistedAt: record.recordedAt, persistedByRef: "agent-reviewer", record,
+          reasonCodes: [], executionCertainty: "applied" });
+      }
+      if (path === "/v1/funnel/events" && req.method === "POST") {
+        if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        return reply(res, 200, await funnel.ingest(await bodyOf(req)));
+      }
       if (path === "/v1/policy" && req.method === "GET") return reply(res, 200, ratingPolicy);
       if (path === "/v1/capabilities" && req.method === "GET") return reply(res, 200, {
         schemaVersion: AGENT_SCHEMA_VERSION, policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION,
         storageSchema: 1, environment: "sandbox", mode: "reviewedEvidence", sourceAutomation: "notConnected",
         portfolioReview: { storage: "durable", decisionAuthority: options.portfolioAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
+        offers: { storage: "durable", providerExecution: "notConnected", decisionAuthority: options.offerAuthority?.decision ? "injected" : "notConnected" },
+        acquisitionFunnel: { storage: "durable", sourceAuthority: options.funnelAuthority ? "injected" : "notConnected" },
+        scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });
@@ -190,11 +250,49 @@ export function createAgentServer(options: AgentServerOptions) {
         if (typeof key !== "string" || !key.trim() || key.length > 240) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED" });
         const binding = modelBinding(input.packet.checkoutRoute);
         if (input.configHash !== (binding?.hash ?? null)) return reply(res, 409, { code: "CONFIG_VERSION_CONFLICT", executionCertainty: "notApplied" });
-        const assessment = assessCreator(input.packet, binding);
+        const proof = await resolveScorecardEvidence(options.scorecardAuthority, { workspaceId: options.workspaceId, accountId: options.accountId }, input.packet, Date.now(), id => offers.acceptedTerms(id));
+        const assessment = assessCreator(input.packet, binding, proof);
         return reply(res, 200, store.save(input.packet, assessment, input.expectedVersion, key));
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "batchDetail") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const data = readScorecardPreview(store, input.filters.selection, current);
+          const unavailable = data.items.filter(item => item.status === "unavailable").length;
+          const partial = unavailable > 0 || data.items.some(item => item.stale);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: !data.items.length ? "empty" : partial ? "partial" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: data.items.length, observedCount: data.items.length - unavailable, missingCount: unavailable,
+              complete: !partial, reasonCodes: partial ? ["REVIEW_EXACT_RUN_OR_CHANGED_PROOF"] : [] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "offerDraft" || input.viewKey === "offerRewards") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const data = input.viewKey === "offerDraft" ? offers.readOffer(input.filters.offerId) : offers.readRewards(input.filters.offerId);
+          const gaps = data?.kind === "agent-offer" ? data.blockers : data?.unknowns ?? [];
+          const stale = data?.kind === "agent-offer" && data.assessment !== null && !data.assessmentCurrent;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: !data ? "empty" : stale ? "stale" : gaps.length ? "partial" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: 1, observedCount: data ? 1 : 0, missingCount: data ? 0 : 1,
+              complete: Boolean(data) && !gaps.length && !stale, reasonCodes: [...(stale ? ["STALE_ASSESSMENT"] : []), ...gaps] },
+            capabilities: [{ actionKind: "saveOfferDraft", state: auth.role === "reviewer" ? "available" : "denied",
+              reasonCodes: auth.role === "reviewer" ? [] : ["REVIEWER_REQUIRED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "pipelineSummary" || input.viewKey === "pipelineBranches") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const data = funnel.read(input.filters);
+          const { opportunities, incomplete } = data.coverage;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: opportunities === 0 ? "empty" : incomplete ? "partial" : "ready", data,
+            sourceFreshness: [], coverage: { expectedCount: null, observedCount: opportunities, missingCount: null, complete: false,
+              reasonCodes: incomplete ? ["FUNNEL_COVERAGE_INCOMPLETE"] : opportunities === 0 ? ["NO_RECORDED_OPPORTUNITIES"] : [] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "Shipping source and label executor are not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
@@ -273,6 +371,7 @@ export function createAgentServer(options: AgentServerOptions) {
     } catch (error) {
       const operationStatus = operationsErrorStatus(error);
       if (operationStatus !== null && error instanceof Error) return reply(res, operationStatus, { code: error.message, executionCertainty: "notApplied" });
+      if (error instanceof FunnelError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof InvalidCursor) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
       if (error instanceof AgentConflict) return reply(res, 409, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof z.ZodError || error instanceof SyntaxError) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });

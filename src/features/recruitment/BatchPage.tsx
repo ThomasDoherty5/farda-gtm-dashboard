@@ -4,6 +4,8 @@ import { useScope } from "@/adapter/scope";
 import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
+import { parseScorecardSelection } from "@/creator-agent/scorecardPreview";
+import { ScorecardPreviewPage } from "./ScorecardPreview";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
@@ -44,6 +46,15 @@ const parseTab = (raw: string | null): Tab => (raw === "exceptions" || raw === "
 
 /** Bulk batch detail (Figma source 66:821, owner THO-298). Pause and cancel touch unsent items only, through the adapter; nothing is dispatched. */
 export function BatchPage() {
+  const { batchId } = useParams();
+  const [search] = useSearchParams();
+  if (batchId !== "scorecard-preview") return <ExecutionBatchPage />;
+  const selection = parseScorecardSelection(search);
+  if (!selection) return <EmptyState state="Empty" title="Invalid assessment selection"><p>Select up to 25 different saved creators from daily sourcing.</p><LinkButton to="/creators/discovery">Daily sourcing</LinkButton></EmptyState>;
+  return <ScorecardPreviewPage selection={selection} />;
+}
+
+function ExecutionBatchPage() {
   const { batchId = "" } = useParams();
   const [search, setSearch] = useSearchParams();
   const tab = parseTab(search.get("tab"));
@@ -202,7 +213,7 @@ function DetailTab({ data, counts, approved, unsent, held, heldTotal, maxHeld, n
   const sentence = [`${counts.confirmed} confirmed`, ...COUNTED.slice(1).map((c) => `${counts[c.state]} ${c.word}`)].join(" + ");
   return (
     <>
-      <ContextBox title="Illustrative batch · current model not published" text={<>This finite execution example assumes valid evidence, terms and approval. Production acquisition must bind the current commission-only policy and published checkout model; no actual creators are approved or queued <br className="wide-break" />here.</>}>
+      <ContextBox title="Illustrative batch · historical basis" text={<>This finite execution example assumes valid evidence, terms and approval. Production acquisition must bind the current commission-only policy and published checkout model; no actual creators are approved or queued <br className="wide-break" />here.</>}>
         <div className={creators.contextActions}>
           <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
           <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>

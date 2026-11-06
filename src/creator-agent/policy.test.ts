@@ -4,7 +4,9 @@ import { bindConfig, digest, modelConfigSchema, numericDigest } from "./config.t
 import { assessCreator, likeGate } from "./policy.ts";
 import { evidencePacketSchema } from "./evidence.ts";
 import { AGENT_VERSION, POLICY_VERSION } from "./assessmentSchema.ts";
-import { syntheticBinding, syntheticConfig, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
+import { syntheticSourceSnapshot, syntheticBinding, syntheticConfig, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
+
+const source = (packet: ReturnType<typeof syntheticPacket>) => ({ snapshot: syntheticSourceSnapshot(packet), reason: "SOURCE_VERIFIED" });
 
 describe("approved qualification over a bound synthetic baseline", () => {
   it.each([199, 200, 201])("applies the strict source-native %i boundary without a replacement threshold", (value) => {
@@ -103,7 +105,7 @@ describe("approved qualification over a bound synthetic baseline", () => {
 
   it.each(["website", "tiktok-shop"] as const)("uses %s route-specific activation evidence independently of publishing network", (route) => {
     const packet = withActivationEvidence(syntheticPacket(route));
-    const result = assessCreator(packet, syntheticBinding(route));
+    const result = assessCreator(packet, syntheticBinding(route), source(packet));
     expect(result.state).toBe("activationReady");
     expect(result.modelId).toBe(route === "website" ? "WEBSITE-AFFILIATE-v3" : "TIKTOK-SHOP-AFFILIATE-v3");
     expect(() => assessCreator(packet, syntheticBinding(route === "website" ? "tiktok-shop" : "website"))).toThrow("WRONG_ROUTE_MODEL");
@@ -141,12 +143,12 @@ describe("approved qualification over a bound synthetic baseline", () => {
     config.decisionRules = { invitationMinScore: null, activationMinScore: 77, minCoveragePct: 0 };
     const binding = bindConfig(config, config, digest(config));
     const packet = withActivationEvidence(syntheticPacket());
-    const below = assessCreator(packet, binding);
+    const below = assessCreator(packet, binding, source(packet));
     expect(below.score?.total).toBe(60);
     expect(below.state).toBe("prospectiveInviteEligible");
     expect(below.reasonCodes).toContain("ACTIVATION_NUMERIC_RULES");
     packet.ratings = { routine: 4, demo: 4 };
-    const above = assessCreator(packet, binding);
+    const above = assessCreator(packet, binding, source(packet));
     expect(above.score?.total).toBe(80);
     expect(above.state).toBe("activationReady");
   });
@@ -207,14 +209,14 @@ describe("immutable current configuration binding", () => {
     config.criteria = [{ ...config.criteria[0]!, weight: 31 }, { ...config.criteria[1]!, weight: 49 }, { id: "synthetic-extra", label: "Synthetic extra criterion", weight: 20 }];
     const binding = bindConfig(config, config, digest(config));
     const packet = withActivationEvidence(syntheticPacket());
-    const incomplete = assessCreator(packet, binding);
+    const incomplete = assessCreator(packet, binding, source(packet));
     expect(incomplete.score).toMatchObject({ earned: 48, total: null, unknownCount: 1 });
     expect(incomplete.state).toBe("prospectiveInviteEligible");
     expect(incomplete.reasonCodes).toContain("ACTIVATION_NUMERIC_RULES");
     packet.criterionRatings["synthetic-extra"] = 4;
     expect(assessCreator(packet, binding).state).toBe("prospectiveInviteEligible");
     packet.criterionEvidenceRefs["synthetic-extra"] = ["synthetic:extra-criterion-proof"];
-    expect(assessCreator(packet, binding).state).toBe("activationReady");
+    expect(assessCreator(packet, binding, source(packet)).state).toBe("activationReady");
   });
 
   it("excludes unsupported noncritical numbers from the bound coverage rule without changing their weights", () => {

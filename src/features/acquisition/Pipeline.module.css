@@ -45,3 +45,6 @@
   .panel { padding: var(--space-16); }
   .cohortList > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
+.filters { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,190px),1fr)); gap: var(--space-12); }
+.filters label { display: grid; gap: var(--space-4); font: var(--text-label); }
+.filters input,.filters select { min-width: 0; font: inherit; padding: var(--space-8); border: 1px solid var(--color-border); border-radius: var(--space-8); color: var(--color-ink); background: var(--color-surface); }

@@ -13,6 +13,7 @@
  * zero upfront fee) is the server's policy decision and is not decided by this shape.
  */
 import { z } from "zod";
+import { offerRecordSchema, rewardsRecordSchema } from "@/creator-agent/offers/contract";
 import { agentAssessmentRecordSchema } from "@/creator-agent/readViews";
 import { calendarDate, count, instant, minorUnits, percent, text } from "./acquisitionPrimitives";
 
@@ -109,4 +110,4 @@ const offerRewards = z.object({
   }),
 });
 
-export const scorecardsViewSchemas: Record<string, z.ZodTypeAny> = { assessmentRecord, offerDraft, offerRewards };
+export const scorecardsViewSchemas: Record<string, z.ZodTypeAny> = { assessmentRecord, offerDraft: z.union([offerRecordSchema, offerDraft]), offerRewards: z.union([rewardsRecordSchema, offerRewards]) };

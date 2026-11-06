@@ -93,7 +93,7 @@ describe("historical scorecards (37:74, 37:251)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Commerce potential, with proof." })).toBeInTheDocument();
     expect(await screen.findByTestId("score")).toHaveTextContent("86");
     expect(screen.getByRole("link", { name: "TT scorecard" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText(/TikTok Shop v3 weights and bands remain unpublished/)).toBeInTheDocument();
+    expect(screen.getByText(/current TikTok Shop assessment uses its own published configuration/)).toBeInTheDocument();
   });
 
   it("FX-04: a missing rating shows Needs data and no total, instead of a rescaled score", async () => {
@@ -186,7 +186,7 @@ describe("offer and economics (65:634)", () => {
     expect(screen.getByLabelText("Upfront content fee")).toHaveAttribute("readonly");
     expect(screen.getByText("Commission-only draft · no Farda rate is approved")).toBeInTheDocument();
     expect(screen.getByLabelText("Objective")).toHaveValue("Website affiliate sales");
-    expect(screen.getByText("WEBSITE-AFFILIATE-v3 · publication pending")).toBeInTheDocument();
+    expect(screen.getByText("WEBSITE-AFFILIATE-v3 · historical draft preview")).toBeInTheDocument();
   });
 
   it("CTRL-103 to CTRL-105: the historical offer types are disabled, with their reason", async () => {
@@ -211,7 +211,7 @@ describe("offer and economics (65:634)", () => {
     open(OFFER);
     await user.selectOptions(await screen.findByLabelText("Checkout and commission provider"), "tiktok-shop");
     expect(screen.getByLabelText("Objective")).toHaveValue("TikTok Shop affiliate sales");
-    expect(screen.getByText("TIKTOK-SHOP-AFFILIATE-v3 · publication pending")).toBeInTheDocument();
+    expect(screen.getByText("TIKTOK-SHOP-AFFILIATE-v3 · historical draft preview")).toBeInTheDocument();
   });
 
   it("CTRL-109: editing the commission recomputes the economics and marks the draft as edited", async () => {

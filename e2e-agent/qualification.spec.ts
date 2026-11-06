@@ -259,3 +259,92 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(await page.locator("main").innerText()).not.toMatch(/synthetic-browser-creator|\bDemo data\b/);
   } finally { await machine.dispose(); }
 });
+
+test("authenticated acquisition views show the actual empty scoped ledger at desktop and phone widths", async ({ page, context }, testInfo) => {
+  await startService();
+  try {
+    const auth = await context.request.get(`${service}/v1/session`, { headers: { authorization: `Bearer ${reader}` } });
+    expect(auth.status()).toBe(200);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: width === 1440 ? 1000 : 844 });
+      const read = page.waitForResponse(res => res.url().endsWith("/v1/read") && res.request().postDataJSON()?.viewKey === "pipelineSummary");
+      await page.goto("/creators/pipeline");
+      const answer = await read;
+      expect(answer.status()).toBe(200);
+      expect(await answer.json()).toMatchObject({ dataState: "empty", data: { coverage: { opportunities: 0 } } });
+      await expect(page.getByTestId("live-acquisition")).toBeVisible();
+      await expect(page.getByText("No acquisition events match", { exact: true })).toBeVisible();
+      await expect(page.getByRole("main")).not.toContainText(/Mature synthetic cohort|Illustrative cohort/);
+      await testInfo.attach(`acquisition-empty-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+    }
+  } finally { await stopService(); }
+});
+
+test("a reviewer saves a real offer and the reader sees retained reward evidence as unknown after restart", async ({ page, context }, testInfo) => {
+  await startService();
+  try {
+    expect((await context.request.get(`${service}/v1/session`, { headers: { authorization: `Bearer ${reviewer}` } })).status()).toBe(200);
+    await page.goto("/offers/new");
+    await page.getByLabel("Creator ID").fill("synthetic-offer-browser");
+    await page.getByLabel("Production brief reference").fill("synthetic-browser-brief");
+    const saved = page.waitForResponse(res => res.url().endsWith("/v1/save") && res.request().method() === "POST");
+    await page.getByRole("button", { name: "Create offer draft" }).click();
+    const ack = await saved;
+    expect(ack.status()).toBe(200);
+    const receipt = await ack.json();
+    expect(receipt).toMatchObject({ resourceVersion: "v1", record: { state: "proposed", acceptedRef: null, provider: null } });
+    await expect(page.getByRole("heading", { name: "Terms that make sense." })).toBeVisible();
+    await testInfo.attach("saved-offer-desktop", { body: await page.screenshot(), contentType: "image/png" });
+    await stopService(); await startService();
+    expect((await context.request.get(`${service}/v1/session`, { headers: { authorization: `Bearer ${reader}` } })).status()).toBe(200);
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Terms that make sense." })).toBeVisible();
+    const rewards = page.waitForResponse(res => res.url().endsWith("/v1/read") && res.request().postDataJSON()?.viewKey === "offerRewards");
+    await page.getByRole("link", { name: "Milestone rewards" }).click();
+    const result = await rewards;
+    expect(result.status()).toBe(200);
+    expect(await result.json()).toMatchObject({ data: { kind: "agent-rewards", status: "unobserved",
+      maturedMinor: null, contributionMinor: null, earnedMinor: null } });
+    await expect(page.getByRole("heading", { name: "Milestone rewards" })).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await testInfo.attach("reward-evidence-phone", { body: await page.screenshot(), contentType: "image/png" });
+  } finally { await stopService(); }
+});
+
+test("selected saved scorecards preview their exact runs and require review after supersession", async ({ page, context }, testInfo) => {
+  await startService();
+  const machine = await apiRequest.newContext({ baseURL: service, extraHTTPHeaders: { authorization: `Bearer ${reviewer}` } });
+  try {
+    const id = "synthetic-finite-" + randomUUID();
+    const capabilities = await (await machine.get("/v1/capabilities")).json();
+    const hash = capabilities.models.find((m: {modelId: string}) => m.modelId === "WEBSITE-AFFILIATE-v3").configHash;
+    const save = (revision: number) => machine.put(`/v1/creators/${id}`, {
+      headers: { "idempotency-key": randomUUID() },
+      data: { expectedVersion: revision, policyVersion: POLICY_VERSION, configHash: hash,
+        packet: syntheticAgentEvidence({ creatorId: id, evidenceRevision: `finite-${revision}`, ratings: { routine: 3, demo: 4 } }) },
+    });
+    const first = await save(0);
+    expect(first.status()).toBe(200);
+    const receipt = await first.json();
+    expect((await context.request.get(`${service}/v1/session`, { headers: { authorization: `Bearer ${reader}` } })).status()).toBe(200);
+    await page.goto("/creators/discovery");
+    await page.getByRole("checkbox", {name: `Select ${id} for preview`}).check();
+    const request = page.waitForResponse(r => r.url().endsWith("/v1/read") && r.request().postDataJSON()?.viewKey === "batchDetail");
+    await page.getByRole("link",{name:"Preview 1 selected"}).click();
+    const response = await request;
+    expect(response.status()).toBe(200);
+    expect(await response.json()).toMatchObject({ data: { selectedCount: 1, dispatchAuthorized: false,
+      items: [{ creatorId: id, runId: receipt.runId, modelId: "WEBSITE-AFFILIATE-v3", configHash: hash }] } });
+    const table = page.getByRole("region",{name:"Selected invitation assessments"});
+    await expect(table).toContainText("Acceptance unverified");
+    for (const width of [1440,390]) {
+      await page.setViewportSize({width,height:900});
+      await expect(table.getByRole("link",{name:id})).toBeVisible();
+      await testInfo.attach(`finite-preview-${width}`, {body:await page.screenshot(), contentType:"image/png"});
+    }
+    expect((await save(1)).status()).toBe(200);
+    await page.reload();
+    await expect(table).toContainText("Stale · review needed");
+    await expect(table.getByRole("link",{name:"View evidence"})).toHaveCount(0);
+  } finally { await machine.dispose(); await stopService(); }
+});

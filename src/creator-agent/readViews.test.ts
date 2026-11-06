@@ -13,7 +13,7 @@ import { agentAssessmentRecordSchema, agentSourcingSchema, type AgentAssessmentR
 import { SCHEMA_VERSION, type ReadResponse } from "../adapter/contract";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { createLiveAdapter } from "../adapter/liveAdapter";
-import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticBinding, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
+import { syntheticSourceSnapshot, SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticBinding, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
 
 describe("actual agent sourcing and immutable assessment read models", () => {
   let app: ReturnType<typeof createAgentServer> | undefined;
@@ -25,7 +25,7 @@ describe("actual agent sourcing and immutable assessment read models", () => {
   async function start(nextBindings = [syntheticBinding(), syntheticBinding("tiktok-shop")], scope = SYNTHETIC_SCOPE, readToken = SYNTHETIC_READ_TOKEN) {
     bindings = nextBindings;
     app = createAgentServer({ databasePath, readToken, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: scope.workspaceId, accountId: scope.accountIds[0]!, bindings });
+      workspaceId: scope.workspaceId, accountId: scope.accountIds[0]!, scorecardAuthority: { resolve: (subject) => syntheticSourceSnapshot(subject) }, bindings });
     const server = app.server;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);

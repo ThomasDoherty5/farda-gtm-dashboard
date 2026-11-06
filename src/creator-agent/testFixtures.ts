@@ -71,3 +71,36 @@ export function withActivationEvidence(packet: EvidencePacket): EvidencePacket {
     packet.checkoutRoute === "website" ? "websiteProgramEligibility" : "nativeShopEligibility",
   ].map((id) => ({ id, status: "pass", sourceRef: `synthetic:activate:${id}` })) });
 }
+
+/** Private source fixture supplied to the server by its test harness, independently of the HTTP review payload. */
+export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId" | "checkoutRoute" | "termsRevision" | "evidenceRevision">,
+  ratings: Record<string, number | null> = {}): import("./routeEvidence.ts").ScorecardSourceSnapshot {
+  const pass = (sourceRef: string) => ({ status: "pass" as const, sourceRef });
+  const criterionRef = (id: string) => `synthetic:criterion-proof:${id}`;
+  const windowStart = "2020-01-01T00:00:00Z";
+  const windowEnd = "2020-02-01T00:00:00Z";
+  return {
+    workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!,
+    creatorId: packet.creatorId, checkoutRoute: packet.checkoutRoute, termsRevision: packet.termsRevision, evidenceRevision: packet.evidenceRevision,
+    creatorSourceId: "source-creator-id", sourceRef: "fixture:provider-snapshot", provider: "fixture-provider",
+    programId: "fixture-program", programVersion: "v1", market: "US", observedAt: windowEnd, validUntil: "2100-01-01T00:00:00Z",
+    programEligibility: pass("fixture:program"), supportedClaims: pass("fixture:claims"),
+    terms: { origin: "provider", shopAdsRateBps: null, offerId: "fixture-offer", version: "v1", manifestHash: "synthetic-manifest-digest", acceptedRef: "fixture:accepted-offer-v1",
+      termsRevision: packet.termsRevision, provider: "fixture-provider", programId: "fixture-program", programVersion: "v1",
+      currency: "USD", commission: { kind: "percentage", basisPoints: 2000 }, eligibleBase: "retained merchandise", refundRule: "reverse refunded credit", guaranteedFeeMinor: 0 },
+    commerce: packet.checkoutRoute === "website" ? { kind: "website", linkOrCodeRef: "fixture:link", attributionPrecedence: "fixture:precedence",
+      test: { expectedProviderCredit: true, orderId: "test-order", refundOfOrderId: "test-order", refundApplied: true, sourceRef: "fixture:test-order-and-refund" } }
+      : { kind: "tiktok-shop", sellerRef: "fixture:seller", productRef: "fixture:product", creatorEligibility: pass("fixture:creator"),
+        sellerEligibility: pass("fixture:seller"), productEligibility: pass("fixture:product"), nativeAttribution: pass("fixture:native-attribution"),
+        standardRate: { version: "v1", basisPoints: 2000, sourceRef: "fixture:standard-rate" }, adsRate: { state: "notApplicable", sourceRef: "fixture:ads-disabled" } },
+    metrics: [{ name: "retainedSales", value: 2500, unit: "minorCurrency", currency: "USD", definition: "Net of mature refunds",
+      denominator: "eligible creator orders", windowStart, windowEnd, sampleSize: 2, maturity: "mature", sourceRef: criterionRef("verifiedCommerce") }],
+    audience: { sourceRef: criterionRef("audienceAlignment"), denominator: "audience panel", sampleSize: 150, windowStart, windowEnd,
+      country: "source aggregate geography", age: "source aggregate age groups", language: "source aggregate languages", alignment: "pass" },
+    reliability: pass(criterionRef("reliability")), economics: pass(criterionRef("offerEconomics")),
+    criteria: (["verifiedCommerce", "audienceAlignment", "reliability", "offerEconomics"] as const).flatMap(id => {
+      const rating = ratings[id];
+      return rating == null ? [] : [{ id, sourceRefs: [criterionRef(id)], rating, rationale: "Fixture measurement reviewed for this criterion." }];
+    }),
+  };
+}

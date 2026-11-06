@@ -15,6 +15,7 @@ import { formatMoney } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import { blockedReason } from "@/features/approvals/shared";
 import type { DiscoveryData } from "@/fixtures/discovery";
+import { scorecardPreviewPath, type ScorecardSelection } from "@/creator-agent/scorecardPreview";
 import type { AgentModelSummary, AgentSourcingData } from "@/creator-agent/readViews";
 import { DEMO_BATCH_ID, DEMO_CREATOR_ID, DEMO_EVIDENCE_ID, DEMO_HOURLY_RUN_ID } from "@/fixtures/ids";
 import { AcquisitionTabs } from "./AcquisitionTabs";
@@ -91,14 +92,18 @@ export function DiscoveryPage() {
       {restartSnapshot && <p role="status" className={styles.small}>The saved queue snapshot is no longer available. Try again or refresh the queue to start a fresh snapshot.</p>}
       {snapshotMismatch && <EmptyState state="Error" title="Saved queue snapshot mismatch" alert><p>These pages do not belong to one saved snapshot. No combined records are shown.</p><Button variant="secondary" onClick={() => void query.refetch()}>Refresh queue</Button></EmptyState>}
       {response && !snapshotMismatch &&
-        (data ? isAgentSourcing(data) && portfolio ? <AgentSourcing data={data} records={portfolio.records} hasMore={Boolean(query.hasNextPage)} loading={query.isFetchingNextPage} refreshing={query.isRefetching && !query.isFetchingNextPage} onLoadMore={() => void query.fetchNextPage()} onRefresh={() => void query.refetch()} /> : demo ? <Body res={response as ReadResponse<DiscoveryData>} data={data as DiscoveryData} demo /> : <EmptyState state="Empty" title="Saved sourcing records unavailable"><p>This source has not returned the current creator records. Review evidence when a saved record is available.</p></EmptyState> : <EmptyState state="Empty" title="No sourcing plan yet"><p>The source responded, but no daily plan is configured.</p></EmptyState>)}
+        (data ? isAgentSourcing(data) && portfolio ? <AgentSourcing key={data.snapshot?.id ?? data.policyVersion} data={data} records={portfolio.records} hasMore={Boolean(query.hasNextPage)} loading={query.isFetchingNextPage} refreshing={query.isRefetching && !query.isFetchingNextPage} onLoadMore={() => void query.fetchNextPage()} onRefresh={() => void query.refetch()} /> : demo ? <Body res={response as ReadResponse<DiscoveryData>} data={data as DiscoveryData} demo /> : <EmptyState state="Empty" title="Saved sourcing records unavailable"><p>This source has not returned the current creator records. Review evidence when a saved record is available.</p></EmptyState> : <EmptyState state="Empty" title="No sourcing plan yet"><p>The source responded, but no daily plan is configured.</p></EmptyState>)}
     </section>
   );
 }
 
 /** Actual saved source packets and current model publication; no illustrative batch or capacity is substituted. */
 function AgentSourcing({ data, records, hasMore, loading, refreshing, onLoadMore, onRefresh }: { data: AgentSourcingData; records: AgentSourcingData["records"]; hasMore: boolean; loading: boolean; refreshing: boolean; onLoadMore: () => void; onRefresh: () => void }) {
+  const [selection, setSelection] = useState<ScorecardSelection>([]);
   const partial = records.length < data.total;
+  const togglePreview = (creatorId: string, runId: string) => setSelection(selected =>
+    selected.some(s => s.creatorId === creatorId) ? selected.filter(s => s.creatorId !== creatorId) : selected.length < 25 ? [...selected,{ creatorId, runId }] : selected);
+
   return <>
     <KpiRow>
       <Kpi label="Saved creators" context={`${records.length} displayed of ${data.total} in snapshot`}>{data.total}</Kpi>
@@ -115,12 +120,15 @@ function AgentSourcing({ data, records, hasMore, loading, refreshing, onLoadMore
         <span key={`${record.creatorId}-state`}>{record.checkoutRoute === "website" ? "Website" : "TikTok Shop"}<br /><Badge tone={record.stale || record.state === "hold" ? "warning" : "violet"}>{record.superseded ? "Review needed · superseded" : record.stale ? "Review needed · stale" : decisionLabel[record.state]}</Badge></span>,
         <span key={record.runId}>{record.runId}<br />Revision {record.revision} · <time dateTime={record.recordedAt}>{record.recordedAt}</time></span>,
         <div key={`${record.runId}-links`} className={styles.actions}>
+          <label><input type="checkbox" checked={selection.some(s => s.runId === record.runId)} disabled={selection.length >= 25 && !selection.some(s => s.runId === record.runId)}
+            onChange={() => togglePreview(record.creatorId, record.runId)} /> Select {record.creatorId} for preview</label>
           <LinkButton variant="secondary" to={creatorAssessmentPath(record.creatorId, record.runId)}>View assessment</LinkButton>
           {record.evidenceId !== null ? <LinkButton variant="secondary" to={evidenceReviewPath(record.creatorId, record.evidenceId)}>Review source evidence</LinkButton> : <span className={styles.small}>Source link unavailable for this saved run.</span>}
         </div>,
       ])} /> : <EmptyState state="Empty" title="No saved creators yet"><p>No reviewed creator packets have been saved in this workspace.</p></EmptyState>}
       <p className={styles.small} role="status">Showing {records.length} of {data.total} saved creators. {partial ? "This is a partial list." : "All saved creators in this snapshot are loaded."}</p>
       <div className={styles.actions}>
+        {selection.length > 0 && <LinkButton variant="secondary" to={scorecardPreviewPath(selection)}>Preview {selection.length} selected</LinkButton>}
         {hasMore && <Button variant="secondary" loading={loading} disabledReason={refreshing ? "The queue is refreshing." : null} onClick={onLoadMore}>Load more creators</Button>}
         <Button variant="secondary" loading={refreshing} disabledReason={loading ? "A page is loading." : null} onClick={onRefresh}>Refresh queue</Button>
       </div>

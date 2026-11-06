@@ -111,3 +111,5 @@
 @media (min-width: 1180px) {
   .fieldsRow, .evGrid, .gateGrid { margin-right: -2px; }
 }
+
+.editorFields { display: grid; gap: var(--space-12); min-width: 0; margin: 0; padding: 0; border: 0; }

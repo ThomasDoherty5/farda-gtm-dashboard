@@ -1,4 +1,7 @@
 import { useSearchParams, useParams } from "react-router-dom";
+import { AgentRewards } from "./SavedOffer";
+import { useIsDemo } from "@/features/analytics/parts";
+import type { RewardRecord } from "@/creator-agent/offers/contract";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
@@ -24,19 +27,20 @@ const PROVIDER_COMPAT = [
 export function RewardsPage() {
   const { offerId = "" } = useParams();
   const [params, setParams] = useSearchParams();
-  const scenario = params.get("scenario") ?? DEFAULT_REWARD_SCENARIO;
-  const query = useView<{ offerId: string; scenario: string }, RewardsRecord>("offerRewards", { offerId, scenario }, null, { keepPrevious: true });
+  const demo = useIsDemo();
+  const scenario = demo ? params.get("scenario") ?? DEFAULT_REWARD_SCENARIO : undefined;
+  const query = useView<{ offerId: string; scenario?: string }, RewardsRecord | RewardRecord>("offerRewards", { offerId, scenario }, null, { keepPrevious: true });
   return (
     <section aria-labelledby="rewards-title" className={a.page}>
       <div className={a.titleRow}>
         <div className={a.heading}>
           <h1 id="rewards-title">Milestone rewards, earned on matured sales.</h1>
-          <p>Creator Offer Economics v1 · recommendation pending owner approval · demo scenarios</p>
+          <p>{demo ? "Creator Offer Economics v1 · recommendation pending owner approval · demo scenarios" : "Creator Offer Economics v1 · sourced reward obligations"}</p>
         </div>
         <LinkButton variant="secondary" to={`/offers/${offerId}`} style={{ minWidth: 176 }}>Back to the offer</LinkButton>
       </div>
       <ViewShell query={query} subject="The reward ladder" emptyTitle="No reward data" emptyBody="The source responded, but there is no reward record to show.">
-        {(record) => <Rewards record={record} onScenario={(v) => setParams({ scenario: v }, { replace: true })} />}
+        {(record) => "kind" in record ? record.offerId === offerId ? <AgentRewards record={record} /> : <p role="alert">Reward record identity mismatch.</p> : <Rewards record={record} onScenario={(v) => setParams({ scenario: v }, { replace: true })} />}
       </ViewShell>
     </section>
   );

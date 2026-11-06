@@ -1,0 +1,55 @@
+import { FUNNEL_VERSION, funnelEventSchema, type FunnelEvent, type FunnelType } from "./funnelContract.ts";
+export const jan = (d: number) => new Date(Date.UTC(2026, 0, d)).toISOString();
+export const fixtureRef = (source: string, id: string) => ({
+  source,
+  accountId: "fixture-account",
+  sourceId: id,
+  canonicalId: id,
+  identityState: "resolved" as const,
+  provenanceRef: "fixture:" + id,
+  url: null,
+});
+export function evt(
+  id: string,
+  eventType: FunnelType,
+  opportunityId = "A",
+  day = 5,
+  values: Partial<FunnelEvent> = {},
+): FunnelEvent {
+  return funnelEventSchema.parse({
+    schemaVersion: FUNNEL_VERSION,
+    eventId: id,
+    eventType,
+    opportunityId,
+    creatorRef: fixtureRef("social-cat", "creator:" + opportunityId),
+    relationshipRef: null,
+    collaborationRef: null,
+    campaignCohortRef: fixtureRef("notion", "launch"),
+    sourceAccount: fixtureRef("social-cat", "external-account"),
+    acquisitionRef: fixtureRef("social-cat", "external-account"),
+    cohortStart: jan(1),
+    maturationAt: jan(9),
+    route: "outbound",
+    network: "instagram",
+    checkout: "website",
+    nativeActorRole: "provider",
+    nativeActionKind: eventType,
+    policyOfferApprovalVersions: { policy: "v1", offer: "offer-1", approval: "approval-1" },
+    occurredAt: jan(day),
+    observedAt: jan(day),
+    sourceState: eventType,
+    evidenceRef: {
+      provenanceRef: "proof:" + id,
+      version: "1",
+      method: "source read",
+      access: "verified",
+      url: "https://example.invalid/receipt",
+      definition: "provider fact",
+      unit: "observation",
+      window: "January",
+    },
+    ingestIdentity: { nativeId: "native:" + id, fingerprint: null, sourceVersion: "1" },
+    details: { blockers: [] },
+    ...values,
+  });
+}
