@@ -81,4 +81,6 @@ node scripts/compare-figma.mjs /overview .handoff/figma/overview-10-217.png   # 
 
 ## Creator agent
 
+The authenticated sandbox stores versioned creator offers, independently verified acquisition events, and route-specific scorecard evidence in SQLite. The live acquisition and offer pages use this service; fixture mode is separate. A source account has to be connected before the service can verify provider facts. The sandbox does not send invitations, reserve inventory, or redeem rewards. See the [acquisition ledger](docs/acquisition-ledger.md) for read and ingest semantics.
+
 The persistent reviewed-evidence runtime is separate from the demo/reference server. See [runtime operations, configuration and Zapier connection](docs/creator-agent.md). Run `npm run creator-agent` with server-only credentials and scope. The launcher loads the owner-approved immutable launch weight bindings by default; explicit unbound instances remain unknown and historical fixtures are never a fallback.
