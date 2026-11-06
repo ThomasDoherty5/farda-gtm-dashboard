@@ -86,7 +86,7 @@ export const tiktokScorecard: ScorecardRecord = {
   modelId: "TT-COMMERCE-v2",
   title: "Commerce potential, with proof.",
   subtitle: "TikTok Affiliate Center · @studio.rae · synthetic TT-COMMERCE-v2 assessment",
-  historicalNote: "The illustrative 86-point TT-COMMERCE-v2 result is not a current acquisition decision. TikTok Shop v3 weights and bands remain unpublished; creative quality does not establish commerce performance.",
+  historicalNote: "The 86-point TT-COMMERCE-v2 example is historical. The TikTok Shop agent uses its published v3 model. Creative fit alone cannot establish sales.",
   coveragePct: 100,
   criteria: criteria([
     ["Routine and category relevance", 4, 25],

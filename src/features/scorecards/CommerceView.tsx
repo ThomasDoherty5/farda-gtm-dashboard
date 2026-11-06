@@ -67,7 +67,7 @@ export function CommerceView({ record }: { record: CommerceScorecardRecord }) {
               <Badge width={160}>65–79 review</Badge>
               <Badge width={132}>&lt;65 hold</Badge>
             </div>
-            <p className={a.small}>These earlier bands and weights are unvalidated proposals. They do not define the unpublished v3 model or authorize new acquisition.</p>
+            <p className={a.small}>These earlier bands and weights belong to this historical snapshot. The current v3 model is published by the creator agent.</p>
           </div>
         </div>
       </Card>

@@ -15,6 +15,8 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
+import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
+import { livePipelineSchema } from "@/creator-agent/funnelContract";
 import { agentSourcingSchema } from "@/creator-agent/readViews";
 import { provenanceValueSchema } from "../contract";
 import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
@@ -184,8 +186,8 @@ const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchem
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   recruitmentQueue,
   invitationDraft,
-  batchDetail,
-  pipelineSummary,
-  pipelineBranches,
+  batchDetail: z.union([scorecardPreviewSchema, batchDetail]),
+  pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),
+  pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,
 };

@@ -103,6 +103,27 @@ test("API container preserves authenticated synthetic evidence across restart an
     assert.equal(approved.length, 2);
     assert.deepEqual(capabilities.body.models, approved.map((model) => ({ modelId: model.current.modelId, configHash: model.hash })));
 
+    // These are the deployed dashboard endpoints, with no source accounts connected.
+    // An empty scoped collection and an unreadable source must never be filled from demo fixtures.
+    const read = async (viewKey, filters) => request("/v1/read", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ schemaVersion: "2026-11-02.proposed", operation: "readView", requestId: "container-dashboard-read", viewKey, filters,
+        requestedScope: { workspaceId: env.FARDA_AGENT_WORKSPACE_ID, accountIds: [env.FARDA_AGENT_ACCOUNT_ID], environment: "sandbox" },
+        page: { limit: 50, cursor: null }, sort: [], period: null }) });
+    for (const key of ["pipelineSummary", "pipelineBranches"]) {
+      const result = await read(key, {});
+      assert.equal(result.status, 200);
+      assert.equal(result.body.dataState, "empty");
+      assert.equal(result.body.data.coverage.opportunities, 0);
+    }
+    for (const key of ["offerDraft", "offerRewards"]) {
+      const result = await read(key, { offerId: "synthetic-never-saved" });
+      assert.equal(result.status, 200);
+      assert.equal(result.body.dataState, "empty");
+      assert.equal(result.body.data, null);
+    }
+    assert.equal((await request("/v1/funnel/events", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 403);
+    assert.equal((await request("/v1/save", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).status, 403);
+
     const packet = syntheticAgentEvidence({ creatorId: "synthetic-container-creator" });
     packet.ratings.routine = 0;
     const model = approved.find((item) => item.current.modelId === "WEBSITE-AFFILIATE-v3");

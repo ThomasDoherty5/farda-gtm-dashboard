@@ -14,7 +14,7 @@ export function scoreOf(criteria: Criterion[]) {
   return { earned, max, complete, total: complete ? Math.round(earned) : null, unknownCount: criteria.length - known.length };
 }
 
-/** Proposed historical bands: 80 to 100 priority, 65 to 79 manual review, below 65 hold. Not the unpublished v3 bands. */
+/** Proposed historical bands: 80 to 100 priority, 65 to 79 manual review, below 65 hold. The current bands are read from the agent. */
 export const bandOf = (score: number | null) => (score === null ? "Needs data" : score >= 80 ? "Priority review" : score >= 65 ? "Manual review" : "Hold");
 
 /* ---------- Offer economics ---------- */

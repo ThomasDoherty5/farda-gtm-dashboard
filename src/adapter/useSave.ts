@@ -2,7 +2,7 @@ import { onlineManager, useMutation, useQueryClient } from "@tanstack/react-quer
 import { useRef } from "react";
 import { SCHEMA_VERSION, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { offlineNotSent } from "./connectivity";
-import { AdapterError } from "./errors";
+import { mustClearProtectedData, AdapterError } from "./errors";
 import { scopeKey, useScope } from "./scope";
 import { dropProtectedData } from "./useView";
 
@@ -30,7 +30,7 @@ export function useSave<P, T>() {
       return ctx.adapter.saveResource<P, T>({ ...input, schemaVersion: SCHEMA_VERSION, operation: "saveResource", requestedScope: ctx.scope, idempotencyKey, requestId: `save-${++requestCounter}` });
     },
     onSettled: async (_data, error) => {
-      if (error instanceof AdapterError && error.category === "unauthenticated") dropProtectedData(client, scopeKey(ctx));
+      if (error instanceof AdapterError && mustClearProtectedData(error.category)) dropProtectedData(client, scopeKey(ctx));
       else if (!(error instanceof AdapterError && error.body.code === "OFFLINE_NOT_SENT")) await client.invalidateQueries({ queryKey: scopeKey(ctx) });
     },
   });

@@ -10,6 +10,8 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { Card, HandoffDialog, KpiCard, ViewShell, useIsDemo } from "@/features/analytics/parts";
 import { DEMO_ASSESSMENT_CONTENT_ID, DEMO_CREATOR_ID, type OfferDraftPayload, type OfferDraftRecord, type Provider } from "@/fixtures/scorecards";
 import { economics, parseCommission, parseDollars, usd2, usdAuto } from "./scorecardMath";
+import { AgentOffer, NewOffer } from "./SavedOffer";
+import type { OfferRecord } from "@/creator-agent/offers/contract";
 import { WATERFALL, waterfallBars } from "./waterfall";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
@@ -31,12 +33,18 @@ const HISTORY_REASON = "offer-type-history-note";
 /** Offer and economics (Figma source 65:634, owner THO-297, CTRL-101 to CTRL-114). A commission-only draft: nothing here activates or sends an offer. */
 export function OfferPage() {
   const { offerId = "" } = useParams();
-  const query = useView<{ offerId: string }, OfferDraftRecord>("offerDraft", { offerId });
+  const demo = useIsDemo();
+  if (offerId === "new" && !demo) return <NewOffer />;
+  return <OfferRead offerId={offerId} />;
+}
+function OfferRead({ offerId }: { offerId: string }) {
+  const query = useView<{ offerId: string }, OfferDraftRecord | OfferRecord>("offerDraft", { offerId });
   return (
     <section aria-labelledby="offer-title" data-figma-source="65:634" className={a.page}>
       <ViewShell query={query} subject="The offer" emptyTitle="No offer" emptyBody="The source responded, but there is no offer record to show.">
-        {(record) => <Offer record={record} />}
+        {(record, response) => "kind" in record ? record.offerId === offerId ? <AgentOffer key={record.offerId} record={record} canEdit={response.capabilities.some(c=>c.actionKind==="saveOfferDraft" && c.state==="available")} /> : <p role="alert">Offer identity mismatch.</p> : <Offer record={record} />}
       </ViewShell>
+      {query.data?.dataState === "empty" && query.data.capabilities.some(c=>c.actionKind === "saveOfferDraft" && c.state === "available") && <LinkButton to="/offers/new">Draft creator offer</LinkButton>}
       {!query.data?.data && <h1 id="offer-title" style={{ font: "var(--text-h1)", margin: 0 }}>Terms that make sense.</h1>}
     </section>
   );
@@ -109,7 +117,7 @@ function Offer({ record }: { record: OfferDraftRecord }) {
           ))}
         </div>
         <div className={s.fieldsRow}>
-          <Field label="Objective" helpText={`${chosen.model} · publication pending`}>{(p) => <input {...p} readOnly value={chosen.objective} />}</Field>
+          <Field label="Objective" helpText={`${chosen.model} · historical draft preview`}>{(p) => <input {...p} readOnly value={chosen.objective} />}</Field>
           <SelectField label="Publishing network" helpText={`Recruitment source: ${record.recruitmentSource}`} value={networks} onChange={(v) => setNetworks(v as OfferDraftPayload["networks"])} options={NETWORKS} />
           <SelectField label="Checkout and commission provider" helpText={chosen.help} value={provider} onChange={(v) => setProvider(v as Provider)} options={PROVIDERS.map((p) => ({ value: p.value, label: p.label }))} />
         </div>

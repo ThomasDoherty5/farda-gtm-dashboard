@@ -13,7 +13,7 @@ import { agentAssessmentRecordSchema, agentSourcingSchema, type AgentAssessmentR
 import { SCHEMA_VERSION, type ReadResponse } from "../adapter/contract";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { createLiveAdapter } from "../adapter/liveAdapter";
-import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticBinding, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
+import { syntheticSourceSnapshot, SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticBinding, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
 
 describe("actual agent sourcing and immutable assessment read models", () => {
   let app: ReturnType<typeof createAgentServer> | undefined;
@@ -25,7 +25,7 @@ describe("actual agent sourcing and immutable assessment read models", () => {
   async function start(nextBindings = [syntheticBinding(), syntheticBinding("tiktok-shop")], scope = SYNTHETIC_SCOPE, readToken = SYNTHETIC_READ_TOKEN) {
     bindings = nextBindings;
     app = createAgentServer({ databasePath, readToken, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: scope.workspaceId, accountId: scope.accountIds[0]!, bindings });
+      workspaceId: scope.workspaceId, accountId: scope.accountIds[0]!, scorecardAuthority: { resolve: (subject) => syntheticSourceSnapshot(subject) }, bindings });
     const server = app.server;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
@@ -176,6 +176,34 @@ describe("actual agent sourcing and immutable assessment read models", () => {
       expect(agentAssessmentRecordSchema.safeParse({ ...valid, [key]: { ...valid[key], modelId: "TIKTOK-SHOP-AFFILIATE-v3" } }).success).toBe(false);
     }
     expect(agentAssessmentRecordSchema.safeParse({ ...valid, agentEvidence: { ...valid.agentEvidence, checkoutRoute: "tiktok-shop" } }).success).toBe(false);
+  });
+
+  it("reads only selected immutable runs in the finite preview, including missing and superseded results", async () => {
+    const first = await save(syntheticPacket(), 0, "first-preview");
+    const selector = (runId: string) => ({creatorId:first.packet.creatorId,runId});
+    const filters = { batchId: "scorecard-preview", selection:[selector(first.runId), {creatorId:"synthetic-missing",runId:"unknown"}] };
+    const inspect = () => read<import("./scorecardPreview").ScorecardPreview>("batchDetail",filters);
+    const saved = await inspect();
+    expect(saved.status).toBe(200);
+    expect(saved.body.data).toMatchObject({selectedCount:2,dispatchAuthorized:false,items:[
+      {runId:first.runId,modelId:first.assessment.modelId,configHash:first.assessment.config.hash,status:"eligible"},
+      {status:"unavailable",score:null,criteria:[]},
+    ]});
+    await save({...first.packet,evidenceRevision:"updated-preview"},1,"second-preview");
+    const revised = await inspect();
+    expect(revised.body.data!.items[0]).toMatchObject({runId:first.runId,stale:true,status:"review",evidencePostId:null});
+    expect((await read("batchDetail",{...filters,selection:[selector(first.runId),selector("other")]})).status).toBe(400);
+    expect((await read("batchDetail",filters,SYNTHETIC_SCOPE,null)).status).toBe(401);
+  });
+
+  it("keeps a pre-upgrade activationReady record readable while current views require review", async () => {
+    const p = withActivationEvidence(syntheticPacket());
+    const old = {...assessCreator(p,bindings[0]!),agentVersion:"1.0.0" as const,state:"activationReady" as const};
+    delete old.routeEvidence;
+    const stored = app!.store.save(p,old,0,"legacy-generic-gates");
+    const readback = await read<AgentAssessmentRecord>("assessmentRecord",{creatorId:p.creatorId,assessmentId:stored.runId});
+    expect(readback.body.data).toMatchObject({stale:true,qualification:{state:"reviewNeeded"},assessedQualification:{state:"activationReady",agentVersion:"1.0.0"}});
+    expect(app!.store.history(p.creatorId)[0]!.assessment).toEqual(old);
   });
 
   it("shows config-stale records and original assessed versions without rewriting stored history", async () => {

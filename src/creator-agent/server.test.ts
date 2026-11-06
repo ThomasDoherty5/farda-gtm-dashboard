@@ -3,6 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evt } from "./funnelFixtures.testkit.ts";
+import type { FunnelAuthority } from "./funnelStore.ts";
+import { newOfferTerms } from "./offers/contract.ts";
 import { createAgentServer } from "./server.ts";
 import { bindConfig, digest, type ConfigBinding } from "./config.ts";
 import type { StoredAssessment } from "./store.ts";
@@ -25,11 +28,11 @@ describe("actual creator-agent HTTP + SQLite service", () => {
   let databasePath: string;
   let currentBindings: ConfigBinding[];
 
-  async function start(bindings = [syntheticBinding()]) {
+  async function start(bindings = [syntheticBinding()], funnelAuthority?: FunnelAuthority) {
     currentBindings = bindings;
     app = createAgentServer({
       databasePath, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings,
+      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings, funnelAuthority,
     });
     const server = app.server;
     await new Promise<void>((resolve, reject) => {
@@ -81,6 +84,73 @@ describe("actual creator-agent HTTP + SQLite service", () => {
   afterEach(async () => {
     await stop();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("exposes scoped acquisition reads as empty and denies mutation to the private reader", async () => {
+    for (const [viewKey, filters] of [
+      ["pipelineSummary", {}], ["pipelineBranches", {}],
+      ["offerDraft", { offerId: "never-saved" }], ["offerRewards", { offerId: "never-saved" }],
+    ] as const) {
+      const envelope = { ...readEnvelope(), viewKey, filters };
+      const post = (value: unknown) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) });
+      const answer = await request<{ dataState: string; data: { coverage: { opportunities: number } } | null }>("/v1/read", post(envelope));
+      expect(answer.status).toBe(200);
+      expect(answer.body.dataState).toBe("empty");
+      if (viewKey.startsWith("pipeline")) expect(answer.body.data?.coverage.opportunities).toBe(0);
+      else expect(answer.body.data).toBeNull();
+      expect((await request("/v1/read", post({ ...envelope, requestedScope: { ...SYNTHETIC_SCOPE, accountIds: ["some-other-account"] } }))).status).not.toBe(200);
+    }
+    for (const path of ["/v1/funnel/events", "/v1/save"]) {
+      const input = { method: "POST", headers: { "content-type": "application/json" }, body: "{}" };
+      expect((await request(path, input, null)).status).toBe(401);
+      expect((await request(path, input)).status).toBe(403);
+    }
+  });
+
+  it("counts an attempt only from a trusted producer and preserves that receipt across restart", async () => {
+    const event = evt("synthetic-attempt", "attempt");
+    const accountId = SYNTHETIC_SCOPE.accountIds[0]!;
+    for (const ref of [event.sourceAccount, event.acquisitionRef, event.creatorRef, event.campaignCohortRef]) if (ref) ref.accountId = accountId;
+    const hash = digest(event);
+    const value = { actor: { id: "synthetic-job", role: "producer" }, mode: "observe", accountRef: event.sourceAccount,
+      inputHash: hash, jobId: "synthetic-intake", jobVersion: "1", policyVersion: event.policyOfferApprovalVersions.policy,
+      correlationId: "synthetic-funnel-input", idempotencyKey: "synthetic-attempt", requestedAt: new Date().toISOString(), checkpoint: null, deadline: null, event };
+    const post = (v: unknown) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(v) });
+    const ingest = () => request("/v1/funnel/events", post(value), SYNTHETIC_REVIEW_TOKEN);
+    expect((await ingest()).status).toBe(403); // A reviewer is not the source of a native receipt.
+    await stop();
+    await start(undefined, { resolve: async (scope, _request, ref) => ref === event.evidenceRef.provenanceRef ? { ...scope, eventHash: hash } : null });
+    expect((await ingest()).body).toMatchObject({ replayed: false, storedEventRef: event.eventId });
+    await stop(); await start();
+    expect((await ingest()).body).toMatchObject({ replayed: true, storedEventRef: event.eventId });
+    for (const key of ["pipelineSummary", "pipelineBranches"]) {
+      const answer = await request("/v1/read", post({ ...readEnvelope(), viewKey: key, filters: {} }));
+      expect(answer.body).toMatchObject({ data: { coverage: { events: 1, opportunities: 1 }, sends: { attempts: 1, confirmed: 0 } } });
+    }
+  });
+
+  it("saves a proposed offer idempotently, recovers it after a process restart and holds unverified commitments", async () => {
+    const terms = newOfferTerms("synthetic-creator", "website", "synthetic-brief");
+    const input = { schemaVersion: SCHEMA_VERSION, operation: "saveResource", requestedScope: SYNTHETIC_SCOPE,
+      resourceKind: "actionDraft", resourceRef: "synthetic-offer", expectedVersion: null, requestId: "offer-test",
+      idempotencyKey: "offer-test-create", payload: terms };
+    const send = (value: unknown, token = SYNTHETIC_REVIEW_TOKEN) => request("/v1/save",
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(value) }, token);
+    const saved = await send(input);
+    expect(saved.status).toBe(200);
+    expect(saved.body).toMatchObject({ resourceVersion: "v1", executionCertainty: "applied", record: { state: "proposed", acceptedRef: null,
+      provider: null, scenarios: [expect.objectContaining({ contributionMinor: null }), expect.objectContaining({ contributionMinor: null })] } });
+    await stop(); await start();
+    expect((await send(input)).body).toEqual(saved.body);
+    expect((await send({ ...input, idempotencyKey: "second-command" })).status).toBe(409);
+    expect((await send({ ...input, expectedVersion: "v1", requestedScope: { ...SYNTHETIC_SCOPE, accountIds: ["another-account"] } })).status).not.toBe(200);
+    const direct = await request("/v1/offers/synthetic-offer");
+    expect(direct.body).toMatchObject({ version: "v1", historyTotal: 1, ownerApprovalRef: null });
+    const fakeApproval = await request("/v1/offers/synthetic-offer/decisions", { method: "POST",
+      headers: { "idempotency-key": "fake-approval", "content-type": "application/json" },
+      body: JSON.stringify({ version: "v1", kind: "owner-approved", sourceRef: "unverified" }) }, SYNTHETIC_REVIEW_TOKEN);
+    expect(fakeApproval.status).not.toBe(200);
+    expect((await request("/v1/offers/synthetic-offer")).body).toMatchObject({ state: "proposed", acceptedRef: null });
   });
 
   it("serves truthful capabilities and requires authenticated read/write roles", async () => {

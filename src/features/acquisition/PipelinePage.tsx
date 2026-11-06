@@ -15,6 +15,8 @@ import { ViewError } from "@/components/ViewError";
 import { dateTime } from "@/features/approvals/shared";
 import { DEMO_CREATOR_ID, DEMO_EVIDENCE_ID } from "@/fixtures/ids";
 import { CURRENT_STAGES, DEFAULT_PIPELINE_FILTERS, type PipelineData, type PipelineFilters } from "@/fixtures/pipeline";
+import { LivePipelinePage } from "./LivePipelinePage";
+import { Funnel } from "./FunnelChart";
 import { AcquisitionTabs } from "./AcquisitionTabs";
 import { BranchesView } from "./BranchesView";
 import { FilterButton } from "./FilterButton";
@@ -26,6 +28,7 @@ import styles from "./Pipeline.module.css";
 /** Figma sets these counts tight against the dot so the line fits on one; a thin space keeps them apart (design-map.md). */
 const THIN = "\u200A";
 const evidencePath = `/creators/${DEMO_CREATOR_ID}/evidence/${DEMO_EVIDENCE_ID}`;
+const medianLabel = (row: StageRow) => row.medianDays === null ? "N/A" : `${row.medianDays}d`;
 const na = (value: number | null) => (value === null ? "N/A" : formatCount(value));
 const NO_SEND_REASON = "N/A · an inbound application has no outbound send, so there is nothing to count.";
 const usd = (m: Parameters<typeof formatMoney>[0]) => formatMoney(m);
@@ -33,6 +36,8 @@ const usd = (m: Parameters<typeof formatMoney>[0]) => formatMoney(m);
 /** Full acquisition pipeline (Figma source 102:74, owner THO-289). `?view=branches` shows terminal paths and the optional sample and content branches. */
 export function PipelinePage() {
   const [search] = useSearchParams();
+  const { adapter } = useScope();
+  if (adapter.kind !== "demo") return <LivePipelinePage branches={search.get("view") === "branches"} />;
   return search.get("view") === "branches" ? <BranchesView /> : <PipelineView />;
 }
 
@@ -260,46 +265,5 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
         <Button variant="secondary" onClick={() => setInspecting(false)}>Close</Button>
       </Dialog>
     </>
-  );
-}
-
-const medianLabel = (row: StageRow) => (row.medianDays === null ? "N/A" : `${row.medianDays}d`);
-
-/** The funnel drawing. Bars share one vertical scale (`scaleMax`), so a filtered funnel stays comparable with the whole. */
-function Funnel({ rows, scaleMax }: { rows: StageRow[]; scaleMax: number }) {
-  const baseline = 272;
-  const plot = 220;
-  const ticks = [0, 30, 60, 90, 120];
-  return (
-    <div className={styles.chartScroll} role="region" aria-label={`Opportunity cohort funnel · counts on a shared ${scaleMax} scale`} tabIndex={0}>
-      <div className={styles.chart}>
-        {ticks.map((t) => {
-          const y = baseline - (t * plot) / 120;
-          return (
-            <span key={t} aria-hidden="true">
-              <span className={styles.tick} style={{ top: y - 8 }}>{t}</span>
-              <span className={styles.grid} style={{ top: y }} />
-            </span>
-          );
-        })}
-        <ol className={styles.columns}>
-          {rows.map((r, i) => {
-            // A known-zero cohort has no positive range; keep its bars at the baseline.
-            const height = r.reached === null || scaleMax === 0 ? 0 : (r.reached / scaleMax) * plot;
-            const top = baseline - height;
-            return (
-              <li key={r.key} className={styles.column} style={{ left: 42 + i * 120 }} data-testid={`funnel-${r.key}`}>
-                {r.reached !== null && <span className={`${styles.bar} ${i < 3 ? styles.early : styles.later}`} style={{ top, height }} aria-hidden="true" />}
-                <p className={styles.count} style={{ top: top - 36 }}>{r.reached === null ? "N/A" : r.reached}</p>
-                <p className={styles.stage}>{r.label}</p>
-                <p className={styles.conversion}>{i === 0 ? "Cohort" : (r.conversion ?? "N/A")}</p>
-                <p className={styles.fact} style={{ top: 370 }}>{i === 0 ? "Cohort start" : `${r.medianDays === null ? "N/A" : `${r.medianDays}d`} median`}</p>
-                {i > 0 && <p className={styles.fact} style={{ top: 392 }}>{r.notAdvanced === null ? "N/A" : r.notAdvanced} not advanced</p>}
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-    </div>
   );
 }

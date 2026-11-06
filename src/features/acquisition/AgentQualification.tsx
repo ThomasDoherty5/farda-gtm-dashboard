@@ -15,7 +15,7 @@ export function QualificationDetails({ assessment: a, packet, savedConfiguration
   return <div className={styles.stack} data-testid="agent-qualification">
     <p><Badge tone={a.state === "hold" ? "warning" : "violet"}>{decisionLabel[a.state]}</Badge> · Assigned brief: {a.briefId} · Content qualification: {a.contentQualification}</p>
     <DataTable caption="Agent assessment versions" columns={[{ label: "Reference" }, { label: "Server value" }]} rows={[
-      ["Policy", a.policyVersion], ["Agent / schema", `${a.agentVersion} / ${a.schemaVersion}`], ["Model", a.modelId],
+      ["Policy", a.policyVersion], ["Agent / schema", `${a.agentVersion} / ${a.schemaVersion}`], [a.routeEvidence && !a.routeEvidence.verifiedModelId ? "Candidate model · route unverified" : "Model", a.modelId],
       ["Configuration", `${a.config.status} · ${a.config.version ?? "Unknown"}`], ["Configuration hash", a.config.hash ?? "Unknown"],
       ["Approved baseline hash", a.config.baselineHash ?? "Unknown"], ["Unchanged numerical configuration hash", a.config.numericHash ?? "Unknown"],
       ["Evidence revision", a.evidenceRevision], ["Terms revision", a.termsRevision],
@@ -33,6 +33,7 @@ export function QualificationDetails({ assessment: a, packet, savedConfiguration
     </div>
     <DataTable caption="Server qualification gates" columns={[{ label: "Gate" }, { label: "State" }, { label: "Evidence / unresolved proof" }]} rows={a.gates.map((g) => [g.id, <Badge key={g.id} tone={g.state === "pass" ? "success" : g.state === "fail" ? "warning" : "neutral"}>{g.state}</Badge>, g.reason])} />
     <p>Server score: {a.score ? `weighted ${known(a.score.earned)} / ${known(a.score.max)} · total ${known(a.score.total)} · band ${a.score.band ?? "Unknown"} · ${a.score.unknownCount} unknown criteria` : savedConfiguration ? "Unknown — no bound score returned for this saved assessment" : "Unknown — no bound current score returned"}. Existing weights and aggregate bands remain server-owned; no historical v2 fallback is applied.</p>
+    {a.routeEvidence && <RouteEvidence assessment={a} saved={savedConfiguration} />}
     <DataTable caption="Metadata baseline summary" columns={[{ label: "Measure" }, { label: "Source-backed value" }]} rows={[
       ["Recent unpinned coverage", `${a.metadata.sampleSize} / 10 · ${a.metadata.coverage}`], ["Comparable view rows", a.metadata.comparableViewCount],
       ["Median views", known(a.metadata.medianViews)], ["View spread", `${known(a.metadata.minViews)}–${known(a.metadata.maxViews)}`],
@@ -49,6 +50,26 @@ export function QualificationDetails({ assessment: a, packet, savedConfiguration
     <p className={styles.small}>Sampled points are not continuous watched intervals. Comment questions, prompted replies and reported ownership are not verified Farda orders. Missing audio/comments remain unknown.</p>
     {a.reasonCodes.length > 0 && <p>Unresolved proof: {a.reasonCodes.join(", ")}</p>}
   </div>;
+}
+
+function RouteEvidence({ assessment, saved }: { assessment: CreatorAssessment; saved: boolean }) {
+  const proof = assessment.routeEvidence!;
+  const routeName = proof.route === "website" ? "Website affiliate" : "TikTok Shop";
+  return <section aria-label="Checkout evidence" className={styles.stack}>
+    <h3>{saved ? "Saved checkout evidence" : "Checkout evidence"}</h3>
+    <p>{routeName} · <Badge tone={proof.status === "verified" ? "success" : proof.status === "failed" ? "warning" : "neutral"}>{proof.status === "verified" ? "Provider verified" : proof.status === "failed" ? "Provider check failed" : "Provider proof pending"}</Badge></p>
+    <p>Evidence coverage: {proof.coveredWeight}% of configured weight. {assessment.score?.unknownCount ?? "Unknown"} criteria without a rating.</p>
+    <p>Source coverage: {proof.confidence.sourceCoverage}. {proof.confidence.completePublicReviews} complete public reviews across {proof.confidence.distinctPublicationDates} dates; {proof.confidence.commentsObservedPosts} posts with inspected comments.</p>
+    <DataTable caption="Evidence behind each rating" columns={[{ label: "Criterion" }, { label: "Anchor and source evidence" }]} rows={proof.criteria.map(c => [
+      c.id, [c.anchor ?? "Rating unknown", c.rationale, c.sourceRefs.length ? c.sourceRefs.join(", ") : "Source unavailable"].filter(Boolean).join(" · "),
+    ])} />
+    {proof.sourceRef && <p className={styles.small}>{[proof.provider, proof.programId, proof.programVersion, proof.market, proof.sourceRef, proof.observedAt].filter(Boolean).join(" · ")}</p>}
+    {proof.metrics.length ? <DataTable caption="Provider commerce measurements" columns={[{ label: "Source measure" }, { label: "Observed value" }, { label: "Window and coverage" }]} rows={proof.metrics.map(m => [
+      `${m.name} · ${m.definition}`, `${m.value.toLocaleString("en-US")} ${m.unit === "count" ? "count" : `minor units (${m.currency})`}`,
+      `${m.windowStart} – ${m.windowEnd} · ${m.maturity} · n=${m.sampleSize} · ${m.denominator} · ${m.sourceRef}`,
+    ])} /> : <p>Verified commerce measurements are unavailable.</p>}
+    {proof.acceptedTerms && <p>Saved offer {proof.acceptedTerms.offerId} · version {proof.acceptedTerms.version} · {proof.acceptedTerms.acceptedRef}</p>}
+  </section>;
 }
 
 const categoryLabel: Record<string, string> = {

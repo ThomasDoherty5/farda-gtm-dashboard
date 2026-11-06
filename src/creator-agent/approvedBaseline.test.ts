@@ -14,7 +14,7 @@ import { createLiveAdapter } from "../adapter/liveAdapter";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { evidenceViewSchemas } from "../adapter/viewSchemas/evidence";
 import { scoreOf } from "../features/scorecards/scorecardMath";
-import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
+import { syntheticSourceSnapshot, SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE, syntheticPacket, withActivationEvidence } from "./testFixtures.ts";
 
 const ids = ["routineFit", "demonstrationStorytelling", "verifiedCommerce", "audienceAlignment", "reliability", "offerEconomics"];
 const approved = {
@@ -41,9 +41,10 @@ describe("owner-approved launch baselines through actual HTTP and SQLite", () =>
   let databasePath: string;
   let bindings: ConfigBinding[];
 
+  const sourceRows = new Map<string, ReturnType<typeof syntheticSourceSnapshot>>();
   async function start() {
     app = createAgentServer({ databasePath, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings });
+      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, scorecardAuthority: { resolve: ({creatorId}) => sourceRows.get(creatorId) }, bindings });
     const server = app.server;
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
     const address = server.address();
@@ -53,6 +54,7 @@ describe("owner-approved launch baselines through actual HTTP and SQLite", () =>
   async function stop() { const current = app; app = undefined; if (current) await current.close(); }
   const bindingFor = (route: EvidencePacket["checkoutRoute"]) => bindings.find((binding) => binding.current.modelId === approved[route].modelId)!;
   async function put(packet: EvidencePacket, expectedVersion = 0) {
+    sourceRows.set(packet.creatorId, syntheticSourceSnapshot(packet, packet.criterionRatings));
     const response = await fetch(`${origin}/v1/creators/${packet.creatorId}`, {
       method: "PUT", headers: { authorization: `Bearer ${SYNTHETIC_REVIEW_TOKEN}`, "content-type": "application/json", "idempotency-key": randomUUID() },
       body: JSON.stringify({ expectedVersion, policyVersion: POLICY_VERSION, configHash: bindingFor(packet.checkoutRoute).hash, packet }),

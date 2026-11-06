@@ -346,6 +346,8 @@ describe("FE05-03 changed media, terms or policy invalidates readiness", () => {
   });
 
   it.each(["media", "terms", "policy"])("a changed %s shows readiness invalidated on the scorecard", async (part) => {
+    // Load the route module before timing its adapter invalidation assertion.
+    await import("./AssessmentPage");
     open(`/creators/demo-creator-1/assessments/demo-assessment-content--${part}`);
     expect(await screen.findByTestId("readiness-invalidated")).toHaveTextContent(new RegExp(`Readiness invalidated: .*${part === "terms" ? "accepted terms" : part}`));
     expect(screen.queryByText("Not approved to send")).not.toBeInTheDocument();

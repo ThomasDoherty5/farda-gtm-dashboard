@@ -44,6 +44,7 @@ function CurrentAssessment({ record }: { record: AgentAssessmentRecord }) {
       </div>
       <LinkButton variant="secondary" to="/creators/discovery">Daily sourcing</LinkButton>
       {reviewPath && <LinkButton to={reviewPath}>Review source evidence</LinkButton>}
+      {!record.stale && !record.superseded && <LinkButton variant="secondary" to={`/offers/new?${new URLSearchParams({creator: record.creatorId, route: record.agentEvidence.checkoutRoute, brief: record.qualification.briefId})}`}>Draft creator offer</LinkButton>}
     </div>
     <AcquisitionTabs current="Daily sourcing" evidencePath={reviewPath} />
     <section className={styles.card} aria-labelledby="saved-run-title">

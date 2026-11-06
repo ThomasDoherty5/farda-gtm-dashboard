@@ -1,7 +1,8 @@
 import { z } from "zod";
+import { routeAssessmentSchema } from "./routeEvidence.ts";
 
 export const POLICY_VERSION = "2026-11-04";
-export const AGENT_VERSION = "1.0.0";
+export const AGENT_VERSION = "1.1.0";
 export const AGENT_SCHEMA_VERSION = "creator-agent.v1";
 const text = z.string().min(1);
 const nullableText = text.nullable();
@@ -11,7 +12,7 @@ export const gateSchema = z.object({ id: text, state: z.enum(["pass", "fail", "u
 const assessmentShapeSchema = z.object({
   schemaVersion: z.literal(AGENT_SCHEMA_VERSION),
   policyVersion: z.literal(POLICY_VERSION),
-  agentVersion: z.literal(AGENT_VERSION),
+  agentVersion: z.enum(["1.0.0", AGENT_VERSION]),
   creatorId: text,
   briefId: text,
   evidenceRevision: text,
@@ -32,6 +33,7 @@ const assessmentShapeSchema = z.object({
   metadata: z.object({ sampleSize: z.number().int().nonnegative(), coverage: z.enum(["complete", "partial"]), reasonCodes: z.array(text), postIds: z.array(text), medianViews: z.number().nullable(), minViews: z.number().nullable(), maxViews: z.number().nullable(), comparableViewCount: z.number().int().nonnegative() }).strict(),
   comments: z.array(z.object({ postId: text, status: z.enum(["observed", "unknown", "unavailable"]), rowCount: z.number().int().nonnegative().nullable(), uniqueAuthors: z.number().int().nonnegative().nullable(), unknownAuthorRows: z.number().int().nonnegative().nullable(), promptedRows: z.number().int().nonnegative().nullable(), creatorRows: z.number().int().nonnegative().nullable(), promotionalRows: z.number().int().nonnegative().nullable(), categoryCounts: z.record(z.number().int().nonnegative()).nullable(), ordering: nullableText, reason: nullableText }).strict()),
   reviews: z.array(z.object({ postId: text, status: text, visualMethod: text, audioMethod: text, sampledPointCount: z.number().int().nonnegative(), continuousSeconds: z.number().nonnegative(), likeGate: z.enum(["pass", "fail", "unknown"]) }).strict()),
+  routeEvidence: routeAssessmentSchema.optional(),
   reasonCodes: z.array(text),
 }).strict();
 export type CreatorAssessment = z.infer<typeof assessmentShapeSchema>;
