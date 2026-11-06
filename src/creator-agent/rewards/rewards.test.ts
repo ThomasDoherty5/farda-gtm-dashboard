@@ -28,14 +28,18 @@ function world(over: { policyState?: "adopted" | "proposed" } = {}) {
     { optionId: "trip", milestone: "vacation", kind: "trip", label: "a trip for two", providerRef: "provider:travel", deliveryRoute: "booking" },
   ] };
   const purchases = new Map<string, { providerOrderRef: string; transactionRef: string; chargedMinor: number; currency: "USD" }>();
-  const executor = { calls: 0, fail: null as null | "before" | "after",
-    purchase(key: string, manifest: { capMinor: number }) {
+  // fail and gate apply to the next call only. A gate holds that call after the provider accepted, until the test resolves it.
+  const executor = { calls: 0, fail: null as null | "before" | "after", gate: null as null | Promise<void>,
+    async purchase(key: string, manifest: { capMinor: number }) {
       this.calls++;
-      if (this.fail === "before") { this.fail = null; throw new Error("connection reset before the provider answered"); }
+      const { fail, gate } = this;
+      this.fail = null; this.gate = null;
+      if (fail === "before") throw new Error("connection reset before the provider answered");
       const quote = [...quotes.values()][0]!;
       const receipt = { providerOrderRef: `order:${key}`, transactionRef: `txn:${key}`, chargedMinor: Math.min(manifest.capMinor, quote.itemMinor - quote.creatorFundedMinor + quote.taxMinor + quote.shippingMinor), currency: "USD" as const };
       purchases.set(key, receipt);
-      if (this.fail === "after") { this.fail = null; throw new Error("timeout after the provider accepted"); }
+      if (gate) await gate;
+      if (fail === "after") throw new Error("timeout after the provider accepted");
       return receipt;
     },
     read(key: string) { return purchases.get(key) ?? null; } };
@@ -72,15 +76,20 @@ function world(over: { policyState?: "adopted" | "proposed" } = {}) {
     outcomes.set(sourceRef, { scope, sourceRef, redemptionId, providerOrderRef, kind, refundMinor, occurredAt: clock.toISOString() });
     return sourceRef;
   };
-  return { repo, store, entitle, quote, request, approve, outcome, decisions, cash, providers, executor, purchases };
+  const hold = () => { let release!: () => void; executor.gate = new Promise<void>((resolve) => { release = resolve; }); return () => release(); };
+  return { repo, store, entitle, quote, request, approve, outcome, decisions, cash, providers, executor, purchases, quotes, hold };
 }
 type World = ReturnType<typeof world>;
-async function purchased(w: World) {
+function approved(w: World) {
   w.entitle(); w.quote();
   const prepared = w.repo.prepare(w.request(), "prepare-1");
   w.repo.decide(prepared.redemptionId, w.approve(prepared.redemptionId, prepared.revision, prepared.requestHash), "decide-1");
-  return w.repo.purchase(prepared.redemptionId, "purchase-1");
+  return prepared.redemptionId;
 }
+async function purchased(w: World) {
+  return w.repo.purchase(approved(w), "purchase-1");
+}
+const afterPurchasing = (view: { history: { state: string }[] }) => view.history.map((h) => h.state).slice(view.history.findIndex((h) => h.state === "purchasing"));
 
 describe("consuming a mature J11 entitlement (acceptance 1)", () => {
   it("redeems the owner's entitlement as reported, without recalculating it", async () => {
@@ -207,6 +216,78 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
     expect(delivered.history.map((h) => h.state)).toEqual(["awaiting-approval", "approved", "purchasing", "purchased", "shipped", "delivered"]);
     expect(delivered.money.outstandingLiabilityMinor).toBe(0);
   });
+  it("refuses a concurrent purchase while one is in flight, so the provider is called once and the state never rolls back", async () => {
+    const w = world();
+    const id = approved(w);
+    const release = w.hold();
+    const first = w.repo.purchase(id, "purchase-1");
+    await expect(w.repo.purchase(id, "purchase-2")).rejects.toThrow("PURCHASE_IN_FLIGHT");
+    release();
+    const view = await first;
+    expect(view.state).toBe("purchased");
+    expect(w.executor.calls).toBe(1);
+    expect(afterPurchasing(view)).toEqual(["purchasing", "purchased"]);
+  });
+  it("reads a stopped worker's purchase back by its key once the lease expires, and completes without buying again", async () => {
+    const w = world();
+    const id = approved(w);
+    const release = w.hold();
+    const stalled = w.repo.purchase(id, "purchase-1");
+    at("2026-11-06T12:06:00Z");
+    const resumed = await w.repo.purchase(id, "purchase-2");
+    expect(resumed.state).toBe("purchased");
+    expect(w.executor.calls).toBe(1);
+    release();
+    expect((await stalled).state).toBe("purchased");
+    expect(afterPurchasing(w.repo.read(id)!)).toEqual(["purchasing", "purchased"]);
+  });
+  it("never lets a late failing call move a purchased or delivered record back", async () => {
+    const w = world();
+    const id = approved(w);
+    w.executor.fail = "after";
+    const release = w.hold();
+    const late = w.repo.purchase(id, "purchase-1");
+    at("2026-11-06T12:06:00Z");
+    const p = await w.repo.purchase(id, "purchase-2");
+    w.repo.recordOutcome(id, w.outcome(id, p.receipts.providerOrderRef!, "delivered"), "o1");
+    release();
+    expect((await late).state).toBe("delivered");
+    const view = w.repo.read(id)!;
+    expect(view.state).toBe("delivered");
+    expect(afterPurchasing(view)).toEqual(["purchasing", "purchased", "delivered"]);
+  });
+  it("binds a purchase idempotency key to its redemption", async () => {
+    const w = world();
+    await purchased(w);
+    await expect(w.repo.purchase("redemption-other", "purchase-1")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
+    await expect(w.repo.purchase("redemption-other", "prepare-1")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
+  });
+  it("re-reads the quote at purchase time and refuses a changed, expired or unavailable one", async () => {
+    const w = world();
+    const id = approved(w);
+    w.quote({ taxMinor: 2500 });
+    await expect(w.repo.purchase(id, "p1")).rejects.toThrow("QUOTE_CHANGED");
+    w.quote({ available: false });
+    await expect(w.repo.purchase(id, "p2")).rejects.toThrow("QUOTE_CHANGED");
+    w.quotes.delete("quote:1");
+    await expect(w.repo.purchase(id, "p3")).rejects.toThrow("QUOTE_CHANGED");
+    w.quote();
+    at("2026-11-21T00:00:00Z");
+    await expect(w.repo.purchase(id, "p4")).rejects.toThrow("QUOTE_CHANGED");
+    expect(w.executor.calls).toBe(0);
+    expect(w.repo.read(id)!.state).toBe("approved");
+  });
+  it("re-reads the provider route at purchase time and refuses one that is no longer Ready or funded", async () => {
+    const w = world();
+    const id = approved(w);
+    w.providers.set("provider:retail", { state: "Denied", fundingVerified: true, ownerRef: "owner:ops" });
+    await expect(w.repo.purchase(id, "p1")).rejects.toThrow("PROVIDER_ROUTE_NOT_READY");
+    w.providers.set("provider:retail", { state: "Ready", fundingVerified: false, ownerRef: "owner:ops" });
+    await expect(w.repo.purchase(id, "p2")).rejects.toThrow("PROVIDER_ROUTE_NOT_READY");
+    expect(w.executor.calls).toBe(0);
+    w.providers.set("provider:retail", { state: "Ready", fundingVerified: true, ownerRef: "owner:ops" });
+    expect((await w.repo.purchase(id, "p3")).state).toBe("purchased");
+  });
 });
 
 describe("physical fulfillment and recovery handoffs (acceptance 5)", () => {
@@ -229,6 +310,38 @@ describe("physical fulfillment and recovery handoffs (acceptance 5)", () => {
     const next = w.repo.prepare(w.request(), "prepare-new");
     expect(next.redemptionId).not.toBe(p.redemptionId);
   });
+  it("releases a failed reward refunded in parts, and keeps the earned obligation outstanding", async () => {
+    const w = world();
+    const p = await purchased(w);
+    const order = p.receipts.providerOrderRef!;
+    w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "failed"), "o1");
+    const partial = w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "refunded", 1000), "o2");
+    expect(partial).toMatchObject({ state: "failed", money: { refundedMinor: 1000 } });
+    expect(w.repo.activeFor("entitlement:tech-1")?.redemptionId).toBe(p.redemptionId);
+    const refunded = w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "refunded", 25900), "o3");
+    expect(refunded).toMatchObject({ state: "refunded", money: { refundedMinor: 26900, outstandingLiabilityMinor: 30000 } });
+    expect(w.repo.activeFor("entitlement:tech-1")).toBeNull();
+    const next = w.repo.prepare(w.request(), "prepare-new");
+    expect(next.state).toBe("awaiting-approval");
+    expect(next.redemptionId).not.toBe(p.redemptionId);
+  });
+  it("keeps a partial refund before shipping as a money adjustment, so shipping and delivery still follow", async () => {
+    const w = world();
+    const p = await purchased(w);
+    const order = p.receipts.providerOrderRef!;
+    const partial = w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "refunded", 500), "o1");
+    expect(partial).toMatchObject({ state: "purchased", money: { refundedMinor: 500 } });
+    w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "shipped"), "o2");
+    const delivered = w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "delivered"), "o3");
+    expect(delivered).toMatchObject({ state: "delivered", money: { refundedMinor: 500, outstandingLiabilityMinor: 0 } });
+    expect(delivered.history.slice(-4).map((h) => h.state)).toEqual(["purchased", "purchased", "shipped", "delivered"]);
+  });
+  it("refuses a refund when there is no charge to refund", async () => {
+    const w = world();
+    const p = await purchased(w);
+    w.store.database.prepare("UPDATE reward_redemptions SET body=json_set(body,'$.chargedMinor',json('null')) WHERE redemption_id=?").run(p.redemptionId);
+    expect(() => w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, p.receipts.providerOrderRef!, "refunded", 100), "o1")).toThrow("NO_CHARGE_TO_REFUND");
+  });
 });
 
 describe("cash reconciliation once against the receipts (acceptance 6)", () => {
@@ -246,6 +359,26 @@ describe("cash reconciliation once against the receipts (acceptance 6)", () => {
     expect(done).toMatchObject({ state: "reconciled", money: { reserveMinor: 30000, earnedLiabilityMinor: 30000, outstandingLiabilityMinor: 0, settledCostMinor: 25400 },
       receipts: { cashRef: "cash:1" } });
     expect(() => w.repo.reconcile(p.redemptionId, "cash:2", "r2")).toThrow("ALREADY_RECONCILED");
+    expect(w.repo.reconcile(p.redemptionId, "cash:1", "r3").receipts.cashRefs).toEqual(["cash:1"]);
+  });
+  it("records a late refund after reconciliation and reconciles again with a new cash reference", async () => {
+    const w = world();
+    const p = await purchased(w);
+    const order = p.receipts.providerOrderRef!;
+    const posted = (sourceRef: string, refundedMinor: number) =>
+      w.cash.set(sourceRef, { scope, sourceRef, providerOrderRef: order, transactionRef: p.receipts.transactionRef, paidMinor: 26900, refundedMinor, currency: "USD", postedAt: clock.toISOString() });
+    w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "delivered"), "o1");
+    posted("cash:1", 0);
+    expect(w.repo.reconcile(p.redemptionId, "cash:1", "r1").money.settledCostMinor).toBe(26900);
+    const late = w.repo.recordOutcome(p.redemptionId, w.outcome(p.redemptionId, order, "refunded", 2000), "o2");
+    expect(late).toMatchObject({ state: "reconciled", money: { refundedMinor: 2000, settledCostMinor: 26900 } });
+    posted("cash:stale", 0);
+    expect(() => w.repo.reconcile(p.redemptionId, "cash:stale", "r2")).toThrow("CASH_DOES_NOT_MATCH_RECEIPTS");
+    posted("cash:2", 2000);
+    const again = w.repo.reconcile(p.redemptionId, "cash:2", "r3");
+    expect(again).toMatchObject({ state: "reconciled", money: { settledCostMinor: 24900, outstandingLiabilityMinor: 0 }, receipts: { cashRef: "cash:2", cashRefs: ["cash:1", "cash:2"] } });
+    posted("cash:3", 2000);
+    expect(() => w.repo.reconcile(p.redemptionId, "cash:3", "r4")).toThrow("ALREADY_RECONCILED");
   });
 });
 
@@ -286,6 +419,11 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
     expect(late).toMatchObject({ clock: { overdue: true }, money: { outstandingLiabilityMinor: 30000 } });
     expect(late.heldReasons).toContain("INITIATION_OVERDUE");
     expect(late.state).toBe("awaiting-approval");
+  });
+  it("shows an unknown creator-funded amount as null, not zero, when there is no quote", () => {
+    const w = world();
+    w.entitle();
+    expect(w.repo.prepare(w.request(), "k").money).toMatchObject({ fardaQuotedMinor: null, creatorFundedMinor: null });
   });
   it("RW-K04 covers an unavailable reward, an all-in overrun and a delayed booking without a purchase", async () => {
     const w = world();

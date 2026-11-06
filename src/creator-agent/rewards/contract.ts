@@ -74,10 +74,11 @@ export const redemptionViewSchema = z.object({
   promise: z.string().nullable(), requestHash: z.string(), heldReasons: z.array(z.string()), ownerRef: ref.nullable(),
   clock: z.object({ qualifiedAt: time, detailsCompleteAt: time.nullable(), initiateBy: time.nullable(), overdue: z.boolean() }).strict(),
   money: z.object({
-    capMinor: minor, fardaQuotedMinor: minor.nullable(), creatorFundedMinor: minor, reserveMinor: minor.nullable(),
+    capMinor: minor, fardaQuotedMinor: minor.nullable(), creatorFundedMinor: minor.nullable(), reserveMinor: minor.nullable(),
     earnedLiabilityMinor: minor, outstandingLiabilityMinor: minor, chargedMinor: minor.nullable(), refundedMinor: minor, settledCostMinor: minor.nullable(),
   }).strict(),
-  receipts: z.object({ decisionRef: ref.nullable(), providerOrderRef: ref.nullable(), transactionRef: ref.nullable(), cashRef: ref.nullable(), outcomeRefs: z.array(ref) }).strict(),
+  receipts: z.object({ decisionRef: ref.nullable(), providerOrderRef: ref.nullable(), transactionRef: ref.nullable(), cashRef: ref.nullable(), cashRefs: z.array(ref),
+    outcomeRefs: z.array(ref) }).strict(),
   history: z.array(z.object({ state: z.enum(REDEMPTION_STATES), at: time, ref: ref.nullable() }).strict()),
   sourceEffects: z.enum(["none", "purchase-attempted"]),
 }).strict();

@@ -26,16 +26,19 @@ type Stored = {
   redemptionId: string; revision: number; state: RedemptionState; revisedAt: string; entitlement: Entitlement; input: PrepareInput;
   policyState: "adopted" | "proposed" | "unavailable"; option: RewardOption | null; quote: Quote | null; requestHash: string;
   heldReasons: string[]; ownerRef: string | null; decisionRef: string | null; physicalAllocationRef: string | null;
-  purchaseKey: string | null; providerOrderRef: string | null; transactionRef: string | null; chargedMinor: number | null; refundedMinor: number;
-  fulfilled: boolean; outcomeRefs: string[]; cashRef: string | null; settledCostMinor: number | null; purchaseAttempted: boolean;
+  purchaseKey: string | null; purchaseLeaseUntil: string | null; providerOrderRef: string | null; transactionRef: string | null; chargedMinor: number | null; refundedMinor: number;
+  fulfilled: boolean; outcomeRefs: string[]; cashRef: string | null; cashRefs: string[]; settledCostMinor: number | null; purchaseAttempted: boolean;
   history: { state: RedemptionState; at: string; ref: string | null }[];
 };
 const REVISABLE: RedemptionState[] = ["held", "awaiting-details", "awaiting-approval", "approved", "rejected"];
 const PRE_PURCHASE: RedemptionState[] = [...REVISABLE];
+/** Fulfilment moves. A refund is a money adjustment, recorded from any of REFUNDABLE; only a full refund moves the state to refunded. */
 const NEXT: Partial<Record<RedemptionState, RedemptionState[]>> = {
-  purchased: ["shipped", "delivered", "failed", "refunded"], shipped: ["delivered", "failed", "returned"],
-  delivered: ["returned", "refunded"], returned: ["refunded"], failed: ["refunded"],
+  purchased: ["shipped", "delivered", "failed"], shipped: ["delivered", "failed", "returned"], delivered: ["returned"], reconciled: ["returned"],
 };
+const REFUNDABLE: RedemptionState[] = ["purchased", "shipped", "delivered", "failed", "returned", "reconciled"];
+/** How long a purchase may run before another call treats the worker as stopped and reads the provider back. */
+const PURCHASE_LEASE_MS = 5 * 60_000;
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T | null => { const r = schema.safeParse(value); return r.success ? r.data : null; };
 const sameScope = (a: RewardScope, b: RewardScope) => a.workspaceId === b.workspaceId && a.accountId === b.accountId;
 const usd = (minor: number) => `$${(minor / 100).toLocaleString("en-US", { minimumFractionDigits: minor % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
@@ -152,8 +155,8 @@ export class RewardRedemptionRepository {
       const s: Stored = active ? { ...active, revision: active.revision + 1, decisionRef: null, physicalAllocationRef: null } : {
         redemptionId: `redemption-${digest({ entitlementRef: input.entitlementRef, attempt: attempts + 1 }).slice(0, 32)}`, revision: 1, state: "held",
         revisedAt: now.toISOString(), entitlement, input, policyState: "unavailable", option: null, quote: null, requestHash, heldReasons: [], ownerRef: null,
-        decisionRef: null, physicalAllocationRef: null, purchaseKey: null, providerOrderRef: null, transactionRef: null, chargedMinor: null, refundedMinor: 0,
-        fulfilled: false, outcomeRefs: [], cashRef: null, settledCostMinor: null, purchaseAttempted: false, history: [],
+        decisionRef: null, physicalAllocationRef: null, purchaseKey: null, purchaseLeaseUntil: null, providerOrderRef: null, transactionRef: null, chargedMinor: null,
+        refundedMinor: 0, fulfilled: false, outcomeRefs: [], cashRef: null, cashRefs: [], settledCostMinor: null, purchaseAttempted: false, history: [],
       };
       Object.assign(s, { revisedAt: now.toISOString(), entitlement, input, option, quote, requestHash, heldReasons: reasons, ownerRef,
         policyState: !policy ? "unavailable" : policy.state });
@@ -189,24 +192,47 @@ export class RewardRedemptionRepository {
     return d;
   }
 
+  /** The quote and provider route are read again at purchase time; anything that moved since the decision refuses the purchase. */
+  private checkPurchasable(s: Stored) {
+    const quote = s.quote ? parse(quoteSchema, this.authority.quote?.(s.quote.quoteRef, this.scope)) : null;
+    if (!s.quote || !quote || quote.quoteRef !== s.quote.quoteRef || !quote.available || Date.parse(quote.validUntil) <= this.now().getTime()
+      || digest(quote) !== digest(s.quote)) throw new AgentConflict("QUOTE_CHANGED");
+    const provider = s.option ? parse(providerStateSchema, this.authority.provider?.(s.option.providerRef, s.option.deliveryRoute)) : null;
+    if (!provider || provider.state !== "Ready" || !provider.fundingVerified) throw new AgentConflict("PROVIDER_ROUTE_NOT_READY");
+  }
+
   /**
-   * Purchases once. The state is committed as purchasing before the executor runs; an error or unreadable receipt leaves it uncertain,
-   * and the next call reads the provider by the same key before any retry.
+   * Purchases once. The state is committed as purchasing, under a lease, before the executor runs; an error or unreadable receipt leaves
+   * it uncertain. A call during an unexpired lease is refused. After the lease expires (a stopped worker), or once uncertain, the next
+   * call reads the provider by the same key before any retry. A late result never moves a record that has already moved on.
    */
   async purchase(redemptionId: string, key: string): Promise<RedemptionView> {
     if (!key?.trim() || key.length > 240) throw new AgentConflict("IDEMPOTENCY_KEY_REQUIRED");
     const executor = this.authority.executor;
     if (!executor) throw new RewardSourceUnavailable("PURCHASE_EXECUTOR_UNAVAILABLE");
     const { s: prepared, resumed } = this.tx(() => {
+      // The caller's key is bound to this redemption's purchase; reusing it for anything else is refused.
+      const hash = digest({ op: "purchase", redemptionId });
+      const prior = this.db.prepare("SELECT hash FROM reward_commands WHERE key=?").get(key);
+      if (prior && prior.hash !== hash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
+      if (!prior) this.db.prepare("INSERT INTO reward_commands VALUES(?,?,?)").run(key, hash, JSON.stringify({ redemptionId }));
       const s = this.load(redemptionId);
       if (!s) throw new AgentConflict("REDEMPTION_UNKNOWN");
-      if (s.state === "purchasing" || s.state === "uncertain") return { s, resumed: true };
+      const now = this.now();
+      const leaseUntil = new Date(now.getTime() + PURCHASE_LEASE_MS).toISOString();
+      if (s.state === "purchasing" || s.state === "uncertain") {
+        if (s.purchaseLeaseUntil && Date.parse(s.purchaseLeaseUntil) > now.getTime()) throw new AgentConflict("PURCHASE_IN_FLIGHT");
+        s.purchaseLeaseUntil = leaseUntil;
+        this.save(s);
+        return { s, resumed: true };
+      }
       if (s.state !== "approved") throw new AgentConflict(PRE_PURCHASE.includes(s.state) ? "J04_APPROVAL_REQUIRED" : "ALREADY_PURCHASED");
       this.currentDecision(s, s.decisionRef!);
       const e = this.entitlement(s.entitlement.entitlementRef);
       if (e.state !== "mature" || e.amountMinor !== s.entitlement.amountMinor) throw new AgentConflict("ENTITLEMENT_CHANGED");
-      if (!s.quote || Date.parse(s.quote.validUntil) <= this.now().getTime()) throw new AgentConflict("QUOTE_EXPIRED");
+      this.checkPurchasable(s);
       s.purchaseKey = `purchase:${s.redemptionId}:r${s.revision}`;
+      s.purchaseLeaseUntil = leaseUntil;
       s.purchaseAttempted = true;
       this.move(s, "purchasing", s.decisionRef);
       this.save(s);
@@ -217,8 +243,8 @@ export class RewardRedemptionRepository {
       // A purchase left purchasing (a stopped worker) or uncertain is read back by its key before anything is retried.
       if (resumed) {
         receipt = parse(purchaseReceiptSchema, await executor.read(prepared.purchaseKey!));
-        // Nothing was found under the key. Retry only while the approval is still current.
-        if (!receipt) this.currentDecision(prepared, prepared.decisionRef!);
+        // Nothing was found under the key. Retry only while the approval, the quote and the provider route are still current.
+        if (!receipt) { this.currentDecision(prepared, prepared.decisionRef!); this.checkPurchasable(prepared); }
       }
       receipt ??= parse(purchaseReceiptSchema, await executor.purchase(prepared.purchaseKey!, {
         redemptionId: prepared.redemptionId, revision: prepared.revision, requestHash: prepared.requestHash, optionId: prepared.option?.optionId,
@@ -226,14 +252,29 @@ export class RewardRedemptionRepository {
         physicalAllocationRef: prepared.physicalAllocationRef,
       }));
     } catch (error) {
-      if (error instanceof AgentConflict) throw error;
+      if (error instanceof AgentConflict) {
+        // Nothing was sent on this attempt. Give the lease back so the next call can resume at once.
+        this.tx(() => {
+          const s = this.load(redemptionId)!;
+          if (s.purchaseKey === prepared.purchaseKey && s.purchaseLeaseUntil === prepared.purchaseLeaseUntil) { s.purchaseLeaseUntil = null; this.save(s); }
+        });
+        throw error;
+      }
       receipt = null;
     }
     return this.tx(() => {
       const s = this.load(redemptionId)!;
-      if (!receipt) { if (s.state !== "uncertain") this.move(s, "uncertain", null); this.save(s); return this.view(s); }
+      // Apply only to the attempt this call made. A record that moved on, or another call's lease, is returned unchanged.
+      if (!["purchasing", "uncertain"].includes(s.state) || s.purchaseKey !== prepared.purchaseKey) return this.view(s);
+      if (!receipt) {
+        if (s.purchaseLeaseUntil !== prepared.purchaseLeaseUntil) return this.view(s);
+        if (s.state !== "uncertain") this.move(s, "uncertain", null);
+        s.purchaseLeaseUntil = null;
+        this.save(s);
+        return this.view(s);
+      }
       this.claimReceipt(receipt.transactionRef, s.redemptionId, "purchase");
-      Object.assign(s, { providerOrderRef: receipt.providerOrderRef, transactionRef: receipt.transactionRef, chargedMinor: receipt.chargedMinor });
+      Object.assign(s, { providerOrderRef: receipt.providerOrderRef, transactionRef: receipt.transactionRef, chargedMinor: receipt.chargedMinor, purchaseLeaseUntil: null });
       if (receipt.chargedMinor > s.entitlement.amountMinor) s.heldReasons = [...new Set([...s.heldReasons, "CHARGE_EXCEEDS_CAP"])];
       this.move(s, "purchased", receipt.transactionRef);
       this.save(s);
@@ -241,7 +282,10 @@ export class RewardRedemptionRepository {
     });
   }
 
-  /** Records a provider outcome in order: shipped, delivered, failed, returned or refunded. */
+  /**
+   * Records a provider outcome in order: shipped, delivered, failed or returned. A refund is a money adjustment that keeps the state,
+   * from purchase onwards and after reconciliation; only the refund that makes the refunds equal the charge moves it to refunded.
+   */
   recordOutcome(redemptionId: string, sourceRef: string, key: string): RedemptionView {
     return this.apply(key, { op: "outcome", redemptionId, sourceRef }, () => {
       const s = this.load(redemptionId);
@@ -251,37 +295,46 @@ export class RewardRedemptionRepository {
         throw new RewardSourceUnavailable("OUTCOME_UNVERIFIED");
       if (Date.parse(o.occurredAt) > this.now().getTime()) throw new AgentConflict("FUTURE_TIMESTAMP");
       if (s.outcomeRefs.includes(sourceRef)) return this.view(s);
-      if (!NEXT[s.state]?.includes(o.kind)) throw new AgentConflict("OUTCOME_OUT_OF_ORDER");
-      if ((o.kind === "refunded") !== (o.refundMinor > 0)) throw new AgentConflict("REFUND_AMOUNT_REQUIRED");
+      const refund = o.kind === "refunded";
+      if (refund && s.chargedMinor === null) throw new AgentConflict("NO_CHARGE_TO_REFUND");
+      // A late return after reconciliation needs a reward that was actually delivered.
+      if (refund ? !REFUNDABLE.includes(s.state) : !NEXT[s.state]?.includes(o.kind) || (s.state === "reconciled" && !s.fulfilled))
+        throw new AgentConflict("OUTCOME_OUT_OF_ORDER");
+      if (refund !== (o.refundMinor > 0)) throw new AgentConflict("REFUND_AMOUNT_REQUIRED");
       if (s.refundedMinor + o.refundMinor > (s.chargedMinor ?? 0)) throw new AgentConflict("REFUND_EXCEEDS_CHARGE");
       this.claimReceipt(sourceRef, s.redemptionId, "outcome");
       s.outcomeRefs.push(sourceRef);
       s.refundedMinor += o.refundMinor;
       if (o.kind === "delivered") s.fulfilled = true;
       if (o.kind === "returned") s.fulfilled = false;
-      // A partial refund on a delivered reward adjusts its cost; the reward stays delivered.
-      const partialAfterDelivery = o.kind === "refunded" && s.state === "delivered" && s.refundedMinor < (s.chargedMinor ?? 0);
-      if (!partialAfterDelivery) this.move(s, o.kind, sourceRef); else s.history.push({ state: s.state, at: this.now().toISOString(), ref: sourceRef });
-      // A failed or returned reward that is fully refunded frees the entitlement for a new request. The earned obligation remains.
-      const released = !s.fulfilled && s.state === "refunded" && s.refundedMinor === s.chargedMinor;
+      // A partial refund adjusts the cost and keeps the state, so fulfilment and a later refund can still follow.
+      if (refund && s.refundedMinor < s.chargedMinor!) s.history.push({ state: s.state, at: this.now().toISOString(), ref: sourceRef });
+      else this.move(s, o.kind, sourceRef);
+      // A reward that was not fulfilled and is fully refunded frees the entitlement for a new request. The earned obligation remains.
+      const released = !s.fulfilled && s.state === "refunded";
       this.save(s, !released);
       return this.view(s);
     });
   }
 
-  /** Reconciles the posted cash once against the purchase receipt and refunds. */
+  /**
+   * Reconciles the posted cash against the purchase receipt and refunds. The same cash reference is idempotent. A reconciled record is
+   * reconciled again only after its refunds changed, with a new cash reference whose totals match.
+   */
   reconcile(redemptionId: string, cashRef: string, key: string): RedemptionView {
     return this.apply(key, { op: "reconcile", redemptionId, cashRef }, () => {
       const s = this.load(redemptionId);
       if (!s) throw new AgentConflict("REDEMPTION_UNKNOWN");
-      if (s.cashRef) { if (s.cashRef !== cashRef) throw new AgentConflict("ALREADY_RECONCILED"); return this.view(s); }
-      if (!["delivered", "refunded"].includes(s.state)) throw new AgentConflict("NOT_READY_TO_RECONCILE");
+      if (s.cashRefs.includes(cashRef)) return this.view(s);
+      if (s.cashRef && s.settledCostMinor === s.chargedMinor! - s.refundedMinor) throw new AgentConflict("ALREADY_RECONCILED");
+      if (!["delivered", "refunded", "reconciled"].includes(s.state)) throw new AgentConflict("NOT_READY_TO_RECONCILE");
       const c = parse(cashMovementSchema, this.authority.cashMovement?.(cashRef, this.scope));
       if (!c || !sameScope(c.scope, this.scope) || c.sourceRef !== cashRef) throw new RewardSourceUnavailable("CASH_MOVEMENT_UNVERIFIED");
       if (c.providerOrderRef !== s.providerOrderRef || c.transactionRef !== s.transactionRef || c.paidMinor !== s.chargedMinor || c.refundedMinor !== s.refundedMinor)
         throw new AgentConflict("CASH_DOES_NOT_MATCH_RECEIPTS");
       this.claimReceipt(cashRef, s.redemptionId, "cash");
       s.cashRef = cashRef;
+      s.cashRefs.push(cashRef);
       s.settledCostMinor = c.paidMinor - c.refundedMinor;
       this.move(s, "reconciled", cashRef);
       this.save(s, this.db.prepare("SELECT active FROM reward_redemptions WHERE redemption_id=?").get(s.redemptionId)?.active === 1);
@@ -309,10 +362,11 @@ export class RewardRedemptionRepository {
       promise: s.option ? promiseFor(s.option, s.entitlement.amountMinor, s.policyState === "adopted") : null,
       requestHash: s.requestHash, heldReasons: overdue ? [...s.heldReasons, "INITIATION_OVERDUE"] : s.heldReasons, ownerRef: s.ownerRef,
       clock: { qualifiedAt: s.entitlement.qualifiedAt, detailsCompleteAt: s.input.detailsCompleteAt, initiateBy, overdue },
-      money: { capMinor: s.entitlement.amountMinor, fardaQuotedMinor, creatorFundedMinor: s.quote?.creatorFundedMinor ?? 0, reserveMinor: s.entitlement.reserveMinor,
+      money: { capMinor: s.entitlement.amountMinor, fardaQuotedMinor, creatorFundedMinor: s.quote?.creatorFundedMinor ?? null, reserveMinor: s.entitlement.reserveMinor,
         earnedLiabilityMinor: s.entitlement.amountMinor, outstandingLiabilityMinor: s.fulfilled ? 0 : s.entitlement.amountMinor,
         chargedMinor: s.chargedMinor, refundedMinor: s.refundedMinor, settledCostMinor: s.settledCostMinor },
-      receipts: { decisionRef: s.decisionRef, providerOrderRef: s.providerOrderRef, transactionRef: s.transactionRef, cashRef: s.cashRef, outcomeRefs: s.outcomeRefs },
+      receipts: { decisionRef: s.decisionRef, providerOrderRef: s.providerOrderRef, transactionRef: s.transactionRef, cashRef: s.cashRef, cashRefs: s.cashRefs,
+        outcomeRefs: s.outcomeRefs },
       history: s.history, sourceEffects: s.purchaseAttempted ? "purchase-attempted" : "none",
     });
   }
