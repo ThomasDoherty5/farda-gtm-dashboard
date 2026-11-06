@@ -51,13 +51,14 @@ export type BlockerCode =
   | "PER_SALE_FIXED_ABOVE_CAP"
   | "RELATIONSHIP_NOT_COMMISSION_ONLY"
   | "SAMPLE_ABOVE_CAP"
+  | "INVALID_COMMISSION_RATE"
   | "INVALID_AMOUNT";
 
 export type Blocker = { code: BlockerCode; field: string; message: string };
 export type Eligibility = { eligible: boolean; blockers: Blocker[]; policyVersion: string };
 
 const MESSAGES: Record<BlockerCode, [string, string]> = {
-  UPFRONT_FEE_PROHIBITED: ["upfrontFee", "New acquisition has no upfront content fee."],
+  UPFRONT_FEE_PROHIBITED: ["upfrontFee", "Upfront content fees are not permitted for new acquisition."],
   GUARANTEED_FEE_PROHIBITED: ["guaranteedFee", "New acquisition has no guaranteed or minimum content payment."],
   PAID_COMPONENT_PROHIBITED: ["paidComponent", "New acquisition has no paid component beside commission."],
   PAID_OR_HYBRID_PROHIBITED: ["relationship", "Paid and hybrid relationships can't start. They stay readable as history."],
@@ -67,18 +68,20 @@ const MESSAGES: Record<BlockerCode, [string, string]> = {
   PER_SALE_FIXED_ABOVE_CAP: ["commission", "The fixed amount per sale is above what the policy allows."],
   RELATIONSHIP_NOT_COMMISSION_ONLY: ["relationship", "New acquisition must be commission-only. Any other relationship can't start."],
   SAMPLE_ABOVE_CAP: ["sample", "The sample cost is above the current policy cap."],
+  INVALID_COMMISSION_RATE: ["commission", "Use a finite, non-negative commission percentage."],
   INVALID_AMOUNT: ["amount", "Amounts must be whole, non-negative minor units."],
 };
 
 const blocker = (code: BlockerCode, extra?: string): Blocker => ({ code, field: MESSAGES[code][0], message: extra ? `${MESSAGES[code][1]} ${extra}` : MESSAGES[code][1] });
 
-const validAmount = (n: unknown) => typeof n === "number" && Number.isInteger(n) && n >= 0;
+const validAmount = (n: unknown) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
 
 /** The single eligibility rule for a new acquisition offer. Never trusts a UI-computed flag. */
 export function evaluateTerms(terms: UntrustedTerms, policy: PolicyConfig = BASE_POLICY): Eligibility {
   const blockers: Blocker[] = [];
   const amounts = [terms.upfrontFeeMinor, terms.guaranteedFeeMinor, terms.paidComponentMinor, terms.perSaleFixedMinor, terms.sampleCostMinor];
   if (!amounts.every(validAmount)) blockers.push(blocker("INVALID_AMOUNT"));
+  if (!Number.isFinite(terms.commissionPct) || terms.commissionPct < 0) blockers.push(blocker("INVALID_COMMISSION_RATE"));
   if (terms.upfrontFeeMinor !== 0) blockers.push(blocker("UPFRONT_FEE_PROHIBITED"));
   if (terms.guaranteedFeeMinor !== 0) blockers.push(blocker("GUARANTEED_FEE_PROHIBITED"));
   if (terms.paidComponentMinor !== 0) blockers.push(blocker("PAID_COMPONENT_PROHIBITED"));

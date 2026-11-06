@@ -48,8 +48,23 @@ test("no horizontal overflow at 320px on the health view", async ({ page }) => {
 });
 
 test("the Operations page links to the health view", async ({ page }) => {
-  await page.goto("/operations");
-  await page.getByRole("link", { name: /^(Issues and fulfillment health|Health view)$/ }).click();
-  await expect(page).toHaveURL(/\/analytics\/fulfillment\?view=health$/);
-  await expect(page.getByRole("heading", { level: 1, name: "Issues and fulfillment health" })).toBeVisible();
+  const viewport = page.viewportSize()!;
+  const widths = viewport.width >= 1180 ? [viewport.width, 1024] : [viewport.width];
+  for (const width of widths) {
+    await page.setViewportSize({ ...viewport, width });
+    await page.goto("/operations");
+
+    let navigation = page.getByRole("main");
+    if (width < 1180) {
+      const menu = page.getByRole("button", { name: width < 768 ? "Menu" : "More", exact: true });
+      await menu.focus();
+      await page.keyboard.press("Enter");
+      navigation = page.getByRole("dialog").getByRole("navigation", { name: "Operations home and health" });
+    }
+    const link = navigation.getByRole("link", { name: "Issues and fulfillment health", exact: true });
+    await expect(link).toHaveAttribute("href", URL);
+    await link.click();
+    await expect(page).toHaveURL(/\/analytics\/fulfillment\?view=health$/);
+    await expect(page.getByRole("heading", { level: 1, name: "Issues and fulfillment health" })).toBeVisible();
+  }
 });

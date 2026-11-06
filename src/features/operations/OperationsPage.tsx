@@ -63,10 +63,10 @@ function OperationsOverviewPage() {
           <Button aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSourceOpen(true)}>Open warehouse</Button>
         </PageHeader>
       ) : (
-        <PageHeader id="ops-title" title="Operations">
-          {layout === "mobile" && <LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton>}
-          {layout === "tablet" && <><LinkButton variant="secondary" to={HEALTH_PATH} style={{ minWidth: 174 }}>Health view</LinkButton><Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button></>}
-        </PageHeader>
+        <div className={styles.compactHeading}>
+          <h1 id="ops-title">Operations</h1>
+          {layout === "tablet" && <Button aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button>}
+        </div>
       )}
       {/* A partial or stale read is said in words, not only by a badge. */}
       <ReadState res={query.data} subject="Operations" only={["partial"]} />
@@ -98,7 +98,8 @@ function Body({ res, data, layout, home, demo }: { res: ReadResponse<OperationsO
   const scopeLabel = home === "all" ? null : homeLabel(home);
   const inScope = (row: { home: Home }) => home === "all" || row.home === home;
   const allRows = data.queue.rows.filter(inScope);
-  const ready = allRows.filter((r) => !r.hold && (view !== "orders" || r.kind === "order"));
+  const matching = allRows.filter((r) => !r.hold && (view !== "orders" || r.kind === "order"));
+  const ready = home === "all" && view === "overview" ? matching.slice(0, 5) : matching;
   const held = allRows.filter((r) => r.hold);
   const stock = data.stock.filter(inScope);
   const exceptions = data.exceptions.filter(inScope);
@@ -110,7 +111,7 @@ function Body({ res, data, layout, home, demo }: { res: ReadResponse<OperationsO
 
   if (layout !== "desktop") {
     const Compact = layout === "mobile" ? MobileOperations : TabletOperations;
-    return <Compact data={data} home={home} ready={ready} syncedMinutesAgo={behind} stale={staleSource} />;
+    return <Compact data={data} demo={demo} home={home} view={view} overviewTo={tabTo("overview")} ordersTo={tabTo("orders")} ready={ready} syncedMinutesAgo={behind} stale={staleSource} />;
   }
 
   return (

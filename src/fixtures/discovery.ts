@@ -3,6 +3,7 @@
  * is not a sourcing result or a cohort funnel. Do not mix its numbers with other datasets.
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
+import { BASE_POLICY, type AcquisitionTerms } from "@/adapter/commissionPolicy";
 import { DEMO_NOW } from "./overview";
 
 export type CapacityRow = { id: "social-cat" | "tiktok-shop" | "shared"; source: string; evidence: string; meaning: string; next: string };
@@ -48,6 +49,11 @@ export type DiscoveryData = {
 
 const base = { evidenceRefs: [], sourceRef: null, occurredAt: null, sourceUpdatedAt: DEMO_NOW, observedAt: DEMO_NOW };
 
+/** The synthetic plan names the economic terms independently of their display label. */
+export const discoveryCommission = {
+  relationship: "commissionOnly", commissionPct: 12, perSaleFixedMinor: 0, guaranteedFeeMinor: 0, paidComponentMinor: 0,
+} satisfies Pick<AcquisitionTerms, "relationship" | "commissionPct" | "perSaleFixedMinor" | "guaranteedFeeMinor" | "paidComponentMinor">;
+
 export const discoveryDemo: DiscoveryData = {
   datasetKey: "discovery-demo",
   schedule: { label: "Draft", context: "Daily cadence · timezone to confirm" },
@@ -73,7 +79,7 @@ export const discoveryDemo: DiscoveryData = {
   versions: {
     sourceAccount: { ...base, state: "unknown", value: null, reasonCode: "ACCOUNT_NOT_READ" },
     icpVersion: "ICP draft v0 · not approved",
-    policyVersion: "commission-only policy · policy-2026-10",
+    policyVersion: BASE_POLICY.version,
     accessStatus: "Unverified",
     scheduleStatus: "draft",
   },
@@ -86,7 +92,7 @@ export const discoveryDemo: DiscoveryData = {
     { title: "Confirm", count: null, countLabel: "confirmed · N/A until a send", owner: "Operations", evidence: "Native source receipts", next: "Wait for an approved send" },
   ],
   identity: { surfaced: 80, mergedDuplicates: 18, suppressed: { optedOut: 3, declinedRecently: 5, existingRelationship: 4 }, selected: 50 },
-  batch: { batchId: "BATCH-TT-DEMO-024", selected: 50, eligible: 24, sampleUnits: 12, sampleUnitCost: { minorUnits: 2_500, currency: "USD" }, rateLabel: "12% standard-rate" },
+  batch: { batchId: "BATCH-TT-DEMO-024", selected: 50, eligible: 24, sampleUnits: 12, sampleUnitCost: { minorUnits: 2_500, currency: "USD" }, rateLabel: `${discoveryCommission.commissionPct}% standard-rate` },
 };
 
 /** What each run state means for the sample batch and what happens next. A state with no item reads 0 because the batch's items are known. */

@@ -5,6 +5,8 @@ import { assessHistorical, canCreateHistoricalFeeCommitment, evaluateTerms, rout
 import { AdapterError } from "./errors";
 import { checkAffiliateTerms } from "@/features/recruitment/recruitmentRules";
 import { DEMO_OFFER_DRAFT_ID, offerDraftSeed, type OfferDraftPayload } from "@/fixtures/scorecards";
+import { discoveryDemo } from "@/fixtures/discovery";
+import { DISCOVERY_VERSION, type BatchApprovalPayload } from "./demoDiscovery";
 
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 let seq = 0;
@@ -37,6 +39,14 @@ describe("one eligibility rule (CP-08 cases)", () => {
     expect(evaluateTerms({ ...good, commissionPct: 0, perSaleFixedMinor: 300 }).eligible).toBe(true);
     expect(codes({ commissionPct: 0, perSaleFixedMinor: 300, guaranteedFeeMinor: 300 })).toEqual(["GUARANTEED_FEE_PROHIBITED"]);
   });
+
+  it.each([NaN, Infinity, -1])("rejects malformed percentage %s even when a valid fixed commission is present", commissionPct => {
+    expect(codes({ commissionPct, perSaleFixedMinor: 300 })).toContain("INVALID_COMMISSION_RATE");
+  });
+
+  it("rejects an unsafe integer amount rather than admitting an imprecise commitment", () => {
+    expect(codes({ perSaleFixedMinor: Number.MAX_SAFE_INTEGER + 1 })).toContain("INVALID_AMOUNT");
+  });
 });
 
 describe("the offer screen and recruitment form agree with the policy", () => {
@@ -55,6 +65,58 @@ describe("the offer screen and recruitment form agree with the policy", () => {
   it("recruitment terms text refuses a fee exactly when the policy does", () => {
     expect(checkAffiliateTerms("15% per sale, $500 upfront", 20).ok).toBe(false);
     expect(checkAffiliateTerms("15% per sale, $0 upfront", 20).ok).toBe(true);
+  });
+
+  it.each(["guaranteedFeeMinor", "paidComponentMinor", "acceptedLiabilityMinor", "creatorAccepted"])("refuses an unrecognized %s before projecting a draft onto commission terms", async field => {
+    const adapter = createDemoAdapter();
+    const request = savePayload({});
+    const err = await rejected(adapter.saveResource({ ...request, payload: { ...request.payload, [field]: 100 } }));
+    expect(err.body).toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+    await expect(adapter.saveResource(savePayload({}))).resolves.toMatchObject({ resourceVersion: offerDraftSeed.version });
+  });
+
+  it("keeps a valid prospective draft available without verified source acceptance or an activation", async () => {
+    const adapter = createDemoAdapter();
+    await expect(adapter.saveResource(savePayload({ baseVerified: false }))).resolves.toMatchObject({
+      record: { payload: { baseVerified: false, upfrontFeeMinor: 0 } },
+    });
+    const offer = await adapter.readView({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "offerDraft",
+      requestedScope: scope, filters: { offerId: DEMO_OFFER_DRAFT_ID }, page: { limit: 1, cursor: null }, sort: [], period: null, requestId: "draft-read" });
+    expect(offer.capabilities).toContainEqual({ actionKind: "activateOffer", state: "unverified", reasonCodes: ["APPROVAL_REQUIRED", "PROVIDER_ACCESS_UNVERIFIED"] });
+    const forged = await rejected(adapter.saveResource(savePayload({ baseVerified: true })));
+    expect(forged.body).toMatchObject({ code: "VALIDATION_FAILED", fieldErrors: { baseVerified: expect.any(String) } });
+    const incompatible = await rejected(adapter.saveResource(savePayload({ compensation: "fixedPerSale" })));
+    expect(incompatible.body).toMatchObject({ code: "POLICY_VIOLATION", fieldErrors: { compensation: expect.any(String) } });
+  });
+
+  it("uses the current policy for both new discovery requests and offer drafts, while replaying an earlier preview only as pending", async () => {
+    const adapter = createDemoAdapter({ actorRole: "founder" });
+    const { batch, versions } = discoveryDemo;
+    const manifest: BatchApprovalPayload = {
+      batchId: batch.batchId, recipients: batch.eligible, rateLabel: batch.rateLabel, sampleUnits: batch.sampleUnits,
+      sampleUnitCostMinor: batch.sampleUnitCost.minorUnits, upfrontFeeMinor: 0, policyVersion: versions.policyVersion,
+    };
+    const preview = (payload: BatchApprovalPayload, key: string) => adapter.submitAction(act("requestBatchApproval", payload, {
+      operation: "requestApproval", idempotencyKey: key, expectedVersion: DISCOVERY_VERSION,
+    }));
+    const original = await preview(manifest, "before-policy-change");
+    expect(original).toMatchObject({ state: "approvalPending", receiptRefs: [], policyVersion: versions.policyVersion });
+    const policyVersion = "commission-only@stricter";
+    await adapter.submitAction(act("changeAcquisitionPolicy", { version: policyVersion, maxCommissionPct: 10, sampleCapMinor: 1000 }));
+    const plan = await adapter.readView({ schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "discoverySummary",
+      requestedScope: scope, filters: {}, page: { limit: 1, cursor: null }, sort: [], period: null, requestId: "current-policy" });
+    expect(plan.data).toMatchObject({ versions: { policyVersion } });
+    expect(await preview(manifest, "before-policy-change")).toEqual(original);
+    expect((await rejected(preview(manifest, "stale-version"))).body.code).toBe("STALE_VERSION");
+    expect((await rejected(preview({ ...manifest, policyVersion }, "recheck-terms"))).body).toMatchObject({
+      code: "POLICY_VIOLATION", fieldErrors: { rateLabel: expect.any(String), sampleUnitCostMinor: expect.any(String) },
+    });
+    expect((await rejected(adapter.saveResource(savePayload({})))).body).toMatchObject({
+      code: "POLICY_VIOLATION", fieldErrors: { commission: expect.any(String), sample: expect.any(String) },
+    });
+    await expect(adapter.saveResource(savePayload({ commissionPct: 10, sampleShippingMinor: 1000 }))).resolves.toMatchObject({
+      record: { payload: { commissionPct: 10, sampleShippingMinor: 1000, baseVerified: false } },
+    });
   });
 });
 

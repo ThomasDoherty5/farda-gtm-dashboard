@@ -13,6 +13,10 @@ Every value is in `src/design-system/tokens.css`, named by each variable's Web c
 | Farda · Semantic, space | 13 | `--space-*` |
 | Text styles | 9 | `--text-*` |
 
+The original file’s current 45 variables match their CSS values or aliases. Its nine Inter styles retain the native size, weight and line height at a 16 px browser default. Font sizes and line heights use rem units so changing the browser text preference scales both.
+
+Enabled text-field boundaries use the muted foreground (5.43:1 on the surface) and the keyboard focus outline uses violet (5.57:1). The original fine border (1.29:1) stays on decorative dividers and disabled fields.
+
 The font is `@fontsource/inter` 4.5.15. The current 5.x build has different letter spacing and matches Figma's render about 2.7× worse, so don't upgrade it without re-running the comparison. Its latin subset has no arrows, so `tokens.css` loads the "all" build for U+2190-2193 only. Without that, "→" falls back to a system font.
 
 ## Components
@@ -28,9 +32,9 @@ No Code Connect mappings exist. Mappings below are by hand.
 | Empty state | 6:649 | 4 | `EmptyState` (`state`) | Built |
 | Skeleton | 6:659 | 2 | `Skeleton`, `SkeletonCard`, `SkeletonRow` (`src/components/EmptyState.tsx`, re-exported from `Skeleton.tsx`) | Built (Card is on every route's loading state; Row has no screen yet, since no list loads on its own) |
 | Modal | 6:687 | 3 | `Modal` (`state` confirm, access, reconcile; `busy`; `confirmDisabledReason`), a 460px compact confirmation. `Dialog` stays the 560px form dialog from 51:1945 | Built. Read from 6:687: Confirm and Access say "Continue", Reconcile says "Open source". No screen uses it yet; the existing two-button confirms put the primary action first, which is a different order |
-| Input | 6:404 | 5 | `Field`, `TextField`, `SelectField` (label, 48px field, help or error text) | Default, filled and error built; disabled and focus not checked |
+| Input | 6:404 | 5 | `Field`, `TextField`, `SelectField` (label, 48px field, help or error text) | Empty, populated, error, native disabled and visible keyboard focus are implemented. Textarea/select share labels, help and validation semantics. |
 | Search | 6:414 | 3 | `SearchField` (`label`, `placeholder`, `fluid`). Default is the placeholder, Query is the value, Focus is the 2px violet border on `:focus-within` | Built; replaces the three local copies (Automation runs, TikTok worklist, Content monitor) |
-| Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Built from ACQ03; focus state not checked. The launch and performance pages use a primary-button variant of it (`WorkspaceTabs`, from 14:100) |
+| Tab | 6:424 | 3 | `SectionTabs` (selected, default) | Selected, default, disabled and keyboard focus are implemented; the three source variants are preserved. The launch and performance pages use a primary-button variant of it (`WorkspaceTabs`, from 14:100) |
 | Checkbox | 6:443 | 4 | `Checkbox` (`checked`, `mixed`, `disabled`, `readOnly`, `describedBy`) over a native input | Built; replaces the locked policy list. The settlement match list keeps its own multi-line rows |
 | Toggle | 6:459 | 3 | `Toggle` (`role="switch"`, `disabledReason`) | Built. No screen uses a switch: the design draws filters such as Assigned to me as pressed buttons |
 | Source freshness | 6:500 | 5 | `SourceFreshness` (`state` live, synced, stale, unknown, error). Unknown never shows a time. The page-level strip stays `Notice` (violet or warning) | Built; all five states unit-tested. No screen uses the card yet |
@@ -135,7 +139,7 @@ Owner THO-305. Measurements for this screen are in "Second-half comparison" belo
 | Section heading and card (7:918) | `Panel` | 4px or 6px between heading and note, as each screen has it; `large` is the 22px heading |
 | Current acquisition policy (109:416), Notice (7:911, 14:672) | `Notice` (`context`, `plain`, `source`) | |
 | Detail rows (7:1017) | `DetailRows` | |
-| Step rows (7:1228, 14:955), gate rows (70:892) | `Steps`, `Gates` | |
+| Step rows (7:1228, 14:955), gate rows (70:892) | `Steps`, `Gates` | Shared `Timeline` preserves named ordered-list semantics for both numbered workflow steps and carrier events. Current carrier steps expose `aria-current="step"`. |
 | Table with 16px rows (7:957) | `DataTable variant="ledger"` | Fixed layout, so the design's column widths hold |
 | Table with 62px rows (14:743) | `DataTable variant="dense"` | |
 | Search (6:414) | `.search` in `PageKit.module.css` | 320 × 48 pill |

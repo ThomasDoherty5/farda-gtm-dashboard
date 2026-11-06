@@ -10,7 +10,7 @@
 .panelSpacious { gap: var(--space-24); }
 .sectionHeading { display: flex; flex-direction: column; gap: var(--space-4); }
 .sectionHeading h2, .sectionHeading h3 { margin: 0; font: var(--text-h3); }
-.sectionHeading p { margin: 0; font: var(--text-small); color: var(--color-muted); }
+.sectionHeading p, .sectionCopy { margin: 0; font: var(--text-small); color: var(--color-muted); }
 .notice { display: flex; align-items: flex-start; gap: var(--space-16); padding: var(--space-20); border-radius: var(--space-16); }
 .notice[data-tone="violet"] { background: var(--color-violetSoft); }
 .notice[data-tone="warning"] { background: var(--color-warningSoft); }

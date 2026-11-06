@@ -26,7 +26,7 @@ describe("operations overview", () => {
     expect(screen.getByText("4 waiting more than 2 days")).toBeInTheDocument();
     expect(metric("Time to ship")).toHaveTextContent("1.2 days");
     const rows = within(screen.getByTestId("queue-table")).getAllByRole("row").slice(1);
-    expect(rows.map((r) => within(r).getAllByRole("rowheader")[0]!.textContent)).toEqual(["TEST-SH-1042", "TEST-SC-0081", "TEST-TT-1038", "TEST-SH-1045", "TEST-SC-0085"]);
+    expect(rows.map((r) => within(r).getAllByRole("rowheader")[0]!.textContent)).toEqual(["TEST-SH-1042", "TEST-SC-0081", "TEST-TT-1038", "TEST-SH-1044", "TEST-SH-1045"]);
     expect(screen.getByText("Home H2 is below its 20-unit threshold.")).toBeInTheDocument();
     expect(screen.getByText("2 shipments need attention")).toBeInTheDocument();
   });
@@ -35,8 +35,8 @@ describe("operations overview", () => {
     await open("/operations");
     const table = await screen.findByTestId("queue-table");
     expect(within(table).getByText("2.4 days")).toBeInTheDocument();
-    expect(within(table).getAllByRole("link", { name: "View sample" })).toHaveLength(2);
-    expect(within(table).getAllByRole("link", { name: "View order" })).toHaveLength(3);
+    expect(within(table).getAllByRole("link", { name: "View sample" })).toHaveLength(1);
+    expect(within(table).getAllByRole("link", { name: "View order" })).toHaveLength(4);
   });
 
   it("scopes totals to one home and says issues are not assigned to a home", async () => {

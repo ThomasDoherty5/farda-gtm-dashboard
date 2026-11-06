@@ -99,3 +99,15 @@
 .badgeHeading { margin: 0; font: inherit; }
 /* Narrow screens: the label and the value stack, so the value has the full width (implementation adaptation, docs/design-map.md). */
 @media (max-width: 599px) { .best { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); } }
+
+.compactHeading { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-24); }
+.compactHeading h1 { min-width: 0; overflow-wrap: anywhere; margin: 0; font: var(--text-h1); }
+@media (min-width: 768px) {
+  .compactHeading h1 { flex: 0 1 535px; }
+}
+@media (max-width: 767px) {
+  [data-figma-source="4:6"] { gap: var(--space-20); }
+  .compactTabs { flex-wrap: wrap; }
+  .compactTabs a { flex: 1 1 96px; }
+  .compactTabs a:first-child { flex-basis: 110px; }
+}

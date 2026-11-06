@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
-import { useScope } from "@/adapter/scope";
+import { scopeKey, useScope } from "@/adapter/scope";
 import { useSave } from "@/adapter/useSave";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
@@ -16,22 +16,28 @@ import { ViewError } from "@/components/ViewError";
 import { ActionError, blockedReason, LeaveGuard } from "@/features/approvals/shared";
 import { CADENCES, TIMEZONES, type Cadence, type ScheduleData, type ScheduleDraft } from "@/fixtures/settings";
 import { DEMO_NOW } from "@/fixtures/overview";
+import type { NativeScheduleDetail } from "@/creator-agent/scheduleCadence";
+import { NativeScheduleEditor } from "./NativeScheduleEditor";
 import { nextRun, DST_POLICY, validateSchedule } from "./schedule";
 import { AutomationNav, CadenceNotice, InfoDialog } from "./shared";
 
 /** Zap and report schedule (Figma source 14:911, owner THO-305). Saving a draft is separate from enabling, and enabling stays blocked until the server verifies a connection. */
 export function SchedulePage() {
-  const { adapter } = useScope();
+  const context = useScope();
+  const { adapter } = context;
   const { jobId = "" } = useParams();
-  const query = useView<{ jobId: string }, ScheduleData>("scheduleDetail", { jobId });
-  const data = query.data?.data ?? null;
+  const query = useView<{ jobId: string }, ScheduleData | NativeScheduleDetail>("scheduleDetail", { jobId });
+  const answer = query.isPlaceholderData ? null : query.data?.data;
+  const data = answer?.jobId === jobId ? answer : null;
+  const native = data && "kind" in data ? data : null;
+  const demoData = adapter.kind === "demo" && data && !("kind" in data) ? data : null;
   const demo = adapter.kind === "demo";
   const [dialog, setDialog] = useState<"zapier" | null>(null);
   const enableBlocked = query.data ? blockedReason(query.data, "enableSchedule") : "Available once the schedule has loaded.";
 
   return (
     <Page labelledBy="schedule-title" source="14:911">
-      <PageHeader id="schedule-title" title={data?.title ?? "Zap and report schedule"} subtitle={data?.subtitle ?? "Schedule, inputs, output and recovery for one automation."}>
+      <PageHeader id="schedule-title" title={demoData?.title ?? "Zap and report schedule"} subtitle={demoData?.subtitle ?? "Schedule, inputs, output and recovery for one automation."}>
         <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 176 }} onClick={() => setDialog("zapier")}>Open Zapier</Button>
         <Button style={{ minWidth: 184 }} disabledReason={enableBlocked} reasonFor="enable-reason">Enable schedule</Button>
       </PageHeader>
@@ -40,15 +46,16 @@ export function SchedulePage() {
         Daily sourcing and review plans use current permitted capacity; hourly monitoring checks enrolled profiles. Neither cadence bypasses human approval for outreach, and neither is represented as live without verified access.
       </CadenceNotice>
       <Notice kind="plain" title="Proposed configuration · currently paused" descriptionId="enable-reason">
-        Source connections, sandbox proof and owner approval are required before enabling live delivery. Zapier is the runner.
+        Source connections, sandbox proof and owner approval are required before enabling live delivery. Zapier is the planned runner.
       </Notice>
       {/* A partial or stale read is said in words, not only by a badge. */}
       <ReadState res={query.data} subject="This schedule" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading schedule…" />}
       {query.isError && <ViewError error={query.error} subject="This schedule" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && (data ? <Body res={query.data as ReadResponse<ScheduleData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="No schedule yet"><p>The source responded, but this automation has no schedule.</p></EmptyState>)}
+      {query.data && (native ? <NativeScheduleEditor key={JSON.stringify([scopeKey(context),jobId])} data={native} res={query.data} reload={() => query.refetch()} />
+        : demoData ? <Body res={query.data as ReadResponse<ScheduleData>} data={demoData} demo={demo} /> : <EmptyState state="Empty" title="No schedule yet"><p>The source responded, but this automation has no schedule.</p></EmptyState>)}
       <InfoDialog open={dialog === "zapier"} title="Open Zapier" demo={demo} onClose={() => setDialog(null)}>
-        <p>No verified Zapier link or sign-in handoff is available from the server, so none is offered. Zapier runs this job; this page only shows and drafts its schedule.</p>
+        <p>No verified Zapier link or sign-in handoff is available from the server, so none is offered. This page saves schedule drafts. Zapier execution requires a separate verified connection.</p>
       </InfoDialog>
     </Page>
   );

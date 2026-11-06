@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { useBlocker } from "react-router-dom";
+export { LeaveGuard } from "@/components/LeaveGuard";
 import type { ActionState, ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
 import { Alert } from "@/components/Alert";
@@ -144,17 +144,5 @@ export function ActionError({ error }: { error: Error }) {
       {certainty === "uncertain" && <p>Don't retry until the outcome is reconciled.</p>}
       {adapterError?.body.correlationId && <p>Reference: {adapterError.body.correlationId}</p>}
     </Alert>
-  );
-}
-
-/** Asks before leaving with unsaved edits. Keep task (CTRL-177) returns to the form with edits intact. */
-export function LeaveGuard({ dirty, subject = "approval" }: { dirty: boolean; subject?: string }) {
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname + currentLocation.search !== nextLocation.pathname + nextLocation.search);
-  return (
-    <Dialog open={blocker.state === "blocked"} title="Discard your edits?" onClose={() => blocker.reset?.()}>
-      <p>You have unsaved changes on this {subject}.</p>
-      <Button onClick={() => blocker.reset?.()}>Keep task</Button>
-      <Button variant="secondary" onClick={() => blocker.proceed?.()}>Discard and leave</Button>
-    </Dialog>
   );
 }

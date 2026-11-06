@@ -27,9 +27,9 @@ describe("next run", () => {
   });
 
   it("runs a time that doesn't exist at the next valid minute (spring forward)", () => {
-    // 8 Mar 2026: 02:30 does not exist in Los Angeles. It runs at 03:30 PDT = 10:30Z.
+    // 8 Mar 2026: 02:30 does not exist in Los Angeles. The first valid wall minute is 03:00 PDT = 10:00Z.
     const run = nextRun({ ...weekdays, cadence: "daily", localTime: "02:30" }, new Date("2026-03-08T00:00:00Z"));
-    expect(run?.at.toISOString()).toBe("2026-03-08T10:30:00.000Z");
+    expect(run?.at.toISOString()).toBe("2026-03-08T10:00:00.000Z");
   });
 
   it("runs a repeated time once, at its first occurrence (fall back)", () => {

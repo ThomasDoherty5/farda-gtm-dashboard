@@ -2,7 +2,11 @@
 
 Handoff section 5 requires Figma MCP. This records which file works and what that does and doesn't prove.
 
-## Status: working on a copy, as of 2026-11-03
+## Original source verification for THO-292 and THO-306
+
+The November 5 shared-shell and responsive audit read the original file `UkX7Vy6r5BGgYvUCAi6Pmd`. It inspected the shared component page, resolved token and text-style values, and captured the original Operations mobile (12:653), tablet (12:708) and Recovery (12:534) frames. The design map records the implementation mapping. Earlier comparisons retain the file keys recorded with their measurements.
+
+## November 3 copy-based verification
 
 | File | Key | MCP access |
 | -- | -- | -- |

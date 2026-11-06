@@ -12,6 +12,7 @@
  * - These views hold no money, so the minor-unit rules do not apply; counts reject negatives and fractions.
  */
 import { z } from "zod";
+import { nativeScheduleDetailSchema } from "@/creator-agent/scheduleCadence";
 import { savedBindingsSchema, savedRunsSchema } from "@/creator-agent/operationsView";
 
 const count = z.number().int().nonnegative();
@@ -140,7 +141,7 @@ export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
   connectionsOverview: z.union([savedBindingsSchema, connectionsOverviewSchema]),
   teamPermissions: teamPermissionsSchema,
   automationRuns: z.union([savedRunsSchema, automationRunsSchema]),
-  scheduleDetail: scheduleDetailSchema,
+  scheduleDetail: z.union([nativeScheduleDetailSchema, scheduleDetailSchema]),
   channelCapabilities: z.union([savedBindingsSchema, channelCapabilitiesSchema]),
   nightlyReconciliation: nightlyReconciliationSchema,
 };

@@ -23,7 +23,7 @@ describe("DS-01 versions, source account and schedule", () => {
     expect(screen.getByTestId("plan-schedule")).toHaveTextContent("Draft · not active");
     expect(screen.getByTestId("plan-source-account")).toHaveTextContent("N/A · account not read");
     expect(screen.getByText("ICP draft v0 · not approved")).toBeInTheDocument();
-    expect(within(screen.getByTestId("plan-versions")).getByText("commission-only policy · policy-2026-10")).toBeInTheDocument();
+    expect(within(screen.getByTestId("plan-versions")).getByText(discoveryDemo.versions.policyVersion)).toBeInTheDocument();
     expect(screen.getByText("Unverified")).toBeInTheDocument();
   });
 

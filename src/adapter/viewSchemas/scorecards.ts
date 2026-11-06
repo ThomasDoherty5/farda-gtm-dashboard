@@ -67,7 +67,7 @@ const commerceScorecard = z.object({
 const historicalAssessmentRecord = z.discriminatedUnion("kind", [scorecard.extend({ kind: z.literal("content-v2") }), scorecard.extend({ kind: z.literal("tiktok-commerce-v2") }), commerceScorecard]);
 const assessmentRecord = z.union([historicalAssessmentRecord, agentAssessmentRecordSchema]);
 
-const offerPayload = z.object({
+export const offerDraftPayloadSchema = z.object({
   commissionPct: z.number().min(0).max(100),
   eligibleBase: z.literal("eligibleMerchandise"),
   baseVerified: z.boolean(),
@@ -86,7 +86,7 @@ const offerDraft = z.object({
   /** Null until the offer service acknowledges a save. */
   savedAt: instant.nullable(),
   recruitmentSource: text,
-  payload: offerPayload,
+  payload: offerDraftPayloadSchema,
   assumptions: z.object({ netSaleMinor: minorUnits, commerceCostMinor: minorUnits, processingPctOfCommission: percent, baseOrders: count, downsideOrders: count }),
 });
 

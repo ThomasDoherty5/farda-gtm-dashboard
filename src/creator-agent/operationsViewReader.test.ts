@@ -18,7 +18,7 @@ const registration = (action: string): CapabilityRegistration => ({
   ownerRef: "owner:private-owner", costBasis: { state: "unknown", reasonCode: "COST_UNKNOWN" },
 });
 const readInput = (viewKey: OperationsViewKey, limit = 50) => ({ viewKey, db: store.database, scope, ledger: operations.ledger, jobs: operations.jobs,
-  secret: "synthetic-test-key", limit, cursor: null, now: () => now });
+  authorizationContext: "test:reader", secret: "synthetic-test-key", limit, cursor: null, now: () => now });
 
 beforeEach(() => {
   now = Date.parse("2026-11-04T16:00:00Z"); proof = null;
@@ -79,6 +79,32 @@ describe("saved dashboard operation views", () => {
     const checked = new Date(now + 1_000).toISOString();
     const later = savedBindingsSchema.parse(readOperationsView({ ...snapshot, health: { get: () => ({ ...registered, checkedAt: checked }) } }).data).records[0]!;
     expect(later).toMatchObject({ observedAt: at, sourceUpdatedAt: null, freshness: "unknown", sourceHealth: { checkedAt: checked, coverage: "unknown" } });
+  });
+  it("pins initial membership while reads reevaluate revoked permission and ignore later inserts", () => {
+    const rows = ["readPolicy", "readOrders", "readMetrics"].map(action => operations.ledger.register(registration(action),0)).sort((a,b) => a.capabilityId.localeCompare(b.capabilityId));
+    const input = readInput("channelCapabilities",1);
+    const page1 = readOperationsView(input);
+    operations.ledger.revoke(rows[1]!.capabilityId,"REVOKED",1);
+    operations.ledger.register(registration("appeared-later"),0);
+    const page2 = readOperationsView({...input,cursor:page1.nextCursor});
+    const page3 = readOperationsView({...input,cursor:page2.nextCursor});
+    const pages = [page1,page2,page3].map(p=>savedBindingsSchema.parse(p.data));
+    expect(pages.map(p=>p.coverage.returned)).toEqual([1,2,3]);
+    expect(new Set(pages.flatMap(p=>p.records.map(r=>r.id))).size).toBe(3);
+    expect(pages[1]!.records[0]!.state).toBe("Blocked");
+    expect(page3).toMatchObject({nextCursor:null,hasMore:false,total:3,partial:false});
+    expect(readOperationsView(input).total).toBe(4);
+  });
+  it("rejects an expired token or a token reused under other display filters, scope, authorization, limit or view", () => {
+    for (const action of ["readOrders","readMetrics"]) operations.ledger.register(registration(action),0);
+    const input = {...readInput("connectionsOverview",1),filters:{q:"chosen"}};
+    const cursor = readOperationsView(input).nextCursor!;
+    for (const fields of [{filters:{q:"new"}},{authorizationContext:"test:reviewer"},{limit:2},{viewKey:"channelCapabilities" as const},
+      {scope:{...scope,accountId:"other"}},{cursor:cursor+"A"}]) {
+      expect(()=>readOperationsView({...input,cursor,...fields})).toThrow("INVALID_OPERATIONS_CURSOR");
+    }
+    now += 15 * 60_000;
+    expect(()=>readOperationsView({...input,cursor})).toThrow("OPERATIONS_CURSOR_EXPIRED");
   });
   it("rejects cursor, invalid limit and other scopes instead of returning a prior scope", () => {
     const input = readInput("automationRuns");

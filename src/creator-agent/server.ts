@@ -18,7 +18,9 @@ import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts
 import { createOperations, operationsErrorStatus, safeOperationsProjection, OPERATIONS_SCHEMA_VERSION, type OperationsOptions } from "./operations.ts";
 import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader.ts";
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
-import { readOperationsView } from "./operationsViewReader.ts";
+import { readOperationsView, operationsViewFiltersSchema, OperationsCursorError } from "./operationsViewReader.ts";
+import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts";
+import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
@@ -59,6 +61,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let assets: AssetRepository;
   let funnel: FunnelRepository;
   let offers: OfferRepository;
+  let schedules: ScheduleDraftRepository;
+  let operationsSecret: string;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -74,6 +78,8 @@ export function createAgentServer(options: AgentServerOptions) {
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
+    operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
   }
@@ -137,6 +143,9 @@ export function createAgentServer(options: AgentServerOptions) {
     requestedScope: readBase.shape.requestedScope, resourceKind: z.literal("actionDraft"), resourceRef: offerIdSchema,
     expectedVersion: z.string().min(1).max(180).nullable(), idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
   }).strict();
+  const saveSchema = z.discriminatedUnion("resourceKind", [saveOfferSchema, saveOfferSchema.extend({
+    resourceKind: z.literal("configurationDraft"), resourceRef: z.string().min(1).max(4100),
+  })]);
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
     readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ offerId: offerIdSchema }).strict() }),
@@ -144,9 +153,10 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("pipelineSummary"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("pipelineBranches"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
-    readBase.extend({ viewKey: z.literal("connectionsOverview"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("channelCapabilities"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("automationRuns"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("connectionsOverview"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("channelCapabilities"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("automationRuns"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
     readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
@@ -264,7 +274,14 @@ export function createAgentServer(options: AgentServerOptions) {
       if (path === "/v1/save" && req.method === "POST") {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
-        const input = saveOfferSchema.parse(await bodyOf(req));
+        const input = saveSchema.parse(await bodyOf(req));
+        if (input.resourceKind === "configurationDraft") {
+          const saved = schedules.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
+            resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: "agent-reviewer", record: saved.resource,
+            reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
+        }
         const record = offers.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: record.offerId,
@@ -283,6 +300,7 @@ export function createAgentServer(options: AgentServerOptions) {
         portfolioReview: { storage: "durable", decisionAuthority: options.portfolioAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         offers: { storage: "durable", providerExecution: "notConnected", decisionAuthority: options.offerAuthority?.decision ? "injected" : "notConnected" },
         acquisitionFunnel: { storage: "durable", sourceAuthority: options.funnelAuthority ? "injected" : "notConnected" },
+        savedOperations: { pagination: "scoped-cursor-v1", scheduleDrafts: "durable-versioned", scheduleActivation: "notConnected" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -307,6 +325,19 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "scheduleDetail") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const data = schedules.read(input.filters.jobId);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: data ? "ready" : "empty", data, sourceFreshness: [],
+            coverage: { expectedCount: 1, observedCount: data ? 1 : 0, missingCount: data ? 0 : 1, complete: Boolean(data),
+              reasonCodes: data ? [] : ["SCHEDULE_JOB_NOT_FOUND"] },
+            capabilities: [{ actionKind: "saveScheduleDraft", state: auth.role === "reviewer" ? "available" : "denied",
+              reasonCodes: auth.role === "reviewer" ? [] : ["REVIEWER_REQUIRED"] },
+              { actionKind: "enableSchedule", state: "held", reasonCodes: ["SCHEDULE_ACTIVATION_NOT_CONNECTED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "batchDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const data = readScorecardPreview(store, input.filters.selection, current);
@@ -346,7 +377,8 @@ export function createAgentServer(options: AgentServerOptions) {
         }
         if (input.viewKey === "connectionsOverview" || input.viewKey === "channelCapabilities" || input.viewKey === "automationRuns") {
           const result = readOperationsView({ viewKey: input.viewKey, db: store.database, ledger: operations.ledger, jobs: operations.jobs,
-            scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: options.readToken,
+            scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+            authorizationContext: `creator-agent.scope.v1:${auth.role}`, filters: input.filters,
             limit: input.page.limit, cursor: input.page.cursor, now: options.operations?.now, health: providerHealth });
           const expectedCount = result.total + (result.data.kind === "saved-runs" ? result.data.jobCoverage.total : 0);
           const observedCount = result.returned + (result.data.kind === "saved-runs" ? result.data.jobCoverage.returned : 0);
@@ -355,7 +387,7 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.partial ? "partial" : "ready", data: result.data, sourceFreshness: [],
             coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete: !result.partial,
               reasonCodes: result.partial ? ["SAVED_OPERATIONS_TRUNCATED"] : [] },
-            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+            capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.hasMore }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "collaborationEvidence") {
           const result = await readCollaborationEvidence({ collaborationId: input.filters.collaborationId, cursor: input.page.cursor, limit: input.page.limit });
@@ -444,6 +476,10 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof OperationsCursorError) return reply(res, error.code === "OPERATIONS_CURSOR_EXPIRED" ? 409 : 400, { code: error.code, executionCertainty: "notApplied" });
+      if (error instanceof ScheduleDraftError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
+        ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       const operationStatus = operationsErrorStatus(error);
       if (operationStatus !== null && error instanceof Error) return reply(res, operationStatus, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof FunnelError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });

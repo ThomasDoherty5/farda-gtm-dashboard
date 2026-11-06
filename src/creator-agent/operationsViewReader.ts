@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { openOperationsToken, sealOperationsToken } from "./operationsTokens.ts";
 import type { CapabilityLedger } from "./connections/ledger.ts";
 import type { CapabilityView } from "./connections/schema.ts";
 import type { HealthSummary } from "./providerHealthSchema.ts";
@@ -10,8 +11,21 @@ import type { SavedBinding, SavedBindings, SavedRuns } from "./operationsView.ts
 
 export const operationsViewKeys = ["connectionsOverview", "channelCapabilities", "automationRuns"] as const;
 export type OperationsViewKey = (typeof operationsViewKeys)[number];
+export const operationsViewFiltersSchema = z.object({
+  tab: z.enum(["runs", "zaps", "reporting", "capabilities", "access", "exceptions", "attribution"]).optional(),
+  q: z.string().max(120).optional(), state: z.string().max(50).optional(),
+}).strict();
+export type OperationsViewFilters = z.infer<typeof operationsViewFiltersSchema>;
+const integer = z.number().int().min(0).safe();
+const pageCursorSchema = z.object({ view: z.enum(operationsViewKeys), authorization: z.string(), filters: operationsViewFiltersSchema,
+  limit: integer, offset: integer, expires: integer, marks: z.object({ bindings: integer, jobs: integer, runs: integer }).strict() }).strict();
+
+export class OperationsCursorError extends Error {
+  readonly code: "INVALID_OPERATIONS_CURSOR" | "OPERATIONS_CURSOR_EXPIRED";
+  constructor(code: "INVALID_OPERATIONS_CURSOR" | "OPERATIONS_CURSOR_EXPIRED") { super(code); this.code = code; }
+}
 type Input = { viewKey: OperationsViewKey; db: DatabaseSync; ledger: CapabilityLedger; jobs: JobRepository; scope: OperationsScope;
-  secret: string; limit: number; cursor: string | null; now?: () => number; health?: { get(id: string): HealthSummary | null } };
+  authorizationContext: string; filters?: OperationsViewFilters; secret: string; limit: number; cursor: string | null; now?: () => number; health?: { get(id: string): HealthSummary | null } };
 const publicProviders = new Set(["zapier", "notion", "linear", "tiktok", "tiktok-shop", "social-cat", "shippo", "slack", "google-sheets", "shopify", "meta", "intercom"]);
 const publicActions = new Map([["readPolicy", "Read policy"], ["readCapabilities", "Read capabilities"], ["checkHealth", "Check health"],
   ["readHealth", "Read health"], ["readOrders", "Read orders"], ["readMetrics", "Read metrics"], ["readPosts", "Read posts"]]);
@@ -37,26 +51,45 @@ function readState(record: CapabilityView): SavedBinding["state"] {
 
 /** Read only the scoped local store. Public aliases are deterministic across refreshes, without disclosing provider IDs or receipt locators. */
 export function readOperationsView(input: Input) {
-  z.object({ limit: z.number().int().min(1).max(100), cursor: z.null() }).parse({ limit: input.limit, cursor: input.cursor });
+  z.number().int().min(1).max(100).parse(input.limit);
+  const authorization = z.string().min(1).max(180).parse(input.authorizationContext);
+  const filters = operationsViewFiltersSchema.parse(input.filters ?? {});
+  const now = (input.now ?? Date.now)();
+  let cursor: z.infer<typeof pageCursorSchema> | null = null;
+  if (input.cursor !== null) {
+    try { cursor = pageCursorSchema.parse(openOperationsToken(input.scope, input.secret, "cursor", input.cursor)); }
+    catch { throw new OperationsCursorError("INVALID_OPERATIONS_CURSOR"); }
+    if (cursor.view !== input.viewKey || cursor.authorization !== authorization || cursor.limit !== input.limit || JSON.stringify(cursor.filters) !== JSON.stringify(filters))
+      throw new OperationsCursorError("INVALID_OPERATIONS_CURSOR");
+    if (cursor.expires <= now) throw new OperationsCursorError("OPERATIONS_CURSOR_EXPIRED");
+  }
   const scope = input.db.prepare("SELECT workspace_id, account_id FROM agent_scope WHERE id=1").get();
   if (input.scope.environment !== "sandbox" || scope?.workspace_id !== input.scope.workspaceId || scope.account_id !== input.scope.accountId)
     throw new Error("DATABASE_SCOPE_MISMATCH");
   const key = createHmac("sha256", input.secret).update(JSON.stringify(["operations-display.v1", input.scope.workspaceId, input.scope.accountId, input.scope.environment])).digest();
   const alias = (kind: string, raw: string) => kind + "-" + createHmac("sha256", key).update(kind + "\0" + raw).digest("hex").slice(0, 16);
-  const observedAt = new Date((input.now ?? Date.now)()).toISOString();
+  const observedAt = new Date(now).toISOString();
+  const offset = cursor?.offset ?? 0;
+  let nextCursor: string | null = null;
   let data: SavedBindings | SavedRuns;
   // One read snapshot ties the displayed totals to their rows even when another process writes the SQLite store.
   input.db.exec("BEGIN");
   try {
+    // Membership and ordering are frozen at the first read. Permission, health and job state are recomputed on every page.
+    const marks = cursor?.marks ?? {
+      bindings: Number(input.db.prepare("SELECT COALESCE(MAX(rowid),0) AS n FROM capability_events").get()!.n),
+      jobs: Number(input.db.prepare("SELECT COALESCE(MAX(rowid),0) AS n FROM job_heads").get()!.n),
+      runs: Number(input.db.prepare("SELECT COALESCE(MAX(rowid),0) AS n FROM job_runs").get()!.n),
+    };
     if (input.viewKey === "automationRuns") {
-      const rows = input.db.prepare("SELECT run_id FROM job_runs ORDER BY observed_at DESC,run_id DESC LIMIT ?").all(input.limit);
-      const jobs = input.db.prepare("SELECT job_id FROM job_heads ORDER BY job_id LIMIT ?").all(input.limit);
-      const total = Number(input.db.prepare("SELECT COUNT(*) AS total FROM job_runs").get()!.total);
-      const jobTotal = Number(input.db.prepare("SELECT COUNT(*) AS total FROM job_heads").get()!.total);
-      data = { kind: "saved-runs", source: "saved-operations", observedAt, coverage: coverage(total, rows.length), jobCoverage: coverage(jobTotal, jobs.length),
+      const rows = input.db.prepare("SELECT run_id FROM job_runs WHERE rowid<=? ORDER BY observed_at DESC,run_id DESC LIMIT ? OFFSET ?").all(marks.runs,input.limit,offset);
+      const jobs = input.db.prepare("SELECT job_id FROM job_heads WHERE rowid<=? ORDER BY job_id LIMIT ? OFFSET ?").all(marks.jobs,input.limit,offset);
+      const total = Number(input.db.prepare("SELECT COUNT(*) AS total FROM job_runs WHERE rowid<=?").get(marks.runs)!.total);
+      const jobTotal = Number(input.db.prepare("SELECT COUNT(*) AS total FROM job_heads WHERE rowid<=?").get(marks.jobs)!.total);
+      data = { kind: "saved-runs", source: "saved-operations", observedAt, coverage: coverage(total, Math.min(total, offset + rows.length)), jobCoverage: coverage(jobTotal, Math.min(jobTotal, offset + jobs.length)),
         jobs: jobs.map(row => {
           const job = input.jobs.getJob(String(row.job_id));
-          return { id: alias("job", job.definition.jobId), version: job.definition.version, mode: job.definition.mode, enabled: job.enabled, paused: job.paused };
+          return { id: alias("job", job.definition.jobId), scheduleRef: sealOperationsToken(input.scope, input.secret, "schedule-job", job.definition.jobId), version: job.definition.version, mode: job.definition.mode, enabled: job.enabled, paused: job.paused };
         }),
         records: rows.map(row => {
           const run = input.jobs.getRun(String(row.run_id));
@@ -66,9 +99,11 @@ export function readOperationsView(input: Input) {
             receiptCount: results.length, receipt: results[0] ? alias("receipt", results[0]) : null };
         }) };
     } else {
-      const list = input.ledger.list(input.limit);
-      data = { kind: "saved-bindings", source: "saved-operations", observedAt, coverage: coverage(list.total, list.records.length),
-        records: list.records.map(record => {
+      const total = Number(input.db.prepare("SELECT COUNT(DISTINCT capability_id) AS total FROM capability_events WHERE rowid<=?").get(marks.bindings)!.total);
+      const page = input.db.prepare("SELECT DISTINCT capability_id FROM capability_events WHERE rowid<=? ORDER BY capability_id LIMIT ? OFFSET ?").all(marks.bindings, input.limit, offset);
+      data = { kind: "saved-bindings", source: "saved-operations", observedAt, coverage: coverage(total, Math.min(total, offset + page.length)),
+        records: page.map(row => {
+          const record = input.ledger.get(String(row.capability_id))!;
           const binding = record.registration.binding;
           const health = input.health?.get(record.capabilityId);
           return { id: alias("binding", record.capabilityId), provider: publicProviders.has(binding.provider) ? binding.provider : "Registered provider",
@@ -81,8 +116,12 @@ export function readOperationsView(input: Input) {
             freshness: health?.checkedAt ? health.freshness : record.sourceFreshness.state, blockers: safeReasons(record.reasonCodes) };
         }) };
     }
+    const more = data.coverage.partial || (data.kind === "saved-runs" && data.jobCoverage.partial);
+    if (more) nextCursor = sealOperationsToken(input.scope, input.secret, "cursor", {
+      authorization, filters, view: input.viewKey, limit: input.limit, marks, offset: offset + input.limit, expires: cursor?.expires ?? now + 15 * 60_000,
+    });
     input.db.exec("COMMIT");
   } catch (error) { input.db.exec("ROLLBACK"); throw error; }
-  return { data, observedAt, returned: data.coverage.returned, total: data.coverage.total,
+  return { data, observedAt, nextCursor, hasMore: nextCursor !== null, returned: data.coverage.returned, total: data.coverage.total,
     partial: data.coverage.partial || (data.kind === "saved-runs" && data.jobCoverage.partial) };
 }

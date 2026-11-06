@@ -1,6 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
+import { SelectField, TextField } from "./Field";
+import { Steps } from "./Panels";
 import { Checkbox } from "./Checkbox";
 import { Drawer } from "./Drawer";
 import { Modal } from "./Modal";
@@ -253,5 +255,28 @@ describe("Skeleton (6:659)", () => {
     expect(container.querySelectorAll("[aria-hidden='true']")).toHaveLength(2);
     rerender(<Skeleton variant="row" label="Loading rows…" />);
     expect(screen.getByRole("status")).toHaveTextContent("Loading rows…");
+  });
+});
+
+
+describe("shared fields and event sequences", () => {
+  it("preserves native disabled semantics, a label and the explanatory text on each field type", () => {
+    render(<>
+      <TextField label="Recipient" value="Saved recipient" onChange={() => {}} disabled helpText="Read-only account." />
+      <TextField label="Review notes" value="" onChange={() => {}} multiline disabled helpText="Reviewer access required." />
+      <SelectField label="Home" value="H2" onChange={() => {}} options={[{value:"H2", label:"Home H2"}]} disabled helpText="Home is assigned by the source." />
+    </>);
+    expect(screen.getByRole("textbox", {name:"Recipient"})).toBeDisabled();
+    expect(screen.getByRole("textbox", {name:"Review notes"})).toHaveAccessibleDescription("Reviewer access required.");
+    expect(screen.getByRole("combobox", {name:"Home"})).toBeDisabled();
+    expect(screen.getByRole("combobox", {name:"Home"})).toHaveAccessibleDescription("Home is assigned by the source.");
+  });
+  it("names chronological events, preserves order and announces current state in words", () => {
+    render(<Steps label="Source events" steps={[{title:"Received", note:"Saved source receipt", state:"done"}, {title:"Review", note:"Awaiting a decision", state:"current"}]} />);
+    const events = screen.getByRole("list", {name:"Source events"});
+    const items = within(events).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Received");
+    expect(items[1]).toHaveTextContent("Review");
+    expect(items[1]).toHaveAttribute("aria-current", "step");
   });
 });
