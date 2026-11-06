@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentStore } from "../store";
 import { type AssessmentBasis, BUNDLES, costKeys, newOfferTerms, offerTermsSchema, type OfferScope, type OfferTerms } from "./contract";
+import { offerInputHash } from "./job";
 import { offerScenario } from "./economics";
 import { OfferRepository, type OfferAuthority } from "./repository";
 import { handleOfferRoute } from "./routes";
@@ -53,6 +54,25 @@ describe("immutable scoped offer proposals and forecasts",()=>{
     t.costs.earnedRewards.minor=2000;expect(offerScenario(t,"base").contributionMinor).toBe(3590);
     t.downside={...t.base,orders:0};expect(offerScenario(t,"downside")).toMatchObject({zeroSaleSeededCreatorsMinimum:2,contributionMinor:-7900});
     t.base.sellerDiscountMinor=1500;expect(offerScenario(t,"base").contributionMinor).toBeLessThan(0);
+  });
+  it("processes a reviewer-authorized J03 proposal envelope once and binds it to scope, input and deadline",()=>{
+    const store=new AgentStore(":memory:",scope),repo=new OfferRepository(store.database,scope);
+    const terms=proposal(), key="job-test", envelope={jobId:"J03",jobVersion:"creator-offer.v1",mode:"propose",actor:{id:"agent-reviewer",role:"reviewer"},
+      accountRef:scope,policyVersion:"commission-only-v1",inputHash:offerInputHash("offer-a",null,terms),idempotencyKey:key,correlationId:"job-trace",
+      requestedAt:"2020-01-01T00:00:00Z",deadline:null,checkpoint:null};
+    const post=(e:typeof envelope)=>route(repo,{envelope:e,terms,expectedVersion:null},{path:"/v1/offers/offer-a/proposals",idempotencyKey:key});
+    expect(post({...envelope,accountRef:{...scope,workspaceId:"other"}})?.status).toBe(409);
+    expect(post({...envelope,mode:"executeApproved"})?.status).toBe(422);
+    expect(post({...envelope,inputHash:"0".repeat(64)})?.status).toBe(409);
+    const result=post(envelope);
+    expect(result).toMatchObject({status:200,body:{draftOfferRef:"offer-a",offerVersion:"v1",envelope:{correlationId:"job-trace"},economicsScenarios:expect.any(Array),
+      proposedManifest:{creatorId:"creator-example"},missingInputs:expect.arrayContaining(["Provider terms and program entitlement unverified"]),
+      componentOwners:expect.arrayContaining([{component:"approval",owner:"J04"}]),sourceEffects:"none",reserved:false,submitted:false,funded:false,activated:false}});
+    expect(post(envelope)).toEqual(result);
+    expect(handleOfferRoute({method:"GET",path:"/v1/offers/offer-a/proposals?correlationId=job-trace",role:"reader"},repo)).toEqual(result);
+    const second={...envelope,idempotencyKey:"expired",deadline:"2020-01-02T00:00:00Z"};
+    expect(route(repo,{envelope:second,terms,expectedVersion:null},{path:"/v1/offers/offer-a/proposals",idempotencyKey:"expired"})).toMatchObject({status:409,body:{code:"JOB_OUTSIDE_EXECUTION_WINDOW"}});
+    store.close();
   });
   it("keeps platform funding, partial line refunds, native standard and Shop Ads rate distinct",()=>{
     const t=proposal();t.checkoutRoute="tiktok-shop";t.provider="tiktok-shop";t.base={...t.base,bundle:"duo",orders:3,shopAdsOrders:1,sellerDiscountMinor:100,refundPerOrderMinor:200,platformCouponMinor:300,fundedCouponMinor:null};

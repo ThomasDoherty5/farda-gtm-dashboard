@@ -5,6 +5,7 @@ import { AgentConflict } from "../store.ts";
 import { assessmentBasisSchema, costKeys, offerRecordSchema, offerTermsSchema, providerFactsSchema, routeId, scopeSchema,
   type AssessmentBasis, type OfferRecord, type OfferScope, type OfferTerms, type ProviderFacts } from "./contract.ts";
 import { offerScenario, proposalBlockers } from "./economics.ts";
+import { offerJobRequestSchema, scopeMatchesJob, jobResult, type OfferJobEnvelope } from "./job.ts";
 import { projectRewards, rewardSourceSchema, type RewardSource } from "./rewards.ts";
 
 const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:true});
@@ -38,6 +39,7 @@ export class OfferRepository {
     if(actual?.workspace_id!==scope.workspaceId || actual.account_id!==scope.accountId) throw new Error("DATABASE_SCOPE_MISMATCH");
     db.exec(`CREATE TABLE IF NOT EXISTS offer_versions (offer_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(offer_id,revision));
       CREATE TABLE IF NOT EXISTS offer_commands (key TEXT PRIMARY KEY, hash TEXT NOT NULL, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS offer_job_receipts (offer_id TEXT NOT NULL,correlation_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(offer_id,correlation_id));
       CREATE TABLE IF NOT EXISTS offer_decisions (offer_id TEXT NOT NULL, revision INTEGER NOT NULL, kind TEXT NOT NULL, source_ref TEXT NOT NULL UNIQUE, body TEXT NOT NULL, PRIMARY KEY(offer_id,revision,kind));
       CREATE TABLE IF NOT EXISTS offer_rewards (creator_id TEXT NOT NULL, source_ref TEXT NOT NULL UNIQUE, observed_at TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(creator_id,observed_at));
       CREATE TABLE IF NOT EXISTS offer_reward_awards (creator_id TEXT NOT NULL,tier TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(creator_id,tier));`);
@@ -108,22 +110,40 @@ export class OfferRepository {
     return !!latest && latest.version===version && latest.manifestHash===manifestHash;
   }
   readOffer(id:string,revision?:number) {const s=this.snapshot(routeId.parse(id),revision);return s?this.project(s):null;}
-  saveFromAdapter(id:string,expected:string|null,input:unknown,key:string) {
+  private withJob(record:OfferRecord,job?:OfferJobEnvelope):OfferRecord {
+    if(!job)return record;
+    if(this.readJobReceipt(record.offerId,job.correlationId))throw new AgentConflict("JOB_CORRELATION_ALREADY_USED");
+    this.db.prepare("INSERT INTO offer_job_receipts VALUES(?,?,?)").run(record.offerId,job.correlationId,JSON.stringify(jobResult(record,job)));
+    return record;
+  }
+  readJobReceipt(id:string,correlationId:string) {
+    const row=this.db.prepare("SELECT body FROM offer_job_receipts WHERE offer_id=? AND correlation_id=?").get(id,correlationId);
+    return row?JSON.parse(String(row.body)) as ReturnType<typeof jobResult>:null;
+  }
+  saveFromAdapter(id:string,expected:string|null,input:unknown,key:string,job?:OfferJobEnvelope) {
     const terms=offerTermsSchema.parse(input);routeId.parse(id);
     if(id==="new")throw new AgentConflict("RESERVED_OFFER_ID");
-    return this.apply(key,{id,expected,terms,operation:"offer-propose"},()=>{
+    return this.apply(key,{id,expected,terms,job:job??null,operation:"offer-propose"},()=>{
+      if(job && (Date.parse(job.requestedAt)>Date.now() || job.deadline!==null && (Date.parse(job.deadline)<Date.parse(job.requestedAt) || Date.parse(job.deadline)<=Date.now())))
+        throw new AgentConflict("JOB_OUTSIDE_EXECUTION_WINDOW");
       const prior=this.snapshot(id);
       if((prior?.version??null)!==expected)throw new AgentConflict("VERSION_CONFLICT");
       if(prior && prior.terms.creatorId!==terms.creatorId)throw new AgentConflict("CREATOR_IDENTITY_CHANGED");
       const recordedAt=new Date().toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt),verifiedFunding=this.funding(terms,recordedAt);
       // Receipt/term basis is independent of score so a new score can bind the immutable manifest hash without creating a cycle.
       const manifestHash=digest({scope:this.scope,offerId:id,terms,provider,verifiedCosts,verifiedFunding});
-      if(prior && prior.manifestHash===manifestHash)return this.project(prior);
+      if(prior && prior.manifestHash===manifestHash)return this.withJob(this.project(prior),job);
       const revision=(prior?.revision??0)+1;
       const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,verifiedFunding,assessment};
       this.db.prepare("INSERT INTO offer_versions VALUES(?,?,?)").run(id,revision,JSON.stringify(snapshot));
-      return this.project(snapshot);
+      return this.withJob(this.project(snapshot),job);
     });
+  }
+  proposeJob(id:string,input:unknown,key:string) {
+    const {envelope,expectedVersion,terms}=offerJobRequestSchema.parse(input);
+    if(!scopeMatchesJob(envelope,this.scope,id,expectedVersion,terms,key))throw new AgentConflict("JOB_SCOPE_OR_INPUT_MISMATCH");
+    this.saveFromAdapter(id,expectedVersion,terms,key,envelope);
+    return this.readJobReceipt(id,envelope.correlationId)!;
   }
   decision(id:string,input:{version:string;sourceRef:string;kind:Change},key:string) {
     return this.apply(key,{id,...input,operation:"offer-decision"},()=>{
