@@ -15,6 +15,7 @@ import { AssetRepository } from "./assetStore.ts";
 import { handleAssetRoute } from "./assetRoutes.ts";
 import type { AssetAuthority } from "./assets.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
+import { createOperations, operationsErrorStatus, type OperationsOptions } from "./operations.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -30,7 +31,7 @@ const cursorPayloadSchema = z.object({
 }).strict();
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
-export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority };
+export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
 /** First real agent service; independent of all demo adapters and reference-server fixtures. */
@@ -38,8 +39,15 @@ export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
-  const portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
-  const assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
+  let operations: ReturnType<typeof createOperations>;
+  let portfolio: PortfolioRepository;
+  let assets: AssetRepository;
+  try {
+    portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
+    assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
+    operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
+  }
+  catch (error) { store.close(); throw error; }
   const sessions = new Map<string, Session>();
   const bindings = options.bindings ?? [];
   const modelBinding = (route: "website" | "tiktok-shop") => bindings.find((b) => b.current.modelId === MODEL_FOR_ROUTE[route]) ?? null;
@@ -137,6 +145,11 @@ export function createAgentServer(options: AgentServerOptions) {
         if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== auth.session.csrf)
           return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "notApplied" });
       }
+      if (path === "/v1/identity" && req.method === "GET") return reply(res, 200, {
+        service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION, role: auth.role,
+        scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "creator-agent.scope.v1" },
+      });
+      if (await operations.handle({ req, res, role: auth.role, reply, bodyOf })) return;
       if (path === "/v1/portfolio" || path.startsWith("/v1/portfolio/")) {
         if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
           return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
@@ -258,6 +271,8 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      const operationStatus = operationsErrorStatus(error);
+      if (operationStatus !== null && error instanceof Error) return reply(res, operationStatus, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof InvalidCursor) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
       if (error instanceof AgentConflict) return reply(res, 409, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof z.ZodError || error instanceof SyntaxError) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
@@ -267,5 +282,11 @@ export function createAgentServer(options: AgentServerOptions) {
   });
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
-  return { server, store, close: () => new Promise<void>((resolve, reject) => server.close((error) => { store.close(); if (error) reject(error); else resolve(); })) };
+  let closing: Promise<void> | undefined;
+  return { server, store, operations, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+    let failure: Error | undefined = error;
+    try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
+    try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }
+    if (failure) reject(failure); else resolve();
+  })) };
 }

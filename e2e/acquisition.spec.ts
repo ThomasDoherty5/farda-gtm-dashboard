@@ -73,6 +73,7 @@ test.describe("plan detail", () => {
   test("the daily page keeps its size with the Plan detail link, and links to the detail", async ({ page, viewport }) => {
     await page.goto("/creators/discovery");
     await page.evaluate(() => document.fonts.ready);
+    await expect(page.getByTestId("metric-Schedule")).toBeVisible();
     if (viewport?.width === 1440) expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(2065);
     await page.getByRole("link", { name: "Plan detail" }).click();
     await expect(page).toHaveURL(/view=plan/);
