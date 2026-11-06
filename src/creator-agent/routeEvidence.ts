@@ -25,7 +25,7 @@ const metricSchema = z.object({
 const receipt = z.object({ status, sourceRef: text }).strict();
 const terms = z.object({
   origin: z.enum(["provider", "saved-offer"]), offerId: text, version: text, manifestHash: text, acceptedRef: text, termsRevision: text,
-  shopAdsRateBps: count.max(10000).nullable(),
+  shopAdsRateBps: count.max(10000).nullable(), nativeStandardRateVersion: text.nullable(), nativeAdsRateVersion: text.nullable(),
   provider: text, programId: text, programVersion: text, currency,
   commission: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("percentage"), basisPoints: count.max(10000) }).strict(),
@@ -134,9 +134,13 @@ export function sourceGates(packet: EvidencePacket, proof: ScorecardProof | unde
   const eligibility = routeEligibility(s);
   const scopeMatches = t && t.termsRevision === packet.termsRevision && t.provider === s.provider && t.programId === s.programId && t.programVersion === s.programVersion;
   const routeCommissionMatches = t && (s.commerce.kind === "website"
-    ? t.commission.kind === "percentage" || (s.provider === "external-affiliate" && t.commission.supportedByProvider)
+    ? t.shopAdsRateBps === null && t.nativeStandardRateVersion === null && t.nativeAdsRateVersion === null
+      && (t.commission.kind === "percentage" || (s.provider === "external-affiliate" && t.commission.supportedByProvider))
     : t.commission.kind === "percentage" && s.commerce.standardRate !== null && t.commission.basisPoints === s.commerce.standardRate.basisPoints
-      && (s.commerce.adsRate.state === "applicable" ? t.shopAdsRateBps === s.commerce.adsRate.rate.basisPoints : t.shopAdsRateBps === null));
+      && t.nativeStandardRateVersion === s.commerce.standardRate.version
+      && (s.commerce.adsRate.state === "applicable"
+        ? t.shopAdsRateBps === s.commerce.adsRate.rate.basisPoints && t.nativeAdsRateVersion === s.commerce.adsRate.rate.version
+        : t.shopAdsRateBps === null && t.nativeAdsRateVersion === null));
   const gates = [
     gate("route", eligibility.status, eligibility.sourceRef),
     gate("terms", meets(t && !!scopeMatches && t.guaranteedFeeMinor === 0 && !!routeCommissionMatches), t?.acceptedRef),
@@ -179,7 +183,7 @@ export function criterionSource(s: ScorecardSourceSnapshot | null | undefined, i
 }
 
 export const routeAssessmentSchema = z.object({
-  route, status: z.enum(["verified", "unknown", "failed"]), reason: text, sourceRef: text.nullable(),
+  route, status: z.enum(["verified", "unknown", "failed"]), verifiedModelId: z.enum(["WEBSITE-AFFILIATE-v3","TIKTOK-SHOP-AFFILIATE-v3"]).nullable(), reason: text, sourceRef: text.nullable(),
   provider: text.nullable(), programId: text.nullable(), programVersion: text.nullable(), market: text.nullable(),
   creatorSourceId: text.nullable(), observedAt: instant.nullable(), validUntil: instant.nullable(), coveredWeight: count.max(100),
   metrics: z.array(metricSchema).max(50),

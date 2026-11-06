@@ -110,6 +110,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   const routeGate = providerGates.find(g => g.id === "SOURCE:route")!;
   const routeEvidence = {
     route: packet.checkoutRoute, status: routeGate.state === "pass" ? "verified" : routeGate.state === "fail" ? "failed" : "unknown",
+    verifiedModelId: routeGate.state === "pass" && binding ? binding.current.modelId : null,
     reason: proof?.reason ?? "SOURCE_NOT_CONNECTED", sourceRef: snapshot?.sourceRef ?? null, provider: snapshot?.provider ?? null,
     programId: snapshot?.programId ?? null, programVersion: snapshot?.programVersion ?? null, market: snapshot?.market ?? null,
     creatorSourceId: snapshot?.creatorSourceId ?? null, observedAt: snapshot?.observedAt ?? null, validUntil: snapshot?.validUntil ?? null,

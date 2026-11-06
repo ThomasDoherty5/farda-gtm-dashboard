@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { AgentStore } from "../store";
-import { BUNDLES, costKeys, newOfferTerms, offerTermsSchema, type OfferScope, type OfferTerms } from "./contract";
+import { type AssessmentBasis, BUNDLES, costKeys, newOfferTerms, offerTermsSchema, type OfferScope, type OfferTerms } from "./contract";
 import { offerScenario } from "./economics";
 import { OfferRepository, type OfferAuthority } from "./repository";
 import { handleOfferRoute } from "./routes";
@@ -24,6 +24,10 @@ function proposal() {
   t.base={...t.base,orders:10};
   t.downside={...t.base,orders:7,refundPerOrderMinor:100};
   return t;
+}
+function eligibleBasis(t:OfferTerms,termsRevision:string,state:AssessmentBasis["state"]="prospectiveInviteEligible",runId="run-two"):AssessmentBasis {
+  return {creatorId:t.creatorId,route:t.checkoutRoute,modelId:t.checkoutRoute==="website"?"WEBSITE-AFFILIATE-v3":"TIKTOK-SHOP-AFFILIATE-v3",
+    configHash:"bound-config",policyVersion:"2026-11-04",termsRevision,state,runId,stale:false};
 }
 function provider(t:OfferTerms) {
   return {scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:"program-source",validUntil:"2099-01-01T00:00:00Z",facts:{
@@ -85,9 +89,18 @@ describe("immutable scoped offer proposals and forecasts",()=>{
         manifestHash:v1.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2099-01-01T00:00:00Z"});
       return repo.decision("offer-a",{version:"v1",kind,sourceRef},sourceRef);
     };
+    expect(()=>decision("owner-approved","unscored")).toThrow("CURRENT_INVITATION_SCORECARD_REQUIRED");
+    auth.assessment=()=>eligibleBasis(t,v1.manifestHash,"hold");
+    expect(()=>decision("owner-approved","held")).toThrow("CURRENT_INVITATION_SCORECARD_REQUIRED");
+    auth.assessment=()=>({...eligibleBasis(t,v1.manifestHash),stale:true});
+    expect(()=>decision("owner-approved","stale")).toThrow("CURRENT_INVITATION_SCORECARD_REQUIRED");
+    auth.assessment=()=>eligibleBasis(t,v1.manifestHash);
     expect(()=>decision("creator-accepted","premature")).toThrow("OWNER_APPROVAL_REQUIRED");
     expect(decision("owner-approved","founder").state).toBe("approved");expect(decision("creator-accepted","native").state).toBe("accepted");
     expect(repo.onboarding("offer-a")).toMatchObject({handoffs:["J07","J15"],postingObligations:[],dispatched:false});
+    auth.assessment=()=>eligibleBasis(t,v1.manifestHash,"activationReady","run-three");
+    expect(repo.saveFromAdapter("offer-a","v1",t,"same")).toMatchObject({version:"v1",state:"accepted",assessmentCurrent:true,assessment:{runId:"run-three"}});
+    expect(repo.acceptedTerms("offer-a")).toMatchObject({version:"v1",acceptedRef:"native"});
     const revised=repo.saveFromAdapter("offer-a","v1",{...t,expiresAt:"2098-03-01T00:00:00Z"},"k2");
     expect(revised.state).toBe("proposed");expect(repo.matchesOfferVersion("offer-a","v1",v1.manifestHash)).toBe(false);
     expect(repo.acceptedTerms("offer-a")).toBeNull();expect(repo.readOffer("offer-a",1)?.acceptedRef).toBe("native");db.close();
@@ -103,6 +116,7 @@ describe("immutable scoped offer proposals and forecasts",()=>{
     auth.funding=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:"promotion-1",
       validUntil:"2099-01-01T00:00:00Z",scenario:"base",bundle:"single",currency:"USD",advertisedDiscountMinor:100,reimbursedMinor:100,feeTreatment:"standard"});
     const v=repo.saveFromAdapter("offer-a",held.version,t,"refresh");expect(v.blockers).toEqual([]);expect(v.manifestHash).not.toBe(held.manifestHash);
+    auth.assessment=()=>eligibleBasis(t,v.manifestHash);
     for(const kind of ["owner-approved","creator-accepted"] as const) {
       auth.decision=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:kind,offerId:"offer-a",version:v.version,
         manifestHash:v.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2090-01-01T01:00:00+01:00"});

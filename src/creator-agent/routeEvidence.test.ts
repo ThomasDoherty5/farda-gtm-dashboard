@@ -133,7 +133,7 @@ describe("authorized route assessment", () => {
     const mismatch = await inspect({...snapshot, provider:"external-affiliate"});
     expect(mismatch.routeEvidence).toMatchObject({status:"unknown",metrics:[]});
     const denied = await inspect({...snapshot, commerce:{...snapshot.commerce, productEligibility:{status:"fail",sourceRef:"fixture:ineligible"}}});
-    expect(denied.routeEvidence?.status).toBe("failed");
+    expect(denied.routeEvidence).toMatchObject({status:"failed",verifiedModelId:null});
     expect(denied.score?.total).toBeNull();
     const pending = await inspect({...snapshot, commerce:{...snapshot.commerce, creatorEligibility:{status:"unknown",sourceRef:"fixture:no-link"}}});
     expect(pending.routeEvidence?.status).toBe("unknown");
@@ -146,7 +146,7 @@ describe("authorized route assessment", () => {
     const c = snapshot.commerce;
     for (const patch of [{ creatorEligibility: { ...c.creatorEligibility, status: "unknown" } }, { sellerEligibility: { ...c.sellerEligibility, status: "fail" } },
       { productEligibility: { ...c.productEligibility, status: "fail" } }, { nativeAttribution: { ...c.nativeAttribution, status: "unknown" } },
-      { standardRate: { ...c.standardRate!, basisPoints: 1000 } }, { adsRate: { state: "unknown" } }])
+      { standardRate: { ...c.standardRate!, basisPoints: 1000 } }, { standardRate: { ...c.standardRate!, version: "unaccepted-v2" } }, { adsRate: { state: "unknown" } }])
       expect((await inspect({ ...snapshot, commerce: { ...c, ...patch } })).state).toBe("prospectiveInviteEligible");
   });
 

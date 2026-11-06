@@ -15,7 +15,7 @@ export function QualificationDetails({ assessment: a, packet, savedConfiguration
   return <div className={styles.stack} data-testid="agent-qualification">
     <p><Badge tone={a.state === "hold" ? "warning" : "violet"}>{decisionLabel[a.state]}</Badge> · Assigned brief: {a.briefId} · Content qualification: {a.contentQualification}</p>
     <DataTable caption="Agent assessment versions" columns={[{ label: "Reference" }, { label: "Server value" }]} rows={[
-      ["Policy", a.policyVersion], ["Agent / schema", `${a.agentVersion} / ${a.schemaVersion}`], ["Model", a.modelId],
+      ["Policy", a.policyVersion], ["Agent / schema", `${a.agentVersion} / ${a.schemaVersion}`], [a.routeEvidence && !a.routeEvidence.verifiedModelId ? "Candidate model · route unverified" : "Model", a.modelId],
       ["Configuration", `${a.config.status} · ${a.config.version ?? "Unknown"}`], ["Configuration hash", a.config.hash ?? "Unknown"],
       ["Approved baseline hash", a.config.baselineHash ?? "Unknown"], ["Unchanged numerical configuration hash", a.config.numericHash ?? "Unknown"],
       ["Evidence revision", a.evidenceRevision], ["Terms revision", a.termsRevision],

@@ -25,7 +25,7 @@ export type OfferScope = z.infer<typeof scopeSchema>;
 export const checkoutSchema = z.enum(["website", "tiktok-shop"]);
 export const assessmentBasisSchema = z.object({
   runId: id, creatorId: id, route: checkoutSchema, modelId: id, configHash: id.nullable(),
-  policyVersion: id, termsRevision: id, stale: z.boolean(),
+  policyVersion: id, termsRevision: id, stale: z.boolean(), state:z.enum(["reviewNeeded","hold","prospectiveInviteEligible","activationReady"]).optional(),
 }).strict();
 export type AssessmentBasis = z.infer<typeof assessmentBasisSchema>;
 const deliverable = z.object({
@@ -104,7 +104,7 @@ export const providerFactsSchema = z.object({
 }).strict();
 export const offerRecordSchema = z.object({
   kind:z.literal("agent-offer"), offerId:routeId, version:id, revision:count, recordedAt:time, manifestHash:id,
-  terms:offerTermsSchema, assessment:assessmentBasisSchema.nullable(), assessmentCurrent:z.boolean(),
+  terms:offerTermsSchema, assessment:assessmentBasisSchema.nullable(), assessmentCurrent:z.boolean(), draftAssessment:assessmentBasisSchema.nullable().optional(),
   scenarios:z.array(scenarioResultSchema).length(2), provider:providerFactsSchema.nullable(), blockers:z.array(text),
   state:z.enum(["proposed","approved","accepted"]), ownerApprovalRef:id.nullable(), acceptedRef:id.nullable(),
   history:z.array(z.object({version:id,hash:id,at:time}).strict()).max(100), historyTotal:count,

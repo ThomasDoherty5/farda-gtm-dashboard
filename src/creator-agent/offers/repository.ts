@@ -13,6 +13,7 @@ const capabilityPacket=proofSchema.extend({facts:providerFactsSchema}).strict();
 const costPacket=proofSchema.extend({costKey:z.enum(costKeys),minor:z.number().int().nonnegative(),currency:z.literal("USD"),productRef:id,productRevision:id}).strict();
 const fundingPacket=proofSchema.extend({scenario:z.enum(["base","downside"]),bundle:z.enum(["single","duo","trio"]),currency:z.literal("USD"),advertisedDiscountMinor:z.number().int().nonnegative(),reimbursedMinor:z.number().int().nonnegative(),feeTreatment:id}).strict();
 const decisionPacket=proofSchema.extend({offerId:routeId,manifestHash:z.string().length(64),version:id,decision:z.enum(["owner-approved","creator-accepted"]),occurredAt:time,acceptedDeliverableIds:z.array(id).max(50).optional()}).strict();
+const storedDecisionSchema=decisionPacket.extend({assessment:assessmentBasisSchema.optional()}).strict();
 type Change="owner-approved"|"creator-accepted";
 type Snapshot={offerId:string;version:string;revision:number;recordedAt:string;manifestHash:string;terms:OfferTerms;assessment:AssessmentBasis|null;provider:ProviderFacts|null;verifiedCosts:string[]; verifiedFunding?:string[]};
 export interface OfferAuthority {
@@ -95,8 +96,9 @@ export class OfferRepository {
     const approved=decisions.find(d=>d.kind==="owner-approved"), accepted=decisions.find(d=>d.kind==="creator-accepted");
     const history=this.db.prepare("SELECT body FROM offer_versions WHERE offer_id=? AND revision<=? ORDER BY revision DESC LIMIT 100").all(s.offerId,s.revision)
       .map(row=>{const snap=JSON.parse(String(row.body)) as Snapshot;return {version:snap.version,hash:snap.manifestHash,at:snap.recordedAt};});
+    const exact=!!current && !current.stale && !!current.configHash && current.termsRevision===s.manifestHash;
     return offerRecordSchema.parse({kind:"agent-offer",offerId:s.offerId,version:s.version,revision:s.revision,recordedAt:s.recordedAt,manifestHash:s.manifestHash,
-      terms:s.terms,assessment:s.assessment,assessmentCurrent:!!current && !current.stale && !!current.configHash && !!s.assessment && digest(current)===digest(s.assessment) && current.termsRevision===s.manifestHash,
+      terms:s.terms,assessment:exact?current:s.assessment,draftAssessment:s.assessment,assessmentCurrent:exact,
       scenarios:[offerScenario(s.terms,"base"),offerScenario(s.terms,"downside")],provider:providerCurrent,
       blockers:proposalBlockers(s.terms,providerCurrent,new Set(currentCosts),now,new Set(this.funding(s.terms,now).filter(k=>s.verifiedFunding?.includes(k)))),state:accepted?"accepted":approved?"approved":"proposed",
       ownerApprovalRef:approved?String(approved.source_ref):null,acceptedRef:accepted?String(accepted.source_ref):null,history,historyTotal:s.revision});
@@ -115,7 +117,7 @@ export class OfferRepository {
       const recordedAt=new Date().toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt),verifiedFunding=this.funding(terms,recordedAt);
       // Receipt/term basis is independent of score so a new score can bind the immutable manifest hash without creating a cycle.
       const manifestHash=digest({scope:this.scope,offerId:id,terms,provider,verifiedCosts,verifiedFunding});
-      if(prior && prior.manifestHash===manifestHash && digest(prior.assessment)===digest(assessment))return this.project(prior);
+      if(prior && prior.manifestHash===manifestHash)return this.project(prior);
       const revision=(prior?.revision??0)+1;
       const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,verifiedFunding,assessment};
       this.db.prepare("INSERT INTO offer_versions VALUES(?,?,?)").run(id,revision,JSON.stringify(snapshot));
@@ -134,12 +136,15 @@ export class OfferRepository {
       if(p.acceptedDeliverableIds?.some(id=>!s.terms.manifest.deliverables.some(d=>d.id===id))) throw new AgentConflict("DELIVERABLE_OUTSIDE_MANIFEST");
       const record=this.project(s);
       if(record.blockers.length)throw new AgentConflict("OFFER_ECONOMICS_HELD");
+      const basis=record.assessment;
+      if(!record.assessmentCurrent || !basis || (basis.state!=="prospectiveInviteEligible" && basis.state!=="activationReady"))
+        throw new AgentConflict("CURRENT_INVITATION_SCORECARD_REQUIRED");
       if(input.kind==="creator-accepted" && !record.ownerApprovalRef)throw new AgentConflict("OWNER_APPROVAL_REQUIRED");
       const old=this.db.prepare("SELECT source_ref FROM offer_decisions WHERE offer_id=? AND revision=? AND kind=?").get(id,s.revision,input.kind);
       if(old && old.source_ref!==input.sourceRef)throw new AgentConflict("DECISION_ALREADY_RECORDED");
       const reused=this.db.prepare("SELECT offer_id,revision,kind FROM offer_decisions WHERE source_ref=?").get(input.sourceRef);
       if(reused && (reused.offer_id!==id || reused.revision!==s.revision || reused.kind!==input.kind))throw new AgentConflict("DECISION_RECEIPT_REUSED");
-      if(!old)this.db.prepare("INSERT INTO offer_decisions VALUES(?,?,?,?,?)").run(id,s.revision,input.kind,input.sourceRef,JSON.stringify(p));
+      if(!old)this.db.prepare("INSERT INTO offer_decisions VALUES(?,?,?,?,?)").run(id,s.revision,input.kind,input.sourceRef,JSON.stringify({...p,assessment:basis}));
       return this.project(s);
     });
   }
@@ -147,7 +152,7 @@ export class OfferRepository {
     const record=this.readOffer(id);
     if(!record?.acceptedRef || !record.provider || record.blockers.length)return null;
     const decisions=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=?").all(id,record.revision);
-    const expiries=[record.provider.validUntil,...decisions.map(row=>decisionPacket.parse(JSON.parse(String(row.body))).validUntil)];
+    const expiries=[record.provider.validUntil,...decisions.map(row=>storedDecisionSchema.parse(JSON.parse(String(row.body))).validUntil)];
     if(record.terms.expiresAt)expiries.push(record.terms.expiresAt);
     const validUntil=new Date(Math.min(...expiries.map(t=>Date.parse(t)))).toISOString();
     if(Date.parse(validUntil)<=Date.now())return null;
@@ -158,7 +163,7 @@ export class OfferRepository {
     const accepted=this.acceptedTerms(id),s=this.snapshot(id);
     if(!accepted || !s)return null;
     const row=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=? AND kind='creator-accepted'").get(id,s.revision);
-    const acceptedIds=decisionPacket.parse(JSON.parse(String(row!.body))).acceptedDeliverableIds??[];
+    const acceptedIds=storedDecisionSchema.parse(JSON.parse(String(row!.body))).acceptedDeliverableIds??[];
     return {accepted,brief:s.terms.manifest,postingObligations:s.terms.manifest.deliverables.filter(d=>acceptedIds.includes(d.id)),
       handoffs:s.terms.sample.requested?["J07","J15"]:[],reserved:false,dispatched:false};
   }

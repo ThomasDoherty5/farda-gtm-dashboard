@@ -86,7 +86,7 @@ export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId"
     creatorSourceId: "source-creator-id", sourceRef: "fixture:provider-snapshot", provider,
     programId: "fixture-program", programVersion: "v1", market: "US", observedAt: windowEnd, validUntil: "2100-01-01T00:00:00Z",
     programEligibility: pass("fixture:program"), supportedClaims: pass("fixture:claims"),
-    terms: { origin: "provider", shopAdsRateBps: null, offerId: "fixture-offer", version: "v1", manifestHash: "synthetic-manifest-digest", acceptedRef: "fixture:accepted-offer-v1",
+    terms: { origin: "provider", shopAdsRateBps: null, nativeStandardRateVersion: packet.checkoutRoute === "website" ? null : "v1", nativeAdsRateVersion: null, offerId: "fixture-offer", version: "v1", manifestHash: "synthetic-manifest-digest", acceptedRef: "fixture:accepted-offer-v1",
       termsRevision: packet.termsRevision, provider, programId: "fixture-program", programVersion: "v1",
       currency: "USD", commission: { kind: "percentage", basisPoints: 2000 }, eligibleBase: "retained merchandise", refundRule: "reverse refunded credit", guaranteedFeeMinor: 0 },
     commerce: packet.checkoutRoute === "website" ? { kind: "website", linkOrCodeRef: "fixture:link", attributionPrecedence: "fixture:precedence",
