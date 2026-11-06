@@ -31,6 +31,7 @@ describe("scoped Linear and J04 portfolio authority", () => {
     ["deactivated user", (f: ReturnType<typeof sourceFixture>) => { f.comment.user.active = false; }],
     ["delegated comment", (f: ReturnType<typeof sourceFixture>) => { f.comment.onBehalfOf = { id: sourceIds.founder }; }],
     ["edited comment", (f: ReturnType<typeof sourceFixture>) => { f.comment.editedAt = sourceTestNow; }],
+    ["malformed absolute source time", (f: ReturnType<typeof sourceFixture>) => { f.comment.createdAt = "2026-11-03T00:01:00+99:99"; }],
     ["archived comment", (f: ReturnType<typeof sourceFixture>) => { f.comment.archivedAt = sourceTestNow; }],
     ["truncated issue", (f: ReturnType<typeof sourceFixture>) => { f.graph.data.issue.comments.pageInfo.hasNextPage = true; }],
     ["later founder message", (f: ReturnType<typeof sourceFixture>) => { f.graph.data.issue.comments.nodes.push({ ...f.comment, id: sourceIds.other, body: "Withdraw this approval", createdAt: sourceTestNow }); }],

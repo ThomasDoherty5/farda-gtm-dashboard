@@ -137,6 +137,22 @@ describe("portfolio source provenance through the authenticated route handler", 
     f.state.origin!.state = "revoked";
     expect(await decide(live, review, "synthetic-revoked-origin")).toMatchObject({ status: 503 });
   });
+  it("preserves a participation receipt’s own source mode independently of its decision", async () => {
+    const live = repository();
+    const review = (await writeReview(live, f.packet))!.body as StoredPortfolioReview;
+    f.decisionFor(review);
+    const decision = (await decide(live, review, "synthetic-verified-decision"))!.body as { decisionId: string; sourceMode: string };
+    expect(decision.sourceMode).toBe("source-verified");
+    const input = { scope, decisionId: decision.decisionId, creatorId: f.packet.creators[0]!.creatorId, state: "accepted" as const,
+      nextCollaborationIds: [], sourceReceiptRef: "synthetic:sandbox-response", occurredAt: sourceTestNow, outcomeRefs: [] };
+    f.state.participation = { reviewKey: review.reviewKey, participation: input };
+    const sandbox = repository({ ...f.authority(), mode: undefined });
+    const saved = await sandbox.recordParticipation(review.reviewKey, input, "synthetic-sandbox-response");
+    expect(saved.sourceMode).toBe("reviewer-sandbox");
+    expect(live.history(review.reviewKey).participation).toEqual([saved]);
+    // A fresh native read can report the same fact but cannot silently promote its historical provenance.
+    expect(await live.recordParticipation(review.reviewKey, input, "synthetic-source-retry")).toEqual(saved);
+  });
   it("never attributes provider participation to a legacy sandbox decision", async () => {
     const authority = f.authority();
     const sandboxAuthority: PortfolioDecisionAuthority = { resolveDecision: authority.resolveDecision, resolveOnDemandApproval: authority.resolveOnDemandApproval, resolveParticipation: authority.resolveParticipation };

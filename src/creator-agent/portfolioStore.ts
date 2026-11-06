@@ -5,7 +5,7 @@ import { digest } from "./config.ts";
 import { AgentConflict } from "./store.ts";
 import { portfolioActionSchema, portfolioPacketSchema, portfolioReviewKey, reviewPortfolio, type PortfolioPacket, type PortfolioProposal } from "./portfolio.ts";
 
-import { portfolioSourceBinding, portfolioSourceBindingSchema, portfolioLinearProofSchema, verifiedPortfolioWeeklyEventSchema, weeklyWindowReleased, type VerifiedPortfolioWeeklyEvent } from "./portfolioSources.ts";
+import { portfolioInstant, portfolioSourceBinding, portfolioSourceBindingSchema, portfolioLinearProofSchema, verifiedPortfolioWeeklyEventSchema, weeklyWindowReleased, type VerifiedPortfolioWeeklyEvent } from "./portfolioSources.ts";
 
 const ref = z.string().trim().min(1).max(240);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -16,7 +16,7 @@ export const portfolioDecisionRequestSchema = z.object({ scope: scopeSchema, exp
 export const verifiedPortfolioDecisionSchema = z.object({
   scope: scopeSchema,
   linearDecisionRef: ref, reviewKey: hash, revision: z.number().int().positive(), reviewHash: hash,
-  decision: z.enum(["approved", "rejected"]), decidedAt: z.string().datetime({ offset: true }), founderRef: ref,
+  decision: z.enum(["approved", "rejected"]), decidedAt: portfolioInstant, founderRef: ref,
   creatorDecisions: z.array(z.object({ creatorId: ref, action: portfolioActionSchema }).strict()).max(100),
   linearProof: portfolioLinearProofSchema.optional(),
 }).strict();
@@ -47,7 +47,7 @@ export const portfolioParticipationSchema = z.object({
   scope: scopeSchema,
   decisionId: ref, creatorId: ref, state: z.enum(["accepted", "declined", "activated", "outcome"]),
   nextCollaborationIds: z.array(ref).max(100), sourceReceiptRef: ref,
-  occurredAt: z.string().datetime({ offset: true }), outcomeRefs: z.array(ref).max(100),
+  occurredAt: portfolioInstant, outcomeRefs: z.array(ref).max(100),
 }).strict().superRefine((input, context) => {
   if ((input.state === "activated" || input.state === "outcome") && !input.nextCollaborationIds.length)
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Activated participation requires next collaboration IDs" });
@@ -56,7 +56,7 @@ export const portfolioParticipationSchema = z.object({
   if (new Set(input.nextCollaborationIds).size !== input.nextCollaborationIds.length)
     context.addIssue({ code: z.ZodIssueCode.custom, message: "Duplicate next collaboration" });
 });
-export type StoredPortfolioParticipation = z.infer<typeof portfolioParticipationSchema> & { participationId: string; recordedAt: string };
+export type StoredPortfolioParticipation = z.infer<typeof portfolioParticipationSchema> & { participationId: string; recordedAt: string; sourceMode?: "source-verified" | "reviewer-sandbox" };
 const verifiedParticipationSchema = z.object({ reviewKey: hash, participation: portfolioParticipationSchema }).strict();
 export type VerifiedPortfolioParticipation = z.infer<typeof verifiedParticipationSchema>;
 export class PortfolioAuthorityUnavailable extends Error {}
@@ -285,7 +285,7 @@ export class PortfolioRepository {
       if (!allowed.includes(input.state)) throw new AgentConflict("PARTICIPATION_TRANSITION_INVALID");
       if (Date.parse(input.occurredAt) < Date.parse(prior?.occurredAt ?? decision.decidedAt)) throw new AgentConflict("PARTICIPATION_TIME_REVERSED");
       if (prior && (prior.state === "activated" || prior.state === "outcome") && digest([...prior.nextCollaborationIds].sort()) !== digest([...input.nextCollaborationIds].sort())) throw new AgentConflict("NEXT_COLLABORATION_CHANGED");
-      const record = { ...input, participationId: randomUUID(), recordedAt: new Date().toISOString() };
+      const record: StoredPortfolioParticipation = { ...input, sourceMode: this.authority.mode ?? "reviewer-sandbox", participationId: randomUUID(), recordedAt: new Date().toISOString() };
       this.database.prepare("INSERT INTO portfolio_participation VALUES(?,?,?,?,?,?)").run(record.participationId, reviewKey, input.decisionId, input.creatorId, record.recordedAt, JSON.stringify(record));
       this.database.prepare("INSERT INTO portfolio_source_receipts VALUES(?,?,?)").run(input.sourceReceiptRef, requestHash, JSON.stringify(record));
       this.receipt(idempotencyKey, requestHash, record);

@@ -2,12 +2,12 @@
 import { z } from "zod";
 import { digest } from "./config.ts";
 import { portfolioActionSchema } from "./portfolio.ts";
-import { portfolioSourceBindingSchema, type VerifiedPortfolioWeeklyEvent } from "./portfolioSources.ts";
+import { portfolioInstant, portfolioSourceBindingSchema, type VerifiedPortfolioWeeklyEvent } from "./portfolioSources.ts";
 import type { PortfolioDecisionAuthority, PortfolioScope, VerifiedPortfolioParticipation } from "./portfolioStore.ts";
 
 const uuid = z.string().uuid();
 const ref = z.string().trim().min(1).max(240);
-const instant = z.string().datetime({ offset: true });
+const instant = portfolioInstant;
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const scopeSchema = z.object({ workspaceId: ref, accountId: ref }).strict();
 const configSchema = z.object({

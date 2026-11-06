@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { digest } from "./config.ts";
+import { portfolioInstant } from "./portfolioSources.ts";
 
 export const PORTFOLIO_VERSION = "portfolio.v1";
 const ref = z.string().trim().min(1).max(240);
-const timestamp = z.string().datetime({ offset: true });
+const timestamp = portfolioInstant;
 const refs = z.array(ref).min(1).max(100);
 const count = z.number().int().nonnegative().safe();
 const observedNumber = z.object({ value: z.number().finite().nullable(), evidenceRefs: z.array(ref).max(100) }).strict()
