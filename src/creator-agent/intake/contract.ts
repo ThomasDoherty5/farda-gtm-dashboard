@@ -134,7 +134,8 @@ export const HANDOFF_TARGETS = ["notion-creator-crm", "sheets-watchlist"] as con
 export const handoffSchema = z.object({
   target: z.enum(HANDOFF_TARGETS),
   key: opaqueRef,
-  state: z.enum(["pending", "confirmed", "uncertain", "unavailable"]),
+  // `superseded`: a newer creator revision exists, so this older record is never written.
+  state: z.enum(["pending", "confirmed", "uncertain", "unavailable", "superseded"]),
   receiptRef: opaqueRef.nullable(),
 }).strict();
 export type Handoff = z.infer<typeof handoffSchema>;

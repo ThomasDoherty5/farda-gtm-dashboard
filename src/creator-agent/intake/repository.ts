@@ -35,12 +35,15 @@ export class IntakeSourceUnavailable extends Error {}
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T | null => { const r = schema.safeParse(value); return r.success ? r.data : null; };
 const newer = (a: string | null, b: string | null) => a !== null && (b === null || Date.parse(a) > Date.parse(b));
 
-/** A native ID when the source gives one, otherwise a controlled fingerprint of the profile address. Never a display name. */
-export function profileKeyOf(profile: Pick<ProfileRef, "source" | "sourceId" | "url">): string | null {
-  if (profile.sourceId) return `id:${profile.sourceId}`;
+/** A controlled fingerprint of the profile address, whether or not the source also gives a native ID. */
+export function fingerprintKeyOf(profile: Pick<ProfileRef, "source" | "url">): string | null {
   if (!profile.url) return null;
   const path = new URL(profile.url).pathname.toLowerCase().replace(/\/+$/, "");
   return `fp:${digest({ network: profile.source, path })}`;
+}
+/** A native ID when the source gives one, otherwise a controlled fingerprint of the profile address. Never a display name. */
+export function profileKeyOf(profile: Pick<ProfileRef, "source" | "sourceId" | "url">): string | null {
+  return profile.sourceId ? `id:${profile.sourceId}` : fingerprintKeyOf(profile);
 }
 const creatorIdFor = (network: Network, key: string) => `creator-${digest({ network, key }).slice(0, 32)}`;
 const campaignKeyOf = (ref: SourceRef) => ref.canonicalId ?? (ref.sourceId ? `${ref.source}:${ref.sourceId}` : null);
@@ -134,15 +137,23 @@ export class IntakeRepository {
       this.db.prepare("INSERT OR IGNORE INTO intake_suppressions VALUES(?,?,?,?,?)").run(subject, entry.sourceRef, entry.reason, suppression.version, entry.effectiveAt);
     }
 
-    // 1. Resolve each profile by native ID, then by a stored fingerprint, then by a reviewed crosswalk. Names never match people.
+    // 1. Resolve each profile by stored native ID, then by a stored fingerprint of its address, then by a reviewed crosswalk entry for either
+    //    key. A profile that gains a native ID still finds the person its fingerprint was attached to. Names never match people.
     const profiles = input.profileRefs.map((profile) => {
       const key = profileKeyOf(profile);
-      const stored = key ? this.profile(profile.source, key) : null;
-      const reviewed = key && !stored ? crosswalk?.entries.find((e) => e.network === profile.source && e.profileKey === key) ?? null : null;
-      return { profile, key, creatorId: stored?.creatorId ?? reviewed?.creatorId ?? null, stored };
+      const fingerprint = fingerprintKeyOf(profile);
+      const keys = [...new Set([key, fingerprint].filter((k): k is string => k !== null))];
+      const own = key ? this.profile(profile.source, key) : null;
+      const byFingerprint = fingerprint && fingerprint !== key ? this.profile(profile.source, fingerprint) : null;
+      const stored = own ?? byFingerprint;
+      const reviewed = stored ? null
+        : keys.map((k) => crosswalk?.entries.find((e) => e.network === profile.source && e.profileKey === k)).find((e) => e !== undefined) ?? null;
+      return { profile, key, keys, own, creatorId: stored?.creatorId ?? reviewed?.creatorId ?? null, stored,
+        split: own !== null && byFingerprint !== null && own.creatorId !== byFingerprint.creatorId };
     });
     if (!input.profileRefs.length) reasons.add("NO_PROFILE");
     if (profiles.some((p) => p.key === null)) reasons.add("PROFILE_ID_MISSING");
+    if (profiles.some((p) => p.split)) reasons.add("IDENTITY_CONFLICT");
     if (crosswalk === null && profiles.some((p) => p.key?.startsWith("fp:") && !p.stored)) reasons.add("IDENTITY_MAP_UNAVAILABLE");
     const correctionTarget = input.trigger === "correction" ? input.sourceCandidate.canonicalId : null;
     if (input.trigger === "correction" && !correctionTarget) reasons.add("CORRECTION_TARGET_MISSING");
@@ -162,6 +173,7 @@ export class IntakeRepository {
     if (reasons.has("IDENTITY_CONFLICT") || reasons.has("CORRECTION_TARGET_UNKNOWN") || reasons.has("CORRECTION_TARGET_MISSING")) creatorId = null;
 
     // 2. Attach profiles. A source signup or a reviewed correction may attach a fingerprint-only profile; a discovery hit may not.
+    //    A profile found by its fingerprint that now carries a native ID gains a native-key row on the same creator; the fingerprint row stays.
     let changed = false;
     const profileRefs: SourceRef[] = [];
     if (creatorId) {
@@ -169,7 +181,7 @@ export class IntakeRepository {
       for (const p of profiles) {
         const attachable = p.key !== null && (p.key.startsWith("id:") || p.creatorId === creatorId || input.trigger === "signup" || input.trigger === "correction");
         if (!attachable) { reasons.add("PROFILE_FINGERPRINT_UNREVIEWED"); profileRefs.push(this.ref(p.profile, null)); continue; }
-        changed = this.upsertProfile(p.profile, p.key!, creatorId, p.stored, input.observedAt, reasons) || changed;
+        changed = this.upsertProfile(p.profile, p.key!, creatorId, p.own, input.observedAt, reasons) || changed;
         profileRefs.push(this.ref(p.profile, creatorId));
       }
     } else for (const p of profiles) profileRefs.push(this.ref(p.profile, null));
@@ -192,23 +204,28 @@ export class IntakeRepository {
       }
     }
 
-    // 4. Suppression and eligibility. Suppression on any attached profile suppresses the person.
-    const suppressionReasons = creatorId ? this.suppressionReasons(creatorId) : this.profileSuppressions(profiles);
+    // 4. Suppression and eligibility. Suppression on the creator, on any attached profile, or on any profile key in this event
+    //    (native or fingerprint, attached or not) suppresses the person.
+    const suppressionReasons = [...new Set([...(creatorId ? this.suppressionReasons(creatorId) : []), ...this.profileSuppressions(profiles)])].sort();
     for (const reason of suppressionReasons) reasons.add(`SUPPRESSED_${reason.toUpperCase().replace(/-/g, "_")}`);
     const resolved = creatorId !== null && !reasons.has("IDENTITY_CONFLICT");
     const watchlistEligibility: IntakeResult["watchlistEligibility"] = suppressionReasons.length || closed ? "excluded"
       : !resolved || !suppression ? "identityPending" : "active";
 
     // 5. Checkpointed handoffs for a changed canonical record: Notion CRM first, then the Sheets watchlist that references it.
+    //    A new eligibility or suppression state is a change too, so it reaches the sinks under a new revision's keys.
     const handoffKeys: string[] = [];
     if (creatorId) {
+      const body = { watchlistEligibility, suppressed: suppressionReasons.length > 0 };
+      const sent = this.db.prepare("SELECT body FROM intake_handoffs WHERE creator_id=? AND revision=? ORDER BY key LIMIT 1").get(creatorId, this.revision(creatorId));
+      const prior = sent ? JSON.parse(String(sent.body)) as typeof body : null;
+      if (prior && (prior.watchlistEligibility !== body.watchlistEligibility || prior.suppressed !== body.suppressed)) changed = true;
       if (changed) this.db.prepare("UPDATE intake_creators SET revision=revision+1 WHERE creator_id=?").run(creatorId);
-      const revision = Number(this.db.prepare("SELECT revision FROM intake_creators WHERE creator_id=?").get(creatorId)!.revision);
+      const revision = this.revision(creatorId);
       for (const target of HANDOFF_TARGETS) {
         const key = `${target}:${creatorId}:r${revision}`;
         handoffKeys.push(key);
-        this.db.prepare("INSERT OR IGNORE INTO intake_handoffs VALUES(?,?,?,?,'pending',NULL,0,?)")
-          .run(key, creatorId, target, revision, JSON.stringify({ watchlistEligibility, suppressed: suppressionReasons.length > 0 }));
+        this.db.prepare("INSERT OR IGNORE INTO intake_handoffs VALUES(?,?,?,?,'pending',NULL,0,?)").run(key, creatorId, target, revision, JSON.stringify(body));
       }
     }
     if (input.cursor) {
@@ -266,14 +283,15 @@ export class IntakeRepository {
     return row ? JSON.parse(String(row.body)) as ProfileRow : null;
   }
   private creatorExists(creatorId: string) { return !!this.db.prepare("SELECT 1 FROM intake_creators WHERE creator_id=?").get(creatorId); }
+  private revision(creatorId: string) { return Number(this.db.prepare("SELECT revision FROM intake_creators WHERE creator_id=?").get(creatorId)!.revision); }
   private suppressionReasons(creatorId: string): string[] {
     const keys = this.db.prepare("SELECT network,profile_key FROM intake_profiles WHERE creator_id=?").all(creatorId).map((r) => `profile:${r.network}:${r.profile_key}`);
     const subjects = [`creator:${creatorId}`, ...keys];
     const rows = this.db.prepare(`SELECT DISTINCT reason FROM intake_suppressions WHERE subject IN (${subjects.map(() => "?").join(",")}) ORDER BY reason`).all(...subjects);
     return rows.map((r) => String(r.reason));
   }
-  private profileSuppressions(profiles: { profile: ProfileRef; key: string | null }[]): string[] {
-    const subjects = profiles.flatMap((p) => (p.key ? [`profile:${p.profile.source}:${p.key}`] : []));
+  private profileSuppressions(profiles: { profile: ProfileRef; keys: string[] }[]): string[] {
+    const subjects = profiles.flatMap((p) => p.keys.map((key) => `profile:${p.profile.source}:${key}`));
     if (!subjects.length) return [];
     return this.db.prepare(`SELECT DISTINCT reason FROM intake_suppressions WHERE subject IN (${subjects.map(() => "?").join(",")}) ORDER BY reason`)
       .all(...subjects).map((r) => String(r.reason));
@@ -296,13 +314,18 @@ export class IntakeRepository {
     this.tx(() => this.db.prepare("UPDATE intake_handoffs SET state=?, receipt_ref=?, attempts=attempts+? WHERE key=?").run(state, receiptRef, attempted ? 1 : 0, key));
   }
 
-  /** Drives pending and uncertain handoffs in order. An uncertain write is read back by its key before any retry. */
+  /**
+   * Drives pending and uncertain handoffs in order. An uncertain write is read back by its key before any retry. A handoff for an older
+   * revision than the creator's current one is superseded and never written, so a replayed event cannot overwrite newer data at a sink.
+   */
   private async resume(source: RecruitmentSource, eventId: string): Promise<IntakeResult> {
     const result = this.event(source, eventId)!;
     let notionReceipt: string | null = null;
     for (const key of result.checkpoint.handoffKeys) {
       const h = this.handoff(key);
       if (h.state === "confirmed") { if (h.target === "notion-creator-crm") notionReceipt = h.receiptRef; continue; }
+      if (h.state === "superseded") continue;
+      if (h.revision < this.revision(h.creatorId)) { this.setHandoff(key, "superseded", null, false); continue; }
       const sink = this.authority.sinks?.[h.target];
       if (!sink) { this.setHandoff(key, "unavailable", null, false); break; }
       if (h.target === "sheets-watchlist" && !notionReceipt) break;

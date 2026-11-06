@@ -5,7 +5,7 @@ import { AgentStore } from "../store";
 import { createAgentServer } from "../server";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures";
 import { intakeInputSchema, type IntakeInput, type ProfileRef } from "./contract";
-import { IntakeRepository, profileKeyOf, type CanonicalRecord, type IdentitySink, type IntakeAuthority } from "./repository";
+import { IntakeRepository, fingerprintKeyOf, profileKeyOf, type CanonicalRecord, type IdentitySink, type IntakeAuthority } from "./repository";
 import { handleIntakeRoute } from "./routes";
 
 // Synthetic identities only. No real handle, account or provider identifier appears here.
@@ -181,6 +181,21 @@ describe("J01 identity resolution (J01-02, J01-03, J01-06, J01-08)", () => {
     expect(applied).toMatchObject({ identityState: "resolved", creatorRef: { canonicalId: known.creatorRef!.canonicalId } });
     expect(repo.creator(known.creatorRef!.canonicalId!)!.profiles).toHaveLength(2);
   });
+  it("keeps one creator when a profile attached by fingerprint later shows its native ID", async () => {
+    const { repo, store } = setup();
+    const address = "https://www.tiktok.com/@synthetic.grower";
+    const signup = await repo.ingest(request(input({
+      recruitmentSource: "social-cat", trigger: "signup", eventId: "signup-fp",
+      sourceCandidate: { source: "social-cat", accountId: "social-cat-sandbox", sourceId: "application-88", url: null, canonicalId: null, identityState: "unresolved", provenanceRef: "prov:application-88" },
+      profileRefs: [profile("instagram", { sourceId: "ig-501" }), profile("tiktok", { url: address })] }), "s"), "s");
+    const creatorId = signup.creatorRef!.canonicalId!;
+    expect(repo.creator(creatorId)!.profiles.map((p) => [p.network, p.profileKey])).toEqual([["instagram", "id:ig-501"], ["tiktok", fingerprintKeyOf(profile("tiktok", { url: address }))]]);
+    const discovered = await repo.ingest(request(input({ eventId: "tt-native", profileRefs: [profile("tiktok", { sourceId: "tt-9", url: address })] }), "d"), "d");
+    expect(discovered.creatorRef?.canonicalId).toBe(creatorId);
+    expect(discovered.reviewReasons).not.toContain("IDENTITY_CONFLICT");
+    expect(creators(store)).toBe(1);
+    expect(repo.creator(creatorId)!.profiles).toEqual(expect.arrayContaining([expect.objectContaining({ network: "tiktok", profileKey: "id:tt-9", sourceId: "tt-9", creatorId })]));
+  });
 });
 
 describe("J01 suppression and closed relationships (J01-04)", () => {
@@ -196,6 +211,40 @@ describe("J01 suppression and closed relationships (J01-04)", () => {
     const third = await repo.ingest(request(input({ eventId: "event-3" }), "k3"), "k3");
     expect(third.watchlistEligibility).toBe("excluded");
     expect(third.creatorRef?.canonicalId).toBe(first.creatorRef?.canonicalId);
+  });
+  it("excludes a creator when the event carries a suppressed profile that is not attached", async () => {
+    const { repo, suppression } = setup();
+    const optedOut = profile("tiktok", { url: "https://www.tiktok.com/@synthetic.optout" });
+    suppression.entries.push({ subject: { kind: "profile", network: "tiktok", profileKey: fingerprintKeyOf(optedOut)! }, reason: "opt-out", sourceRef: "optout-7", effectiveAt: "2026-11-05T12:00:00Z" });
+    const result = await repo.ingest(request(input({ eventId: "mixed", profileRefs: [profile("instagram", { sourceId: "ig-808" }), optedOut] }), "k"), "k");
+    expect(result).toMatchObject({ identityState: "resolved", watchlistEligibility: "excluded", nextWork: null });
+    expect(result.reviewReasons).toContain("SUPPRESSED_OPT_OUT");
+  });
+  it("sends a new revision to Notion and Sheets when a suppression excludes an active creator", async () => {
+    const { repo, sheets, suppression } = setup();
+    const first = await repo.ingest(request(input(), "k1"), "k1");
+    const creatorId = first.creatorRef!.canonicalId!;
+    expect(first.handoffs.map((h) => h.state)).toEqual(["confirmed", "confirmed"]);
+    expect(sheets.rows.get(`sheets-watchlist:${creatorId}:r1`)).toMatchObject({ watchlistEligibility: "active", suppressed: false });
+    suppression.entries.push({ subject: { kind: "profile", network: "instagram", profileKey: "id:ig-1001" }, reason: "opt-out", sourceRef: "optout-2", effectiveAt: "2026-11-05T12:00:00Z" });
+    const second = await repo.ingest(request(input({ eventId: "event-2" }), "k2"), "k2");
+    expect(second.watchlistEligibility).toBe("excluded");
+    expect(second.checkpoint.handoffKeys).toEqual([`notion-creator-crm:${creatorId}:r2`, `sheets-watchlist:${creatorId}:r2`]);
+    expect(second.handoffs.map((h) => h.state)).toEqual(["confirmed", "confirmed"]);
+    expect(sheets.rows.get(`sheets-watchlist:${creatorId}:r2`)).toMatchObject({ revision: 2, watchlistEligibility: "excluded", suppressed: true });
+  });
+  it("sends a new revision when eligibility moves from identityPending to active", async () => {
+    let available = false;
+    const list = { version: "suppression-v1", entries: [] };
+    const { repo, sheets } = setup({ suppression: (v) => (available && v === list.version ? list : null) });
+    const pending = await repo.ingest(request(input(), "k1"), "k1");
+    const creatorId = pending.creatorRef!.canonicalId!;
+    expect(pending.watchlistEligibility).toBe("identityPending");
+    available = true;
+    const active = await repo.ingest(request(input({ eventId: "event-2" }), "k2"), "k2");
+    expect(active).toMatchObject({ watchlistEligibility: "active", nextWork: "J20" });
+    expect(active.checkpoint.handoffKeys).toEqual([`notion-creator-crm:${creatorId}:r2`, `sheets-watchlist:${creatorId}:r2`]);
+    expect(sheets.rows.get(`sheets-watchlist:${creatorId}:r2`)).toMatchObject({ revision: 2, watchlistEligibility: "active", suppressed: false });
   });
   it("fails closed when the suppression list version is unavailable", async () => {
     const { repo } = setup({ suppression: () => null });
@@ -250,6 +299,23 @@ describe("J01 checkpointed Notion and Sheets handoff (J01-05)", () => {
     const reconciled = await repo.ingest(request(input(), "k", { mode: "reconcile" }), "k");
     expect(reconciled.handoffs.map((h) => h.state)).toEqual(["confirmed", "confirmed"]);
     expect(notion.writes).toBe(1);
+  });
+  it("supersedes an older revision's unfinished handoff on replay instead of overwriting newer sink data", async () => {
+    const { repo, notion, sheets } = setup();
+    notion.failNext = "throw";
+    const first = await repo.ingest(request(input(), "k1"), "k1");
+    const creatorId = first.creatorRef!.canonicalId!;
+    expect(first.handoffs.map((h) => h.state)).toEqual(["uncertain", "pending"]);
+    const campaign = { source: "linear", accountId: "farda", sourceId: null, url: null, canonicalId: "campaign-b", identityState: "resolved" as const, provenanceRef: "prov:b" };
+    const second = await repo.ingest(request(input({ eventId: "event-2", campaignRef: campaign }), "k2"), "k2");
+    expect(second.checkpoint.handoffKeys).toEqual([`notion-creator-crm:${creatorId}:r2`, `sheets-watchlist:${creatorId}:r2`]);
+    expect(second.handoffs.map((h) => h.state)).toEqual(["confirmed", "confirmed"]);
+    const writes = notion.writes;
+    const replay = await repo.ingest(request(input(), "k1"), "k1");
+    expect(replay.handoffs.map((h) => h.state)).toEqual(["superseded", "superseded"]);
+    expect(notion.writes).toBe(writes);
+    expect([...notion.rows.keys()]).toEqual([`notion-creator-crm:${creatorId}:r2`]);
+    expect([...sheets.rows.keys()]).toEqual([`sheets-watchlist:${creatorId}:r2`]);
   });
   it("shows an unavailable handoff when no sink is configured, without blocking the identity", async () => {
     const { repo } = setup({ sinks: {} });
