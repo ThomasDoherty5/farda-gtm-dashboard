@@ -1,3 +1,4 @@
+import { SavedCreatorPlatformPage } from "./SavedCreatorPlatform";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -23,6 +24,8 @@ const parseView = (raw: string | null): View => (raw === "board" ? "board" : "da
 /** Social Cat: the current lifecycle board (6:24, view=board) and the dashboard (23:275, view=dashboard). Owner THO-294. Read work only. */
 export function SocialCatPage() {
   const [search] = useSearchParams();
+  const native = useScope().adapter.kind !== "demo";
+  if (native) return <SavedCreatorPlatformPage key={search.get("view")} viewKey={search.get("view") === "board" ? "socialCatBoard" : "socialCatDashboard"} />;
   const view = parseView(search.get("view"));
   return view === "board" ? <Board /> : <Dashboard />;
 }
@@ -277,8 +280,8 @@ function DashboardBody({ res, data, network, onNetwork }: { res: ReadResponse<So
           <span data-testid="channel-route">
             <span data-field="acquisition-source">Source: Social Cat</span> · <span data-field="publishing-network">Publishing: Instagram + TikTok</span> · <span data-field="checkout">Checkout: Shopify website</span> · <span data-field="payout-owner">Payout: Collabs provider (illustrative)</span>.
           </span>{" "}
-          <span data-testid="route-note">A TikTok post is not a TikTok Shop order.</span> Hybrid is negotiated separately.{" "}
-          <span id="history-reason">History tabs are read-only: accepted obligations stay readable, and no new gifted-only, paid or hybrid acquisition can start here.</span>
+          <span data-testid="route-note">A TikTok post is not a TikTok Shop order.</span>{" "}
+          <span id="history-reason">Read-only. Past fees payable. New offers commission-only.</span>
         </p>
         <div className={styles.contextActions} style={{ gap: 16 }}>
           <LinkButton to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 204 }}>Configure offer</LinkButton>

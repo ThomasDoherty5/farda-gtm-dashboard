@@ -59,7 +59,9 @@ describe("owner-approved launch baselines through actual HTTP and SQLite", () =>
       method: "PUT", headers: { authorization: `Bearer ${SYNTHETIC_REVIEW_TOKEN}`, "content-type": "application/json", "idempotency-key": randomUUID() },
       body: JSON.stringify({ expectedVersion, policyVersion: POLICY_VERSION, configHash: bindingFor(packet.checkoutRoute).hash, packet }),
     });
-    return { status: response.status, body: await response.json() as StoredAssessment & { code?: string } };
+    const { stale, ...receipt } = await response.json() as StoredAssessment & { stale?: boolean; code?: string };
+    if (response.ok) expect(stale).toBe(false);
+    return { status: response.status, body: receipt };
   }
   async function get(creatorId: string) {
     const response = await fetch(`${origin}/v1/creators/${creatorId}`, { headers: { authorization: `Bearer ${SYNTHETIC_READ_TOKEN}` } });
@@ -129,7 +131,11 @@ describe("owner-approved launch baselines through actual HTTP and SQLite", () =>
     const data = evidenceViewSchemas.evidenceRecord!.parse(view.data);
     expect(data.qualification).toEqual(a);
     expect(data.agentEvidence.criterionEvidenceRefs).toEqual(packet.criterionEvidenceRefs);
-    expect(view.capabilities.every((capability) => capability.state === "held")).toBe(true);
+    expect(view.capabilities).toEqual([
+      { actionKind: "saveEvidenceDraft", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] },
+      { actionKind: "recordDisagreement", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] },
+      { actionKind: "markWatched", state: "held", reasonCodes: ["J20_SOURCE_REVIEW_REQUIRED"] },
+    ]);
     await stop(); await start();
     expect(await get(packet.creatorId)).toEqual({ ...saved.body, stale: false });
     expect(app!.store.history(packet.creatorId)).toEqual([saved.body]);

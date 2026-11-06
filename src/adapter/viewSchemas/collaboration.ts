@@ -9,6 +9,7 @@
  * not sent, so any other state in this list is a shape the screen does not know how to describe honestly.
  */
 import { z } from "zod";
+import { nativeCollaborationSchema } from "@/creator-agent/collaborationWorkflowSchema";
 import { collaborationEvidenceSchema } from "@/creator-agent/collaborationEvidence";
 import { calendarDate, count, money, text } from "./acquisitionPrimitives";
 
@@ -64,4 +65,4 @@ const collaborationDetail = z.object({
   requests: z.array(z.object({ id: text, kind: text, summary: text, version: text, state: z.literal("approvalPending") })),
 });
 
-export const collaborationViewSchemas: Record<string, z.ZodTypeAny> = { collaborationDetail, collaborationEvidence: collaborationEvidenceSchema };
+export const collaborationViewSchemas: Record<string, z.ZodTypeAny> = { collaborationDetail:z.union([nativeCollaborationSchema,collaborationDetail]), collaborationEvidence: collaborationEvidenceSchema };

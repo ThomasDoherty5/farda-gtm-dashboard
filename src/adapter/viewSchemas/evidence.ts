@@ -9,6 +9,7 @@
  * Strictness: loose (unknown keys stripped). The record carries no commercial terms, so a stray key is noise.
  */
 import { z } from "zod";
+import { sourceReviewSchema, reviewVersion } from "../../creator-agent/evidenceReviewContract";
 import { provenanceValueSchema } from "../contract";
 import { MAX_DISPUTES, MAX_OBSERVATIONS, MAX_REASON, MAX_TEXT } from "@/features/acquisition/evidenceRules";
 import { instant, text } from "./acquisitionPrimitives";
@@ -86,9 +87,23 @@ const evidenceRecord = z.object({
   readiness,
   qualification: creatorAssessmentSchema.nullable().optional(),
   agentEvidence: evidencePacketSchema.nullable().optional(),
+  sourceReview: sourceReviewSchema.optional(),
 }).superRefine((record, ctx) => {
   const assessment = record.qualification;
   const packet = record.agentEvidence;
+  if (record.sourceReview) {
+    const review = record.sourceReview;
+    const post = packet?.posts.find(p => p.postId === record.evidenceRef);
+    if (!assessment || !packet || !post || !reviewVersion.safeParse(record.version).success ||
+        record.version !== `er-${review.basisHash}-${review.annotations.length}` ||
+        review.postId !== post.postId || review.canonicalMediaId !== post.canonicalMediaId || record.mediaUrl !== post.sourceUrl ||
+        review.creatorId !== packet.creatorId || record.creatorHandle !== packet.creatorId ||
+        review.evidenceRevision !== packet.evidenceRevision || review.termsRevision !== packet.termsRevision ||
+        review.configHash !== assessment.config.hash || review.modelId !== assessment.modelId || review.policyVersion !== assessment.policyVersion ||
+        review.annotations.some((a,index) => a.revision !== index+1 || a.input.creatorId !== review.creatorId ||
+          a.input.basisHash !== review.basisHash || a.input.runId !== review.runId))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceReview"], message: "The review must match the exact saved post, assessment and annotation version." });
+  }
   if (!assessment || !packet) return;
   for (const field of ["creatorId", "briefId", "evidenceRevision", "termsRevision"] as const) {
     if (assessment[field] !== packet[field]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["qualification", field], message: "The assessment and source packet must identify the same saved input." });

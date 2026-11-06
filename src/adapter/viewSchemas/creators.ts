@@ -10,6 +10,7 @@
  * `datasetKey` is a demo label that no screen reads, so it is any non-empty string here, not the demo literal.
  */
 import { z } from "zod";
+import { savedCreatorPlatformSchema } from "@/creator-agent/creatorPlatformViews";
 import { count, countsByOwner, labelCount, money, owner, text, tone, unknownMarker } from "./acquisitionPrimitives";
 
 const card = z.object({ id: text, handle: text, detail: text, status: z.object({ label: text, tone }), note: text, owner });
@@ -69,8 +70,8 @@ const tiktokDashboard = z.object({
 }).refine((d) => d.orders <= d.shopOrders, { message: "Measured creators' orders cannot exceed all shop orders", path: ["orders"] });
 
 export const creatorsViewSchemas: Record<string, z.ZodTypeAny> = {
-  socialCatBoard,
-  socialCatDashboard,
-  tiktokBoard,
-  tiktokDashboard,
+  socialCatBoard: z.union([savedCreatorPlatformSchema, socialCatBoard]),
+  socialCatDashboard: z.union([savedCreatorPlatformSchema, socialCatDashboard]),
+  tiktokBoard: z.union([savedCreatorPlatformSchema, tiktokBoard]),
+  tiktokDashboard: z.union([savedCreatorPlatformSchema, tiktokDashboard]),
 };

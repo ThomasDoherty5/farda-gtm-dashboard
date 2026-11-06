@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { AdapterError } from "@/adapter/errors";
 import { useSave } from "@/adapter/useSave";
@@ -20,6 +20,8 @@ import { AcquisitionTabs } from "./AcquisitionTabs";
 import { QualificationDetails, rating } from "./AgentQualification";
 import { evidenceReviewPath } from "./creatorReviewPaths";
 import { EvidenceDisputes } from "./EvidenceDisputes";
+import { SavedAnnotations, SavedSourcePlayer, type EditorKind } from "./SavedEvidenceReview";
+import { scopeKey, useScope } from "@/adapter/scope";
 import styles from "./Acquisition.module.css";
 
 type Res = ReadResponse<EvidenceRecord>;
@@ -35,14 +37,19 @@ const CATEGORIES = (Object.keys(CATEGORY_LABEL) as ObservationCategory[]).map((v
 /** Lifestyle video evidence review (Figma source 102:364, owner THO-288). A saved draft is never a completed review. */
 export function EvidencePage() {
   const { creatorId = "", evidenceId = "" } = useParams();
-  const filters = useMemo(() => ({ creatorId, evidenceId }), [creatorId, evidenceId]);
-  const query = useView<{ creatorId: string; evidenceId: string }, EvidenceRecord>("evidenceRecord", filters);
-  const record = query.data?.data ?? null;
+  const [params] = useSearchParams(), runId = params.get("run");
+  const context = useScope();
+  const filters = useMemo(() => ({ creatorId, evidenceId, ...(runId !== null ? {runId} : {}) }), [creatorId, evidenceId, runId]);
+  const query = useView<typeof filters, EvidenceRecord>("evidenceRecord", filters);
+  const returned = query.isPlaceholderData ? null : query.data?.data;
+  const record = returned?.evidenceRef === evidenceId && (!returned.sourceReview ||
+    returned.sourceReview.creatorId === creatorId && (!runId || returned.sourceReview.runId === runId)) ? returned : null;
   return (
     <section aria-labelledby="evidence-title" data-figma-source="102:364" className={styles.page}>
       <ReadState res={query.data} subject="This evidence record" />
       {record ? (
-        <Review key={record.evidenceRef} res={query.data as Res} record={record} reviewPath={evidenceReviewPath(creatorId, evidenceId)} />
+        <Review key={JSON.stringify([scopeKey(context),creatorId,evidenceId,record.sourceReview?.runId ?? runId])} res={query.data as Res} record={record} reviewPath={evidenceReviewPath(creatorId, evidenceId)}
+          readFresh={async()=>(await query.refetch({throwOnError:true})).data?.data ?? null}/>
       ) : (
         <>
           <div className={styles.titleRow}>
@@ -58,8 +65,11 @@ export function EvidencePage() {
   );
 }
 
-function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord; reviewPath: string }) {
+function Review({ res, record, reviewPath, readFresh }: { res: Res; record: EvidenceRecord; reviewPath: string; readFresh:()=>Promise<EvidenceRecord|null> }) {
   const qualification = record.qualification;
+  const source = record.sourceReview;
+  const selectedPost = source && record.agentEvidence?.posts.find(p=>p.postId === source.postId);
+  const [editor,setEditor] = useState<EditorKind|null>(null);
   const [mediaUrl, setMediaUrl] = useState(record.mediaUrl ?? "");
   const [route, setRoute] = useState<CheckoutRoute>(record.checkoutRoute);
   const [observations, setObservations] = useState<Observation[]>(record.observations);
@@ -91,9 +101,11 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
   const audio = coveredSeconds(observations, "audio", validUrl);
   const coverage = (s: number) => (s > 0 ? `Partial · ${formatTime(s)} observed` : "Not reviewed");
 
-  const saveBlocked = blockedReason(res, "saveEvidenceDraft");
+  const intervalMissing = selectedPost && !selectedPost.review.watchedIntervals.length && !selectedPost.review.heardIntervals?.length;
+  const saveBlocked = blockedReason(res, "saveEvidenceDraft") ?? (intervalMissing ? "No continuous visual or heard-audio intervals were recorded." : null);
   const watchedBlocked = blockedReason(res, "markWatched") ?? "Not available.";
   const onSave = () => {
+    if (source) { setEditor("observation"); return; }
     if (liveUrlError) {
       setUrlError(liveUrlError);
       return;
@@ -119,7 +131,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
         <p className={styles.contextTitle}>A caption is context. Playback is evidence.</p>
         <p className={styles.small}>Review actual GRWM, workday, organizing, travel or product-in-routine footage. Clinical lectures, IVF explainers and generic medical education do not qualify.</p>
       </div>
-      {(save.data || record.savedAt) && (
+      {!source && (save.data || record.savedAt) && (
         <p role="status" data-testid="save-status" className={styles.status}>
           {noChange ? "Nothing to save: the draft matches version " : "Saved as version "}{record.version.replace("v", "")}. A saved draft is not a completed review.
         </p>
@@ -130,9 +142,9 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
         <section className={styles.card} aria-labelledby="player-title" style={{ gap: "var(--space-20)" }}>
           <div className={styles.sectionTitle}>
             <h2 id="player-title" className={styles.h2}>Original lifestyle video</h2>
-            <p className={styles.small}>{validUrl ? "Clip address recorded · playback isn't connected, so no visual or audio observation counts as watched." : "No clip loaded · no visual or audio observation has been completed."}</p>
+            <p className={styles.small}>{selectedPost ? "Recorded media provenance and source access for this selected post." : validUrl ? "Clip address recorded · playback isn't connected, so no visual or audio observation counts as watched." : "No clip loaded · no visual or audio observation has been completed."}</p>
           </div>
-          <div className={styles.player} data-testid="player">
+          {source && selectedPost ? <SavedSourcePlayer source={source} post={selectedPost}/> : <><div className={styles.player} data-testid="player">
             <Badge tone="violet" width={168}>{validUrl ? "Playback not verified" : "Playback pending"}</Badge>
             <p className={styles.playerTitle}>Open the permitted original.</p>
             <p className={styles.playerText}>A preview, caption or product list cannot establish the hook, demonstration, sound or story.</p>
@@ -142,10 +154,11 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
             </div>
           </div>
           <TextField label="Original video URL" helpText="Keep the original asset identity; do not substitute a profile." error={shownUrlError} value={mediaUrl} placeholder="Awaiting validated source URL" onChange={(v) => { setMediaUrl(v); setUrlError(null); }} />
+          </>}
           {stale > 0 && <p role="status" className={styles.small}>{stale} earlier {stale === 1 ? "observation was" : "observations were"} recorded against a different video, so {stale === 1 ? "it doesn't" : "they don't"} count here.</p>}
           <div className={styles.pairTight}>
-            <Kpi label="Visual coverage" context="Record actual watched intervals" testId="metric-Visual coverage">{coverage(visual)}</Kpi>
-            <Kpi label="Audio coverage" context="Silent viewing is not audio review" testId="metric-Audio coverage">{coverage(audio)}</Kpi>
+            <Kpi label="Visual coverage" context="Record actual watched intervals" testId="metric-Visual coverage">{selectedPost ? selectedPost.review.visualMethod === "sampledFrames" ? `${selectedPost.review.sampledPoints.length} sampled points` : selectedPost.review.visualMethod === "continuous" ? `${selectedPost.review.watchedIntervals.length} recorded intervals` : "Not assessed" : coverage(visual)}</Kpi>
+            <Kpi label="Audio coverage" context="Silent viewing is not audio review" testId="metric-Audio coverage">{selectedPost ? selectedPost.review.audioMethod : coverage(audio)}</Kpi>
           </div>
         </section>
 
@@ -154,7 +167,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
             <h2 id="fit-title" className={styles.h2}>Separate fit from sales proof.</h2>
             <p className={styles.small}>The destination selects the commerce model.</p>
           </div>
-          <SelectField label="Checkout route" helpText="Recruitment and publishing network remain independent." value={route} onChange={(v) => setRoute(v as CheckoutRoute)} options={ROUTES} />
+          <SelectField label="Checkout route" disabled={Boolean(source)} helpText="Recruitment and publishing network remain independent." value={route} onChange={(v) => setRoute(v as CheckoutRoute)} options={ROUTES} />
           <div><Badge tone="violet" width={258} testId="model-badge">{MODEL_FOR_ROUTE[route]}</Badge></div>
           <Kpi hug label={qualification ? "Saved model" : "Published model"} context={qualification ? `${qualification.modelId} · as-assessed configuration ${qualification.config.version ?? "Unknown"}` : "Current agent configuration not returned."} testId={qualification ? "metric-Saved model" : "metric-Published model"}>{qualification ? (qualification.config.status === "bound" ? "Bound when assessed" : "Unbound when assessed") : record.modelPublication.label}</Kpi>
           <div className={styles.pairTight}>
@@ -176,7 +189,14 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
           caption="Time-coded review evidence"
           columns={[{ label: "Observation", width: "20.833%" }, { label: "Playback interval", width: "15.224%" }, { label: "Evidence status", width: "15.224%" }, { label: "Record" }]}
           testId="observation-table"
-          rows={(Object.keys(CATEGORY_LABEL) as ObservationCategory[]).map((category) => {
+          rows={selectedPost ? [
+            ...selectedPost.review.observedActions.map(a=>["Visual action",formatTime(a.atSec),selectedPost.review.visualMethod,a.action]),
+            ...selectedPost.review.claims.map(c=>["Spoken or caption claim",formatTime(c.atSec),c.method,c.text]),
+            ...selectedPost.review.inferences.map(text=>["Reviewer inference","Time not supplied","Inference",text]),
+            ...selectedPost.review.watchedIntervals.map(i=>["Visual coverage",`${formatTime(i.startSec)}–${formatTime(i.endSec)}`,"Continuous","Source-recorded interval"]),
+            ...selectedPost.review.sampledPoints.map(t=>["Visual coverage",formatTime(t),"Sampled frame","Discrete sample"]),
+            ...(selectedPost.review.heardIntervals ?? []).map(i=>["Audio coverage",`${formatTime(i.startSec)}–${formatTime(i.endSec)}`,"Heard audio","Source-recorded interval"]),
+          ] : (Object.keys(CATEGORY_LABEL) as ObservationCategory[]).map((category) => {
             const here = observations.filter((o) => o.category === category);
             return [
               CATEGORY_LABEL[category],
@@ -193,7 +213,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
           })}
         />
         <div className={styles.rowActions}>
-          <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 252 }} disabledReason={validUrl ? null : addReason} reasonFor={addReasonId} onClick={() => setDialog("observation")}>Add time-coded observation</Button>
+          <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 252 }} disabledReason={source ? saveBlocked : validUrl ? null : addReason} reasonFor={addReasonId} onClick={() => source ? setEditor("observation") : setDialog("observation")}>Add time-coded observation</Button>
           <Button variant="secondary" style={{ minWidth: 184 }} loading={save.isPending} disabledReason={saveBlocked} onClick={onSave}>Save partial review</Button>
           <Button style={{ minWidth: 164 }} disabledReason={watchedBlocked} reasonFor={watchedReasonId}>Mark watched</Button>
         </div>
@@ -212,8 +232,8 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
           {[
             { tone: "warning" as const, status: "Needs source", title: "Metric definition + window", note: "Exact native label, asset set, observation time and paid/organic scope" },
             { tone: "neutral" as const, status: "If applicable", title: "TikTok Shop product linkage", note: "A TikTok post alone is not proof of a Shop product or checkout route" },
-            { tone: "neutral" as const, status: "Not accepted", title: "Commission-only proposal", note: "An authorized invitation may precede willingness; activation requires real acceptance" },
-            { tone: "warning" as const, status: visual + audio > 0 ? "Partial" : "Pending", title: "Video review completion", note: "Visual/audio ranges, review depth and reviewer must be recorded" },
+            { tone: "neutral" as const, status: qualification?.routeEvidence?.acceptedTerms ? "Accepted terms on file" : "Not accepted", title: "Commission-only proposal", note: "An authorized invitation may precede willingness; activation requires real acceptance" },
+            { tone: "warning" as const, status: selectedPost?.review.status ?? (visual + audio > 0 ? "Partial" : "Pending"), title: "Video review completion", note: "Visual/audio ranges, review depth and reviewer must be recorded" },
           ].map((g) => (
             <li key={g.title} className={styles.gate}>
               <div><Badge tone={g.tone} width={140}>{g.status}</Badge></div>
@@ -225,7 +245,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
         <p className={styles.small}>Observed views and interactions need comparable definitions and complete inputs. Attractive lifestyle footage may still have unknown Farda routine or product-format fit; attributed sales require separate provider <br className="wide-break" />evidence.</p>
       </section>
       <p className={styles.small}>Evidence-review template · no source footage or metrics are fabricated · full, partial, captions-only and inaccessible states remain distinct.</p>
-      <EvidenceDisputes res={res} record={record} draftDirty={dirty} />
+      {source ? <SavedAnnotations res={res} record={record} kind={editor} open={setEditor} readFresh={readFresh}/> : <EvidenceDisputes res={res} record={record} draftDirty={dirty} />}
 
       <ObservationDialog open={dialog === "observation"} mediaUrl={validUrl} onClose={() => setDialog(null)} onAdd={(o) => { setObservations((all) => [...all, o]); setDialog(null); }} />
       <Dialog open={dialog === "model"} title="Model status" onClose={() => setDialog(null)}>
@@ -234,7 +254,7 @@ function Review({ res, record, reviewPath }: { res: Res; record: EvidenceRecord;
           <p>The evidence policy is approved. A current agent assessment and bound configuration have not been returned for this record. Earlier v2 snapshots remain historical and cannot authorize new acquisition.</p>
         </>}
         {qualification && <p className={styles.small}>This is the saved server assessment, independent of this partial-review draft. Editing the clip, route or observations here does not change its qualification or authorize an action. Its configuration is the one used when assessed; current model publications are listed in daily sourcing.</p>}
-        <p>Evidence coverage: visual {coverage(visual).toLowerCase()}, audio {coverage(audio).toLowerCase()}.</p>
+        <p>{selectedPost ? `Selected source review: ${selectedPost.review.status}. Visual ${selectedPost.review.visualMethod}, audio ${selectedPost.review.audioMethod}.` : `Evidence coverage: visual ${coverage(visual).toLowerCase()}, audio ${coverage(audio).toLowerCase()}.`}</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
     </>

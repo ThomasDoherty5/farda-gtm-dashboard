@@ -91,7 +91,9 @@ function AgentEvidenceDetails({ assessment, packet }: { assessment: CreatorAsses
     })} />
     <p className={styles.small}>These are the server-selected metadata rows, including ordinary and lower-like posts. Metadata inclusion does not give deep-review or qualifying-post credit.</p>
     {packet.posts.map((post) => <section key={post.postId} className={styles.stack} aria-label={`Source packet ${post.postId}`}>
-      <p><a href={post.sourceUrl} target="_blank" rel="noreferrer">{post.postId} · original {post.network} post</a> · Native likes: {nativeLikes(post.nativeLikes)} · Published: {post.publishedAt ?? "Unknown"} · Observed: {post.observedAt}</p>
+      <p>{!post.accessObservation || post.accessObservation.state === "permitted" ?
+        <a href={post.sourceUrl} target="_blank" rel="noreferrer">{post.postId} · original {post.network} post</a> :
+        <span>{post.postId} · {post.network} · original access {post.accessObservation.state}</span>} · Native likes: {nativeLikes(post.nativeLikes)} · Published: {post.publishedAt ?? "Unknown"} · Observed: {post.observedAt}</p>
       <DataTable caption={`Timestamped source review ${post.postId}`} columns={[{ label: "Provenance" }, { label: "Recorded source evidence" }]} rows={[
         ["Review completion / modality", `${post.review.status} · visual ${post.review.visualMethod} · audio ${post.review.audioMethod}`],
         ["Sampled points", post.review.sampledPoints.length ? post.review.sampledPoints.map(formatTime).join(", ") : "None recorded"],
@@ -103,7 +105,7 @@ function AgentEvidenceDetails({ assessment, packet }: { assessment: CreatorAsses
       {post.comments.status === "observed" ? <>
         <p className={styles.small}>Comment sample: {post.comments.ordering} · observed {post.comments.observedAt}. Convenience sample; tags can overlap.</p>
         <DataTable caption={`Observed comment rows ${post.postId}`} columns={[{ label: "Comment / author" }, { label: "Source text" }, { label: "Flags / response tags" }]} rows={post.comments.rows.map((comment) => [
-          `${comment.commentId} · ${comment.authorRef ?? "Author unknown"}`, comment.text,
+          `${comment.commentId} · ${comment.authorRef && /^author:[0-9a-f]{64}$/.test(comment.authorRef) ? "Author " + comment.authorRef.slice(7,15) : "Author unknown"}`, comment.text,
           `${comment.creator ? "Creator" : "Audience"} · ${comment.promotional ? "promotional" : "not flagged promotional"} · ${comment.prompted ? "prompted" : "not prompted"} · ${comment.categories.map((tag) => categoryLabel[tag] ?? tag).join(", ")}`,
         ])} />
       </> : <p>Comments {post.comments.status}: {post.comments.reason}. Response categories and author counts remain unknown.</p>}

@@ -157,7 +157,13 @@ function attemptOnce(transport: Transport, req: TransportRequest, timeoutMs: num
 function mayRetry(error: unknown): boolean {
   if (!(error instanceof TransportFailure)) return true;
   if (error.kind === "network" || error.kind === "timeout") return true;
-  if (error.kind === "http") return (error.status ?? 0) >= 500;
+  if (error.kind === "http") {
+    const response = adapterErrorBodySchema.safeParse(error.body);
+    // A source has explicitly reported an uncertain result. Preserve the receipt
+    // lookup boundary instead of treating this as an ordinary gateway outage.
+    if (response.success && (response.data.executionCertainty === "uncertain" || response.data.code === "OUTCOME_UNCERTAIN")) return false;
+    return (error.status ?? 0) >= 500;
+  }
   return false;
 }
 
@@ -174,6 +180,24 @@ const MESSAGES: Record<string, string> = {
   TIMEOUT: "The data service took too long to answer.",
   INTEGRATION_PENDING: "The live data service is not connected yet.",
   VALIDATION_FAILED: "The service did not accept that request.",
+  OBSERVATION_OUTSIDE_REVIEW: "Use an interval covered by the recorded source review.",
+  EVIDENCE_REVIEW_LIMIT: "This evidence revision reached its reviewer-entry limit. Review its history before continuing.",
+  INVALID_COLLABORATION_REFERENCE: "Open the collaboration again from its current source list.",
+  INVALID_PROPOSAL_TARGET: "Review the current deliverable and submission before proposing a change.",
+  SOURCE_RESPONSE_INVALID: "The source returned an unverified record. Check the source before continuing.",
+  ASSET_EVIDENCE_UNVERIFIED: "The registered asset evidence could not be verified.",
+  SOURCE_VERSION_CHANGED: "The source or registered submission changed. Read the current record before continuing.",
+  SOURCE_COVERAGE_INCOMPLETE: "Complete the source read before reconciling this request.",
+  SOURCE_TIME_UNVERIFIED: "The source observation time could not be verified.",
+  SOURCE_STALE: "Refresh the source record before proposing a change.",
+  SOURCE_COVERAGE_PARTIAL: "Complete the source read before proposing a change.",
+  SUBMISSION_UNVERIFIED: "A verified submission is required for this proposal.",
+  OUTREACH_SUPPRESSED: "Outreach is suppressed for this collaboration.",
+  SUPPRESSION_UNVERIFIED: "Verify suppression status before proposing outreach.",
+  RELATIONSHIP_CLOSED: "This relationship is closed to new outreach.",
+  POSTING_OBLIGATION_UNVERIFIED: "Verify accepted posting terms before proposing a reminder.",
+  CREATOR_PLATFORM_CURSOR_INVALID: "Reload the saved opportunity list before loading more.",
+  FUNNEL_NARROW_COHORT_WINDOW: "Choose a narrower cohort date range and try again.",
   OUTCOME_UNCERTAIN: "The service did not confirm what happened.",
 };
 const message = (code: string) => MESSAGES[code] ?? "The service could not complete that request.";

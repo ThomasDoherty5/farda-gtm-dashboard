@@ -22,6 +22,12 @@ import { readOperationsView, operationsViewFiltersSchema, OperationsCursorError 
 import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
+import { EvidenceReviewRepository, EvidenceReviewError } from "./evidenceReviewStore.ts";
+import { createCollaborationWorkflow, CollaborationWorkflowError } from "./collaborationWorkflow.ts";
+import type { CollaborationSourceReader } from "./collaborationWorkflowSchema.ts";
+import { openCollaborationRef } from "./creatorPlatformReferences.ts";
+import { creatorPlatformKeys, creatorPlatformFilterSchema, readCreatorPlatformView } from "./creatorPlatformReader.ts";
+import { protectCommentAuthors } from "./evidencePrivacy.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -47,6 +53,7 @@ type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; providerHealth?: HealthOptions;
   scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
+  collaborationSourceReader?: CollaborationSourceReader;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -63,6 +70,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let offers: OfferRepository;
   let schedules: ScheduleDraftRepository;
   let operationsSecret: string;
+  let evidenceReviews: EvidenceReviewRepository;
+  let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -82,14 +91,21 @@ export function createAgentServer(options: AgentServerOptions) {
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
+    evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
+      (record, superseded) => current(record, superseded, false));
+    collaborationWorkflow = createCollaborationWorkflow(store.database,
+      { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.collaborationSourceReader, options.operations?.now,
+      input => readCollaborationEvidence(input));
   }
   catch (error) { store.close(); throw error; }
   const readCollaborationEvidence = createCollaborationEvidenceReader(store.database,
-    { workspaceId: options.workspaceId, accountId: options.accountId }, options.readToken, options.assetAuthority);
+    { workspaceId: options.workspaceId, accountId: options.accountId }, operationsSecret, options.assetAuthority);
   const sessions = new Map<string, Session>();
   const bindings = options.bindings ?? [];
   const modelBinding = (route: "website" | "tiktok-shop") => bindings.find((b) => b.current.modelId === MODEL_FOR_ROUTE[route]) ?? null;
-  const cursorKey = createHmac("sha256", options.readToken).update("farda.creator-sourcing.cursor.v1").digest();
+  // Authentication credentials are never encryption/signing keys. Credential rotation
+  // still invalidates continuations, while possession of a reader token cannot forge one.
+  const cursorKey = createHmac("sha256", operationsSecret).update("farda.creator-sourcing.cursor.v2").update(options.readToken).digest();
   const cursorContext = () => versionOfData({ policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION, agentSchemaVersion: AGENT_SCHEMA_VERSION,
     models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], hash: modelBinding(route)?.hash ?? null })) });
   const encodeCursor = (payload: z.infer<typeof cursorPayloadSchema>) => {
@@ -126,12 +142,15 @@ export function createAgentServer(options: AgentServerOptions) {
     if (session && session.expiresAt > Date.now()) return { role: session.role, session };
     return null;
   };
-  const current = (record: StoredAssessment, superseded = false) => {
+  const current = (record: StoredAssessment, superseded = false, includeReviewerDisputes = true) => {
     const binding = modelBinding(record.packet.checkoutRoute);
     const terms = record.assessment.routeEvidence?.acceptedTerms;
     const offerSuperseded = terms?.origin === "saved-offer" && !offers.matchesOfferVersion(terms.offerId, terms.version, terms.manifestHash);
-    const stale = superseded || offerSuperseded || isScorecardProofExpired(record.assessment) || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
-    return { ...record, stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
+    const contested = includeReviewerDisputes && evidenceReviews.contested(record);
+    const stale = contested || superseded || offerSuperseded || isScorecardProofExpired(record.assessment) || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
+    return { ...record, packet: protectCommentAuthors(record.packet,
+      { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret),
+      stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
   };
   const readBase = z.object({
     schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
@@ -145,22 +164,32 @@ export function createAgentServer(options: AgentServerOptions) {
   }).strict();
   const saveSchema = z.discriminatedUnion("resourceKind", [saveOfferSchema, saveOfferSchema.extend({
     resourceKind: z.literal("configurationDraft"), resourceRef: z.string().min(1).max(4100),
-  })]);
+  }), saveOfferSchema.extend({ resourceKind: z.literal("reviewerAssessment"), resourceRef: z.string().min(1).max(240) }),
+    saveOfferSchema.extend({ resourceKind: z.literal("evidenceDraft"), resourceRef: z.string().min(1).max(240) })]);
+  const collaborationActionSchema = z.object({
+    schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("requestApproval"), requestId: z.string().min(1).max(240),
+    requestedScope: readBase.shape.requestedScope, actionKind: z.literal("proposeCollaborationReview"), entityRefs: z.array(z.never()).max(0),
+    expectedVersion: z.string().regex(/^cw1-[a-f0-9]{64}$/), approvalRef: z.null(), manifestRef: z.null(), runRef: z.null().optional(),
+    idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
+  }).strict();
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
+    ...creatorPlatformKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: creatorPlatformFilterSchema,
+      period: z.null(), sort: z.array(z.never()).max(0) })),
     readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ offerId: offerIdSchema }).strict() }),
     readBase.extend({ viewKey: z.literal("offerRewards"), filters: z.object({ offerId: offerIdSchema }).strict() }),
     readBase.extend({ viewKey: z.literal("pipelineSummary"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("pipelineBranches"), filters: funnelFilterSchema }),
-    readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1).max(240), evidenceId: z.string().min(1).max(240), runId: z.string().uuid().optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("connectionsOverview"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("channelCapabilities"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("automationRuns"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
-    readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
-    readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
+    readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(500),
+      proposalRequestKey: z.string().trim().min(1).max(240).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -282,11 +311,34 @@ export function createAgentServer(options: AgentServerOptions) {
             resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: "agent-reviewer", record: saved.resource,
             reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
         }
+        if (input.resourceKind === "reviewerAssessment" || input.resourceKind === "evidenceDraft") {
+          const kind = z.object({ kind: z.enum(["observation", "disagree", "override"]) }).passthrough().parse(input.payload).kind;
+          if ((kind === "observation") !== (input.resourceKind === "evidenceDraft"))
+            return reply(res, 422, { code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+          const saved = evidenceReviews.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey, "agent-reviewer", input.resourceKind);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
+            resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: saved.persistedByRef, record: saved.resource,
+            reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
+        }
         const record = offers.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: record.offerId,
           resourceVersion: record.version, persistedAt: record.recordedAt, persistedByRef: "agent-reviewer", record,
           reasonCodes: [], executionCertainty: "applied" });
+      }
+      if (path === "/v1/action" && req.method === "POST") {
+        if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
+        const input = collaborationActionSchema.parse(await bodyOf(req));
+        const result = await collaborationWorkflow.propose(input, "agent-reviewer");
+        return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+          scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
+          runRef: null, approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
+          reasonCodes: ["LOCAL_PROPOSAL_ONLY", "J04_DECISION_AND_SOURCE_DISPATCH_NOT_CONNECTED"],
+          nextAction: { kind: "Review the saved proposal in the decision workflow", ownerRef: null, dueAt: null, available: false },
+          nextPollAfterMs: null, executionCertainty: "applied" });
       }
       if (path === "/v1/funnel/events" && req.method === "POST") {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
@@ -300,7 +352,10 @@ export function createAgentServer(options: AgentServerOptions) {
         portfolioReview: { storage: "durable", decisionAuthority: options.portfolioAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         offers: { storage: "durable", providerExecution: "notConnected", decisionAuthority: options.offerAuthority?.decision ? "injected" : "notConnected" },
         acquisitionFunnel: { storage: "durable", sourceAuthority: options.funnelAuthority ? "injected" : "notConnected" },
+        creatorPlatforms: { views: "saved-ledger-projections", providerCoverage: "unknown" },
         savedOperations: { pagination: "scoped-cursor-v1", scheduleDrafts: "durable-versioned", scheduleActivation: "notConnected" },
+        reviewerEvidence: { annotations: "immutable-versioned", completionAuthority: "source-j20" },
+        collaborationReview: { sourceAuthority: options.collaborationSourceReader ? "injected" : "notConnected", proposals: "durable", dispatch: "notConnected" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -319,12 +374,27 @@ export function createAgentServer(options: AgentServerOptions) {
         if (typeof key !== "string" || !key.trim() || key.length > 240) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED" });
         const binding = modelBinding(input.packet.checkoutRoute);
         if (input.configHash !== (binding?.hash ?? null)) return reply(res, 409, { code: "CONFIG_VERSION_CONFLICT", executionCertainty: "notApplied" });
-        const proof = await resolveScorecardEvidence(options.scorecardAuthority, { workspaceId: options.workspaceId, accountId: options.accountId }, input.packet, Date.now(), id => offers.acceptedTerms(id));
-        const assessment = assessCreator(input.packet, binding, proof);
-        return reply(res, 200, store.save(input.packet, assessment, input.expectedVersion, key));
+        const protect = (packet: z.infer<typeof evidencePacketSchema>) => protectCommentAuthors(packet,
+          { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret);
+        const packet = protect(input.packet);
+        const proof = await resolveScorecardEvidence(options.scorecardAuthority, { workspaceId: options.workspaceId, accountId: options.accountId }, packet, Date.now(), id => offers.acceptedTerms(id));
+        const assessment = assessCreator(packet, binding, proof);
+        const saved = store.save(packet, assessment, input.expectedVersion, key, protect);
+        return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "socialCatBoard" || input.viewKey === "tiktokBoard" || input.viewKey === "socialCatDashboard" || input.viewKey === "tiktokDashboard") {
+          const result = readCreatorPlatformView({ viewKey: input.viewKey, filters: input.filters, db: store.database, funnel,
+            scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+            role: auth.role, limit: input.page.limit, cursor: input.page.cursor, now: options.operations?.now });
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
+            dataState: result.nextCursor || result.data.sourceOutages || result.data.unknownStates ? "partial" : result.total ? "ready" : "empty", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: result.total, observedCount: result.returned, missingCount: result.total - result.returned,
+              complete: false, reasonCodes: ["SAVED_LEDGER_ONLY", "PROVIDER_UNIVERSE_UNKNOWN", ...(result.nextCursor ? ["SNAPSHOT_PAGE_PARTIAL"] : [])] },
+            capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.nextCursor !== null }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "scheduleDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const data = schedules.read(input.filters.jobId);
@@ -390,7 +460,13 @@ export function createAgentServer(options: AgentServerOptions) {
             capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.hasMore }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "collaborationEvidence") {
-          const result = await readCollaborationEvidence({ collaborationId: input.filters.collaborationId, cursor: input.page.cursor, limit: input.page.limit });
+          let canonicalId = input.filters.collaborationId;
+          if (canonicalId.startsWith("collab1-")) {
+            try { canonicalId = openCollaborationRef({ workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, canonicalId); }
+            catch { return reply(res, 400, { code: "INVALID_COLLABORATION_REFERENCE", executionCertainty: "notApplied" }); }
+          }
+          const result = await readCollaborationEvidence({ collaborationId: canonicalId, cursor: input.page.cursor, limit: input.page.limit });
+          result.data.collaborationId = input.filters.collaborationId;
           const observed = result.data.records.length;
           const remaining = result.data.total - result.data.offset - observed;
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
@@ -400,7 +476,22 @@ export function createAgentServer(options: AgentServerOptions) {
               complete: result.data.offset === 0 && remaining === 0, reasonCodes: result.data.offset > 0 || remaining > 0 ? ["SNAPSHOT_PAGE_PARTIAL"] : [] },
             capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.data.hasMore }, refresh: { nextPollAfterMs: null } });
         }
-        if (input.viewKey === "shippingHub" || input.viewKey === "collaborationDetail") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+        if (input.viewKey === "collaborationDetail") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
+            return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+          const result = await collaborationWorkflow.read(input.filters.collaborationId,
+            { requestKey: input.filters.proposalRequestKey, actorRef: `agent-${auth.role}` });
+          if (!result) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.stale ? "stale" : result.partial ? "partial" : "ready", data: result.data, sourceFreshness: [],
+            coverage: { expectedCount: 1, observedCount: 1, missingCount: 0, complete: !result.partial && !result.stale,
+              reasonCodes: [...(result.stale ? ["SOURCE_OBSERVATION_STALE"] : []), ...(result.partial ? ["SOURCE_OR_PROPOSAL_COVERAGE_PARTIAL"] : [])] },
+            capabilities: result.capabilities.map(capability => auth.role === "reviewer" ? capability : { ...capability, state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] }),
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
           const listing = store.listLatestPage({ limit: input.page.limit, snapshot: cursor ? { rowId: cursor.rowId, anchorRunId: cursor.anchorRunId } : undefined, after: cursor?.after });
@@ -445,7 +536,7 @@ export function createAgentServer(options: AgentServerOptions) {
           const data = agentAssessmentRecordSchema.parse({
             kind: "creator-v3", creatorId: stored.packet.creatorId, assessmentId: stored.runId, runId: stored.runId,
             evidenceId: superseded ? null : stored.packet.posts[0]?.postId ?? null,
-            qualification: record.assessment, assessedQualification: stored.assessment, agentEvidence: stored.packet,
+            qualification: record.assessment, assessedQualification: stored.assessment, agentEvidence: record.packet,
             recordedAt: stored.recordedAt, revision: stored.revision, stale: record.stale, superseded,
           });
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
@@ -454,28 +545,25 @@ export function createAgentServer(options: AgentServerOptions) {
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
           });
         }
-        const stored = store.latest(input.filters.creatorId);
-        if (!stored) return reply(res, 404, { code: "RECORD_NOT_FOUND" });
-        const record = current(stored);
-        const first = record.packet.posts.find((p) => p.postId === input.filters.evidenceId);
-        if (!first) return reply(res, 404, { code: "RECORD_NOT_FOUND" });
-        const unknown = (reasonCode: string) => ({ state: "unknown", value: null, reasonCode, evidenceRefs: [], sourceRef: null, occurredAt: null, sourceUpdatedAt: null, observedAt: record.recordedAt });
-        const data = {
-          evidenceRef: first.postId, creatorHandle: record.packet.creatorId, version: `v${record.revision}`, mediaUrl: first.sourceUrl, checkoutRoute: record.packet.checkoutRoute,
-          observations: [], savedAt: record.recordedAt, reviewerRole: "Authenticated evidence reviewer",
-          modelPublication: { label: record.assessment.config.status === "bound" ? record.assessment.config.version : "Configuration unbound", note: record.assessment.config.status === "bound" ? "Approved immutable baseline verified; numerical configuration preserved." : "Approved evidence policy is implemented; numeric baseline must be explicitly bound." },
-          assessments: { creative: unknown("NO_CREATIVE_WEIGHT_BINDING"), routine: unknown("SEE_AGENT_QUALIFICATION"), commerce: unknown("NO_VERIFIED_ORDER_EVIDENCE") },
-          firstReview: null, disputes: [], readiness: { state: "notReady", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] },
-          qualification: record.assessment, agentEvidence: record.packet,
-        };
+        if (input.viewKey !== "evidenceRecord") return reply(res, 400, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
+        if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+        const record = evidenceReviews.read(input.filters.creatorId, input.filters.evidenceId, input.filters.runId);
+        if (!record) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
+        const data = record.data;
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data), dataState: record.stale ? "stale" : "ready", data,
-          sourceFreshness: [], coverage: { expectedCount: 3, observedCount: record.assessment.packet.qualifyingPosts, missingCount: Math.max(0, 3 - record.assessment.packet.qualifyingPosts), complete: record.assessment.contentQualification === "pass", reasonCodes: record.assessment.reasonCodes },
-          capabilities: [{ actionKind: "saveEvidenceDraft", state: "held", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] }, { actionKind: "markWatched", state: "held", reasonCodes: ["AGENT_ASSESSMENT_READ_ONLY"] }], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
+          sourceFreshness: [], coverage: { expectedCount: 3, observedCount: data.qualification.packet.qualifyingPosts, missingCount: Math.max(0, 3 - data.qualification.packet.qualifyingPosts), complete: data.qualification.contentQualification === "pass", reasonCodes: data.qualification.reasonCodes },
+          capabilities: ["saveEvidenceDraft", "recordDisagreement"].map(actionKind => ({ actionKind, state: auth.role !== "reviewer" ? "denied" : record.canAnnotate ? "available" : "held",
+            reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : record.canAnnotate ? [] : ["REVIEW_CURRENT_EVIDENCE_OR_LIMIT"] })).concat([{ actionKind: "markWatched", state: "held", reasonCodes: ["J20_SOURCE_REVIEW_REQUIRED"] }]),
+          page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
         });
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
+      if (error instanceof EvidenceReviewError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof OperationsCursorError) return reply(res, error.code === "OPERATIONS_CURSOR_EXPIRED" ? 409 : 400, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof ScheduleDraftError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),

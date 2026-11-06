@@ -1,10 +1,11 @@
 import { z } from "zod";
+import { accessObservation } from "./evidenceReviewContract.ts";
 
 /** Public wire schemas and pure summaries. Safe to import in the browser; no source access happens here. */
 const id = z.string().trim().min(1).max(240);
 const reason = z.string().trim().min(1).max(1_000);
 const sourceRef = z.string().trim().min(1).max(1_000);
-const instant = z.string().datetime({ offset: true });
+const instant = z.string().datetime({ offset: true }).refine(t => Number.isFinite(Date.parse(t)), "Use a finite source timestamp.");
 const count = z.number().int().nonnegative().safe();
 const seconds = z.number().finite().nonnegative();
 const rating = z.number().int().min(0).max(5).nullable();
@@ -66,8 +67,11 @@ export const reviewSchema = z.object({
   status: z.enum(["complete", "partial", "blocked", "unassessed"]),
   visualMethod: z.enum(["continuous", "sampledFrames", "unassessed"]),
   audioMethod: z.enum(["heard", "asr", "nativeCaptions", "silent", "unassessed"]),
+  reviewerRef: id.optional(),
+  reviewedAt: instant.refine(t => Number.isFinite(Date.parse(t))).optional(),
   sampledPoints: z.array(seconds).max(5_000),
   watchedIntervals: z.array(intervalSchema).max(500),
+  heardIntervals: z.array(intervalSchema).max(500).optional(),
   observedActions: z.array(z.object({ atSec: seconds, action: reason, meaningfulUse: z.boolean() }).strict()).max(500),
   claims: z.array(z.object({ atSec: seconds, text: reason, method: z.enum(["heard", "asr", "nativeCaptions"]) }).strict()).max(500),
   inferences: z.array(reason).max(100),
@@ -77,6 +81,8 @@ export const reviewSchema = z.object({
   if (new Set(review.sampledPoints).size !== review.sampledPoints.length) fail("sampledPoints", "Sampled points must be unique.");
   if (review.visualMethod === "sampledFrames" && review.watchedIntervals.length)
     fail("watchedIntervals", "Sampled frame points cannot be represented as continuously watched intervals.");
+  if (review.heardIntervals?.length && review.audioMethod !== "heard")
+    fail("heardIntervals", "Heard intervals require an actual heard-audio review.");
   if (review.visualMethod === "continuous" && review.sampledPoints.length)
     fail("sampledPoints", "Record the continuous method's watched intervals separately from sampled frames.");
   if (review.visualMethod === "unassessed" && (review.sampledPoints.length || review.watchedIntervals.length || review.observedActions.length))
@@ -121,6 +127,7 @@ export const postEvidenceSchema = z.object({
   canonicalMediaId: id,
   network: networkSchema,
   sourceUrl: z.string().url().max(2_000),
+  accessObservation: accessObservation.optional(),
   publishedAt: instant.nullable(),
   observedAt: instant,
   relevant: z.boolean(),

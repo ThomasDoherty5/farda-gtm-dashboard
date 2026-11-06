@@ -13,6 +13,7 @@ export function ViewError({ error, subject, hasPriorData = false, onRetry, paren
     unauthenticated: { state: "Denied", title: "Sign in again", body: "Your session ended. Sign in to this workspace, then check access again.", retry: true },
     forbidden: { state: "Denied", title: "No access to this account", body: "You don't have permission to view this account's data. Check access again after your permissions change.", retry: true },
     conflict: { state: "Error", title: "The source record changed", body: "Reload the current version before continuing with your edits.", retry: true },
+    validation: { state: "Error", title: "Check this request", body: `${subject} could not be loaded. ${error.message}`, retry: true },
     notFound: { state: "Error", title: "Record not found", body: error.message, retry: false },
     unavailable: { state: "Error", title: "Data unavailable", body: error.message, retry: true },
     unknown: { state: "Error", title: "Something went wrong", body: `${subject} could not be loaded.`, retry: true },

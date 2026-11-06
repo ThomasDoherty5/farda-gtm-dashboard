@@ -1,13 +1,13 @@
 # Repository intake
 
-Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae`, intake taken 2026-11-03.
+Required by section 1 of the handoff and THO-292 FHC-04. Original intake: `75b98ae`, November 3. Runtime status refreshed November 6 after the native agent service and saved-operations releases.
 
 ## Stack
 
 | Item | Value |
 | -- | -- |
 | App directory | repository root |
-| Runtime | Node 22 or later (`engines`), tested locally on 24.21.0; CI uses 22 |
+| Runtime | Node 24 for the native SQLite service and CI; frontend package engine permits 22 or later |
 | Package manager | npm, with `package-lock.json` |
 | Framework | React 18, Vite 5, TypeScript 5 in strict mode |
 | Routing | React Router 6, data router built from the generated manifest |
@@ -15,7 +15,7 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | Styling | CSS custom properties from Figma tokens, and CSS modules |
 | Font | `@fontsource/inter` 4.5.15, pinned (see `design-map.md`) |
 | Tests | Vitest and Testing Library; Playwright and axe |
-| Auth | None yet in the app. Demo scope is fixed; live scope comes from THO-283. The reference server has a fake dev sign-in only |
+| Auth | Demo scope is fixed and separate. Native server issues scoped reader/reviewer sessions, with origin/CSRF checks on cookie-authorized mutations. Machine credentials remain server-side. The reference server is a separate test double. |
 
 ## Commands
 
@@ -38,7 +38,7 @@ Required by section 1 of the handoff and THO-292 FHC-04. Base revision: `75b98ae
 | Name | Purpose |
 | -- | -- |
 | `VITE_FARDA_ADAPTER` | `demo` (default), `sandbox` or `production`. Anything else is a startup error |
-| `VITE_FARDA_ADAPTER_BASE_URL` | Where the HTTP transport (`src/adapter/httpTransport.ts`) sends requests; paths are in `docs/adapter-decisions.md`. Used only when `VITE_FARDA_ADAPTER` is `sandbox` or `production`. With no value the live adapter keeps its pending transport and answers `INTEGRATION_PENDING`. Must be https, or http for localhost. No production backend exists, so the only server that answers is the reference server |
+| `VITE_FARDA_ADAPTER_BASE_URL` | Where the HTTP transport (`src/adapter/httpTransport.ts`) sends requests; paths are in `docs/adapter-decisions.md`. Used only when `VITE_FARDA_ADAPTER` is `sandbox` or `production`. With no value it answers `INTEGRATION_PENDING`. Must be https, or http for localhost. The native agent service supports its published sandbox views; unsupported sources remain pending and never fall back to fixtures. |
 
 `VITE_` values ship to the browser, so they never hold secrets.
 
@@ -50,9 +50,9 @@ Approval history has no proposed path, so it uses query values on the approval r
 
 ## Open inputs
 
-- Figma: a copy works; the original still refuses this account. See `figma-access-gap.md`.
-- THO-283 has not published a transport, so the contract in `src/adapter/contract.ts` stays proposed. The live adapter's front-end half is in `live-adapter.md`; with no transport it still answers `INTEGRATION_PENDING`.
-- Approval and run view models in `src/features/approvals/types.ts` are proposals. THO-283 and THO-321 freeze the real schemas.
+- Original Figma access has been verified for the shared-shell release. Exact source frames must still be re-read for each changed screen; see `figma-access-gap.md`.
+- Native sandbox API reads, durable saves and source-bound modules are implemented in `src/creator-agent/server.ts`; the schema identifier remains `2026-11-02.proposed` for compatibility. This does not mean every dashboard view or provider is connected. See the module API documentation and Linear for each tested release stage.
+- Approval and run view models in `src/features/approvals/types.ts` remain frontend proposals until their native J04 decision/dispatch paths are bound. A saved draft, local proposal or source observation does not authorize execution.
 
 ## Questions for the THO-283 freeze
 

@@ -200,6 +200,19 @@ describe("video evidence review", () => {
     expect(details.getByText(/not verified Farda orders/)).toBeInTheDocument();
   });
 
+  it("shows a short author pseudonym and conceals a raw identifier in a legacy comment response", async () => {
+    const packet=syntheticAgentEvidence(),comments=packet.posts[0]!.comments;
+    if(comments.status!=="observed" || comments.rows.length<2) throw new Error("Expected two observed synthetic comments");
+    const raw="legacy-commenter@example.invalid",token="author:"+"1234567890abcdef".repeat(4);
+    comments.rows[0]!.authorRef=raw;comments.rows[1]!.authorRef=token;
+    const {user}=await open("demo-evidence-1",withAgent(syntheticQualification(),packet));
+    await user.click(screen.getByRole("button",{name:"Inspect model status"}));
+    const table=screen.getByRole("region",{name:"Observed comment rows synthetic-post-1",hidden:true});
+    expect(table).toHaveTextContent("Author unknown");
+    expect(table).toHaveTextContent("Author 12345678");
+    expect(table).not.toHaveTextContent(raw);expect(table).not.toHaveTextContent(token);
+  });
+
   it("keeps missing comments and baseline views unknown, and never rescores when the legacy draft route changes", async () => {
     const qualification = syntheticQualification({
       config: { status: "bound", version: "synthetic-config-7", hash: "synthetic-hash", baselineHash: "synthetic-baseline", numericHash: "synthetic-numeric" },

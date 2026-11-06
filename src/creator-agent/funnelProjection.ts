@@ -332,7 +332,7 @@ function lifecycleMetrics(opps: Event[][], mature: Event[][], asOf: string) {
     ).map((type) => measure(type, countOp(opps, type), "opportunities")),
   ];
 }
-export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string): LivePipeline {
+export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string, selectedOpportunities?: ReadonlySet<string>, metricNetwork?: Event["network"]): LivePipeline {
   // Apply corrections over all versions before selecting a facet. The ledger is bounded by recorded/observed time in the repository.
   const superseded = new Set(all.map((e) => e.correctsEventId).filter(Boolean));
   const original = all.filter((e) => !superseded.has(e.eventId)).sort(eventOrder);
@@ -350,6 +350,7 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
   const opps = [...groups(active, (e) => e.opportunityId).values()].filter((es) => {
     const acquired = es.find((e) => e.acquisitionRef)?.acquisitionRef ?? es[0]!.sourceAccount;
     return (
+      (!selectedOpportunities || selectedOpportunities.has(es[0]!.opportunityId)) &&
       (!filters.source || filters.source === acquired.source) &&
       (!filters.account || filters.account === (acquired.sourceId ?? acquired.accountId)) &&
       es.some((e) => included(e, filters))
@@ -373,7 +374,7 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
       : has(es, "confirmedSent")
         ? "confirmedSent"
         : last(es.filter((e) => ["uncertain", "queued", "attempt"].includes(e.eventType)))?.eventType;
-  const matureEvents = mature.flat(),
+  const matureEvents = mature.flat().filter(e => !metricNetwork || e.network === metricNetwork),
     orders = activeOrders(matureEvents),
     retainedOrders = orders.filter(retained);
   const disputed = matureEvents.some((e) => e.details.blockers.includes(ORDER_CONFLICT));

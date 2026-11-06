@@ -1,3 +1,4 @@
+import { SavedCreatorPlatformPage } from "./SavedCreatorPlatform";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -19,6 +20,8 @@ import styles from "./Creators.module.css";
 /** TikTok Shop: the current funnel board (9:143, view=board) and the dashboard (23:440, view=dashboard). Owner THO-294. Read work only. */
 export function TikTokPage() {
   const [search] = useSearchParams();
+  const native = useScope().adapter.kind !== "demo";
+  if (native) return <SavedCreatorPlatformPage key={search.get("view")} viewKey={search.get("view") === "board" ? "tiktokBoard" : "tiktokDashboard"} />;
   return search.get("view") === "board" ? <Board /> : <Dashboard />;
 }
 

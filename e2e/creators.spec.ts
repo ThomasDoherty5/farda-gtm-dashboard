@@ -46,8 +46,8 @@ test.describe("creator boards and dashboards against Figma at 1440", () => {
     await page.goto(DASH);
     await page.evaluate(() => document.fonts.ready);
     await ready(page, DASH);
-    // 18px taller than Figma's 2583: the history tabs' reason is visible text and wraps onto a second line (design-map.md).
-    expect(await height(page)).toBe(2601);
+    // Original Figma source 23:275 includes the commission history note in a single row.
+    expect(await height(page)).toBe(2583);
     expect(await box(kpi(page, "Linked-post views"))).toMatchObject({ x: 72, y: 590, w: 312, h: 152 });
     expect(await box(page.getByTestId("cumulative-chart"))).toMatchObject({ x: 97, y: 871, w: 784, h: 244 });
     expect(await box(page.getByTestId("action-queue"))).toMatchObject({ x: 924, y: 766, w: 444, h: 330 });
@@ -105,7 +105,7 @@ test("a gated history tab is reachable by keyboard and says why it is unavailabl
   const tab = page.getByRole("button", { name: "Paid · history" });
   await tab.focus();
   await expect(tab).toBeFocused();
-  await expect(tab).toHaveAccessibleDescription(/no new gifted-only, paid or hybrid acquisition can start here/);
+  await expect(tab).toHaveAccessibleDescription(/Read-only\. Past fees payable\. New offers commission-only\./);
   await tab.click({ force: true });
   await expect(page).toHaveURL(/view=dashboard$/);
 });

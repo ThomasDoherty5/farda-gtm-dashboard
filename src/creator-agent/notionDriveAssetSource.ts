@@ -3,6 +3,8 @@ import { z } from "zod";
 import { assetIdSchema, assetScopeSchema, sameAssetScope, unavailableAssetAuthority } from "./assets.ts";
 import type { AssetAuthority, AssetScope, AssetSubmission } from "./assets.ts";
 import { digest } from "./config.ts";
+import { projectNotionCollaboration } from "./notionCollaboration.ts";
+import type { CollaborationSourceReader } from "./collaborationWorkflowSchema.ts";
 
 // Credentials and provider identifiers belong in private server configuration.
 type TokenReader = () => Promise<string | null>;
@@ -201,6 +203,42 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     };
   }
 
+  const readCollaborationSnapshot: CollaborationSourceReader = async (requested,id,serverReferenceKey) => {
+    if (!sameAssetScope(requested,config.scope) || requested.environment !== "sandbox") throw new AssetRegistryReadError("SOURCE_SCOPE_DENIED",403,"denied");
+    const canonical = pageId.safeParse(id);
+    if (!canonical.success) return null;
+    const token = await notionToken();
+    if (!token) throw missingAccess();
+    // Never read arbitrary pages by caller-supplied ID. Prove membership through the fixed authorized collection first.
+    let row: RegistryRow | undefined, cursor: string | null = null;
+    const cursors = new Set<string>();
+    for (let n=0;n<10;n++) {
+      const response = await readJson(fetcher,notionUrl(`data_sources/${ids.collaborations}/query`),token,
+        {page_size:100,result_type:"page",...(cursor?{start_cursor:cursor}:{})});
+      const page=notionList.safeParse(response);
+      if(!page.success || page.data.results.some(r=>r.parent.data_source_id!==ids.collaborations)) throw badResponse();
+      row=page.data.results.find(r=>r.id===canonical.data);
+      if(row)break;
+      if(!page.data.has_more) {
+        if(page.data.request_status?.type==="incomplete") throw new AssetRegistryReadError("SOURCE_COVERAGE_INCOMPLETE",503);
+        return null;
+      }
+      cursor=page.data.next_cursor;
+      if(!cursor || cursors.has(cursor)) throw badResponse();
+      cursors.add(cursor);
+    }
+    if(!row) throw new AssetRegistryReadError("SOURCE_COVERAGE_INCOMPLETE",503);
+    const content=notionList.safeParse(await readJson(fetcher,notionUrl(`data_sources/${ids.content}/query`),token,
+      {page_size:100,result_type:"page",filter:{property:"Collaboration",relation:{contains:canonical.data}}}));
+    if(!content.success || content.data.results.some(m=>m.parent.data_source_id!==ids.content || !matchesRelation(m,"Collaboration",canonical.data))) throw badResponse();
+    const check=await registryRow(canonical.data,ids.collaborations,token);
+    if(!check || check.last_edited_time!==row.last_edited_time) throw new AssetRegistryReadError("SOURCE_VERSION_CHANGED",409);
+    const snapshotScope={workspaceId:requested.workspaceId,accountId:requested.accountId,environment:"sandbox" as const};
+    const safeRef=(raw:string)=>"registry:"+createHmac("sha256",serverReferenceKey??secret).update(JSON.stringify(["collaboration-detail.v1",snapshotScope,raw])).digest("hex");
+    return projectNotionCollaboration(snapshotScope,row,content.data.results,
+      content.data.has_more || content.data.request_status?.type==="incomplete" ? "partial":"complete",clock(),safeRef);
+  };
+
   async function registryRow(id: string, source: string, token: string | null) {
     const parsed = notionPage.safeParse(await readJson(fetcher, notionUrl(`pages/${id}`), token));
     if (!parsed.success || parsed.data.id !== id || parsed.data.parent.data_source_id !== source) return null;
@@ -255,5 +293,5 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     } catch { return null; }
   }
   const authority: AssetAuthority = { ...unavailableAssetAuthority, resolveSource };
-  return { listRegistryPage, readNotionWorkspace, authority };
+  return { listRegistryPage, readNotionWorkspace, readCollaborationSnapshot, authority };
 }

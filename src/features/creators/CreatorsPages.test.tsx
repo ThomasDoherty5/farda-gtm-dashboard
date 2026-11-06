@@ -163,7 +163,7 @@ describe("Social Cat dashboard (23:275)", () => {
     for (const name of ["Gifted · history", "Paid · history", "Hybrid · history"]) {
       const tab = screen.getByRole("button", { name });
       expect(tab).toHaveAttribute("aria-disabled", "true");
-      expect(tab).toHaveAccessibleDescription(/no new gifted-only, paid or hybrid acquisition can start here/);
+      expect(tab).toHaveAccessibleDescription(/Read-only\. Past fees payable\. New offers commission-only\./);
       await user.click(tab);
     }
     expect(screen.getByRole("link", { name: "Affiliate" })).toHaveAttribute("aria-current", "page");
