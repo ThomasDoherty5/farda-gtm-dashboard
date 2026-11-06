@@ -110,6 +110,7 @@ export class OfferRepository {
   readOffer(id:string,revision?:number) {const s=this.snapshot(routeId.parse(id),revision);return s?this.project(s):null;}
   saveFromAdapter(id:string,expected:string|null,input:unknown,key:string) {
     const terms=offerTermsSchema.parse(input);routeId.parse(id);
+    if(id==="new")throw new AgentConflict("RESERVED_OFFER_ID");
     return this.apply(key,{id,expected,terms,operation:"offer-propose"},()=>{
       const prior=this.snapshot(id);
       if((prior?.version??null)!==expected)throw new AgentConflict("VERSION_CONFLICT");
@@ -139,7 +140,13 @@ export class OfferRepository {
       const basis=record.assessment;
       if(!record.assessmentCurrent || !basis || (basis.state!=="prospectiveInviteEligible" && basis.state!=="activationReady"))
         throw new AgentConflict("CURRENT_INVITATION_SCORECARD_REQUIRED");
-      if(input.kind==="creator-accepted" && !record.ownerApprovalRef)throw new AgentConflict("OWNER_APPROVAL_REQUIRED");
+      if(input.kind==="creator-accepted") {
+        const row=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=? AND kind='owner-approved'").get(id,s.revision);
+        if(!row)throw new AgentConflict("OWNER_APPROVAL_REQUIRED");
+        const owner=storedDecisionSchema.parse(JSON.parse(String(row.body)));
+        if(Date.parse(owner.validUntil)<=now || Date.parse(p.occurredAt)<Date.parse(owner.occurredAt))
+          throw new AgentConflict("CURRENT_OWNER_APPROVAL_REQUIRED");
+      }
       const old=this.db.prepare("SELECT source_ref FROM offer_decisions WHERE offer_id=? AND revision=? AND kind=?").get(id,s.revision,input.kind);
       if(old && old.source_ref!==input.sourceRef)throw new AgentConflict("DECISION_ALREADY_RECORDED");
       const reused=this.db.prepare("SELECT offer_id,revision,kind FROM offer_decisions WHERE source_ref=?").get(input.sourceRef);
