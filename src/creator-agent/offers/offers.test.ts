@@ -92,6 +92,25 @@ describe("immutable scoped offer proposals and forecasts",()=>{
     expect(revised.state).toBe("proposed");expect(repo.matchesOfferVersion("offer-a","v1",v1.manifestHash)).toBe(false);
     expect(repo.acceptedTerms("offer-a")).toBeNull();expect(repo.readOffer("offer-a",1)?.acceptedRef).toBe("native");db.close();
   });
+  it("holds an unsupported platform subsidy and keeps affiliate acceptance separate from posting consent",()=>{
+    const db=new AgentStore(":memory:",scope),t=proposal(),auth=authority(t);
+    t.base={...t.base,platformCouponMinor:100,fundedCouponMinor:100,platformFundingRef:"promotion-1"};
+    t.manifest.deliverables=[{id:"clip",quantity:1,network:"Instagram",format:"Reel",concept:"Morning routine",dueAt:null,
+      deadlineAnchor:null,timezone:null,disclosure:null,cta:null,previewAgreed:null,revisionLimit:null,rights:null}];
+    const repo=new OfferRepository(db.database,scope,auth);
+    const held=repo.saveFromAdapter("offer-a",null,t,"held");
+    expect(held.blockers).toContain("Platform subsidy unverified: base");
+    auth.funding=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:"promotion-1",
+      validUntil:"2099-01-01T00:00:00Z",scenario:"base",bundle:"single",currency:"USD",advertisedDiscountMinor:100,reimbursedMinor:100,feeTreatment:"standard"});
+    const v=repo.saveFromAdapter("offer-a",held.version,t,"refresh");expect(v.blockers).toEqual([]);expect(v.manifestHash).not.toBe(held.manifestHash);
+    for(const kind of ["owner-approved","creator-accepted"] as const) {
+      auth.decision=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:kind,offerId:"offer-a",version:v.version,
+        manifestHash:v.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2090-01-01T01:00:00+01:00"});
+      repo.decision("offer-a",{version:v.version,kind,sourceRef:kind},kind);
+    }
+    expect(repo.onboarding("offer-a")).toMatchObject({postingObligations:[],accepted:{validUntil:"2090-01-01T00:00:00.000Z"}});
+    db.close();
+  });
   it("does not trust wrong-account facts, incompatible fixed commissions, Social Cat omissions or unfounded bundle claims",()=>{
     const store=new AgentStore(":memory:",scope), t=proposal();t.sample={requested:false,seededCreators:0,unitsPerCreator:0,shippingCapMinor:null,merchandiseCapMinor:null};
     t.commission={...t.commission,type:"fixed-per-sale",fixedMinor:299,standardRateBps:null};t.manifest.claims=["separate-routines"];

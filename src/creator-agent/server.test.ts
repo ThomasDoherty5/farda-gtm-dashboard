@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { evt } from "./funnelFixtures.testkit.ts";
+import type { FunnelAuthority } from "./funnelStore.ts";
 import { newOfferTerms } from "./offers/contract.ts";
 import { createAgentServer } from "./server.ts";
 import { bindConfig, digest, type ConfigBinding } from "./config.ts";
@@ -26,11 +28,11 @@ describe("actual creator-agent HTTP + SQLite service", () => {
   let databasePath: string;
   let currentBindings: ConfigBinding[];
 
-  async function start(bindings = [syntheticBinding()]) {
+  async function start(bindings = [syntheticBinding()], funnelAuthority?: FunnelAuthority) {
     currentBindings = bindings;
     app = createAgentServer({
       databasePath, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings,
+      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, bindings, funnelAuthority,
     });
     const server = app.server;
     await new Promise<void>((resolve, reject) => {
@@ -102,6 +104,28 @@ describe("actual creator-agent HTTP + SQLite service", () => {
       const input = { method: "POST", headers: { "content-type": "application/json" }, body: "{}" };
       expect((await request(path, input, null)).status).toBe(401);
       expect((await request(path, input)).status).toBe(403);
+    }
+  });
+
+  it("counts an attempt only from a trusted producer and preserves that receipt across restart", async () => {
+    const event = evt("synthetic-attempt", "attempt");
+    const accountId = SYNTHETIC_SCOPE.accountIds[0]!;
+    for (const ref of [event.sourceAccount, event.acquisitionRef, event.creatorRef, event.campaignCohortRef]) if (ref) ref.accountId = accountId;
+    const hash = digest(event);
+    const value = { actor: { id: "synthetic-job", role: "producer" }, mode: "observe", accountRef: event.sourceAccount,
+      inputHash: hash, jobId: "synthetic-intake", jobVersion: "1", policyVersion: event.policyOfferApprovalVersions.policy,
+      correlationId: "synthetic-funnel-input", idempotencyKey: "synthetic-attempt", requestedAt: new Date().toISOString(), checkpoint: null, deadline: null, event };
+    const post = (v: unknown) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(v) });
+    const ingest = () => request("/v1/funnel/events", post(value), SYNTHETIC_REVIEW_TOKEN);
+    expect((await ingest()).status).toBe(403); // A reviewer is not the source of a native receipt.
+    await stop();
+    await start(undefined, { resolve: async (scope, _request, ref) => ref === event.evidenceRef.provenanceRef ? { ...scope, eventHash: hash } : null });
+    expect((await ingest()).body).toMatchObject({ replayed: false, storedEventRef: event.eventId });
+    await stop(); await start();
+    expect((await ingest()).body).toMatchObject({ replayed: true, storedEventRef: event.eventId });
+    for (const key of ["pipelineSummary", "pipelineBranches"]) {
+      const answer = await request("/v1/read", post({ ...readEnvelope(), viewKey: key, filters: {} }));
+      expect(answer.body).toMatchObject({ data: { coverage: { events: 1, opportunities: 1 }, sends: { attempts: 1, confirmed: 0 } } });
     }
   });
 

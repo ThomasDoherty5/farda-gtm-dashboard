@@ -42,7 +42,7 @@ function eventContext(event: FunnelEvent) {
     route: event.route,
   });
 }
-function checkIdentity(previous: FunnelEvent, next: FunnelEvent) {
+function checkIdentity(previous: FunnelEvent, next: FunnelEvent, history: FunnelEvent[]) {
   const before = previous.creatorRef,
     after = next.creatorRef;
   if (before.canonicalId && after.canonicalId && before.canonicalId !== after.canonicalId)
@@ -52,7 +52,15 @@ function checkIdentity(previous: FunnelEvent, next: FunnelEvent) {
   // A verified bridge is required before identities from two different provider accounts can be joined.
   const unresolved = before.canonicalId ? next : previous;
   const resolved = before.canonicalId ? previous : next;
-  const bridge = resolved.details.identityCrosswalk ?? next.details.identityCrosswalk;
+  const bridge = [resolved, next, ...history]
+    .map((e) => e.details.identityCrosswalk)
+    .find(
+      (b) =>
+        b &&
+        b.canonicalId === resolved.creatorRef.canonicalId &&
+        b.fromSource === unresolved.creatorRef.source &&
+        b.fromId === (unresolved.creatorRef.sourceId ?? unresolved.ingestIdentity.fingerprint),
+    );
   if (
     !bridge ||
     bridge.canonicalId !== resolved.creatorRef.canonicalId ||
@@ -65,6 +73,7 @@ function sourceKey(e: FunnelEvent) {
   return digest([
     e.sourceAccount.source,
     e.sourceAccount.accountId,
+    e.sourceAccount.sourceId,
     e.eventType,
     e.ingestIdentity.nativeId ? "native" : "crosswalk",
     e.ingestIdentity.nativeId ?? e.ingestIdentity.fingerprint,
@@ -74,8 +83,7 @@ function sourceKey(e: FunnelEvent) {
 }
 function replayHash(e: FunnelEvent) {
   // Another sync may observe the same native revision later under a different transport ID.
-  const { eventId: _eventId, observedAt: _observedAt, ...fact } = e;
-  return digest(fact);
+  return digest(Object.fromEntries(Object.entries(e).filter(([key]) => key !== "eventId" && key !== "observedAt")));
 }
 export class FunnelRepository {
   private readonly db: DatabaseSync;
@@ -172,10 +180,11 @@ export class FunnelRepository {
               "SELECT context_hash,body FROM funnel_events_v1 WHERE workspace=? AND account=? AND opportunity=? ORDER BY seq",
             )
             .all(...scopeArgs, e.opportunityId);
-          for (const anchor of anchors) {
+          const history = anchors.map((anchor) => JSON.parse(String(anchor.body)) as FunnelEvent);
+          for (const [index, anchor] of anchors.entries()) {
             if (anchor.context_hash !== context) throw new FunnelError("FUNNEL_OPPORTUNITY_CONTEXT_CHANGED", 409);
-            const prior = JSON.parse(String(anchor.body)) as FunnelEvent;
-            checkIdentity(prior, e);
+            const prior = history[index]!;
+            checkIdentity(prior, e, history);
             if (
               prior.acquisitionRef &&
               e.acquisitionRef &&
@@ -194,7 +203,17 @@ export class FunnelRepository {
             if (!target || target.opportunity !== e.opportunityId || replaced)
               throw new FunnelError("FUNNEL_CORRECTION_CONFLICT", 409);
             const prior = JSON.parse(String(target.body)) as FunnelEvent;
-            if (prior.eventType !== e.eventType || Date.parse(prior.observedAt) > Date.parse(e.observedAt))
+            const priorIdentity = prior.ingestIdentity.nativeId ?? prior.ingestIdentity.fingerprint;
+            const replacementIdentity = e.ingestIdentity.nativeId ?? e.ingestIdentity.fingerprint;
+            if (
+              prior.eventType !== e.eventType ||
+              priorIdentity !== replacementIdentity ||
+              prior.sourceAccount.source !== e.sourceAccount.source ||
+              prior.sourceAccount.sourceId !== e.sourceAccount.sourceId ||
+              prior.details.orderId !== e.details.orderId ||
+              prior.details.postId !== e.details.postId ||
+              Date.parse(prior.observedAt) > Date.parse(e.observedAt)
+            )
               throw new FunnelError("FUNNEL_CORRECTION_MISMATCH", 409);
           }
           this.db

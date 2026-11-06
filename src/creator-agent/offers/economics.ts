@@ -43,7 +43,7 @@ export function offerScenario(terms: OfferTerms, label: "base" | "downside") {
     perOrderMarginMinor:perOrder===null?null:Math.round(perOrder), breakEvenOrders:breakEven, reserveMinor:reserve, earnedRewardMinor:earned,
     paidCommissionCashMinor:terms.costs.commissionAlreadyPaid.minor, missing: [...new Set(missing)] };
 }
-export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | null, verifiedCostKeys: Set<string>, now: string) {
+export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | null, verifiedCostKeys: Set<string>, now: string, verifiedFunding = new Set<string>()) {
   const blockers: string[] = [];
   if (!provider) blockers.push("Provider terms and program entitlement unverified");
   else {
@@ -73,6 +73,7 @@ export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | nu
     if(!verifiedCostKeys.has(key)) blockers.push(`Cost evidence unverified: ${key}`);
   for (const label of ["base","downside"] as const) {
     const scenario=offerScenario(terms,label);
+    if(terms[label].platformCouponMinor>0 && !verifiedFunding.has(label)) blockers.push(`Platform subsidy unverified: ${label}`);
     if(scenario.contributionMinor===null || scenario.contributionMinor<=0 || !scenario.orders) blockers.push(`Cohort payback unproven: ${label}`);
   }
   return blockers;

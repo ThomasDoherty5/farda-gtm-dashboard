@@ -154,7 +154,7 @@ describe("EVT-INV scoped acquisition ledger", () => {
       recipients: 1,
       confirmed: 1,
       uncertain: 0,
-      queued: 1,
+      queued: 0,
       replies: 1,
       matched: 1,
     });
@@ -246,5 +246,36 @@ describe("EVT-INV scoped acquisition ledger", () => {
     expect(now.coverage.unavailable).toBe(1);
     expect(now.queue[0]?.blockers).toHaveLength(3);
     expect(Object.values(now.exclusions)).toEqual([1]);
+  });
+  it("counts reached receipts separately from mature conversions and quarantines multiply attributed orders", async () => {
+    await ingest(evt("a", "discovered"));
+    await ingest(evt("ar", "directReviewed", "A", 6));
+    await ingest(evt("b", "discovered", "B", 5, { maturationAt: jan(30) }));
+    await ingest(evt("br", "directReviewed", "B", 6, { maturationAt: jan(30) }));
+    const order = details({
+      orderId: "shared-order",
+      retainedMinor: 2000,
+      currency: "USD",
+      attributionVersion: "v1",
+      attributionWindow: "7 days",
+    });
+    await ingest(evt("order-A", "retainedOrder", "A", 8, order));
+    await ingest(
+      evt("order-B", "retainedOrder", "B", 9, {
+        ...order,
+        maturationAt: jan(30),
+        sourceAccount: fixtureRef("shopify", "other-provider"),
+      }),
+    );
+    const data = repo.read();
+    expect(data.milestones.find((m) => m.key === "directReviewed")).toMatchObject({
+      reached: 2,
+      eligible: 1,
+      advanced: 1,
+    });
+    expect(data.queue.map((q) => q.primary)).toEqual(["Order attribution disputed", "Order attribution disputed"]);
+    expect(data.milestones.find((m) => m.key === "retainedOrder")?.reached).toBe(0);
+    expect(data.outcomes.find((m) => m.name === "Attributed net sales")?.value).toBeNull();
+    expect(data.coverage.incomplete).toBe(true);
   });
 });

@@ -12,9 +12,13 @@ export function likeGate(post: PostEvidence): "pass" | "fail" | "unknown" {
   return post.nativeLikes.status !== "known" || !post.nativeLikes.exact ? "unknown" : post.nativeLikes.value > 200 ? "pass" : "fail";
 }
 /** Critical ratings use the reviewed post packet; every other numeric rating needs its own source proof. */
+function creativeRating(packet: EvidencePacket, key: "routine" | "demo") {
+  const reviewed = packet.posts.some(post => post.relevant && post.publishedAt && likeGate(post) === "pass" && post.review.status === "complete" && post.review.sourceRef);
+  return reviewed ? packet.ratings[key] : null;
+}
 export function configuredRating(packet: EvidencePacket, config: ModelConfig, criterionId: string, proof?: ScorecardProof): number | null {
-  if (criterionId === config.routineCriterionId) return packet.ratings.routine;
-  if (criterionId === config.demoCriterionId) return packet.ratings.demo;
+  if (criterionId === config.routineCriterionId) return creativeRating(packet, "routine");
+  if (criterionId === config.demoCriterionId) return creativeRating(packet, "demo");
   const refs = packet.criterionEvidenceRefs?.[criterionId];
   if (!refs?.length || refs.some((ref) => !ref.trim())) return null;
   if (["verifiedCommerce", "audienceAlignment", "reliability", "offerEconomics"].includes(criterionId)) {
@@ -53,7 +57,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   add("PUBLICATION_DATES", dates.size >= 2 ? "pass" : "unknown", `${dates.size}/2 publication dates`);
   add("MEANINGFUL_USE", usePosts.length >= 2 ? "pass" : "unknown", `${usePosts.length}/2 on-brief action/use examples`);
   for (const key of ["routine", "demo"] as const) {
-    const rating = packet.ratings[key];
+    const rating = creativeRating(packet, key);
     add(key === "routine" ? "ROUTINE_FLOOR" : "DEMO_FLOOR", rating === null ? "unknown" : rating >= 3 ? "pass" : "fail", rating === null ? "Required criterion evidence is unknown" : `Verified rating ${rating}/5; minimum 3/5`);
   }
   const contentGates = [...gates];
@@ -131,7 +135,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
     creatorId: packet.creatorId, briefId: packet.briefId, evidenceRevision: packet.evidenceRevision, termsRevision: packet.termsRevision, modelId,
     config: { status: binding ? "bound" : "unbound", version: binding?.current.version ?? null, hash: binding?.hash ?? null, baselineHash: binding?.baselineHash ?? null, numericHash: binding?.numericHash ?? null },
     configuration: binding ? { criteria: rows, bands: binding.current.bands, arithmetic: binding.current.arithmetic } : null,
-    state, contentQualification, gates, packet: { qualifyingPosts: posts.length, publicationDates: dates.size, meaningfulUsePosts: usePosts.length, postIds: posts.map((p) => p.postId) }, criteria: packet.ratings, score,
+    state, contentQualification, gates, packet: { qualifyingPosts: posts.length, publicationDates: dates.size, meaningfulUsePosts: usePosts.length, postIds: posts.map((p) => p.postId) }, criteria: { routine: creativeRating(packet, "routine"), demo: creativeRating(packet, "demo") }, score,
     metadata: { sampleSize: baseline.selected.length, coverage: baseline.coverage, reasonCodes: baseline.coverageReasons, postIds: baseline.selected.map((p) => p.postId), medianViews: baseline.viewStats.median, minViews: baseline.viewStats.min, maxViews: baseline.viewStats.max, comparableViewCount: baseline.viewStats.knownCount },
     comments, reviews: packet.posts.map((p) => ({ postId: p.postId, status: p.review.status, visualMethod: p.review.visualMethod, audioMethod: p.review.audioMethod, sampledPointCount: p.review.sampledPoints.length, continuousSeconds: secondsOf(p.review.watchedIntervals), likeGate: likeGate(p) })),
     routeEvidence,

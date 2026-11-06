@@ -45,6 +45,40 @@ describe("authorized route assessment", () => {
     expect(result.gates).toContainEqual(expect.objectContaining({ id: "SOURCE:route", state: "unknown" }));
   });
 
+  it("keeps unsupported creative ratings unknown when there are no source-reviewed eligible clips", () => {
+    const {packet,config} = example("website");
+    packet.posts = [];
+    packet.ratings = {routine:0,demo:5};
+    const result = assessCreator(packet,config);
+    expect(result).toMatchObject({state:"reviewNeeded",criteria:{routine:null,demo:null}, score:{earned:0,total:null}});
+  });
+
+  it("rejects a vanished or modified locally accepted offer and caps proof to its earliest expiry", async () => {
+    const { packet, snapshot, at } = example("website");
+    const t = snapshot.terms!;
+    t.origin = "saved-offer";
+    t.provider = snapshot.provider = "shopify-collabs";
+    t.eligibleBase = "retained-eligible-merchandise";
+    const validUntil = "2030-01-01T00:00:00Z";
+    const commission = {type:"percentage" as const,standardRateBps:2000,fixedMinor:null,shopAdsRateBps:null,
+      currency:"USD" as const,base:"retained-eligible-merchandise" as const,effectiveAt:null};
+    const offer = {offerId:t.offerId,version:t.version,manifestHash:t.manifestHash,creatorId:packet.creatorId,route:packet.checkoutRoute,
+      currency:"USD" as const,commission,provider:{sourceRef:"synthetic:provider",observedAt:snapshot.observedAt,validUntil,provider:"shopify-collabs" as const,
+      programRef:snapshot.programId,supportsPercentage:true,supportsFixedPerSale:false,actualCommission:commission,payoutOwner:"provider",
+      attributionWindowDays:30,precedence:"verified",conflictRule:"verified",holdDays:30,payoutSchedule:"monthly",payoutThresholdMinor:0,
+      onboarding:"verified",feeTreatment:"verified",fundingRule:"verified",refundRule:t.refundRule,trackingOwner:"provider"},acceptedRef:t.acceptedRef,validUntil};
+    const auth = {resolve: () => snapshot};
+    expect((await resolveScorecardEvidence(auth,scope,packet,at)).snapshot?.terms).toBeNull();
+    expect((await resolveScorecardEvidence(auth,scope,packet,at,() => ({...offer,manifestHash:"changed"}))).snapshot?.terms).toBeNull();
+    expect((await resolveScorecardEvidence(auth,scope,packet,at,() => ({...offer,commission:{...commission,standardRateBps:1999}}))).snapshot?.terms).toBeNull();
+    // An otherwise valid accepted receipt cannot activate an assessment calculated for different terms.
+    expect((await resolveScorecardEvidence(auth,scope,packet,at,() => offer)).snapshot?.terms).toBeNull();
+    packet.termsRevision = snapshot.termsRevision = t.termsRevision = t.manifestHash;
+    const exact = await resolveScorecardEvidence(auth,scope,packet,at,() => offer);
+    expect(exact.snapshot?.terms).toEqual(t);
+    expect(Date.parse(exact.snapshot!.validUntil)).toBe(Date.parse(validUntil));
+  });
+
   it("drops mismatched account, immutable creator identity, route and revision without disclosing other records", async () => {
     const { snapshot, inspect } = example("website");
     for (const patch of [
@@ -91,6 +125,19 @@ describe("authorized route assessment", () => {
     for (const patch of [{ linkOrCodeRef: null }, { attributionPrecedence: null }, { test: null },
       { test: { ...c.test!, refundOfOrderId: "different-order" } }, { test: { ...c.test!, refundApplied: false } }])
       expect((await inspect({ ...snapshot, commerce: { ...c, ...patch } })).state).toBe("prospectiveInviteEligible");
+  });
+
+  it("ignores an incompatible provider family and keeps unverified native seller/product linkage out of commerce scores", async () => {
+    const {inspect,snapshot} = example("tiktok-shop");
+    if (snapshot.commerce.kind !== "tiktok-shop") throw Error("wrong fixture");
+    const mismatch = await inspect({...snapshot, provider:"external-affiliate"});
+    expect(mismatch.routeEvidence).toMatchObject({status:"unknown",metrics:[]});
+    const denied = await inspect({...snapshot, commerce:{...snapshot.commerce, productEligibility:{status:"fail",sourceRef:"fixture:ineligible"}}});
+    expect(denied.routeEvidence?.status).toBe("failed");
+    expect(denied.score?.total).toBeNull();
+    const pending = await inspect({...snapshot, commerce:{...snapshot.commerce, creatorEligibility:{status:"unknown",sourceRef:"fixture:no-link"}}});
+    expect(pending.routeEvidence?.status).toBe("unknown");
+    expect(pending.routeEvidence?.criteria.find(c => c.id === "verifiedCommerce")?.rating).toBeNull();
   });
 
   it("requires native seller, creator and product linkage plus effective standard/Ads rates", async () => {

@@ -64,7 +64,7 @@ export function createAgentServer(options: AgentServerOptions) {
         if (!record) return null;
         const { stale, assessment } = current(record);
         return { runId: record.runId, creatorId, route: record.packet.checkoutRoute, modelId: assessment.modelId, configHash: assessment.config.hash,
-          policyVersion: assessment.policyVersion, termsRevision: record.packet.termsRevision, stale };
+          policyVersion: assessment.policyVersion, state: assessment.state, termsRevision: record.packet.termsRevision, stale };
       },
     });
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);

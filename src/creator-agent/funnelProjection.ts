@@ -36,8 +36,10 @@ const creator = (e: Event) =>
 const has = (events: Event[], type: FunnelType) => events.some((e) => e.eventType === type);
 const countOp = (opps: Event[][], type: FunnelType) => opps.filter((es) => has(es, type)).length;
 const last = (es: Event[]) => es.at(-1)!;
-const postKey = (e: Event) => JSON.stringify([e.network, e.sourceAccount.accountId, e.details.postId]);
+const postKey = (e: Event) =>
+  JSON.stringify([e.network, e.sourceAccount.sourceId ?? e.sourceAccount.accountId, e.details.postId]);
 const orderKey = (e: Event) => e.details.orderId!;
+const ORDER_CONFLICT = "Order attribution disputed";
 const reversed = (events: Event[]) => [...events].reverse();
 const terminal = ["optOut", "declined", "expired"] as const;
 const stageTask: Record<string, string> = {
@@ -75,7 +77,10 @@ function included(e: Event, f: FunnelFilters) {
 const activeOrders = (es: Event[]) =>
   [
     ...groups(
-      es.filter((e) => e.eventType === "retainedOrder" || e.eventType === "refund"),
+      es.filter(
+        (e) =>
+          (e.eventType === "retainedOrder" || e.eventType === "refund") && !e.details.blockers.includes(ORDER_CONFLICT),
+      ),
       orderKey,
     ).values(),
   ].map(last);
@@ -98,12 +103,12 @@ function measure(
 function milestoneEvents(es: Event[], key: (typeof stages)[number]): Event[] {
   return key === "retainedOrder" ? activeOrders(es).filter(retained) : es.filter((e) => e.eventType === key);
 }
-function stageRows(opps: Event[][]): LivePipeline["milestones"] {
+function stageRows(opps: Event[][], mature: Event[][]): LivePipeline["milestones"] {
   return stages.map((key, i) => {
     let eligible = 0,
       advanced = 0;
     const intervals: number[] = [];
-    for (const es of opps) {
+    for (const es of mature) {
       const inbound = es[0]!.route === "inbound";
       if (i === 0 || (inbound && key === "confirmedSent")) continue;
       const previous = key === "matched" && inbound ? "approval" : stages[i - 1]!;
@@ -131,8 +136,26 @@ function currentRow(es: Event[], asOf: string): LivePipeline["queue"][number] {
   const lastEvent = last(es),
     acquisition = es.find((e) => e.acquisitionRef)?.acquisitionRef ?? es[0]!.sourceAccount,
     currentTerminal = terminal.find((t) => has(es, t));
-  const lastStage = [...stages].reverse().find((k) => milestoneEvents(es, k).length);
-  const stage = currentTerminal ?? lastStage ?? "unknown";
+  // Current work can be in dispatch, production, settlement or repeat review even though those are optional paths in the conversion funnel.
+  const phaseGroups: FunnelType[][] = [
+    ["repeatParticipation", "repeatEligible", "review"],
+    ["settled", "paid", "legacyPayable"],
+    ["retainedOrder", "refund"],
+    ["published", "removed", "adAuthorized"],
+    ["publicationPlanned", "scheduled", "contentAccepted", "productionSubmitted", "productionBlocked", "briefAccepted"],
+    ["sampleRequested", "sampleApproved", "sampleShipped", "sampleDelivered", "noSample"],
+    ["tracking"],
+    ["terms"],
+    ["matched"],
+    ["reply", "confirmedSent"],
+    ["queued", "attempt", "uncertain"],
+    ["approval"],
+    ["qualified"],
+    ["directReviewed"],
+    ["discovered"],
+  ];
+  const currentFact = phaseGroups.map((group) => reversed(es).find((e) => group.includes(e.eventType))).find(Boolean);
+  const stage = currentTerminal ?? currentFact?.eventType ?? "unknown";
   const blockerSources = es.flatMap((e) => e.details.blockers);
   const blockers = uniq([
     ...(currentTerminal ? [currentTerminal] : []),
@@ -142,8 +165,8 @@ function currentRow(es: Event[], asOf: string): LivePipeline["queue"][number] {
   ]);
   const since = currentTerminal
     ? knownTime(es.filter((e) => e.eventType === currentTerminal))
-    : lastStage
-      ? knownTime(milestoneEvents(es, lastStage))
+    : currentFact?.occurredAt
+      ? millis(currentFact.occurredAt)
       : NaN;
   const knownValue = (select: (e: Event) => string | null | undefined) =>
     reversed(es).map(select).find(Boolean) ?? null;
@@ -312,7 +335,18 @@ function lifecycleMetrics(opps: Event[][], mature: Event[][], asOf: string) {
 export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string): LivePipeline {
   // Apply corrections over all versions before selecting a facet. The ledger is bounded by recorded/observed time in the repository.
   const superseded = new Set(all.map((e) => e.correctsEventId).filter(Boolean));
-  const active = all.filter((e) => !superseded.has(e.eventId)).sort(eventOrder);
+  const original = all.filter((e) => !superseded.has(e.eventId)).sort(eventOrder);
+  const orderRows = original.filter((e) => e.eventType === "retainedOrder" || e.eventType === "refund");
+  const conflicted = new Set(
+    [...groups(orderRows, orderKey)]
+      .filter(([, es]) => new Set(es.map((e) => e.opportunityId)).size > 1)
+      .map(([id]) => id),
+  );
+  const active = original.map((e) =>
+    e.details.orderId && conflicted.has(e.details.orderId)
+      ? { ...e, details: { ...e.details, blockers: uniq([...e.details.blockers, ORDER_CONFLICT]) } }
+      : e,
+  );
   const opps = [...groups(active, (e) => e.opportunityId).values()].filter((es) => {
     const acquired = es.find((e) => e.acquisitionRef)?.acquisitionRef ?? es[0]!.sourceAccount;
     return (
@@ -334,13 +368,16 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
   const attempts = events.filter((e) => e.eventType === "attempt"),
     outbound = opps.filter((es) => es[0]!.route === "outbound");
   const dispatchState = (es: Event[]) =>
-    has(es, "confirmedSent")
-      ? "confirmedSent"
-      : last(es.filter((e) => ["uncertain", "queued", "attempt"].includes(e.eventType)))?.eventType;
+    terminal.some((type) => has(es, type))
+      ? "closed"
+      : has(es, "confirmedSent")
+        ? "confirmedSent"
+        : last(es.filter((e) => ["uncertain", "queued", "attempt"].includes(e.eventType)))?.eventType;
   const matureEvents = mature.flat(),
     orders = activeOrders(matureEvents),
     retainedOrders = orders.filter(retained);
-  const net = currencyValue(orders, (e) => e.details.retainedMinor);
+  const disputed = matureEvents.some((e) => e.details.blockers.includes(ORDER_CONFLICT));
+  const net = disputed ? null : currencyValue(orders, (e) => e.details.retainedMinor);
   const salesUnit =
     uniq(orders.map((e) => e.details.currency)).length === 1
       ? (orders[0]?.details.currency ?? "unknown") + " minor units"
@@ -382,6 +419,18 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
       mature.length,
     ),
   );
+  const periodDays = filters.start
+    ? (Math.min(millis(asOf), filters.end ? millis(filters.end) : Infinity) - millis(filters.start)) / day
+    : null;
+  economics.push(
+    measure(
+      "Acquisition throughput",
+      periodDays && periodDays > 0 ? opps.length / periodDays : null,
+      "observed opportunities per day",
+      opps.length,
+      "Select a cohort start and observation cutoff",
+    ),
+  );
   const snapshots = [
     ...groups(
       matureEvents.filter((e) => e.eventType === "postMetrics"),
@@ -411,12 +460,17 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
       mature: mature.length,
       immature: opps.filter((es) => maturity(es) && millis(maturity(es)!) > millis(asOf)).length,
       unknownMaturity: opps.filter((es) => !maturity(es)).length,
-      incomplete: !!(missingTimes || unresolvedIdentity || unavailable),
+      incomplete: !!(
+        missingTimes ||
+        unresolvedIdentity ||
+        unavailable ||
+        events.some((e) => e.details.blockers.includes(ORDER_CONFLICT))
+      ),
       missingTimes,
       unresolvedIdentity,
       unavailable,
     },
-    milestones: stageRows(opps),
+    milestones: stageRows(opps, mature),
     queue,
     queueCounts,
     exclusions,
@@ -441,12 +495,12 @@ export function projectFunnel(all: Event[], filters: FunnelFilters, asOf: string
       ),
       measure(
         "Attributed orders",
-        orders.length || mature.length ? orders.length : null,
+        disputed ? null : orders.length || mature.length ? orders.length : null,
         "observed distinct orders",
         mature.length,
       ),
       measure("Attributed net sales", net, salesUnit, mature.length),
-      measure("Retained orders", retainedOrders.length, "observed distinct orders", mature.length),
+      measure("Retained orders", disputed ? null : retainedOrders.length, "observed distinct orders", mature.length),
     ],
   };
 }

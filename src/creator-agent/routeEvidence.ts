@@ -7,6 +7,7 @@ const instant = z.string().datetime({ offset: true });
 const count = z.number().int().nonnegative().safe();
 const route = z.enum(["website", "tiktok-shop"]);
 const status = z.enum(["pass", "fail", "unknown"]);
+const providerFamily = z.enum(["shopify-collabs", "external-affiliate", "tiktok-shop"]);
 const currency = z.string().regex(/^[A-Z]{3}$/);
 const metricName = z.enum(["gmv", "orders", "items", "refundAmount", "refundedOrders", "retainedSales", "creatorPayout"]);
 const countMetrics = new Set(["orders", "items", "refundedOrders"]);
@@ -60,12 +61,12 @@ const audience = z.object({
 /** Independent, server-supplied evidence snapshot; this is never accepted from a dashboard POST/PUT. */
 export const sourceSnapshotSchema = z.object({
   workspaceId: text, accountId: text, creatorId: text, creatorSourceId: text, checkoutRoute: route, evidenceRevision: text, termsRevision: text,
-  sourceRef: text, observedAt: instant, validUntil: instant, provider: text, market: text, programId: text, programVersion: text,
+  sourceRef: text, observedAt: instant, validUntil: instant, provider: providerFamily, market: text, programId: text, programVersion: text,
   programEligibility: receipt, supportedClaims: receipt.nullable(), terms: terms.nullable(), commerce: z.discriminatedUnion("kind", [website, shop]),
   metrics: z.array(metricSchema).max(50), audience: audience.nullable(), reliability: receipt.nullable(), economics: receipt.nullable(),
   criteria: z.array(criterionEvidence).max(4),
 }).strict().superRefine((s, ctx) => {
-  if (s.checkoutRoute !== s.commerce.kind || new Set(s.criteria.map(c => c.id)).size !== s.criteria.length)
+  if (s.checkoutRoute !== s.commerce.kind || (s.checkoutRoute === "tiktok-shop") !== (s.provider === "tiktok-shop") || new Set(s.criteria.map(c => c.id)).size !== s.criteria.length)
     ctx.addIssue({ code: "custom", message: "Source snapshot must describe one route with unique criterion claims." });
   if (s.metrics.some(m => Date.parse(m.windowEnd) > Date.parse(s.observedAt)) || (s.audience && Date.parse(s.audience.windowEnd) > Date.parse(s.observedAt)))
     ctx.addIssue({ code: "custom", message: "Source proof cannot include a measurement window in its future." });
@@ -91,23 +92,29 @@ export async function resolveScorecardEvidence(authority: ScorecardAuthority | u
   const s = parsed.data;
   if ((Object.keys(subject) as (keyof ScorecardSubject)[]).some(key => s[key] !== subject[key])) return unavailable("SOURCE_SCOPE_OR_VERSION_MISMATCH");
   if (Date.parse(s.observedAt) > nowMs || Date.parse(s.validUntil) <= nowMs) return unavailable("SOURCE_STALE");
-  if (s.terms?.origin === "saved-offer" && !matchesAcceptedOffer(s, readAccepted))
-    return { snapshot: { ...s, terms: null }, reason: "ACCEPTED_OFFER_MISSING_OR_CHANGED" };
+  if (s.terms?.origin === "saved-offer") {
+    const validUntil = acceptedOfferValidity(s, readAccepted);
+    if (!validUntil || Date.parse(validUntil) <= nowMs)
+      return { snapshot: { ...s, terms: null }, reason: "ACCEPTED_OFFER_MISSING_OR_CHANGED" };
+    s.validUntil = new Date(Math.min(Date.parse(s.validUntil), Date.parse(validUntil))).toISOString();
+  }
   return { snapshot: s, reason: "SOURCE_VERIFIED" };
 }
 
 /** Bind the provider's claimed accepted terms to the actual current scoped offer record. */
-function matchesAcceptedOffer(s: ScorecardSourceSnapshot, readAccepted: OfferRepository["acceptedTerms"] | undefined) {
+function acceptedOfferValidity(s: ScorecardSourceSnapshot, readAccepted: OfferRepository["acceptedTerms"] | undefined) {
   const t = s.terms!;
+  if (t.termsRevision !== t.manifestHash || s.termsRevision !== t.manifestHash) return null;
   const offer = readAccepted?.(t.offerId);
   if (!offer || offer.version !== t.version || offer.manifestHash !== t.manifestHash || offer.creatorId !== s.creatorId
     || offer.route !== s.checkoutRoute || offer.acceptedRef !== t.acceptedRef || offer.currency !== t.currency
     || offer.provider.provider !== s.provider || offer.provider.programRef !== s.programId
     || offer.commission.base !== t.eligibleBase || offer.provider.refundRule !== t.refundRule
-    || offer.commission.shopAdsRateBps !== t.shopAdsRateBps) return false;
-  return t.commission.kind === "percentage"
+    || offer.commission.shopAdsRateBps !== t.shopAdsRateBps) return null;
+  const agrees = t.commission.kind === "percentage"
     ? offer.commission.type === "percentage" && offer.commission.standardRateBps === t.commission.basisPoints
     : offer.commission.type === "fixed-per-sale" && offer.commission.fixedMinor === t.commission.amountMinor && offer.provider.supportsFixedPerSale;
+  return agrees ? offer.validUntil : null;
 }
 
 type Gate = { id: string; state: z.infer<typeof status>; reason: string };
@@ -115,17 +122,23 @@ function gate(id: string, value: z.infer<typeof status> | undefined, ref?: strin
   return { id: `SOURCE:${id}`, state: value ?? "unknown", reason: ref ?? "Required provider evidence is unknown." };
 }
 const meets = (v: boolean | null) => v === null ? "unknown" : v ? "pass" : "fail";
+function routeEligibility(s: ScorecardSourceSnapshot) {
+  const receipts = s.commerce.kind === "website" ? [s.programEligibility]
+    : [s.programEligibility, s.commerce.sellerEligibility, s.commerce.creatorEligibility, s.commerce.productEligibility];
+  return receipts.find(r => r.status === "fail") ?? receipts.find(r => r.status === "unknown") ?? s.programEligibility;
+}
 export function sourceGates(packet: EvidencePacket, proof: ScorecardProof | undefined): Gate[] {
   const s = proof?.snapshot;
   if (!s) return [gate("route", "unknown", proof?.reason)];
   const t = s.terms;
+  const eligibility = routeEligibility(s);
   const scopeMatches = t && t.termsRevision === packet.termsRevision && t.provider === s.provider && t.programId === s.programId && t.programVersion === s.programVersion;
   const routeCommissionMatches = t && (s.commerce.kind === "website"
-    ? t.commission.kind === "percentage" || t.commission.supportedByProvider
+    ? t.commission.kind === "percentage" || (s.provider === "external-affiliate" && t.commission.supportedByProvider)
     : t.commission.kind === "percentage" && s.commerce.standardRate !== null && t.commission.basisPoints === s.commerce.standardRate.basisPoints
       && (s.commerce.adsRate.state === "applicable" ? t.shopAdsRateBps === s.commerce.adsRate.rate.basisPoints : t.shopAdsRateBps === null));
   const gates = [
-    gate("route", s.programEligibility.status, s.programEligibility.sourceRef),
+    gate("route", eligibility.status, eligibility.sourceRef),
     gate("terms", meets(t && !!scopeMatches && t.guaranteedFeeMinor === 0 && !!routeCommissionMatches), t?.acceptedRef),
     gate("audience", s.audience?.alignment, s.audience?.sourceRef),
     gate("supportedClaims", s.supportedClaims?.status, s.supportedClaims?.sourceRef),
@@ -155,6 +168,7 @@ export function criterionSource(s: ScorecardSourceSnapshot | null | undefined, i
   let eligibleRefs: string[];
   switch (claim.id) {
     case "verifiedCommerce":
+      if (routeEligibility(s).status !== "pass" || (s.commerce.kind === "tiktok-shop" && s.commerce.nativeAttribution.status !== "pass")) return null;
       eligibleRefs = s.metrics.filter(m => m.name === "retainedSales" && m.maturity === "mature" && m.sampleSize > 0).map(m => m.sourceRef);
       break;
     case "audienceAlignment": eligibleRefs = s.audience && s.audience.alignment !== "unknown" ? [s.audience.sourceRef] : []; break;

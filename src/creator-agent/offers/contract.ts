@@ -55,7 +55,7 @@ const cost = z.object({ minor: money.nullable(), sourceRef: id.nullable() }).str
 const costs = z.object(Object.fromEntries(costKeys.map(k=>[k,cost])) as Record<typeof costKeys[number],typeof cost>).strict();
 const scenario = z.object({
   bundle: z.enum(["single","duo","trio"]), orders: count, shopAdsOrders: count, refundPerOrderMinor: money,
-  sellerDiscountMinor: money, platformCouponMinor: money, fundedCouponMinor: money.nullable(),
+  sellerDiscountMinor: money, platformCouponMinor: money, fundedCouponMinor: money.nullable(), platformFundingRef:id.nullable().optional(),
 }).strict().superRefine((x,c) => {
   const b=BUNDLES.find(b=>b.id===x.bundle)!;
   if(x.shopAdsOrders>x.orders || x.refundPerOrderMinor+x.sellerDiscountMinor+x.platformCouponMinor>b.merchandiseMinor ||

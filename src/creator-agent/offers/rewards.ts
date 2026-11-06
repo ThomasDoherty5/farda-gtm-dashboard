@@ -11,10 +11,15 @@ export const rewardSourceSchema=z.object({scope:scopeSchema,creatorId:id,sourceR
 export type RewardSource=z.infer<typeof rewardSourceSchema>;
 export function projectRewards(offerId:string,creatorId:string,version:string,source:RewardSource|null,priorAwards:RewardSource["awards"]=[]):RewardRecord {
   const unknowns:string[]=[], unique=new Map<string,RewardSource["orders"][number]>();
+  const nativeIds=new Map<string,string>();
   let mirrors=0,matured=0,pending=0,excluded=0,refunded=0,pendingOrders=0;
   if(!source) unknowns.push("No authorized reward ledger snapshot");
   else if(new Set(source.coveredRoutes).size!==2) unknowns.push("Cross-platform coverage incomplete");
   for(const row of source?.orders??[]) {
+    const nativeKey=JSON.stringify([row.source,row.nativeId]);
+    const address=nativeIds.get(nativeKey);
+    if(address && address!==row.canonicalId)unknowns.push("One native order has conflicting canonical identities");
+    nativeIds.set(nativeKey,row.canonicalId);
     const prior=unique.get(row.canonicalId);
     if(prior) {
       mirrors++;

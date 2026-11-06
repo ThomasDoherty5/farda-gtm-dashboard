@@ -10,9 +10,9 @@ export type ScorecardSelection = z.infer<typeof selection>;
 const item = z.object({
   creatorId: ref, runId: ref, status: z.enum(["review", "hold", "eligible", "unavailable"]),
   route: z.enum(["website", "tiktok-shop"]).nullable(), modelId: ref.nullable(), configHash: ref.nullable(), policyVersion: ref.nullable(),
-  evidenceRevision: ref.nullable(), termsRevision: ref.nullable(), sourceRef: ref.nullable(), evidencePostId: ref.nullable(),
+  evidenceRevision: ref.nullable(), termsRevision: ref.nullable(), sourceRef: z.string().min(1).max(500).nullable(), evidencePostId: ref.nullable(),
   score: z.number().nullable(), stale: z.boolean(), reasonCodes: z.array(ref),
-  acceptedOffer: z.object({ offerId: ref, version: ref, manifestHash: z.string().min(1).max(500) }).strict().nullable(),
+  acceptedOffer: z.object({ offerId: z.string().min(1).max(500), version: z.string().min(1).max(500), manifestHash: z.string().min(1).max(500) }).strict().nullable(),
   criteria: z.array(z.object({ id: ref, weight: z.number().positive(), rating: z.number().int().min(0).max(5).nullable() }).strict()),
 }).strict();
 export const scorecardPreviewSchema = z.object({

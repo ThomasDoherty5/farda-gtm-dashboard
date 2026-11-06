@@ -11,13 +11,15 @@ const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:tru
 const proofSchema=z.object({scope:scopeSchema,creatorId:id,provider:providerFactsSchema.shape.provider,programRef:id,sourceRef:id,validUntil:time}).strict();
 const capabilityPacket=proofSchema.extend({facts:providerFactsSchema}).strict();
 const costPacket=proofSchema.extend({costKey:z.enum(costKeys),minor:z.number().int().nonnegative(),currency:z.literal("USD"),productRef:id,productRevision:id}).strict();
-const decisionPacket=proofSchema.extend({offerId:routeId,manifestHash:z.string().length(64),version:id,decision:z.enum(["owner-approved","creator-accepted"]),occurredAt:time}).strict();
+const fundingPacket=proofSchema.extend({scenario:z.enum(["base","downside"]),bundle:z.enum(["single","duo","trio"]),currency:z.literal("USD"),advertisedDiscountMinor:z.number().int().nonnegative(),reimbursedMinor:z.number().int().nonnegative(),feeTreatment:id}).strict();
+const decisionPacket=proofSchema.extend({offerId:routeId,manifestHash:z.string().length(64),version:id,decision:z.enum(["owner-approved","creator-accepted"]),occurredAt:time,acceptedDeliverableIds:z.array(id).max(50).optional()}).strict();
 type Change="owner-approved"|"creator-accepted";
-type Snapshot={offerId:string;version:string;revision:number;recordedAt:string;manifestHash:string;terms:OfferTerms;assessment:AssessmentBasis|null;provider:ProviderFacts|null;verifiedCosts:string[]};
+type Snapshot={offerId:string;version:string;revision:number;recordedAt:string;manifestHash:string;terms:OfferTerms;assessment:AssessmentBasis|null;provider:ProviderFacts|null;verifiedCosts:string[]; verifiedFunding?:string[]};
 export interface OfferAuthority {
   assessment?(creatorId:string):AssessmentBasis|null;
   provider?(terms:OfferTerms,scope:OfferScope):unknown;
   cost?(sourceRef:string,scope:OfferScope):unknown;
+  funding?(sourceRef:string,scope:OfferScope):unknown;
   decision?(sourceRef:string,scope:OfferScope):unknown;
   reward?(sourceRef:string,scope:OfferScope):unknown;
 }
@@ -76,6 +78,15 @@ export class OfferRepository {
         proof.productRef===terms.manifest.productRef && proof.productRevision===terms.manifest.productRevision && Date.parse(proof.validUntil)>Date.parse(now);
     });
   }
+  private funding(terms:OfferTerms,now:string) {
+    return (["base","downside"] as const).filter(label=>{
+      const l=terms[label]; if(!l.platformFundingRef || l.fundedCouponMinor===null)return false;
+      const p=parse(fundingPacket,this.authority.funding?.(l.platformFundingRef,this.scope));
+      return !!p && sameScope(p.scope,this.scope) && p.creatorId===terms.creatorId && p.provider===terms.provider && p.programRef===terms.programRef &&
+        p.sourceRef===l.platformFundingRef && p.scenario===label && p.bundle===l.bundle && p.reimbursedMinor===l.fundedCouponMinor &&
+        p.advertisedDiscountMinor===l.platformCouponMinor && Date.parse(p.validUntil)>Date.parse(now);
+    });
+  }
   private project(s:Snapshot):OfferRecord {
     const now=new Date().toISOString(),current=this.model(s.terms), provider=this.provider(s.terms,now);
     const providerCurrent=provider && digest(provider)===digest(s.provider)?provider:null;
@@ -87,7 +98,7 @@ export class OfferRepository {
     return offerRecordSchema.parse({kind:"agent-offer",offerId:s.offerId,version:s.version,revision:s.revision,recordedAt:s.recordedAt,manifestHash:s.manifestHash,
       terms:s.terms,assessment:s.assessment,assessmentCurrent:!!current && !current.stale && !!current.configHash && !!s.assessment && digest(current)===digest(s.assessment) && current.termsRevision===s.manifestHash,
       scenarios:[offerScenario(s.terms,"base"),offerScenario(s.terms,"downside")],provider:providerCurrent,
-      blockers:proposalBlockers(s.terms,providerCurrent,new Set(currentCosts),now),state:accepted?"accepted":approved?"approved":"proposed",
+      blockers:proposalBlockers(s.terms,providerCurrent,new Set(currentCosts),now,new Set(this.funding(s.terms,now).filter(k=>s.verifiedFunding?.includes(k)))),state:accepted?"accepted":approved?"approved":"proposed",
       ownerApprovalRef:approved?String(approved.source_ref):null,acceptedRef:accepted?String(accepted.source_ref):null,history,historyTotal:s.revision});
   }
   matchesOfferVersion(id:string,version:string,manifestHash:string):boolean {
@@ -101,12 +112,12 @@ export class OfferRepository {
       const prior=this.snapshot(id);
       if((prior?.version??null)!==expected)throw new AgentConflict("VERSION_CONFLICT");
       if(prior && prior.terms.creatorId!==terms.creatorId)throw new AgentConflict("CREATOR_IDENTITY_CHANGED");
-      const recordedAt=new Date().toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt);
+      const recordedAt=new Date().toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt),verifiedFunding=this.funding(terms,recordedAt);
       // Receipt/term basis is independent of score so a new score can bind the immutable manifest hash without creating a cycle.
-      const manifestHash=digest({scope:this.scope,offerId:id,terms,provider,verifiedCosts});
+      const manifestHash=digest({scope:this.scope,offerId:id,terms,provider,verifiedCosts,verifiedFunding});
       if(prior && prior.manifestHash===manifestHash && digest(prior.assessment)===digest(assessment))return this.project(prior);
       const revision=(prior?.revision??0)+1;
-      const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,assessment};
+      const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,verifiedFunding,assessment};
       this.db.prepare("INSERT INTO offer_versions VALUES(?,?,?)").run(id,revision,JSON.stringify(snapshot));
       return this.project(snapshot);
     });
@@ -120,11 +131,14 @@ export class OfferRepository {
         p.creatorId!==s.terms.creatorId || p.provider!==s.terms.provider || p.programRef!==s.terms.programRef || p.decision!==input.kind ||
         Date.parse(p.validUntil)<=now || Date.parse(p.occurredAt)>now || Date.parse(p.occurredAt)<Date.parse(s.recordedAt))
         throw new OfferSourceUnavailable("EXACT_VERSION_DECISION_UNVERIFIED");
+      if(p.acceptedDeliverableIds?.some(id=>!s.terms.manifest.deliverables.some(d=>d.id===id))) throw new AgentConflict("DELIVERABLE_OUTSIDE_MANIFEST");
       const record=this.project(s);
       if(record.blockers.length)throw new AgentConflict("OFFER_ECONOMICS_HELD");
       if(input.kind==="creator-accepted" && !record.ownerApprovalRef)throw new AgentConflict("OWNER_APPROVAL_REQUIRED");
       const old=this.db.prepare("SELECT source_ref FROM offer_decisions WHERE offer_id=? AND revision=? AND kind=?").get(id,s.revision,input.kind);
       if(old && old.source_ref!==input.sourceRef)throw new AgentConflict("DECISION_ALREADY_RECORDED");
+      const reused=this.db.prepare("SELECT offer_id,revision,kind FROM offer_decisions WHERE source_ref=?").get(input.sourceRef);
+      if(reused && (reused.offer_id!==id || reused.revision!==s.revision || reused.kind!==input.kind))throw new AgentConflict("DECISION_RECEIPT_REUSED");
       if(!old)this.db.prepare("INSERT INTO offer_decisions VALUES(?,?,?,?,?)").run(id,s.revision,input.kind,input.sourceRef,JSON.stringify(p));
       return this.project(s);
     });
@@ -133,14 +147,19 @@ export class OfferRepository {
     const record=this.readOffer(id);
     if(!record?.acceptedRef || !record.provider || record.blockers.length)return null;
     const decisions=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=?").all(id,record.revision);
-    if(decisions.some(row=>Date.parse(decisionPacket.parse(JSON.parse(String(row.body))).validUntil)<=Date.now()))return null;
+    const expiries=[record.provider.validUntil,...decisions.map(row=>decisionPacket.parse(JSON.parse(String(row.body))).validUntil)];
+    if(record.terms.expiresAt)expiries.push(record.terms.expiresAt);
+    const validUntil=new Date(Math.min(...expiries.map(t=>Date.parse(t)))).toISOString();
+    if(Date.parse(validUntil)<=Date.now())return null;
     return {offerId:id,version:record.version,manifestHash:record.manifestHash,creatorId:record.terms.creatorId,route:record.terms.checkoutRoute,
-      currency:record.terms.commission.currency,commission:record.terms.commission,provider:record.provider,acceptedRef:record.acceptedRef};
+      validUntil,currency:record.terms.commission.currency,commission:record.terms.commission,provider:record.provider,acceptedRef:record.acceptedRef};
   }
   onboarding(id:string) {
     const accepted=this.acceptedTerms(id),s=this.snapshot(id);
     if(!accepted || !s)return null;
-    return {accepted,brief:s.terms.manifest,postingObligations:s.terms.manifest.deliverables,
+    const row=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=? AND kind='creator-accepted'").get(id,s.revision);
+    const acceptedIds=decisionPacket.parse(JSON.parse(String(row!.body))).acceptedDeliverableIds??[];
+    return {accepted,brief:s.terms.manifest,postingObligations:s.terms.manifest.deliverables.filter(d=>acceptedIds.includes(d.id)),
       handoffs:s.terms.sample.requested?["J07","J15"]:[],reserved:false,dispatched:false};
   }
   private rewards(creator:string) {
@@ -163,7 +182,11 @@ export class OfferRepository {
         if(digest(prior)===digest(raw))return this.readRewards(id);
         throw new AgentConflict("STALE_REWARD_SNAPSHOT");
       }
-      const result=projectRewards(id,raw.creatorId,s.version,raw,this.awards(raw.creatorId));
+      const duplicateSource=this.db.prepare("SELECT creator_id FROM offer_rewards WHERE source_ref=?").get(ref);
+      if(duplicateSource)throw new AgentConflict("REWARD_SOURCE_REUSED");
+      let result;
+      try { result=projectRewards(id,raw.creatorId,s.version,raw,this.awards(raw.creatorId)); }
+      catch (error) { if(error instanceof Error && /^(CONFLICTING_|REDEMPTION_)/.test(error.message))throw new AgentConflict(error.message); throw error; }
       this.db.prepare("INSERT INTO offer_rewards VALUES(?,?,?,?)").run(raw.creatorId,ref,new Date(raw.observedAt).toISOString(),JSON.stringify(raw));
       for(const a of raw.awards)this.db.prepare("INSERT INTO offer_reward_awards VALUES(?,?,?) ON CONFLICT(creator_id,tier) DO UPDATE SET body=excluded.body").run(raw.creatorId,a.tier,JSON.stringify(a));
       return result;

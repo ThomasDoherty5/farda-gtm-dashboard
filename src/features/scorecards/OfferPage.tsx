@@ -44,6 +44,7 @@ function OfferRead({ offerId }: { offerId: string }) {
       <ViewShell query={query} subject="The offer" emptyTitle="No offer" emptyBody="The source responded, but there is no offer record to show.">
         {(record, response) => "kind" in record ? record.offerId === offerId ? <AgentOffer key={record.offerId} record={record} canEdit={response.capabilities.some(c=>c.actionKind==="saveOfferDraft" && c.state==="available")} /> : <p role="alert">Offer identity mismatch.</p> : <Offer record={record} />}
       </ViewShell>
+      {query.data?.dataState === "empty" && query.data.capabilities.some(c=>c.actionKind === "saveOfferDraft" && c.state === "available") && <LinkButton to="/offers/new">Draft creator offer</LinkButton>}
       {!query.data?.data && <h1 id="offer-title" style={{ font: "var(--text-h1)", margin: 0 }}>Terms that make sense.</h1>}
     </section>
   );

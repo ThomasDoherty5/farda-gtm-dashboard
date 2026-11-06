@@ -82,6 +82,7 @@ export function DiscoveryPage() {
           <h1 id="discovery-title">Find the next right fit.</h1>
           <p>Daily acquisition workspace · commission-only offers · source access and capacity to validate</p>
         </div>
+        {!demo && <LinkButton variant="secondary" to="/offers/new">Draft creator offer</LinkButton>}
         {reviewPath ? <LinkButton variant="secondary" to={reviewPath} style={{ minWidth: 166 }}>Review evidence</LinkButton> : <Button variant="secondary" style={{ minWidth: 166 }} disabledReason="No saved source record is available to review.">Review evidence</Button>}
         <LinkButton to="/settings/capabilities" style={{ minWidth: 162 }}>Validate access</LinkButton>
       </div>

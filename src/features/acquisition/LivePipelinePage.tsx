@@ -9,6 +9,7 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { ViewError } from "@/components/ViewError";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { funnelFilterSchema, stageNames, type FunnelFilters, type LivePipeline } from "@/creator-agent/funnelContract";
+import { FilterButton } from "./FilterButton";
 import { AcquisitionTabs } from "./AcquisitionTabs";
 import { Funnel } from "./FunnelChart";
 import { percent } from "./pipelineMetrics";
@@ -71,6 +72,28 @@ export function LivePipelinePage({ branches }: { branches: boolean }) {
     setSearch(next);
     setEditing(false);
   };
+  const facet = (key: "source" | "network" | "checkout", name: string, options: string[]) => {
+    const value = search.get(key) ?? "";
+    const update = (selection: string) => {
+      const next = new URLSearchParams(search);
+      if (selection) next.set(key, selection);
+      else next.delete(key);
+      setSearch(next);
+    };
+    return (
+      <FilterButton
+        name={name}
+        title={"Choose " + name.toLowerCase()}
+        value={value}
+        onChange={update}
+        options={[
+          { value: "", label: "All" },
+          ...[...new Set([...options, ...(value ? [value] : [])])].map((v) => ({ value: v, label: v })),
+        ]}
+        width={174}
+      />
+    );
+  };
   const toggle = new URLSearchParams(search);
   if (branches) toggle.delete("view");
   else toggle.set("view", "branches");
@@ -97,6 +120,9 @@ export function LivePipelinePage({ branches }: { branches: boolean }) {
       </div>
       <AcquisitionTabs current="Pipeline" />
       <div className={acquisition.controls}>
+        {facet("source", "Source", ["social-cat", "tiktok-shop"])}
+        {facet("network", "Network", choices.network!)}
+        {facet("checkout", "Checkout", choices.checkout!)}
         <Button variant="secondary" aria-haspopup="dialog" onClick={() => setEditing(true)}>
           Filter cohort
         </Button>
@@ -185,7 +211,12 @@ function Cohort({ filters, branches }: { filters: FunnelFilters; branches: boole
         No source observations are recorded for this selection. Adjust the filters to check a different cohort.
       </EmptyState>
     );
-  return <Contents data={data} branches={branches} />;
+  return (
+    <>
+      {query.data?.dataState === "stale" && <p role="status">Showing an earlier saved acquisition snapshot.</p>}
+      <Contents data={data} branches={branches} />
+    </>
+  );
 }
 function QuantityTable({ label, data }: { label: string; data: LivePipeline["outcomes"] }) {
   return (
@@ -198,6 +229,7 @@ function QuantityTable({ label, data }: { label: string; data: LivePipeline["out
 }
 function Contents({ data, branches }: { data: LivePipeline; branches: boolean }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [inspectCohort, setInspectCohort] = useState(false);
   const item = data.queue.find((r) => r.id === selected);
   const rows = data.milestones.map((m) => ({
     key: m.key,
@@ -229,7 +261,27 @@ function Contents({ data, branches }: { data: LivePipeline; branches: boolean })
             ))}
           </KpiRow>
           <section className={styles.panel}>
-            <h2 className={acquisition.h2}>See the whole journey.</h2>
+            <div className={acquisition.sectionHead}>
+              <h2 className={acquisition.h2}>See the whole journey.</h2>
+              <Button variant="secondary" aria-haspopup="dialog" onClick={() => setInspectCohort(true)}>
+                Inspect cohort
+              </Button>
+            </div>
+            <Dialog open={inspectCohort} title="Inspect cohort" onClose={() => setInspectCohort(false)}>
+              <p>
+                {info.opportunities} opportunities and {info.creators} observed creators. {info.mature} have reached
+                their recorded maturity time.
+              </p>
+              <p>
+                Counts use individual opportunities with recorded stage receipts. Conversion uses mature opportunities
+                observed at both stages over the eligible mature previous stage. Elapsed time uses known event times in
+                UTC.
+              </p>
+              <p>Snapshot: {data.asOf}</p>
+              <Button variant="secondary" onClick={() => setInspectCohort(false)}>
+                Close
+              </Button>
+            </Dialog>
             <Funnel
               rows={rows.map((r) => (inboundOnly && r.key === "confirmedSent" ? { ...r, reached: null } : r))}
               scaleMax={info.opportunities}

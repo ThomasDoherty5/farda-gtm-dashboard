@@ -75,6 +75,7 @@ export function withActivationEvidence(packet: EvidencePacket): EvidencePacket {
 /** Private source fixture supplied to the server by its test harness, independently of the HTTP review payload. */
 export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId" | "checkoutRoute" | "termsRevision" | "evidenceRevision">,
   ratings: Record<string, number | null> = {}): import("./routeEvidence.ts").ScorecardSourceSnapshot {
+  const provider = packet.checkoutRoute === "website" ? "external-affiliate" : "tiktok-shop";
   const pass = (sourceRef: string) => ({ status: "pass" as const, sourceRef });
   const criterionRef = (id: string) => `synthetic:criterion-proof:${id}`;
   const windowStart = "2020-01-01T00:00:00Z";
@@ -82,11 +83,11 @@ export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId"
   return {
     workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!,
     creatorId: packet.creatorId, checkoutRoute: packet.checkoutRoute, termsRevision: packet.termsRevision, evidenceRevision: packet.evidenceRevision,
-    creatorSourceId: "source-creator-id", sourceRef: "fixture:provider-snapshot", provider: "fixture-provider",
+    creatorSourceId: "source-creator-id", sourceRef: "fixture:provider-snapshot", provider,
     programId: "fixture-program", programVersion: "v1", market: "US", observedAt: windowEnd, validUntil: "2100-01-01T00:00:00Z",
     programEligibility: pass("fixture:program"), supportedClaims: pass("fixture:claims"),
     terms: { origin: "provider", shopAdsRateBps: null, offerId: "fixture-offer", version: "v1", manifestHash: "synthetic-manifest-digest", acceptedRef: "fixture:accepted-offer-v1",
-      termsRevision: packet.termsRevision, provider: "fixture-provider", programId: "fixture-program", programVersion: "v1",
+      termsRevision: packet.termsRevision, provider, programId: "fixture-program", programVersion: "v1",
       currency: "USD", commission: { kind: "percentage", basisPoints: 2000 }, eligibleBase: "retained merchandise", refundRule: "reverse refunded credit", guaranteedFeeMinor: 0 },
     commerce: packet.checkoutRoute === "website" ? { kind: "website", linkOrCodeRef: "fixture:link", attributionPrecedence: "fixture:precedence",
       test: { expectedProviderCredit: true, orderId: "test-order", refundOfOrderId: "test-order", refundApplied: true, sourceRef: "fixture:test-order-and-refund" } }

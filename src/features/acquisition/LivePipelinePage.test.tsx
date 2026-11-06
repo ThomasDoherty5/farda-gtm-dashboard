@@ -29,13 +29,13 @@ it("renders persisted counts and filtered account exposure, native receipt drill
   expect(screen.getByText(/Partial coverage: 1 missing event time/)).toBeInTheDocument();
   expect(within(screen.getByTestId("funnel-confirmedSent")).getAllByText("N/A").length).toBeGreaterThan(0);
   await user.click(screen.getByRole("button", { name: "Inspect inbound-A" }));
-  const dialog = screen.getByRole("dialog", { name: "Opportunity evidence" });
-  expect(within(dialog).getByRole("link", { name: "proof:application" })).toHaveAttribute(
+  const dialog = screen.getByRole("heading", { name: "Opportunity evidence", hidden: true }).closest("dialog")!;
+  expect(within(dialog).getByRole("link", { name: "proof:application", hidden: true })).toHaveAttribute(
     "href",
     "https://example.invalid/receipt",
   );
-  await user.keyboard("{Escape}");
-  expect(screen.queryByRole("dialog", { name: "Opportunity evidence" })).not.toBeInTheDocument();
+  await user.click(within(dialog).getByRole("button", { name: "Close", hidden: true }));
+  expect(screen.queryByRole("heading", { name: "Opportunity evidence", hidden: true })).not.toBeInTheDocument();
   await user.click(screen.getByRole("link", { name: "Paths and branches" }));
   await screen.findByRole("region", { name: "Lifecycle and optional branches" });
   expect(adapter.calls.filter((c) => c.viewKey === "pipelineBranches").at(-1)?.filters).toEqual({
@@ -52,11 +52,11 @@ it("starts without fixture filters and lets a user recover an empty selection by
   expect(adapter.calls.find((c) => c.viewKey === "pipelineSummary")?.filters).toEqual({});
   await user.click(screen.getByRole("button", { name: "Filter cohort" }));
   await user.type(screen.getByLabelText("Offer version"), "missing-version");
-  await user.click(screen.getByRole("button", { name: "Apply filters" }));
+  await user.click(screen.getByRole("button", { name: "Apply filters", hidden: true }));
   await screen.findByRole("heading", { name: "No acquisition events match" });
   expect(screen.queryByRole("button", { name: "Inspect inbound-A" })).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Filter cohort" }));
-  await user.click(screen.getByRole("button", { name: "Clear filters" }));
+  await user.click(screen.getByRole("button", { name: "Clear filters", hidden: true }));
   await screen.findByRole("button", { name: "Inspect inbound-A" });
 });
 it("shows an access denial without exposing any protected rows", async () => {
