@@ -305,7 +305,7 @@ test("a reviewer saves a real offer and the reader sees retained reward evidence
     expect(result.status()).toBe(200);
     expect(await result.json()).toMatchObject({ data: { kind: "agent-rewards", status: "unobserved",
       maturedMinor: null, contributionMinor: null, earnedMinor: null } });
-    await expect(page.getByRole("heading", { name: "Milestone rewards" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Milestone rewards", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
     await testInfo.attach("reward-evidence-phone", { body: await page.screenshot(), contentType: "image/png" });
   } finally { await stopService(); }
