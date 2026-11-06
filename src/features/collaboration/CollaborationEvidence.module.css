@@ -1,0 +1,11 @@
+.evidence, .list, .record { display: flex; flex-direction: column; gap: var(--space-16); min-width: 0; }
+.evidence p, .record dl, .record dd, .record h3 { margin: 0; }
+.evidence > button, .evidence > span { align-self: flex-start; }
+.note { font: var(--text-small); color: var(--color-muted); overflow-wrap: anywhere; }
+.list { margin: 0; padding: 0; list-style: none; }
+.record { border: 1px solid var(--color-border); border-radius: var(--space-16); padding: var(--space-16); overflow-wrap: anywhere; }
+.record h3 { font: var(--text-h3); }
+.record dl { display: grid; gap: var(--space-8); }
+.record dl > div { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: var(--space-12); }
+.record dt { color: var(--color-muted); font: var(--text-small); }
+@media (max-width: 479px) { .record dl > div { display: block; } }

@@ -90,6 +90,8 @@ export function readMonitorView<T>(request: ReadRequest<unknown>, fixture: Overv
             netSales: p.netSales,
             // Only P-001 has a reported GMV figure; an Instagram post has no TikTok Shop checkout, so GMV does not apply to it.
             gmv: p.network === "tiktok" ? { state: "not-reported" } : { state: "not-applicable" },
+            publicationProof: null,
+            attributionWindow: null,
             // Only P-001 has consecutive snapshots in this demo.
             dailyDeltas: [],
             details: { creatorId: "Not in this demo", contentId: "Not in this demo", intake: p.source === "tiktok-affiliate" ? "TikTok affiliate" : "Social Cat", metricSource: "Linked post snapshot", salesSource: "Reconciled orders" },

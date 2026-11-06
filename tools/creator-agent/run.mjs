@@ -4,6 +4,7 @@ import { createAgentServer } from "../../src/creator-agent/server.ts";
 import { loadApprovedBindings, loadBindings } from "../../src/creator-agent/config.ts";
 import { readRuntimeConfig } from "./runtime-config.mjs";
 import { installShutdown } from "./lifecycle.mjs";
+import { loadCreatorSourceRuntime } from "../../src/creator-agent/sourceRuntime.ts";
 
 try {
   if (Number(process.versions.node.split(".")[0]) < 24) throw new Error("The creator-agent launcher requires Node 24 or later.");
@@ -17,6 +18,7 @@ try {
     workspaceId: process.env.FARDA_AGENT_WORKSPACE_ID ?? "",
     accountId: process.env.FARDA_AGENT_ACCOUNT_ID ?? "",
     bindings, secureCookies: runtime.secureCookies, publicOrigin: runtime.publicOrigin,
+    ...loadCreatorSourceRuntime(process.env, { workspaceId: process.env.FARDA_AGENT_WORKSPACE_ID ?? "", accountId: process.env.FARDA_AGENT_ACCOUNT_ID ?? "" }),
   });
   installShutdown(app);
   app.server.listen(runtime.port, runtime.host, () => console.log(`Farda creator agent listening on ${runtime.host} port ${runtime.port}; ${bindings.length} bound model(s); sandbox reviewed-evidence mode.`));

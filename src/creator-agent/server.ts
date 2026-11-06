@@ -16,6 +16,8 @@ import { handleAssetRoute } from "./assetRoutes.ts";
 import type { AssetAuthority } from "./assets.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
 import { createOperations, operationsErrorStatus, type OperationsOptions } from "./operations.ts";
+import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader.ts";
+import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -39,7 +41,9 @@ const cursorPayloadSchema = z.object({
 }).strict();
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
-export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment"> };
+export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions;
+  scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
+  assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
 /** First real agent service; independent of all demo adapters and reference-server fixtures. */
@@ -69,6 +73,8 @@ export function createAgentServer(options: AgentServerOptions) {
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
   }
   catch (error) { store.close(); throw error; }
+  const readCollaborationEvidence = createCollaborationEvidenceReader(store.database,
+    { workspaceId: options.workspaceId, accountId: options.accountId }, options.readToken, options.assetAuthority);
   const sessions = new Map<string, Session>();
   const bindings = options.bindings ?? [];
   const modelBinding = (route: "website" | "tiktok-shop") => bindings.find((b) => b.current.modelId === MODEL_FOR_ROUTE[route]) ?? null;
@@ -135,6 +141,8 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
+    readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
@@ -193,6 +201,14 @@ export function createAgentServer(options: AgentServerOptions) {
         if (result) return reply(res, result.status, result.body);
       }
       if (path === "/v1/assets" || path.startsWith("/v1/assets/")) {
+        if (path === "/v1/assets/registry" && req.method === "GET") {
+          if (!options.assetRegistryReader) return reply(res, 503, { code: "SOURCE_ACCESS_UNAVAILABLE", executionCertainty: "notApplied" });
+          const url = new URL(req.url!, "http://localhost");
+          if ([...url.searchParams.keys()].length !== new Set(url.searchParams.keys()).size) throw new SyntaxError("Duplicate source query");
+          const query = z.object({ registry: z.enum(["content", "collaborations"]), cursor: z.string().max(8192).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) }).strict().parse(Object.fromEntries(url.searchParams));
+          const data = await options.assetRegistryReader({ workspaceId: options.workspaceId, accountId: options.accountId }, query);
+          return reply(res, 200, { schemaVersion: "creator-registry.v1", data, sourceEffect: "none" });
+        }
         if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
           return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         const key = req.headers["idempotency-key"];
@@ -293,7 +309,18 @@ export function createAgentServer(options: AgentServerOptions) {
               reasonCodes: incomplete ? ["FUNNEL_COVERAGE_INCOMPLETE"] : opportunities === 0 ? ["NO_RECORDED_OPPORTUNITIES"] : [] },
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
-        if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "Shipping source and label executor are not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+        if (input.viewKey === "collaborationEvidence") {
+          const result = await readCollaborationEvidence({ collaborationId: input.filters.collaborationId, cursor: input.page.cursor, limit: input.page.limit });
+          const observed = result.data.records.length;
+          const remaining = result.data.total - result.data.offset - observed;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
+            dataState: result.data.offset > 0 || remaining > 0 ? "partial" : "ready", data: result.data, sourceFreshness: [],
+            coverage: { expectedCount: result.data.total, observedCount: observed, missingCount: result.data.total - observed,
+              complete: result.data.offset === 0 && remaining === 0, reasonCodes: result.data.offset > 0 || remaining > 0 ? ["SNAPSHOT_PAGE_PARTIAL"] : [] },
+            capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.data.hasMore }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "shippingHub" || input.viewKey === "collaborationDetail") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
           const listing = store.listLatestPage({ limit: input.page.limit, snapshot: cursor ? { rowId: cursor.rowId, anchorRunId: cursor.anchorRunId } : undefined, after: cursor?.after });
@@ -372,6 +399,7 @@ export function createAgentServer(options: AgentServerOptions) {
       const operationStatus = operationsErrorStatus(error);
       if (operationStatus !== null && error instanceof Error) return reply(res, operationStatus, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof FunnelError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
+      if (error instanceof AssetRegistryReadError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof InvalidCursor) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
       if (error instanceof AgentConflict) return reply(res, 409, { code: error.message, executionCertainty: "notApplied" });
       if (error instanceof z.ZodError || error instanceof SyntaxError) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
