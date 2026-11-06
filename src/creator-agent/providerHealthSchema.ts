@@ -54,9 +54,11 @@ export const noObservation = (binding: ExpectedBinding, now: number, status: Hea
   bindingDigest: healthBindingDigest(binding), checkedAt: new Date(now).toISOString(), status, permission: "unknown", session: "unknown", roleScopePlan: "unknown",
   sourceLastSuccess: null, sourceUpdatedAt: null, mirrorUpdatedAt: null, coverage: "unknown", quotaState: "unknown", quotaRemaining: null, deadline: null, deadlineState: "unknown",
 });
-export type RegistryReader = (scope: AssetScope, query: AssetRegistryQuery) => Promise<AssetRegistryPage>;
+export type RegistryReader = (scope: AssetScope, query: AssetRegistryQuery, signal?:AbortSignal) => Promise<AssetRegistryPage>;
+const registryPageSize=100;
+const registryMaxPages=3;
 
-export function createNotionRegistryHealthTargets(scope: CapabilityScope, inputs: readonly NotionHealthTargetConfig[], reader?: RegistryReader, readNotionWorkspace?: () => Promise<string|null>): HealthTarget[] {
+export function createNotionRegistryHealthTargets(scope: CapabilityScope, inputs: readonly NotionHealthTargetConfig[], reader?: RegistryReader, readNotionWorkspace?: (signal?:AbortSignal) => Promise<string|null>): HealthTarget[] {
   return inputs.map(input => {
     const config = notionHealthTargetConfigSchema.parse(input);
     const { registry, ...targetPolicy } = config;
@@ -67,28 +69,55 @@ export function createNotionRegistryHealthTargets(scope: CapabilityScope, inputs
     return { ...targetPolicy, documentationRef: "docs:notion-query-data-source", freshnessBasis: "successful_read" as const,
       probe: reader && readNotionWorkspace ? async (signal: AbortSignal) => {
         const base = noObservation(b, Date.now(), "missing_access");
+        // Leave time for a partial/failed receipt before the job's outer probe timeout.
+        const scanSignal=AbortSignal.any([signal,AbortSignal.timeout(6000)]);
+        let pagesRead=0;
         try {
-          signal.throwIfAborted();
-          const workspace = await readNotionWorkspace?.();
+          scanSignal.throwIfAborted();
+          const workspace = await readNotionWorkspace(scanSignal);
           if (!workspace) return base;
           if (workspace !== b.providerAccountId) return { ...base,status:"account_mismatch" };
-          const page = await reader({ workspaceId: scope.workspaceId, accountId: scope.accountId }, { registry, limit: 1 });
-          signal.throwIfAborted();
-          const currentWorkspace=await readNotionWorkspace?.();
-          if (!currentWorkspace) return {...base,checkedAt:new Date().toISOString()};
-          if (currentWorkspace!==workspace || page.registry !== config.registry) return { ...base, status: "account_mismatch" };
-          return { ...base, checkedAt: page.observedAt, status: "observed", permission: "allowed", session: "authenticated",
+          let cursor:string|null=null, latestEdit:number|null=null;
+          let observedAt=base.checkedAt;
+          let complete=false;
+          for (let n=0;n<registryMaxPages;n++) {
+            scanSignal.throwIfAborted();
+            const page=await reader({workspaceId:scope.workspaceId,accountId:scope.accountId},
+              {registry,limit:registryPageSize,...(cursor ? {cursor}:{})},scanSignal);
+            if (page.registry!==registry) return {...base,status:"account_mismatch"};
+            if (page.records.length>registryPageSize) throw new Error("INVALID_REGISTRY_PAGE");
+            pagesRead++;
+            observedAt=page.observedAt;
+            for (const record of page.records) {
+              const edited=Date.parse(record.registryEditedAt);
+              if (!Number.isFinite(edited)) throw new Error("INVALID_REGISTRY_TIME");
+              latestEdit=Math.max(latestEdit ?? edited,edited);
+            }
+            if (page.queryTruncated) break;
+            if (!page.nextCursor) {
+              // A continuation page alone is partial. An untruncated native terminal page
+              // completes a scan that started at the beginning of this same registry.
+              complete=pagesRead===1 ? page.coverage==="complete" : page.queryTruncated===false;
+              break;
+            }
+            cursor=page.nextCursor;
+          }
+          scanSignal.throwIfAborted();
+          const currentWorkspace=await readNotionWorkspace(scanSignal);
+          if (!currentWorkspace || currentWorkspace!==workspace) return {...base,status:currentWorkspace ? "account_mismatch" : "missing_access"};
+          return { ...base, checkedAt:observedAt,status:"observed",permission:"allowed",session:"authenticated",
             // The read proves this operation and its observed coverage, not a billing plan, role, or write scope.
-            sourceLastSuccess: page.observedAt, sourceUpdatedAt: page.records[0]?.registryEditedAt ?? null, coverage: page.coverage,
+            sourceLastSuccess:observedAt,sourceUpdatedAt:complete && latestEdit!==null ? new Date(latestEdit).toISOString():null,coverage:complete ? "complete":"partial",
             quotaState: "unknown", deadlineState: "not_applicable" };
         } catch (error) {
+          const failed={...base,checkedAt:new Date().toISOString(),coverage:pagesRead ? "partial" as const : "unknown" as const};
           if (error instanceof AssetRegistryReadError && error.authority === "denied") {
-            return { ...base,checkedAt:new Date().toISOString(),status:"restricted",permission:"denied" };
+            return { ...failed,status:"restricted",permission:"denied" };
           }
           if (error instanceof AssetRegistryReadError && error.authority === "expired") {
-            return { ...base,checkedAt:new Date().toISOString(),session:"expired" };
+            return { ...failed,session:"expired" };
           }
-          return { ...base, checkedAt: new Date().toISOString(),
+          return { ...failed,
             status: error instanceof AssetRegistryReadError && error.code === "SOURCE_ACCESS_UNAVAILABLE" ? "missing_access" : "failed" };
         }
       } : undefined,

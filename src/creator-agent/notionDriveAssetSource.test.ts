@@ -75,7 +75,7 @@ describe("read-only pagination of the two configured native registries", () => {
     const adapter = setup(() => json(list()), { drive: undefined });
     for (const registry of ["content", "collaborations"] as const) {
       expect(await adapter.listRegistryPage(assetTestScope, { registry })).toEqual({
-        registry, observedAt: assetTestNow, records: [], coverage: "complete", nextCursor: null, rights: "unverified",
+        registry, observedAt: assetTestNow, records: [], coverage: "complete", queryTruncated:false, nextCursor: null, rights: "unverified",
       });
     }
     expect(adapter.calls.map(({ url }) => url.pathname)).toEqual([ids.content, ids.collaborations].map((id) => `/v1/data_sources/${id}/query`));

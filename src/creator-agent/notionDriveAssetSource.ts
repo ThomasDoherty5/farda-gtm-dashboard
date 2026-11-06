@@ -15,7 +15,7 @@ export type AssetRegistryQuery = { registry: "content" | "collaborations"; curso
 export type AssetRegistryPage = {
   registry: AssetRegistryQuery["registry"]; observedAt: string;
   records: { recordRef: string; registryEditedAt: string; driveLink: "present" | "absent" | "unsupported" | "not_applicable" }[];
-  coverage: "complete" | "partial"; nextCursor: string | null; rights: "unverified";
+  coverage: "complete" | "partial"; queryTruncated?: boolean; nextCursor: string | null; rights: "unverified";
 };
 export class AssetRegistryReadError extends Error {
   readonly code: string;
@@ -75,7 +75,7 @@ function matchesRelation(row: RegistryRow, name: string, expected: string | null
 }
 
 // Never follow an external URL or pre-signed storage link. Both token audiences are fixed.
-async function readJson(fetcher: typeof fetch, url: URL, token: string | null, body?: object): Promise<unknown> {
+async function readJson(fetcher: typeof fetch, url: URL, token: string | null, body?: object, signal?: AbortSignal): Promise<unknown> {
   if (!token) throw missingAccess();
   const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
   if (url.origin === "https://api.notion.com") headers["Notion-Version"] = "2026-03-11";
@@ -83,7 +83,7 @@ async function readJson(fetcher: typeof fetch, url: URL, token: string | null, b
   try {
     const response = await fetcher(url, {
       method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined,
-      redirect: "error", signal: AbortSignal.timeout(8000),
+      redirect: "error", signal: signal ? AbortSignal.any([signal,AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     if (!response.ok) {
       await response.body?.cancel();
@@ -158,17 +158,17 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     try { return await config.notionToken(); } catch { throw missingAccess(); }
   }
   /** Native identity of the current integration, independent of any configured account label. */
-  async function readNotionWorkspace(): Promise<string|null> {
+  async function readNotionWorkspace(signal?: AbortSignal): Promise<string|null> {
     const identity = z.object({ object:z.literal("user"),type:z.literal("bot"),bot:z.object({workspace_id:pageId}) });
     try {
-      const result=identity.safeParse(await readJson(fetcher,notionUrl("users/me"),await notionToken()));
+      const result=identity.safeParse(await readJson(fetcher,notionUrl("users/me"),await notionToken(),undefined,signal));
       return result.success ? result.data.bot.workspace_id : null;
     } catch (error) {
       if (error instanceof AssetRegistryReadError && (error.authority !== "unknown" || error.code !== "SOURCE_ACCESS_UNAVAILABLE")) throw error;
       return null;
     }
   }
-  async function listRegistryPage(requestScope: AssetScope, input: AssetRegistryQuery): Promise<AssetRegistryPage> {
+  async function listRegistryPage(requestScope: AssetScope, input: AssetRegistryQuery, signal?: AbortSignal): Promise<AssetRegistryPage> {
     if (!sameAssetScope(scope, requestScope)) throw new AssetRegistryReadError("SCOPE_DENIED", 403);
     const validated = querySchema.safeParse(input);
     if (!validated.success) throw invalidQuery();
@@ -178,7 +178,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     const start = cursor ? openCursor(secret, binding, cursor) : undefined;
     const data = await readJson(fetcher, notionUrl(`data_sources/${source}/query`), await notionToken(), {
       page_size: limit, result_type: "page", ...(start ? { start_cursor: start } : {}),
-    });
+    },signal);
     const parsed = notionList.safeParse(data);
     if (!parsed.success) throw badResponse();
     const page = parsed.data;
@@ -196,6 +196,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     return {
       registry, observedAt: clock(), records, rights: "unverified",
       coverage: !cursor && !page.has_more && page.request_status?.type !== "incomplete" ? "complete" : "partial",
+      queryTruncated:page.request_status?.type === "incomplete",
       nextCursor: page.next_cursor ? sealCursor(secret, binding, page.next_cursor) : null,
     };
   }

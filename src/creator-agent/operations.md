@@ -91,6 +91,8 @@ Health routes reuse the operations envelope and `sourceEffect: "none"`. Duplicat
 
 The native launcher optionally accepts private `FARDA_PROVIDER_HEALTH_CONFIG` with `notionRegistryTargets` and an optional opaque `activationRef`. Each target pins the exact server scope/binding, registry, owner, freshness age and documentation-check time. Only Notion API observe actions `read-content-registry` and `read-collaborations-registry` are supported by this launcher helper. It reuses the private registry reader from asset-source configuration; no arbitrary endpoint or credential is accepted from the frontend. A successful registry read proves that operation only, not a write scope, plan, role or business eligibility.
 
+The registry probe scans at most three pages of 100 records within six seconds and rechecks native workspace identity. It distinguishes a terminal continuation from provider query truncation. Only an exhausted, untruncated scan supplies complete coverage and a registry-wide last-edit timestamp; cap exhaustion, truncation or a mid-scan failure keeps readiness held. The outer job probe is independently bounded.
+
 Configuration alone does not activate J14. The activation reference is only a locator for the separately trusted job activation resolver. That resolver remains absent by default. A configured check without trusted activation produces a held local run and no source call; missing configuration/grants are unverified. There is no production health schedule or provider business executor in this release.
 
 ## Verification and release stage

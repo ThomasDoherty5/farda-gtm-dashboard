@@ -242,7 +242,7 @@ describe("bounded provider health checks",()=>{
     const s=setup(targets);const id=await s.register(b);
     const observed=await s.check(id,"notion-read");
     expect(observed.health).toMatchObject({state:"ready",sourceUpdatedAt:null,coverage:"complete",roleScopePlan:"unknown",quotaState:"unknown",deadlineState:"not_applicable"});
-    expect(reader).toHaveBeenCalledWith({workspaceId:scope.workspaceId,accountId:scope.accountId},{registry:"content",limit:1});
+    expect(reader).toHaveBeenCalledWith({workspaceId:scope.workspaceId,accountId:scope.accountId},{registry:"content",limit:100},expect.any(AbortSignal));
     expect(identity).toHaveBeenCalledTimes(2);
     granted=false;await s.check(id,"notion-loss");
     expect(s.service.get(id)?.permission).toBe("unknown");
@@ -259,6 +259,45 @@ describe("bounded provider health checks",()=>{
     let first=true;
     expect((await source(async()=>{if(first){first=false;return b.providerAccountId;}return "changed";})).status).toBe("account_mismatch");
     expect(reader).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["exhausted",2,"complete","ready"],
+    ["page budget",3,"partial","unverified"],
+    ["native truncation",2,"partial","unverified"],
+    ["second request fails",2,"partial","unverified"],
+  ] as const)("bounded Notion query scan: %s",async(scenario,expectedCalls,coverage,state)=>{
+    clock=Date.now()+100;
+    const workspace="20000000-0000-4000-8000-000000000001";
+    const source="30000000-0000-4000-8000-000000000001";
+    const api=binding({provider:"notion",providerAccountId:workspace,action:"read-content-registry"});
+    const cursors:(string|null)[]=[];
+    const newest=iso(clock-5_000);
+    const native=createNotionDriveAssetSource({scope:{workspaceId:scope.workspaceId,accountId:scope.accountId},contentDataSourceId:source,
+      collaborationDataSourceId:"30000000-0000-4000-8000-000000000002",notionToken:async()=>"synthetic-read-token"},{
+      clock:()=>iso(),fetch:async(url,opts)=>{
+        if(String(url).endsWith("/users/me")) return Response.json({object:"user",type:"bot",bot:{workspace_id:workspace}});
+        expect(String(url)).toBe(`https://api.notion.com/v1/data_sources/${source}/query`);
+        const input=JSON.parse(String(opts?.body));
+        expect(input.page_size).toBe(100);
+        cursors.push(input.start_cursor ?? null);
+        const page=cursors.length;
+        if(scenario==="second request fails" && page===2) return new Response("synthetic provider failure",{status:500});
+        const more=scenario==="page budget" || page===1;
+        const row=(n:number,stamp:string)=>({object:"page",id:`40000000-0000-4000-8000-${String(n).padStart(12,"0")}`,
+          parent:{type:"data_source_id",data_source_id:source},in_trash:false,is_archived:false,last_edited_time:stamp,
+          properties:{"Asset link":{type:"url",url:null}}});
+        const results=page===1 ? [row(1,iso(clock-50_000)),row(2,newest)] : [row(page+1,iso(clock-20_000))];
+        return Response.json({object:"list",results,has_more:more,next_cursor:more ? "cursor-"+page:null,
+          request_status:{type:scenario==="native truncation" && page===2 ? "incomplete":"complete"}});
+      },
+    });
+    const targets=createNotionRegistryHealthTargets(scope,[{registry:"content",binding:api,ownerRef:"owner:source-operator",maxAgeSeconds:60,documentationCheckedAt:iso(epoch)}],
+      native.listRegistryPage,native.readNotionWorkspace);
+    const s=setup(targets),id=await s.register(api);
+    const check=await s.check(id,"native-scan");
+    expect(cursors).toEqual([null,"cursor-1","cursor-2"].slice(0,expectedCalls));
+    expect(check.health).toMatchObject({state,coverage,sourceUpdatedAt:coverage==="complete" ? newest:null});
+    expect(s.ops.ledger.requireReady(api).allowed).toBe(coverage==="complete");
   });
   it.each([
     [401,"unknown","expired","blocked",false], [403,"denied","unknown","blocked",true], [404,"unknown","unknown","unverified",false],
