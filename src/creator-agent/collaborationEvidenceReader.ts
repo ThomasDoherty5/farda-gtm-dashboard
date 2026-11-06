@@ -103,7 +103,7 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
     }
     const participation = body as StoredPortfolioParticipation;
     return { ...common, kind: "participation", creatorId: safeId(participation.creatorId), decisionId: participation.decisionId,
-      recordedAt: participation.recordedAt, state: participation.state, occurredAt: participation.occurredAt, sourceReceiptRef: opaque(participation.sourceReceiptRef), sourceVerified: row.source_mode === "source-verified" };
+      recordedAt: participation.recordedAt, state: participation.state, occurredAt: participation.occurredAt, sourceReceiptRef: opaque(participation.sourceReceiptRef), sourceVerified: row.source_mode === "source-verified" && body.sourceMode === "source-verified" };
   }
   return async (raw: unknown) => {
     const input = requestSchema.parse(raw);
@@ -127,7 +127,11 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
       record.reviewState = rights.review;
       if (rights.review === "accepted" && (rights.acceptedVersion !== record.version || !rights.approvalVersion)) record.reviewState = "pending";
       record.rightsState = rights.status;
-      if (rights.status === "granted" && rights.endsAt && Date.parse(rights.endsAt) <= observedAt) record.rightsState = "expired";
+      if (rights.status === "granted") {
+        if (!rights.startsAt || !rights.endsAt || Date.parse(rights.startsAt) >= Date.parse(rights.endsAt)) record.rightsState = "unknown";
+        else if (Date.parse(rights.endsAt) <= observedAt) record.rightsState = "expired";
+        else if (Date.parse(rights.startsAt) > observedAt) record.rightsState = "pending";
+      }
       record.rightsObservedAt = rights.observedAt;
     }
     const hasMore = offset + records.length < total;

@@ -111,6 +111,8 @@ describe("exact collaboration evidence reads", () => {
       store.database.prepare("UPDATE portfolio_decisions SET body=json_set(body,'$.linearDecisionRef',?)").run(unsafe);
       store.database.prepare("UPDATE portfolio_participation SET body=json_set(body,'$.sourceReceiptRef',?)").run(unsafe);
       expect(JSON.stringify((await read({ collaborationId: "synthetic-creator-collaboration", cursor: null, limit: 25 })).data)).not.toContain("synthetic-private-value");
+      store.database.prepare("UPDATE portfolio_participation SET body=json_remove(body,'$.sourceMode')").run();
+      expect((await read({ collaborationId: "synthetic-next-collaboration", cursor: null, limit: 25 })).data.records).toEqual([expect.objectContaining({ sourceVerified: false })]);
       store.database.prepare("UPDATE portfolio_decisions SET body=json_remove(body,'$.sourceMode')").run();
       const historical = (await read({ collaborationId: "synthetic-next-collaboration", cursor: null, limit: 25 })).data.records;
       expect(historical).toEqual([expect.objectContaining({ kind: "participation", sourceVerified: false })]);
@@ -130,6 +132,23 @@ describe("exact collaboration evidence reads", () => {
       const read = createCollaborationEvidenceReader(s.store.database, assetTestScope, secret, authority, () => clock);
       const records = (await read({ collaborationId: collab, cursor: null, limit: 25 })).data.records;
       expect(records).toEqual([expect.objectContaining({ assetId: "first", rightsState: "unknown" }), expect.objectContaining({ assetId: "slow", rightsState: "granted" })]);
+    } finally { s.store.close(); }
+  });
+  it("holds future or missing rights terms and mismatched exact-version review metadata", async () => {
+    const s = setup();
+    try {
+      await s.assets.ingest({ scope: assetTestScope, expectedVersion: 0, submission: syntheticAsset() }, "asset1");
+      for (const [change, expected] of [
+        [{ startsAt: "2026-11-05T00:00:00Z" }, { rightsState: "pending" }],
+        [{ startsAt: null }, { rightsState: "unknown" }],
+        [{ endsAt: null }, { rightsState: "unknown" }],
+        [{ endsAt: "2026-11-03T00:00:00Z" }, { rightsState: "expired" }],
+        [{ acceptedVersion: 2 }, { reviewState: "pending" }],
+        [{ productRevision: "other" }, { rightsState: "unknown", reviewState: "unknown" }],
+      ] as const) {
+        s.fixture.state.rights.set("synthetic-asset", change);
+        expect((await s.read({ collaborationId: collab, cursor: null, limit: 25 })).data.records[0]).toMatchObject(expected);
+      }
     } finally { s.store.close(); }
   });
 });
