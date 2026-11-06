@@ -146,10 +146,17 @@ export type HeadlineEvidence = {
   retention: "mature" | "immature" | "unknown"; landedCost: "complete" | "incomplete" | "unknown";
   refundRevision: string | null;
 };
+export type MetricObservationScope = {
+  source: "fixture" | "source"; sourceRef: string;
+  cohortId: string; currency: string; period: import("../features/analytics/economicCosts").ReportingWindow;
+};
 export type PlatformWindow = { label: string; sourceRef: string };
 export type AttributionData = {
   datasetKey: "overview-original" | "attribution-observed";
   periodLabel: string;
+  reportScope?: MetricObservationScope;
+  receiptScope?: MetricObservationScope;
+  retainedCustomerScope?: MetricObservationScope;
   netReceipts: ProvenanceValue<Money>;
   orders: ProvenanceValue<number>;
   retainedUnits: number;
@@ -167,9 +174,16 @@ export type AttributionData = {
 };
 
 const o = overviewOriginal;
+const fixtureAttributionScope = {
+  source: "fixture", sourceRef: "demo:overview/report", cohortId: "fixture-all-acquisition", currency: "USD",
+  period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" },
+} satisfies MetricObservationScope;
 export const attributionDemo = {
   datasetKey: "overview-original",
   periodLabel: "30 Sep–29 Oct 2026",
+  reportScope: fixtureAttributionScope,
+  receiptScope: { ...fixtureAttributionScope, sourceRef: "demo:overview/order-receipts" },
+  retainedCustomerScope: { ...fixtureAttributionScope, sourceRef: "demo:overview/retained-customers" },
   netReceipts: o.netReceipts,
   orders: o.orders,
   retainedUnits: 378,

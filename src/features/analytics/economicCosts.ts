@@ -24,7 +24,7 @@ export function validReportingWindow(w: ReportingWindow | undefined): w is Repor
   try { new Intl.DateTimeFormat("en-US", { timeZone: w.timezone }); return true; }
   catch { return false; }
 }
-const sameWindow = (a: ReportingWindow, b: ReportingWindow) => a.start === b.start && a.end === b.end && a.timezone === b.timezone;
+export const sameReportingWindow = (a: ReportingWindow, b: ReportingWindow) => a.start === b.start && a.end === b.end && a.timezone === b.timezone;
 const present = (v: string | null | undefined): v is string => !!v?.trim();
 const safeMinor = (x: unknown): x is number => typeof x === "number" && Number.isSafeInteger(x) && x >= 0;
 const rank: Record<CostBasis, number> = { estimated: 0, accrued: 1, paid: 2 };
@@ -45,13 +45,16 @@ export function allocateCosts(rows: readonly CostBucket[], scope?: CostScope): C
     cohorts.add(row.cohortId);
     if (scope && row.cohortId !== scope.cohortId) diagnostics.add("COST_COHORT_MISMATCH");
     if (!present(row.obligationId) || !present(row.evidenceId)) { diagnostics.add("MISSING_OBLIGATION_OR_EVIDENCE_ID"); continue; }
+    if ([row.obligationId, row.evidenceId, row.cashId].some(id => id != null && (!id || id !== id.trim()))) {
+      diagnostics.add("INVALID_ECONOMIC_IDENTITY"); continue;
+    }
     if (!safeMinor(row.minorUnits)) { diagnostics.add("UNKNOWN_OR_INVALID_AMOUNT"); continue; }
     if (!row.currency || !isCurrency(row.currency)) { diagnostics.add("INVALID_CURRENCY"); continue; }
     if (!validReportingWindow(row.period)) { diagnostics.add("INVALID_REPORTING_WINDOW"); continue; }
     units.add(row.currency);
     windows.add(JSON.stringify([row.period.start, row.period.end, row.period.timezone]));
     if (scope && row.currency !== scope.currency) diagnostics.add("CURRENCY_MISMATCH");
-    if (scope && !sameWindow(row.period, scope.period)) diagnostics.add("REPORTING_WINDOW_MISMATCH");
+    if (scope && !sameReportingWindow(row.period, scope.period)) diagnostics.add("REPORTING_WINDOW_MISMATCH");
     const cash = row.basis === "paid" || row.alsoInCash;
     if (cash !== present(row.cashId)) diagnostics.add("CASH_IDENTITY_UNRESOLVED");
     const fingerprint = JSON.stringify([row.obligationId, row.cohortId, row.basis, row.minorUnits, row.currency, row.period.start, row.period.end, row.period.timezone, cash, row.cashId ?? null]);

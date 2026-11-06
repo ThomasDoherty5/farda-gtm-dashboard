@@ -2,7 +2,8 @@
  * Headline acquisition metrics for the demo adapter. Live values come from the THO-283 adapter; these derivations exist so
  * the fixtures can be hand-checked. Unknown (null), zero and provisional are three different states and never collapse to 0.
  */
-import { allocateCosts as reconcileEconomicCosts } from "./economicCosts";
+import { allocateCosts as reconcileEconomicCosts, sameReportingWindow, validReportingWindow, type CostScope } from "./economicCosts";
+import type { AttributionData, MetricObservationScope } from "../../fixtures/analytics";
 
 export type NaReason = "UNKNOWN_INPUT" | "ZERO_DENOMINATOR" | "INVALID_INPUT";
 export type MetricResult =
@@ -82,19 +83,41 @@ export function evaluateCase(i: CaseInputs) {
   };
 }
 
-/** Period-level source evidence and worked dictionary examples remain separate reads. */
-export function periodHeadline(data: import("../../fixtures/analytics").AttributionData) {
+type ScopeDimensions = Pick<CostScope, "cohortId" | "currency" | "period">;
+function sameScope(left: ScopeDimensions, right: ScopeDimensions) {
+  return left.cohortId === right.cohortId && left.currency === right.currency && sameReportingWindow(left.period, right.period);
+}
+
+/** Only the source-owned report scope selects the period. The label is presentation text. */
+export function periodHeadline(data: AttributionData) {
   const e = data.headlineEvidence;
   const allocation = e ? reconcileEconomicCosts(e.costs, e.costScope) : null;
   const reasons = new Set(allocation?.diagnostics ?? []);
+  const source = data.datasetKey === "attribution-observed" ? "source" : "fixture";
+  const report = data.reportScope;
+  const validBinding = (binding: MetricObservationScope | undefined) =>
+    !!binding && binding.source === source && !!binding.sourceRef.trim() && !!binding.cohortId.trim() &&
+    binding.currency === "USD" && validReportingWindow(binding.period);
+  const reportBound = validBinding(report);
+  if (!reportBound) reasons.add("REPORT_SCOPE_UNVERIFIED");
   if (!e) reasons.add("COST_EVIDENCE_MISSING");
-  if (e && (data.datasetKey === "attribution-observed") !== (e.source === "source")) reasons.add("SOURCE_DATASET_MISMATCH");
-  if (e && (e.costScope.currency !== "USD" || e.cohortId !== e.costScope.cohortId || e.cohortWindow.timezone !== e.costScope.period.timezone || e.cohortWindow.start !== e.costScope.period.start || e.cohortWindow.end !== e.costScope.period.end)) reasons.add("COHORT_SCOPE_MISMATCH");
-  if (allocation?.totalMinor != null && data.marketingSpend && allocation.totalMinor !== data.marketingSpend.minorUnits) reasons.add("REPORTED_SPEND_MISMATCH");
+  if (e && source !== e.source) reasons.add("SOURCE_DATASET_MISMATCH");
+  if (e && (e.cohortId !== e.costScope.cohortId || !sameReportingWindow(e.cohortWindow, e.costScope.period) ||
+      (report && !sameScope(report, e.costScope)))) reasons.add("COHORT_SCOPE_MISMATCH");
+  if (allocation?.totalMinor != null && data.marketingSpend && (allocation.totalMinor !== data.marketingSpend.minorUnits ||
+      data.marketingSpend.currency !== report?.currency)) reasons.add("REPORTED_SPEND_MISMATCH");
   const cost = reasons.size ? null : allocation?.totalMinor ?? null;
+
+  // The order mirror and retained-customer ledger can have different coverage. Hold only the ratios that depend on a mismatched input.
+  const boundToReport = (binding: MetricObservationScope | undefined) =>
+    reportBound && !!report && !!binding && validBinding(binding) && sameScope(report, binding);
+  const receiptsBound = boundToReport(data.receiptScope) && (!data.netReceipts.value || data.netReceipts.value.currency === report?.currency);
+  const retainedBound = boundToReport(data.retainedCustomerScope);
+  if (!receiptsBound) reasons.add("RECEIPT_SCOPE_UNVERIFIED");
+  if (!retainedBound) reasons.add("RETAINED_CUSTOMER_SCOPE_UNVERIFIED");
   const costCaveat = e?.landedCost !== "complete" ? "LANDED_COST_INCOMPLETE" : allocation?.state === "provisional" ? "ESTIMATED_COST" : null;
-  const customerCount = e?.retention === "unknown" || !e ? null : data.newRetainedCustomers;
+  const customerCount = retainedBound && e && e.retention !== "unknown" ? data.newRetainedCustomers : null;
   const cac = blendedCac(cost, customerCount, e?.retention === "immature" ? "RETENTION_IMMATURE" : costCaveat);
-  const merValue = mer(data.netReceipts.value?.minorUnits ?? null, cost, costCaveat);
-  return { allocation, diagnostics: [...reasons].sort(), cost, customerCount, cac, mer: merValue };
+  const merValue = mer(receiptsBound ? data.netReceipts.value?.minorUnits ?? null : null, cost, costCaveat);
+  return { allocation, diagnostics: [...reasons].sort(), cost, receiptsBound, customerCount, cac, mer: merValue };
 }

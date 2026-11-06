@@ -17,18 +17,22 @@ const multiple = (n: number) => `${n.toFixed(2)}×`;
 /** Performance attribution (Figma source 14:377, owner THO-293, CTRL-202 and CTRL-203). */
 export function AttributionPage() {
   const query = useView<Record<string, never>, AttributionData>("attribution", {});
+  const report = query.data?.data;
+  const periodLabel = report?.datasetKey === "attribution-observed"
+    ? report.reportScope ? `${report.reportScope.period.start} to ${report.reportScope.period.end} (${report.reportScope.period.timezone})` : null
+    : report?.periodLabel ?? null;
   const [dialog, setDialog] = useState<"period" | "definitions" | null>(null);
   return (
     <section aria-labelledby="attribution-title" data-figma-source="14:377" className={styles.page}>
       <PageHeader id="attribution-title" title="Every dollar, in perspective." subtitle="Performance · one period, clear attribution, and the economics behind growth.">
-        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{report?.datasetKey === "attribution-observed" ? "Reporting period" : "Last 30 days"}</Button>
         <Button style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("definitions")}>Metric definitions</Button>
       </PageHeader>
       <WorkspaceTabs tabs={LAUNCH_TABS("performance")} />
       <ViewShell query={query} subject="Performance attribution" emptyTitle="No performance data" emptyBody="The source responded, but nothing matches this period.">
         {(data) => <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
-      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={query.data?.data?.periodLabel ?? null} />
+      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
       <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
         {dialog === "definitions" && <Definitions data={query.data?.data ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
@@ -66,7 +70,8 @@ function PeriodEvidence({ data }: { data: AttributionData }) {
   return <section data-testid="period-economic-evidence">
     <h3 className={styles.label}>Reporting-period evidence</h3>
     <p className={styles.small}>{e ? `${e.source === "fixture" ? "Illustrative fixture" : "Source record"} · ${e.sourceRef} · ${e.cohortWindow.start} to ${e.cohortWindow.end} (${e.cohortWindow.timezone}) · ${e.cohortId}` : "Source and cost coverage unknown."}</p>
-    <p className={styles.small}>Economic cost {amount(result.cost)}. Linked cash receipts {amount(result.diagnostics.length ? null : result.allocation?.cashPaidMinor)}.</p>
+    {data.datasetKey === "attribution-observed" && <p className={styles.small}>Report: {data.reportScope?.sourceRef ?? "unknown"}. Receipts: {data.receiptScope?.sourceRef ?? "unknown"}. Retained customers: {data.retainedCustomerScope?.sourceRef ?? "unknown"}.</p>}
+    <p className={styles.small}>Economic cost {amount(result.cost)}. Linked cash receipts {amount(result.cost === null ? null : result.allocation?.cashPaidMinor)}.</p>
     <p className={styles.small}>Retention: {e?.retention ?? "unknown"}. Landed cost: {e?.landedCost ?? "unknown"}. Refund revision: {e?.refundRevision ?? "none supplied"}.</p>
     {result.diagnostics.length > 0 && <p className={styles.small} role="status">Reconciliation required: {result.diagnostics.map(reason => reason.toLowerCase().replaceAll("_", " ")).join("; ")}.</p>}
     {e && e.costs.length > 0 && <details><summary>Cost observations ({e.costs.length})</summary>
@@ -104,7 +109,8 @@ function Dictionary({ dict }: { dict: MetricDictionaryData }) {
         ))}
         {dict.related.map((r) => <div key={r.label}><dt>{r.label}</dt><dd>{r.basis}</dd></div>)}
       </dl>
-      <h3 className={styles.label}>Illustrative cost allocation · {alloc.totalMinor === null ? "Unknown" : usd({ minorUnits: alloc.totalMinor, currency: "USD" })}</h3>
+      <h3 className={styles.label}>Illustrative cost allocation · {dict.allocationScope && dict.allocationScope.currency !== "USD" ? `Unavailable in USD (${dict.allocationScope.currency})`
+        : alloc.totalMinor === null ? "Unknown" : usd({ minorUnits: alloc.totalMinor, currency: "USD" })}</h3>
       {dict.allocationVersion && <p className={styles.small}>Allocation {dict.allocationVersion}. An accrual and its payment share one obligation. Matching amounts count once economically. Cash requires a linked settlement. Conflicting records hold the total.</p>}
       <ul className={styles.small} data-testid="cost-buckets">
         {dict.buckets.map((b, i) => <li key={(b.evidenceId ?? b.key) + "/" + i}>{b.label}: {b.minorUnits === null || b.currency !== "USD" ? "Unresolved amount or currency" : usd({ minorUnits: b.minorUnits, currency: "USD" })} · {b.basis} · {b.note}</li>)}
@@ -131,12 +137,12 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
   const orders = data.orders.value;
   const attributed = data.attribution.reduce((s, a) => s + a.orders, 0);
   const unattributed = data.attribution.find((a) => a.key === "unattributed")?.orders;
-  const { cac, mer: merResult, cost, customerCount } = periodHeadline(data);
+  const { cac, mer: merResult, cost, receiptsBound, customerCount } = periodHeadline(data);
   const caveat = (r: typeof cac) => r.state === "provisional" ? CAVEAT_TEXT[r.reasonCode as Caveat] : null;
   const spendText = cost === null ? "Unknown cost" : usd({ minorUnits: cost, currency: "USD" });
-  const aovResult = aovOf(net?.minorUnits ?? null, orders);
+  const aovResult = aovOf(receiptsBound ? net?.minorUnits ?? null : null, orders);
   const cacMinor = cac.value;
-  const perOrder = contributionPerOrder(contribution?.minorUnits ?? null, orders);
+  const perOrder = contributionPerOrder(receiptsBound ? contribution?.minorUnits ?? null : null, orders);
   const perOrderMinor = perOrder.value;
   const channelTotal = data.channels.reduce((s, c) => s + c.netReceipts.minorUnits, 0);
   const totals = weekTotals(data.weeks);

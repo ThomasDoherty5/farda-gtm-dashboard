@@ -53,6 +53,38 @@ describe("economic-event allocation", () => {
   });
 });
 describe("cohort-bound headlines", () => {
+  it.each(["obligationId", "evidenceId", "cashId"] as const)("holds padded %s rather than counting distinct cost or cash", field => {
+    const first = event({ basis: "paid", cashId: "cash-1" });
+    const padded = { ...first, evidenceId: "second-observation", [field]: first[field] + " " };
+    for (const rows of [[first, padded], [padded, first]]) {
+      expect(allocateCosts(rows, scope)).toMatchObject({ totalMinor: null, cashPaidMinor: null, diagnostics: ["INVALID_ECONOMIC_IDENTITY"] });
+    }
+  });
+  it.each(["reportScope", "receiptScope", "retainedCustomerScope"] as const)("unbound %s only permits independently scoped metrics", field => {
+    const data: AttributionData = structuredClone(attributionDemo);
+    delete data[field];
+    const result = periodHeadline(data);
+    expect(result.cac.value !== null).toBe(field === "receiptScope");
+    expect(result.mer.value !== null).toBe(field === "retainedCustomerScope");
+  });
+  it.each(["cohort", "window", "timezone", "currency", "dataset"] as const)("checks observation %s independently for each numerator or denominator", difference => {
+    const data: AttributionData = structuredClone(attributionDemo);
+    const receipt = data.receiptScope!;
+    const alter = (binding: typeof receipt) => {
+      switch (difference) {
+        case "cohort": binding.cohortId = "different-cohort"; break;
+        case "window": binding.period = { ...binding.period, start: "2026-10-01" }; break;
+        case "timezone": binding.period = { ...binding.period, timezone: "UTC" }; break;
+        case "currency": binding.currency = "EUR"; break;
+        case "dataset": binding.source = "source"; break;
+      }
+    };
+    alter(receipt);
+    expect(periodHeadline(data).mer.value).toBeNull();
+    expect(periodHeadline(data).cac.value).toBe(2500);
+    alter(data.retainedCustomerScope!);
+    expect(periodHeadline(data).cac.value).toBeNull();
+  });
   it("retains the signed refund loss and rejects fractional customer/order denominators", () => {
     expect(contributionPerOrder(-925, 1)).toMatchObject({ state: "known", value: -925 });
     expect(aov(1200, 1.5).value).toBeNull(); expect(blendedCac(1200, 1.5).value).toBeNull();
@@ -62,6 +94,7 @@ describe("cohort-bound headlines", () => {
     expect(periodHeadline(data).diagnostics).toContain("SOURCE_DATASET_MISMATCH");
     delete data.headlineEvidence;
     expect(periodHeadline(data).cac.value).toBeNull();
+    for (const scope of [data.reportScope, data.receiptScope, data.retainedCustomerScope]) scope!.source = "source";
     data.headlineEvidence = { ...structuredClone(attributionDemo.headlineEvidence), source: "source", retention: "immature", landedCost: "incomplete" };
     expect(periodHeadline(data).cac).toMatchObject({ state: "provisional", value: 2500, reasonCode: "RETENTION_IMMATURE" });
     expect(periodHeadline(data).mer).toMatchObject({ state: "provisional", reasonCode: "LANDED_COST_INCOMPLETE" });

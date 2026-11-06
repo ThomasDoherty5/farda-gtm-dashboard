@@ -107,6 +107,10 @@ const costObservation = z.object({ key: z.string(), label: z.string(), basis: z.
   cohortId: z.string().optional(), obligationId: z.string().optional(), evidenceId: z.string().optional(), cashId: z.string().nullable().optional(),
   currency: z.string().optional(), period: reportingWindow.optional(),
 });
+const metricObservationScope = z.object({
+  source: z.enum(["fixture", "source"]), sourceRef: z.string().trim().min(1), cohortId: z.string().trim().min(1),
+  currency: z.string().length(3), period: reportingWindow,
+}).strict();
 const platformWindow = z.object({ label: z.string().trim().min(1), sourceRef: z.string().trim().min(1) }).strict();
 const headlineEvidence = z.object({ source: z.enum(["fixture", "source"]), sourceRef: z.string().trim().min(1),
   cohortId: z.string().trim().min(1), cohortWindow: reportingWindow, costScope, costs: z.array(costObservation).max(2000),
@@ -117,6 +121,7 @@ const headlineEvidence = z.object({ source: z.enum(["fixture", "source"]), sourc
 export const attributionSchema = z.object({
   datasetKey: z.enum(["overview-original", "attribution-observed"]),
   periodLabel: z.string(),
+  reportScope: metricObservationScope.optional(), receiptScope: metricObservationScope.optional(), retainedCustomerScope: metricObservationScope.optional(),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
   orders: provenanceValueSchema(count),
   retainedUnits: count,

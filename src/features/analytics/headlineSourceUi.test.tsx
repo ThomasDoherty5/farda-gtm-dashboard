@@ -7,15 +7,19 @@ import { renderRoute } from "@/test/renderWithAdapter";
 import { attributionDemo, paidMediaDemo, type AttributionData, type PaidMediaData } from "@/fixtures/analytics";
 import { metricDictionaryDemo } from "@/fixtures/headlineMetrics";
 
-function render(data: AttributionData | PaidMediaData, path: string) {
+function render(data: AttributionData | PaidMediaData, path: string, dictionary = metricDictionaryDemo) {
   const adapter = createLiveAdapter("sandbox", { transport: { async send(req) {
     if (req.kind !== "read") throw new Error("Unexpected source mutation");
-    return respondWith(req.envelope, req.envelope.viewKey === "metricDictionary" ? metricDictionaryDemo : data, { dataVersion: "synthetic-source-case" });
+    return respondWith(req.envelope, req.envelope.viewKey === "metricDictionary" ? dictionary : data, { dataVersion: "synthetic-source-case" });
   } } });
   renderRoute(path, adapter);
 }
 function source(): AttributionData {
-  return { ...structuredClone(attributionDemo), datasetKey: "attribution-observed",
+  const fixture = structuredClone(attributionDemo);
+  return { ...fixture, reportScope: { ...fixture.reportScope, source: "source", sourceRef: "synthetic:report" },
+    receiptScope: { ...fixture.receiptScope, source: "source", sourceRef: "synthetic:receipt-ledger" },
+    retainedCustomerScope: { ...fixture.retainedCustomerScope, source: "source", sourceRef: "synthetic:customer-ledger" },
+    datasetKey: "attribution-observed",
     headlineEvidence: { ...structuredClone(attributionDemo.headlineEvidence), source: "source", sourceRef: "synthetic:period-ledger" } };
 }
 describe("headline source records through the live adapter", () => {
@@ -32,6 +36,24 @@ describe("headline source records through the live adapter", () => {
     const period = await screen.findByTestId("period-economic-evidence");
     expect(period).toHaveTextContent("obligation amount conflict"); expect(period).toHaveTextContent("synthetic:refund-v2");
     expect(period).toHaveTextContent("Source record"); expect(period).toHaveTextContent("Linked cash receipts Unknown");
+  });
+  it("withholds October costs from a November report even when receipts and customer counts are present", async () => {
+    const d = source();
+    const november = { start: "2026-11-01", end: "2026-11-30", timezone: "America/Los_Angeles" };
+    for (const scope of [d.reportScope, d.receiptScope, d.retainedCustomerScope]) scope!.period = november;
+    d.periodLabel = "November";
+    render(d, "/analytics/attribution");
+    expect(await screen.findByTestId("metric-cac")).toHaveTextContent("N/A"); expect(screen.getByTestId("metric-mer")).toHaveTextContent("N/A");
+    const user = userEvent.setup(); await user.click(screen.getByRole("button", { name: "Metric definitions" }));
+    expect(await screen.findByTestId("period-economic-evidence")).toHaveTextContent("cohort scope mismatch");
+  });
+  it("does not label a reconciled EUR dictionary total in USD", async () => {
+    const dictionary = structuredClone(metricDictionaryDemo);
+    dictionary.allocationScope!.currency = "EUR";
+    dictionary.buckets.forEach(row => { row.currency = "EUR"; });
+    render(source(), "/analytics/attribution", dictionary);
+    const user = userEvent.setup(); await user.click(screen.getByRole("button", { name: "Metric definitions" }));
+    expect(await screen.findByTestId("metric-dictionary")).toHaveTextContent("Illustrative cost allocation · Unavailable in USD (EUR)");
   });
   it("holds unknown customer counts, distinguishes known zero, and renders empty receipt history", async () => {
     const d = source(); d.newRetainedCustomers = null; d.weeks = []; d.attribution = [];
