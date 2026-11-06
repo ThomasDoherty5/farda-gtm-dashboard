@@ -58,6 +58,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `campaignFunnel` | `campaignId`, `cohort` | CampaignFunnelData | `analytics/CampaignFunnelPage` | `demoAnalytics` | proposed + conflict | C-05. |
 | `channelCapabilities` | none | CapabilityData | `settings/CapabilitiesPage` | `demoSettings` | proposed |  |
 | `collaborationDetail` | `collaborationId` | CollaborationData | `collaboration/CollaborationPage` | `demoAdapter` | proposed |  |
+| `collaborationEvidence` | `collaborationId`; cursor pages | CollaborationEvidenceData | `collaboration/CollaborationEvidence` | `demoCollaborationEvidence` | scoped saved-record projection | The authenticated service reads exact collaboration links. |
 | `commissionLedger` | `scenario?` | CommissionLedger | `finance/CommissionLedgerPage` | `demoFinance` | proposed + conflict | C-06. |
 | `connectionsOverview` | none | ConnectionsData | `settings/ConnectionsPage` | `demoSettings` | proposed |  |
 | `consentEligibility` | none | ConsentData | `lifecycle/ConsentPage` | `demoLifecycle` | proposed |  |

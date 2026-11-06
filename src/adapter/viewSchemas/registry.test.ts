@@ -124,6 +124,7 @@ const WITH_RECORD: Record<string, unknown[]> = {
   emailFlow: [{ flow: "setup" }],
   scheduleDetail: [{ jobId: "zap-12" }],
   postPerformance: [{ postId: "P-001" }, { postId: "P-002" }],
+  collaborationEvidence: [{ collaborationId: "demo-collaboration-1" }, { collaborationId: "demo-collaboration-2" }],
   orderDetail: [{ orderId: "TEST-SH-1042" }],
   shippingException: [{ shipmentId: "TEST-SP-0093", exceptionId: "TEST-EVT-129" }],
   supportWorkspace: [{ caseId: "TEST-ISS-018" }, { caseId: "TEST-ISS-016" }],

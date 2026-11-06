@@ -8,8 +8,8 @@ const queue = (actionKind: string, key: string, payload: object): ActionRequest<
 });
 
 describe("collaboration view schemas", () => {
-  it("covers exactly collaborationDetail", () => {
-    expect(Object.keys(schemas)).toEqual(["collaborationDetail"]);
+  it("registers both the collaboration and its separate evidence read", () => {
+    expect(Object.keys(schemas)).toEqual(["collaborationDetail", "collaborationEvidence"]);
   });
 
   describe("every demo variant parses unchanged", () => {
