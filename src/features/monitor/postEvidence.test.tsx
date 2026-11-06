@@ -52,9 +52,26 @@ describe("post detail through the validated live adapter", () => {
     expect(screen.getByTestId("metric-net-sales")).toHaveTextContent("$0");
   });
 
+  it.each([
+    ["future observation", { publishedAt: "2099-01-01T00:00:00Z", observedAt: "2099-01-02T00:00:00Z" }],
+    ["invalid numeric offset", { observedAt: "2026-10-29T17:04:00+99:99" }],
+    ["blank native reference", { nativePostRef: "   " }],
+    ["blank source reference", { sourceRef: "   " }],
+  ])("rejects %s as publication evidence", async (_case, invalid) => {
+    openPost({ publicationProof: { ...postPerformanceDemo.publicationProof, ...(invalid as object) } });
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByText("Publication verified", { selector: "span" })).not.toBeInTheDocument();
+  });
+
   it("rejects a verified receipt attributed to another post", async () => {
     openPost({ publicationProof: { ...postPerformanceDemo.publicationProof, postId: "another-post" } });
     expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByTestId("gmv-note")).not.toBeInTheDocument();
+  });
+  it("withholds an internally consistent record that belongs to another route", async () => {
+    openPost({ postId: "P-002", publicationProof: { ...postPerformanceDemo.publicationProof, postId: "P-002" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Post reference mismatch");
+    expect(screen.queryByTestId("metric-views")).not.toBeInTheDocument();
     expect(screen.queryByTestId("gmv-note")).not.toBeInTheDocument();
   });
 });

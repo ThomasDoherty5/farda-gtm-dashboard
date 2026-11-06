@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
+import { EmptyState } from "@/components/EmptyState";
 import { Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, ViewShell, usd, useIsDemo } from "@/features/analytics/parts";
 import type { PostGmv, PostPerformanceData } from "@/fixtures/monitor";
 import { count, deltaHeight, interactionsOf, ratePct } from "./monitorMath";
@@ -14,12 +15,16 @@ export function PostPage() {
   const { postId = "" } = useParams();
   const query = useView<{ postId: string }, PostPerformanceData>("postPerformance", { postId });
   const record = query.data?.data ?? null;
+  const wrongPost = record !== null && record.postId !== postId;
   return (
     <section aria-labelledby="post-title" data-figma-source="25:481" className={a.page}>
-      {!record && <h1 id="post-title" style={{ font: "var(--text-h1)", margin: 0 }}>Post performance</h1>}
-      <ViewShell query={query} subject="The post" emptyTitle="No post record" emptyBody="The source responded, but there is no post to show.">
+      {(!record || wrongPost) && <h1 id="post-title" style={{ font: "var(--text-h1)", margin: 0 }}>Post performance</h1>}
+      {wrongPost ? <EmptyState state="Error" title="Post reference mismatch" alert>
+        <p>The source returned a different post. Refresh to request the selected post again.</p>
+        <Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh post</Button>
+      </EmptyState> : <ViewShell query={query} subject="The post" emptyTitle="No post record" emptyBody="The source responded, but there is no post to show.">
         {(data) => <Post data={data} />}
-      </ViewShell>
+      </ViewShell>}
     </section>
   );
 }
@@ -106,8 +111,8 @@ function Post({ data }: { data: PostPerformanceData }) {
         </Card>
         <Card labelledBy="status-title" className={a.card20}>
           <h2 id="status-title" className={a.cardH2} style={{ margin: 0 }}>The conversation explains the next step</h2>
-          <div className={a.btnRow}><Badge tone={proof ? "success" : "warning"} width={200}>{proof ? "Live post verified" : "Publication unverified"}</Badge></div>
-          <p className={a.small}>{proof ? "Native post and publish time verified." : "No verified native publication record is available."} The creator conversation is linked to collaboration {data.collaborationId}.</p>
+          <div className={a.btnRow}><Badge tone={proof ? "success" : "warning"} width={200}>{proof ? "Publication verified" : "Publication unverified"}</Badge></div>
+          <p className={a.small}>{proof ? `Native post ${proof.nativePostRef} and its publish time were verified at ${proof.observedAt}.` : "No verified native publication record is available."} The source links this post to collaboration {data.collaborationId}.</p>
           <p className={a.small}>Next: review reuse rights before republishing. Message claims alone cannot approve payment or confirm an order.</p>
           <div className={a.btnRow}><LinkButton variant="secondary" to={`/collaborations/${data.collaborationId}?tab=overview`} style={{ minWidth: 280 }}>Open collaboration</LinkButton></div>
         </Card>
