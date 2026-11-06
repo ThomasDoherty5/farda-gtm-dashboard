@@ -37,6 +37,10 @@ The existing draft/mark-watched controls are held for projected records. Review 
 
 All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
+### Reward redemption (THO-348)
+
+`/v1/rewards/redemptions` prepares, decides, purchases, records outcomes for and reconciles one redemption per mature J11 entitlement. It needs an exact J04 decision before any purchase, holds proposed terms as proposed, and reads an uncertain purchase back before retrying. Every source and the purchase executor are injected through `rewardAuthority`; none is connected. See [`src/creator-agent/rewards/README.md`](../src/creator-agent/rewards/README.md).
+
 ## Weight binding
 
 The owner-approved `2026-11-04.launch-v1` website and TikTok bindings are versioned under `src/creator-agent/configurations/` and loaded by the launcher by default. They preserve the explicitly adopted route percentages, existing arithmetic and80/65 bands. Historical v2 fixtures remain unchanged and are never a fallback. An explicitly unbound embedded/test instance still reports unknown numeric configuration and cannot activate.
