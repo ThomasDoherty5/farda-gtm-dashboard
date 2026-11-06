@@ -449,6 +449,6 @@ describe("channel capabilities (66:641)", () => {
     renderRoute("/settings/capabilities", createLiveAdapter("production"));
     expect(await screen.findByRole("alert")).toHaveTextContent("not connected");
     expect(screen.queryByTestId("capability-matrix")).not.toBeInTheDocument();
-    expect(screen.getByText("No integration is verified")).toBeInTheDocument();
+    expect(screen.getByText("Account-specific permission evidence")).toBeInTheDocument();
   });
 });

@@ -8,7 +8,7 @@ test.describe("headline acquisition metrics", () => {
     await expect(page.getByTestId("metric-mer")).toContainText("1.80×");
     await page.getByRole("button", { name: "Metric definitions" }).click();
     const dict = page.getByTestId("metric-dictionary");
-    await expect(dict).toContainText("headline-metrics@1");
+    await expect(dict).toContainText("headline-metrics@2");
     await expect(dict.getByTestId("definition-blendedCac")).toContainText("Refunds:");
     await expect(dict.locator('[data-case="normal"]')).toContainText("CAC $25.00");
     await expect(dict.locator('[data-case="unknown-spend"]')).toContainText("CAC N/A · an input is unknown");

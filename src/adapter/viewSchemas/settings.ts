@@ -12,6 +12,7 @@
  * - These views hold no money, so the minor-unit rules do not apply; counts reject negatives and fractions.
  */
 import { z } from "zod";
+import { savedBindingsSchema, savedRunsSchema } from "@/creator-agent/operationsView";
 
 const count = z.number().int().nonnegative();
 const tone = z.enum(["neutral", "violet", "success", "warning", "danger"]);
@@ -136,10 +137,10 @@ export const nightlyReconciliationSchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
-  connectionsOverview: connectionsOverviewSchema,
+  connectionsOverview: z.union([savedBindingsSchema, connectionsOverviewSchema]),
   teamPermissions: teamPermissionsSchema,
-  automationRuns: automationRunsSchema,
+  automationRuns: z.union([savedRunsSchema, automationRunsSchema]),
   scheduleDetail: scheduleDetailSchema,
-  channelCapabilities: channelCapabilitiesSchema,
+  channelCapabilities: z.union([savedBindingsSchema, channelCapabilitiesSchema]),
   nightlyReconciliation: nightlyReconciliationSchema,
 };

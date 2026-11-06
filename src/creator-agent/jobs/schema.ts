@@ -6,13 +6,14 @@ const id = z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).re
 const instant = z.string().datetime({ offset: true });
 export const jobDefinitionSchema = z.object({
   jobId: id, version: z.number().int().positive().safe(), ownerRef: id,
-  mode: z.enum(["observe", "propose"]).default("observe"), handler: z.enum(["record-reference.v1", "draft-reference.v1"]),
+  mode: z.enum(["observe", "propose"]).default("observe"), handler: z.enum(["record-reference.v1", "draft-reference.v1", "probe-provider-health.v1"]),
   eventType: id, inputSchemaVersion: z.literal("job-reference-batch.v1"), outputSchemaVersion: z.literal("job-local-result.v1"),
-  policyVersion: id, modelVersion: id.nullable(), offerVersion: id.nullable(), capabilityBinding: expectedBindingSchema.nullable(),
+  policyVersion: id, healthPolicyVersion:z.string().regex(/^[a-f0-9]{64}$/).optional(), modelVersion: id.nullable(), offerVersion: id.nullable(), capabilityBinding: expectedBindingSchema.nullable(),
   budgets: z.object({ maxItems: z.number().int().min(1).max(100), maxSteps: z.number().int().min(1).max(1000), maxAttempts: z.number().int().min(1).max(5),
     maxRunMs: z.number().int().min(1000).max(900_000), leaseMs: z.number().int().min(1000).max(300_000), maxConcurrency: z.number().int().min(1).max(4), retryBaseMs: z.number().int().min(0).max(60_000) }).strict(),
 }).strict().superRefine((job, ctx) => {
-  if ((job.mode === "observe") !== (job.handler === "record-reference.v1")) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Handler and no-source mode must match." });
+  if ((job.mode === "propose") !== (job.handler === "draft-reference.v1")) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Handler and job mode must match." });
+  if ((job.handler==="probe-provider-health.v1")!==Boolean(job.healthPolicyVersion)) ctx.addIssue({code:"custom",message:"Health handlers require the exact source policy revision."});
   if (job.capabilityBinding && job.capabilityBinding.mode !== job.mode) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Capability mode must match the registration." });
   if (job.budgets.leaseMs > job.budgets.maxRunMs) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A lease cannot exceed the run time budget." });
 });
@@ -41,6 +42,6 @@ export const jobRunViewSchema = z.object({ schemaVersion: z.literal(JOB_SCHEMA_V
   control: z.enum(["active", "paused", "cancelled"]), state: z.enum(["empty", "queued", "running", "deferred", "held", "paused", "cancelling", "cancelled", "completed", "partial", "failed", "reconcile"]),
   counts: z.object({ total: z.number().int().nonnegative(), due: z.number().int().nonnegative(), deferred: z.number().int().nonnegative(), leased: z.number().int().nonnegative(), held: z.number().int().nonnegative(), completed: z.number().int().nonnegative(), cancelled: z.number().int().nonnegative(), failed: z.number().int().nonnegative(), reconcile: z.number().int().nonnegative(), reused: z.number().int().nonnegative() }).strict(),
   blockerCodes: z.array(z.string()), nextAction: z.string(), items: z.array(jobItemViewSchema).max(100),
-  usage: z.object({ workSteps: z.number().int().nonnegative(), externalCalls: z.literal(0), modelCalls: z.literal(0), sourceQuota: z.literal("notApplicable"), zapierTasks: z.literal("unknown"), runtimeCost: z.literal("unknown") }).strict(),
+  usage: z.object({ workSteps: z.number().int().nonnegative(), externalCalls: z.literal(0).nullable(), modelCalls: z.literal(0), sourceQuota: z.enum(["notApplicable","unknown"]), zapierTasks: z.literal("unknown"), runtimeCost: z.literal("unknown") }).strict(),
 }).strict();
 export type JobRunView = z.infer<typeof jobRunViewSchema>;

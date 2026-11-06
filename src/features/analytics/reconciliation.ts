@@ -29,8 +29,8 @@ export function buildMatrix(i: ReconciliationInputs): MatrixRow[] {
   const attrNet = known<{ minorUnits: number }>(i.attribution.netReceipts);
   const ovOrders = known<number>(i.overview.orders);
   const attrOrders = known<number>(i.attribution.orders);
-  const mediaSpend = i.paidMedia.channels.reduce((a, c) => a + money(c.spend), 0);
-  const acquisitionCost = mediaSpend + money(i.paidMedia.creatorSampleEconomics);
+  const mediaSpend = i.paidMedia.channels.length ? sumNullable(i.paidMedia.channels.map(c => c.spend?.minorUnits ?? null)) : null;
+  const acquisitionCost = mediaSpend === null || !i.paidMedia.creatorSampleEconomics ? null : mediaSpend + money(i.paidMedia.creatorSampleEconomics);
   const postOrders = sumNullable(i.posts.map((p) => p.orders));
   const postSales = i.posts.some((p) => p.netSales === null) ? null : i.posts.reduce((a, p) => a + p.netSales!.minorUnits, 0);
   const postViews = sumNullable(i.posts.map((p) => p.views));
@@ -61,7 +61,7 @@ export function buildMatrix(i: ReconciliationInputs): MatrixRow[] {
     ] },
     { metric: "Marketing spend", unit: "usd", cells: [
       { page: "Overview", route: "/overview", value: money(i.overview.marketingSpend) },
-      { page: "Performance attribution", route: "/analytics/attribution", value: money(i.attribution.marketingSpend) },
+      { page: "Performance attribution", route: "/analytics/attribution", value: i.attribution.marketingSpend?.minorUnits ?? null },
       { page: "Paid media: media + creator and sample economics", route: "/analytics/paid-media", value: acquisitionCost },
     ] },
     { metric: "Attributed orders", unit: "count", cells: [

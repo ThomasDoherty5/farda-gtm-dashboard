@@ -1,3 +1,4 @@
+import { metricDictionaryDemo } from "./headlineMetrics";
 /**
  * Demo datasets for the launch and analytics screens (THO-293). Every figure here is synthetic and the screens label it so.
  * The original 12,596 / 400-order example is kept apart from the pilot 1,800 / 270 commission data and later acquisition-cohort
@@ -137,15 +138,33 @@ export const launchControlDemo: LaunchControlData = {
 
 /* ---------- Performance attribution (Figma 14:377) ---------- */
 
+export type HeadlineEvidence = {
+  source: "fixture" | "source"; sourceRef: string;
+  cohortId: string; cohortWindow: import("../features/analytics/economicCosts").ReportingWindow;
+  costScope: import("../features/analytics/economicCosts").CostScope;
+  costs: import("../features/analytics/economicCosts").CostBucket[];
+  retention: "mature" | "immature" | "unknown"; landedCost: "complete" | "incomplete" | "unknown";
+  refundRevision: string | null;
+};
+export type MetricObservationScope = {
+  source: "fixture" | "source"; sourceRef: string;
+  cohortId: string; currency: string; period: import("../features/analytics/economicCosts").ReportingWindow;
+};
+export type PlatformWindow = { label: string; sourceRef: string };
 export type AttributionData = {
-  datasetKey: "overview-original";
+  datasetKey: "overview-original" | "attribution-observed";
   periodLabel: string;
+  reportScope?: MetricObservationScope;
+  receiptScope?: MetricObservationScope;
+  retainedCustomerScope?: MetricObservationScope;
   netReceipts: ProvenanceValue<Money>;
   orders: ProvenanceValue<number>;
   retainedUnits: number;
   contribution: ProvenanceValue<Money>;
-  marketingSpend: Money;
-  newRetainedCustomers: number;
+  marketingSpend: Money | null;
+  newRetainedCustomers: number | null;
+  headlineEvidence?: HeadlineEvidence;
+  tiktokRoasWindow?: PlatformWindow | null;
   tiktokPlatformRoas: ProvenanceValue<number>;
   channels: { key: "shopify" | "tiktok"; label: string; netReceipts: Money; orders: number }[];
   weeks: { label: string; note: string | null; shopify: Money; tiktok: Money }[];
@@ -155,15 +174,25 @@ export type AttributionData = {
 };
 
 const o = overviewOriginal;
-export const attributionDemo: AttributionData = {
+const fixtureAttributionScope = {
+  source: "fixture", sourceRef: "demo:overview/report", cohortId: "fixture-all-acquisition", currency: "USD",
+  period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" },
+} satisfies MetricObservationScope;
+export const attributionDemo = {
   datasetKey: "overview-original",
   periodLabel: "30 Sep–29 Oct 2026",
+  reportScope: fixtureAttributionScope,
+  receiptScope: { ...fixtureAttributionScope, sourceRef: "demo:overview/order-receipts" },
+  retainedCustomerScope: { ...fixtureAttributionScope, sourceRef: "demo:overview/retained-customers" },
   netReceipts: o.netReceipts,
   orders: o.orders,
   retainedUnits: 378,
   contribution: o.contribution,
   marketingSpend: o.marketingSpend,
   newRetainedCustomers: o.newRetainedCustomers,
+  headlineEvidence: { source: "fixture", sourceRef: "Illustrative acquisition cost schedule", cohortId: "fixture-all-acquisition", cohortWindow: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" }, costScope: { cohortId: "fixture-all-acquisition", currency: "USD", period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" }, coverage: "complete" },
+    costs: metricDictionaryDemo.buckets, retention: "mature", landedCost: "complete", refundRevision: null },
+  tiktokRoasWindow: null,
   tiktokPlatformRoas: known(2.4),
   channels: o.channels,
   // Weekly buckets in dollars; they sum to the two channel totals. Week 5 holds two days.
@@ -188,23 +217,23 @@ export const attributionDemo: AttributionData = {
     { handle: "@oliviasunday", roi: 0.6 },
   ],
   provenance: provenance("Orders mirror · illustrative", "400 orders, 30 Sep–29 Oct 2026"),
-};
+} satisfies AttributionData;
 
 /* ---------- Paid media (Figma 30:349) ---------- */
 
 export type RightsState = "cleared" | "expiring" | "notGranted" | "unknown";
 export type PaidMediaData = {
-  datasetKey: "paid-media-demo";
+  datasetKey: "paid-media-demo" | "paid-media-observed";
   periodLabel: string;
-  channels: { key: "meta" | "tiktok"; label: string; spend: Money; impressions: number; clicks: number; platformPurchaseValue: Money }[];
-  creatorSampleEconomics: Money;
+  channels: { key: "meta" | "tiktok"; label: string; spend: Money | null; impressions: number; clicks: number; platformPurchaseValue: Money | null; attributionWindow?: PlatformWindow | null }[];
+  creatorSampleEconomics: Money | null;
   assets: { id: string; platform: "meta" | "tiktok"; label: string; clicks: number; impressions: number; rights: RightsState; expiresInDays: number | null }[];
   /** Assets before any filter, so the table can state its denominator. */
   assetTotal: number;
   provenance: Provenance;
 };
 
-export const paidMediaDemo: PaidMediaData = {
+export const paidMediaDemo = {
   datasetKey: "paid-media-demo",
   periodLabel: "30 Sep–29 Oct 2026",
   channels: [
@@ -220,7 +249,7 @@ export const paidMediaDemo: PaidMediaData = {
   ],
   assetTotal: 4,
   provenance: provenance("Illustrative ad-source snapshots", "Meta and TikTok ad exports pending; snapshot per asset"),
-};
+} satisfies PaidMediaData;
 
 /* ---------- Campaign funnel (Figma 30:550) ---------- */
 

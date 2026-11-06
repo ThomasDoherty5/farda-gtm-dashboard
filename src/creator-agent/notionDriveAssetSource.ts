@@ -15,15 +15,18 @@ export type AssetRegistryQuery = { registry: "content" | "collaborations"; curso
 export type AssetRegistryPage = {
   registry: AssetRegistryQuery["registry"]; observedAt: string;
   records: { recordRef: string; registryEditedAt: string; driveLink: "present" | "absent" | "unsupported" | "not_applicable" }[];
-  coverage: "complete" | "partial"; nextCursor: string | null; rights: "unverified";
+  coverage: "complete" | "partial"; queryTruncated?: boolean; nextCursor: string | null; rights: "unverified";
 };
 export class AssetRegistryReadError extends Error {
   readonly code: string;
   readonly status: number;
-  constructor(code: string, status: number) { super(code); this.code = code; this.status = status; }
+  readonly authority: "expired"|"denied"|"unknown";
+  constructor(code: string, status: number, authority: "expired"|"denied"|"unknown" = "unknown") {
+    super(code); this.code = code; this.status = status; this.authority = authority;
+  }
 }
 const badResponse = () => new AssetRegistryReadError("SOURCE_RESPONSE_INVALID", 502);
-const missingAccess = () => new AssetRegistryReadError("SOURCE_ACCESS_UNAVAILABLE", 503);
+const missingAccess = (authority: "expired"|"denied"|"unknown" = "unknown") => new AssetRegistryReadError("SOURCE_ACCESS_UNAVAILABLE", 503, authority);
 const invalidQuery = () => new AssetRegistryReadError("SOURCE_QUERY_INVALID", 400);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const pageId = z.string().regex(uuidPattern).transform((id) => id.toLowerCase());
@@ -72,7 +75,7 @@ function matchesRelation(row: RegistryRow, name: string, expected: string | null
 }
 
 // Never follow an external URL or pre-signed storage link. Both token audiences are fixed.
-async function readJson(fetcher: typeof fetch, url: URL, token: string | null, body?: object): Promise<unknown> {
+async function readJson(fetcher: typeof fetch, url: URL, token: string | null, body?: object, signal?: AbortSignal): Promise<unknown> {
   if (!token) throw missingAccess();
   const headers: Record<string, string> = { Authorization: `Bearer ${token}`, Accept: "application/json" };
   if (url.origin === "https://api.notion.com") headers["Notion-Version"] = "2026-03-11";
@@ -80,11 +83,13 @@ async function readJson(fetcher: typeof fetch, url: URL, token: string | null, b
   try {
     const response = await fetcher(url, {
       method: body ? "POST" : "GET", headers, body: body ? JSON.stringify(body) : undefined,
-      redirect: "error", signal: AbortSignal.timeout(8000),
+      redirect: "error", signal: signal ? AbortSignal.any([signal,AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000),
     });
     if (!response.ok) {
       await response.body?.cancel();
-      if ([401, 403, 404].includes(response.status)) throw missingAccess();
+      if (response.status === 401) throw missingAccess("expired");
+      if (response.status === 403) throw missingAccess("denied");
+      if (response.status === 404) throw missingAccess();
       throw new AssetRegistryReadError("SOURCE_READ_FAILED", 503);
     }
     const reader = response.body?.getReader();
@@ -152,7 +157,18 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
   async function notionToken() {
     try { return await config.notionToken(); } catch { throw missingAccess(); }
   }
-  async function listRegistryPage(requestScope: AssetScope, input: AssetRegistryQuery): Promise<AssetRegistryPage> {
+  /** Native identity of the current integration, independent of any configured account label. */
+  async function readNotionWorkspace(signal?: AbortSignal): Promise<string|null> {
+    const identity = z.object({ object:z.literal("user"),type:z.literal("bot"),bot:z.object({workspace_id:pageId}) });
+    try {
+      const result=identity.safeParse(await readJson(fetcher,notionUrl("users/me"),await notionToken(),undefined,signal));
+      return result.success ? result.data.bot.workspace_id : null;
+    } catch (error) {
+      if (error instanceof AssetRegistryReadError && (error.authority !== "unknown" || error.code !== "SOURCE_ACCESS_UNAVAILABLE")) throw error;
+      return null;
+    }
+  }
+  async function listRegistryPage(requestScope: AssetScope, input: AssetRegistryQuery, signal?: AbortSignal): Promise<AssetRegistryPage> {
     if (!sameAssetScope(scope, requestScope)) throw new AssetRegistryReadError("SCOPE_DENIED", 403);
     const validated = querySchema.safeParse(input);
     if (!validated.success) throw invalidQuery();
@@ -162,7 +178,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     const start = cursor ? openCursor(secret, binding, cursor) : undefined;
     const data = await readJson(fetcher, notionUrl(`data_sources/${source}/query`), await notionToken(), {
       page_size: limit, result_type: "page", ...(start ? { start_cursor: start } : {}),
-    });
+    },signal);
     const parsed = notionList.safeParse(data);
     if (!parsed.success) throw badResponse();
     const page = parsed.data;
@@ -180,6 +196,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     return {
       registry, observedAt: clock(), records, rights: "unverified",
       coverage: !cursor && !page.has_more && page.request_status?.type !== "incomplete" ? "complete" : "partial",
+      queryTruncated:page.request_status?.type === "incomplete",
       nextCursor: page.next_cursor ? sealCursor(secret, binding, page.next_cursor) : null,
     };
   }
@@ -238,5 +255,5 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     } catch { return null; }
   }
   const authority: AssetAuthority = { ...unavailableAssetAuthority, resolveSource };
-  return { listRegistryPage, authority };
+  return { listRegistryPage, readNotionWorkspace, authority };
 }

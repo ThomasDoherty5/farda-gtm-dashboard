@@ -1,3 +1,4 @@
+import { useScope } from "@/adapter/scope";
 import type { ReactNode } from "react";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
@@ -28,6 +29,7 @@ export function AutomationNav({ current, width }: { current: NavKey; width: numb
 
 /** The violet box that separates daily sourcing from hourly monitoring (e.g. 109:416). Copy differs per screen. */
 export function CadenceNotice({ title, children, funnel = false }: { title: string; children: ReactNode; funnel?: boolean }) {
+  const demo = useScope().adapter.kind === "demo";
   return (
     <Notice
       title={title}
@@ -35,7 +37,8 @@ export function CadenceNotice({ title, children, funnel = false }: { title: stri
       actions={
         <>
           <LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 170 }}>Daily sourcing</LinkButton>
-          <LinkButton variant="secondary" to={evidencePath} style={{ minWidth: 223.5 }}>Review lifestyle evidence</LinkButton>
+          {demo ? <LinkButton variant="secondary" to={evidencePath} style={{ minWidth: 223.5 }}>Review lifestyle evidence</LinkButton> :
+            <Button variant="secondary" style={{ minWidth: 223.5 }} disabledReason="Open a saved creator record to review its linked evidence.">Review lifestyle evidence</Button>}
           {funnel && <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>}
         </>
       }

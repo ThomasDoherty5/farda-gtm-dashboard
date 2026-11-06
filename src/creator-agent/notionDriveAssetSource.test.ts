@@ -62,11 +62,20 @@ function fileReader(overrides: { asset?: unknown; collab?: unknown; about?: unkn
 }
 
 describe("read-only pagination of the two configured native registries", () => {
+  it("uses the token's native bot workspace identity, holding when the provider cannot supply it", async () => {
+    const adapter=setup(url=>{
+      expect(url.href).toBe("https://api.notion.com/v1/users/me");
+      return json({object:"user",type:"bot",bot:{workspace_id:uuid(10)}});
+    });
+    expect(await adapter.readNotionWorkspace()).toBe(uuid(10));
+    expect(await setup(()=>json({object:"user",type:"bot",bot:{workspace_name:"synthetic workspace"}})).readNotionWorkspace()).toBeNull();
+    await expect(setup(()=>new Response(null,{status:403})).readNotionWorkspace()).rejects.toMatchObject({authority:"denied",code:"SOURCE_ACCESS_UNAVAILABLE"});
+  });
   it("proves complete empty reads for each registry without requiring a Drive grant", async () => {
     const adapter = setup(() => json(list()), { drive: undefined });
     for (const registry of ["content", "collaborations"] as const) {
       expect(await adapter.listRegistryPage(assetTestScope, { registry })).toEqual({
-        registry, observedAt: assetTestNow, records: [], coverage: "complete", nextCursor: null, rights: "unverified",
+        registry, observedAt: assetTestNow, records: [], coverage: "complete", queryTruncated:false, nextCursor: null, rights: "unverified",
       });
     }
     expect(adapter.calls.map(({ url }) => url.pathname)).toEqual([ids.content, ids.collaborations].map((id) => `/v1/data_sources/${id}/query`));

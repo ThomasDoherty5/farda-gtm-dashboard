@@ -3,6 +3,8 @@
  * apart from `overview-original` and the pilot commission data; the normal case repeats the original's figures on purpose so a
  * test can prove they reconcile, and no other case reads from any other dataset.
  */
+import { COST_ALLOCATION_VERSION, type CostBucket, type CostScope } from "../features/analytics/economicCosts";
+
 export type DictionaryEntry = {
   key: "aov" | "blendedCac" | "mer" | "platformRoas";
   label: string;
@@ -17,7 +19,7 @@ export type DictionaryEntry = {
 
 export type DictionaryRelated = { label: string; basis: string };
 
-export type CostBucketRow = { key: string; label: string; basis: "paid" | "accrued" | "estimated"; minorUnits: number; alsoInCash: boolean; note: string };
+export type CostBucketRow = CostBucket & { note: string };
 
 export type CaseInput = { netReceiptsMinor: number | null; validOrders: number | null; acquisitionCostMinor: number | null; newRetainedCustomers: number | null; marketingSpendMinor: number | null; caveat: "LANDED_COST_INCOMPLETE" | "RETENTION_IMMATURE" | null };
 export type MetricCase = { id: string; label: string; input: CaseInput; /** Hand-calculated before the code, as display text. */ expected: { aov: string; cac: string; mer: string }; handCalculation: string };
@@ -30,6 +32,8 @@ export type MetricDictionaryData = {
   entries: DictionaryEntry[];
   related: DictionaryRelated[];
   buckets: CostBucketRow[];
+  allocationScope?: CostScope;
+  allocationVersion?: string;
   cases: MetricCase[];
   sourceNote: string;
 };
@@ -38,8 +42,8 @@ const SCOPE = "Valid orders, 30 Sep–29 Oct 2026 (demo period)";
 
 export const metricDictionaryDemo: MetricDictionaryData = {
   datasetKey: "headline-metrics-cases",
-  version: "headline-metrics@1",
-  effective: "2026-10-30",
+  version: "headline-metrics@2",
+  effective: "2026-11-05",
   stage: "fixture-complete",
   entries: [
     {
@@ -68,9 +72,11 @@ export const metricDictionaryDemo: MetricDictionaryData = {
     { label: "Cost per retained order", basis: "Acquisition cost ÷ retained orders. One order per customer purchase event." },
     { label: "Cost per retained unit", basis: "Acquisition cost ÷ retained units. A two-bottle order is one order and two units." },
   ],
+  allocationVersion: COST_ALLOCATION_VERSION,
+  allocationScope: { cohortId: "fixture-all-acquisition", currency: "USD", period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" }, coverage: "complete" },
   buckets: [
-    { key: "media", label: "Media (Meta and TikTok)", basis: "paid", minorUnits: 500_000, alsoInCash: true, note: "Cash paid to the platforms" },
-    { key: "creator-sample", label: "Sample shipping, gifted product and historical accepted fees", basis: "estimated", minorUnits: 200_000, alsoInCash: false, note: "Historical accepted fees are read-only and separate from commission; new acquisition has no upfront fee. Gifted product is counted once, as economic cost, and not added again as cash. Commission is not part of this fixture total" },
+    { key: "media", cohortId: "fixture-all-acquisition", obligationId: "fixture-media-obligation", evidenceId: "media", cashId: "fixture-media-settlement", currency: "USD", period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" }, label: "Media (Meta and TikTok)", basis: "paid", minorUnits: 500_000, alsoInCash: true, note: "Cash paid to the platforms" },
+    { key: "creator-sample", cohortId: "fixture-all-acquisition", obligationId: "fixture-creator-sample-aggregate", evidenceId: "creator-sample", cashId: null, currency: "USD", period: { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" }, label: "Sample shipping, gifted product and historical accepted fees", basis: "estimated", minorUnits: 200_000, alsoInCash: false, note: "Historical accepted fees are read-only and separate from commission; new acquisition has no upfront fee. Gifted product is counted once, as economic cost, and not added again as cash. Commission is not part of this fixture total" },
   ],
   cases: [
     {

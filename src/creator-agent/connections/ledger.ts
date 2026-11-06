@@ -31,6 +31,7 @@ export class CapabilityLedger {
   private scope: CapabilityScope;
   private now: () => number;
   private resolveReceipt?: ReceiptResolver;
+  private healthHold?: (binding: ExpectedBinding) => string | null;
 
   constructor(database: string | DatabaseType, scope: CapabilityScope, options: { now?: () => number; resolveReceipt?: ReceiptResolver } = {}) {
     this.scope = capabilityScopeSchema.parse(scope);
@@ -166,6 +167,20 @@ export class CapabilityLedger {
     });
   }
   get(id: string): CapabilityView | null { const record = this.latest(id); return record ? this.view(record) : null; }
+  matchesBinding(input: ExpectedBinding): boolean {
+    const binding = normalized(input);
+    const record = this.latest(capabilityIdForBinding(binding));
+    return !!record && sameScope(binding, this.scope) && same(record.registration.binding, binding);
+  }
+  hasDeniedActionRoute(binding: CapabilityScope & Pick<ExpectedBinding,"provider"|"providerAccountId"|"action">): boolean {
+    if (!sameScope(binding,this.scope)) return true;
+    // A revocation on this native account/action cannot be bypassed by swapping transports.
+    return Boolean(this.db.prepare(`SELECT 1 FROM capability_events e WHERE e.revision=(
+      SELECT MAX(other.revision) FROM capability_events other WHERE other.capability_id=e.capability_id)
+      AND json_extract(e.body,'$.registration.binding.provider')=? AND json_extract(e.body,'$.registration.binding.providerAccountId')=?
+      AND json_extract(e.body,'$.registration.binding.action')=? AND (json_extract(e.body,'$.revokedAt') IS NOT NULL
+      OR json_extract(e.body,'$.observedState')='Denied') LIMIT 1`).get(binding.provider,binding.providerAccountId,binding.action));
+  }
   list(limit = 100): { records: CapabilityView[]; total: number; partial: boolean } {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("INVALID_CAPABILITY_LIMIT");
     const total = Number(this.db.prepare("SELECT COUNT(DISTINCT capability_id) AS total FROM capability_events").get()?.total ?? 0);
@@ -185,6 +200,7 @@ export class CapabilityLedger {
   }
 
   /** Permission preflight only: source data freshness, business approval, budget and source execution remain separate. */
+  setHealthHold(check: (binding: ExpectedBinding) => string | null) { this.healthHold = check; }
   requireReady(input: ExpectedBinding): CapabilityReadiness {
     const unavailable = (state: CapabilityReadiness["state"], reason: string, capabilityId: string | null = null): CapabilityReadiness => ({ allowed: false, state, reasonCodes: [reason], capabilityId, revision: null, checkedAt: null, expiresAt: null, receiptRef: null, ownerRef: null, recovery: "configureRoute" });
     const parsed = expectedBindingSchema.safeParse(input);
@@ -197,6 +213,8 @@ export class CapabilityLedger {
     if (record.registration.binding.providerAccountId !== expected.providerAccountId) return { ...unavailable("Denied", "CAPABILITY_ACCOUNT_MISMATCH", id), revision: record.revision, ownerRef: record.registration.ownerRef, recovery: "reviewPermission" };
     if (!same(record.registration.binding, expected)) return { ...unavailable("Unverified", "CAPABILITY_BINDING_STALE", id), revision: record.revision, ownerRef: record.registration.ownerRef, recovery: "reverify" };
     const view = this.view(record);
+    const hold = this.healthHold?.(expected);
+    if (hold && view.state === "Ready") return { ...unavailable("Unverified", hold, id), revision: record.revision, ownerRef: record.registration.ownerRef, recovery: "reverify" };
     return { allowed: view.state === "Ready" && view.fresh, state: view.state, reasonCodes: view.reasonCodes,
       capabilityId: id, revision: record.revision, checkedAt: record.checkedAt, expiresAt: record.expiresAt,
       receiptRef: record.receiptRef, ownerRef: record.registration.ownerRef, recovery: view.recovery };

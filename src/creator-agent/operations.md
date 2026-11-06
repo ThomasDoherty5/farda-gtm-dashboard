@@ -57,13 +57,43 @@ The [connection schema/ledger contract](connections/README.md) defines the regis
 | `POST /v1/jobs/:jobId/pause` | Reviewer; `{version}` |
 | `POST /v1/job-runs/:runId/control` | Reviewer; `{command: "pause" | "cancel"}` |
 
-Registration is disabled by default. HTTP has **no activate, resume, claim, checkpoint, complete, fail or worker execution route** and accepts no client action outcome. The only registered handlers are bounded local observe/propose reference handlers. The repository's worker/activation methods remain internal. Trusted activation resolution is an optional constructor dependency; the actual capability preflight always uses the shared ledger's `requireReady`. Neither is supplied by incoming requests. Pause/cancel preserve historical work and cannot imply that a prior source effect was undone.
+Registration is disabled by default. HTTP has **no activate, resume, claim, checkpoint, complete or fail route** and accepts no client action outcome. General job ingress runs only local observe/propose reference handlers. J14's separate reviewer endpoint can request a bounded, server-configured read-only health probe after trusted activation; generic claims cannot consume those health items. The repository's worker/activation methods remain internal. Trusted activation resolution is an optional constructor dependency; any configured capability preflight uses the shared ledger's `requireReady`. Neither is supplied by incoming requests. Pause/cancel preserve historical work and cannot imply that a prior source effect was undone.
 
 ## Scope, errors and lifecycle
 
 Wrong binding workspace/account/environment is rejected. An existing generic connection does not confer another account/action/route. Readers cannot mutate. Reviewer cookie requests retain both CSRF and exact-origin checks; machine bearer requests remain separate. Schemas reject unexpected Ready/proof/role/activation fields and unsafe reference material without echoing their values. Missing records return 404; scope/shape errors 400; version/replay conflicts 409; role/CSRF denial 403; missing authentication 401; oversized input 413. Write errors retain `executionCertainty: "notApplied"` when no mutation was applied.
 
 The service passes its existing evidence-store database handle to the composition; both `JobRepository` and `CapabilityLedger` borrow that same scoped handle, including for `:memory:`. Standalone composition/ledger callers may instead supply a path, in which case only the component that opens the connection owns its close. Borrowed handles stay open on repository release or initialization failure; the service closes its owner handle once after the requests drain. Startup failure releases owned handles, and service close is idempotent. There is no background worker loop or scheduler in this HTTP composition.
+
+## Saved operations dashboard reads
+
+The authenticated `POST /v1/read` adapter supports `connectionsOverview`, `channelCapabilities` and `automationRuns` as views of the existing local ledgers. Each uses empty filters, `period: null`, no sort, and a bounded first page of 1–100 rows. A cursor or unsupported filter/period/sort is rejected. Counts and omitted rows describe saved records only; they do not describe all accounts or activity at any provider.
+
+These responses carry `source: "saved-operations"` in their data. The first two return `kind: "saved-bindings"`; runs return `kind: "saved-runs"` with separate job and run coverage. Lists beyond the requested bound are explicitly partial; there is no fabricated next cursor. Reading a zero-row saved ledger proves only that the scoped local store is empty. Unconnected sources, schedules, grants and source-owned reconciliation remain separate.
+
+The public display projection uses domain-separated, scope-bound HMAC aliases for account, binding, action, owner, job, run, event and receipt locators. Credential-store references, provider account IDs and arbitrary source text never enter this projection. Safe provider/action names are allowlisted; unknown names remain opaque aliases. Read time, receipt verification/expiry, source observation time and last successful source read are distinct. A Ready permission receipt loses readiness when it expires even without a new write. Permission readiness alone does not establish fresh data or business eligibility.
+
+Existing settings routes render these typed reads through the normal adapter. Saved run details are read-only; they do not imply that a broader workflow or provider executor exists. Session loss clears protected data. These views have no source effect and grant no activation, scheduling or execution authority.
+
+## Read-only provider health
+
+`providerHealth.ts` composes bounded, server-owned probes with the shared durable job repository. Health observations never grant permission receipts. The configured account/action/route, capability revision, current lease, job policy and activation are checked around asynchronous source reads. Source success/event times and coverage stay distinct from probe and mirror-write time. Failure preserves the last native success; unknown quota/deadline values retain explicit states. Required unknown capacity/deadline values hold dependent execution.
+
+| Method / route | Result |
+| --- | --- |
+| `GET /v1/provider-health` | Saved binding health with configured/total/partial coverage; optional `limit=1..100` |
+| `GET /v1/provider-health/:capabilityId` | Current effective health, evaluated at read time |
+| `GET /v1/provider-health/:capabilityId/history` | Bounded observation receipt history |
+| `GET /v1/provider-health/:capabilityId/exceptions` | Current owned exception states, retaining durable history |
+| `POST /v1/provider-health/check` | Reviewer-only `{capabilityId, eventId}` plus stable `Idempotency-Key`; no client-supplied result |
+
+Health routes reuse the operations envelope and `sourceEffect: "none"`. Duplicate/unknown query fields and extra body assertions are rejected. Reader authentication, reviewer write authorization and cookie CSRF checks remain shared with the service. No route activates a job, changes provider permissions, dismisses an exception or dispatches business work. A fresh matching source result is required for recovery. A repeated event preserves its observation receipt while reporting current health, so an expired or revoked receipt cannot become Ready through replay. Health claims cannot drain another business run; pending receipts and uncertain items remain in their original states.
+
+The native launcher optionally accepts private `FARDA_PROVIDER_HEALTH_CONFIG` with `notionRegistryTargets` and an optional opaque `activationRef`. Each target pins the exact server scope/binding, registry, owner, freshness age and documentation-check time. Only Notion API observe actions `read-content-registry` and `read-collaborations-registry` are supported by this launcher helper. It reuses the private registry reader from asset-source configuration; no arbitrary endpoint or credential is accepted from the frontend. A successful registry read proves that operation only, not a write scope, plan, role or business eligibility.
+
+The registry probe scans at most three pages of 100 records within six seconds and rechecks native workspace identity. It distinguishes a terminal continuation from provider query truncation. Only an exhausted, untruncated scan supplies complete coverage and a registry-wide last-edit timestamp; cap exhaustion, truncation or a mid-scan failure keeps readiness held. The outer job probe is independently bounded.
+
+Configuration alone does not activate J14. The activation reference is only a locator for the separately trusted job activation resolver. That resolver remains absent by default. A configured check without trusted activation produces a held local run and no source call; missing configuration/grants are unverified. There is no production health schedule or provider business executor in this release.
 
 ## Verification and release stage
 

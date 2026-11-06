@@ -15,9 +15,11 @@ import { AssetRepository } from "./assetStore.ts";
 import { handleAssetRoute } from "./assetRoutes.ts";
 import type { AssetAuthority } from "./assets.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
-import { createOperations, operationsErrorStatus, type OperationsOptions } from "./operations.ts";
+import { createOperations, operationsErrorStatus, safeOperationsProjection, OPERATIONS_SCHEMA_VERSION, type OperationsOptions } from "./operations.ts";
 import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader.ts";
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
+import { readOperationsView } from "./operationsViewReader.ts";
+import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -41,7 +43,7 @@ const cursorPayloadSchema = z.object({
 }).strict();
 type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
-export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions;
+export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; providerHealth?: HealthOptions;
   scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
@@ -52,6 +54,7 @@ export function createAgentServer(options: AgentServerOptions) {
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
   let operations: ReturnType<typeof createOperations>;
+  let providerHealth: ReturnType<typeof createProviderHealth>;
   let portfolio: PortfolioRepository;
   let assets: AssetRepository;
   let funnel: FunnelRepository;
@@ -71,6 +74,8 @@ export function createAgentServer(options: AgentServerOptions) {
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
+    providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      operations.ledger, operations.jobs, options.providerHealth);
   }
   catch (error) { store.close(); throw error; }
   const readCollaborationEvidence = createCollaborationEvidenceReader(store.database,
@@ -139,6 +144,9 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("pipelineSummary"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("pipelineBranches"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("connectionsOverview"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("channelCapabilities"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("automationRuns"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
     readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
@@ -191,6 +199,33 @@ export function createAgentServer(options: AgentServerOptions) {
         scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "creator-agent.scope.v1" },
       });
       if (await operations.handle({ req, res, role: auth.role, reply, bodyOf })) return;
+      if (path === "/v1/provider-health" || path.startsWith("/v1/provider-health/")) {
+        const url = new URL(req.url!, "http://localhost");
+        if ([...url.searchParams.keys()].length !== new Set(url.searchParams.keys()).size) throw new SyntaxError("Duplicate health query");
+        const respondHealth = (data: unknown) => reply(res, 200, { schemaVersion: OPERATIONS_SCHEMA_VERSION,
+          scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "operations.scope.v1" },
+          data: safeOperationsProjection(data), sourceEffect: "none" });
+        if (req.method === "GET") {
+          const match = /^\/v1\/provider-health\/([a-f0-9]{64})(?:\/(history|exceptions))?$/.exec(path);
+          if (path === "/v1/provider-health" || match) {
+            const query = z.object({ limit: z.coerce.number().int().min(1).max(100).default(25) }).strict().parse(Object.fromEntries(url.searchParams));
+            if (!match) return respondHealth(providerHealth.list(query.limit));
+            const record = providerHealth.get(match[1]!);
+            if (!record) return reply(res, 404, { code: "CAPABILITY_NOT_FOUND", executionCertainty: "notApplied" });
+            return respondHealth(match[2] === "history" ? providerHealth.history(match[1]!, query.limit)
+              : match[2] === "exceptions" ? providerHealth.exceptions(match[1]!, query.limit) : record);
+          }
+        }
+        if (path === "/v1/provider-health/check" && req.method === "POST") {
+          if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+          z.object({}).strict().parse(Object.fromEntries(url.searchParams));
+          if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+          const key = req.headers["idempotency-key"];
+          if (typeof key !== "string" || !key.trim() || key.length > 180) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED", executionCertainty: "notApplied" });
+          return respondHealth(await providerHealth.check(await bodyOf(req), key));
+        }
+        return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
+      }
       if (path === "/v1/portfolio" || path.startsWith("/v1/portfolio/")) {
         if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
           return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
@@ -309,6 +344,19 @@ export function createAgentServer(options: AgentServerOptions) {
               reasonCodes: incomplete ? ["FUNNEL_COVERAGE_INCOMPLETE"] : opportunities === 0 ? ["NO_RECORDED_OPPORTUNITIES"] : [] },
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
+        if (input.viewKey === "connectionsOverview" || input.viewKey === "channelCapabilities" || input.viewKey === "automationRuns") {
+          const result = readOperationsView({ viewKey: input.viewKey, db: store.database, ledger: operations.ledger, jobs: operations.jobs,
+            scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: options.readToken,
+            limit: input.page.limit, cursor: input.page.cursor, now: options.operations?.now, health: providerHealth });
+          const expectedCount = result.total + (result.data.kind === "saved-runs" ? result.data.jobCoverage.total : 0);
+          const observedCount = result.returned + (result.data.kind === "saved-runs" ? result.data.jobCoverage.returned : 0);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
+            dataState: result.partial ? "partial" : "ready", data: result.data, sourceFreshness: [],
+            coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete: !result.partial,
+              reasonCodes: result.partial ? ["SAVED_OPERATIONS_TRUNCATED"] : [] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "collaborationEvidence") {
           const result = await readCollaborationEvidence({ collaborationId: input.filters.collaborationId, cursor: input.page.cursor, limit: input.page.limit });
           const observed = result.data.records.length;
@@ -410,7 +458,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }

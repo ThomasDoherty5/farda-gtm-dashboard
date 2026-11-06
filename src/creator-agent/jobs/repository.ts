@@ -145,11 +145,13 @@ export class JobRepository {
         this.log(String(row.lease_run_id), String(row.item_id), "lease-recovered", { state, reason }); }
       return { recovered: rows.length, remainingExpired: Number(this.db.prepare("SELECT COUNT(*) AS count FROM job_items WHERE state='leased' AND lease_until<=?").get(this.now())?.count ?? 0) }; });
   }
-  claim(workerId: string, jobId?: string): JobClaim | null { referenceInputSchema.shape.subjectRef.parse(workerId); this.recoverExpired();
+  claim(workerId: string, jobId?: string, healthRunId?: string): JobClaim | null { referenceInputSchema.shape.subjectRef.parse(workerId); this.recoverExpired();
     return this.tx(() => { const query = `SELECT i.* FROM job_items i WHERE i.state IN ('queued','retryWait') AND i.due_at<=?
       AND EXISTS(SELECT 1 FROM job_run_items dispatch_item INNER JOIN job_runs dispatch_run ON dispatch_run.run_id=dispatch_item.run_id WHERE dispatch_item.item_id=i.item_id AND dispatch_run.control='active')
-      ${jobId ? "AND i.job_id=?" : ""} ORDER BY i.created_at,i.item_id LIMIT 100`;
-      const candidates = jobId ? this.db.prepare(query).all(this.now(), jobId) : this.db.prepare(query).all(this.now());
+      AND EXISTS(SELECT 1 FROM job_definitions def WHERE def.job_id=i.job_id AND def.version=i.job_version
+        AND (json_extract(def.body,'$.handler')='probe-provider-health.v1')=?)
+      ${jobId ? "AND i.job_id=?" : ""} ${healthRunId ? "AND EXISTS(SELECT 1 FROM job_run_items jr WHERE jr.item_id=i.item_id AND jr.run_id=?)" : ""} ORDER BY i.created_at,i.item_id LIMIT 100`;
+      const candidates = this.db.prepare(query).all(this.now(), healthRunId ? 1 : 0, ...(jobId ? [jobId] : []), ...(healthRunId ? [healthRunId] : []));
       for (const row of candidates) { const run = this.activeRun(String(row.item_id)); if (!run) continue; const runId = String(run.run_id); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
         const reason = this.currentReason(row) ?? this.capabilityReason(definition);
         if (reason) { this.db.prepare("UPDATE job_items SET state='held',reason_code=?,updated_at=? WHERE item_id=?").run(reason, this.now(), row.item_id!); this.log(runId, String(row.item_id), "held", { reason }); continue; }
@@ -175,11 +177,16 @@ export class JobRepository {
       this.db.prepare("UPDATE job_items SET checkpoint=?,checkpoint_version=checkpoint_version+1,steps=steps+1,updated_at=? WHERE item_id=?").run(JSON.stringify(data), this.now(), itemId);
       this.log(String(row.lease_run_id), itemId, "checkpoint", { version: expectedVersion + 1 }); return this.viewItem(this.itemRow(itemId)); });
   }
-  complete(itemId: string, token: string, input: unknown) { const result = localResultSchema.parse(input); const outcomeHash = digest({ operation: "complete", result });
+  complete(itemId: string, token: string, input: unknown, persistHealthObservation?: () => void) { const result = localResultSchema.parse(input); const outcomeHash = digest({ operation: "complete", result });
     return this.tx(() => { const current = this.itemRow(itemId); if (current.last_token_hash === digest(token) && current.last_outcome_hash === outcomeHash) return this.viewItem(current);
       const row = this.leased(itemId, token); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
       if (this.currentReason(row, true) || this.capabilityReason(definition)) throw new JobConflict("JOB_PREFLIGHT_HELD");
-      if ((definition.mode === "observe") !== (result.kind === "reference-recorded")) throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH"); this.release(row);
+      if ((definition.mode === "observe") !== (result.kind === "reference-recorded") || (definition.handler === "probe-provider-health.v1") !== Boolean(persistHealthObservation)) throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH");
+      if (persistHealthObservation) {
+        if (this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control !== "active" || this.currentReason(row)) throw new JobConflict("JOB_PREFLIGHT_HELD");
+        persistHealthObservation();
+      }
+      this.release(row);
       this.db.prepare("UPDATE job_items SET state='completed',result=?,reason_code=NULL,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,last_token_hash=?,last_outcome_hash=?,updated_at=? WHERE item_id=?").run(JSON.stringify(result), digest(token), outcomeHash, this.now(), itemId);
       this.log(String(row.lease_run_id), itemId, "completed", { result }); return this.viewItem(this.itemRow(itemId)); });
   }
@@ -211,7 +218,7 @@ export class JobRepository {
     const control = String(run.control); const state = counts.reconcile ? "reconcile" : control === "cancelled" ? counts.leased ? "cancelling" : "cancelled" : counts.completed === rows.length ? rows.length ? "completed" : "empty" : control === "paused" || head.paused ? "paused" : counts.leased ? "running" : counts.failed === rows.length ? "failed" : counts.failed + counts.cancelled > 0 ? "partial" : !enabled || counts.held ? "held" : counts.deferred && !due ? "deferred" : "queued";
     return jobRunViewSchema.parse({ schemaVersion: "farda.jobs.v1", environment: this.options.scope.environment, runId, jobId: run.job_id, eventId: run.event_id, eventAt: run.event_at, observedAt: iso(run.observed_at), definition, definitionHash: run.definition_hash, enabled,
       activationRef: run.activation_ref === null ? null : String(run.activation_ref), control, state, counts, blockerCodes, nextAction: state === "reconcile" ? "Reconcile uncertainty; do not retry automatically." : state === "held" ? "Resolve the registration, policy or capability hold." : state === "deferred" ? "Wait for the due time before the next bounded claim." : "Read the per-item state; no source executor is registered.",
-      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: 0, modelCalls: 0, sourceQuota: "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
+      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: definition.handler === "probe-provider-health.v1" && rows.some((row) => Number(row.attempts) > 0) ? null : 0, modelCalls: 0, sourceQuota: definition.handler === "probe-provider-health.v1" ? "unknown" : "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
   }
   history(runId: string, limit = 100) { this.getRun(runId); if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new JobConflict("INVALID_HISTORY_LIMIT"); const total = Number(this.db.prepare("SELECT COUNT(*) AS count FROM job_transitions WHERE run_id=?").get(runId)?.count ?? 0);
     return { total, partial: total > limit, transitions: this.db.prepare("SELECT * FROM job_transitions WHERE run_id=? ORDER BY at,transition_id LIMIT ?").all(runId, limit).map((row) => ({ transitionId: row.transition_id, itemId: row.item_id, kind: row.kind, at: iso(row.at), detail: parse(row.detail) })) }; }

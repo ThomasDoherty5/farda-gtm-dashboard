@@ -6,7 +6,7 @@ import { Dialog } from "@/components/Dialog";
 import { DEMO_OFFER_ID, type AttributionData } from "@/fixtures/analytics";
 import type { MetricDictionaryData } from "@/fixtures/headlineMetrics";
 import { LAUNCH_TABS } from "./LaunchControlPage";
-import { allocateCosts, aov as aovOf, blendedCac, evaluateCase, mer as merOf, moneyResult, multipleResult } from "./headlineMetrics";
+import { allocateCosts, aov as aovOf, contributionPerOrder, evaluateCase, periodHeadline, CAVEAT_TEXT, type Caveat } from "./headlineMetrics";
 import { weekBarHeight, weekTotals, AXIS_MAX_MINOR } from "./attributionMath";
 import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, PeriodDialog, SectionHeading, ViewShell, WorkspaceTabs, count, percent, ratio, usd, usdExact, useIsDemo } from "./parts";
 import styles from "./Analytics.module.css";
@@ -17,20 +17,24 @@ const multiple = (n: number) => `${n.toFixed(2)}×`;
 /** Performance attribution (Figma source 14:377, owner THO-293, CTRL-202 and CTRL-203). */
 export function AttributionPage() {
   const query = useView<Record<string, never>, AttributionData>("attribution", {});
+  const report = query.data?.data;
+  const periodLabel = report?.datasetKey === "attribution-observed"
+    ? report.reportScope ? `${report.reportScope.period.start} to ${report.reportScope.period.end} (${report.reportScope.period.timezone})` : null
+    : report?.periodLabel ?? null;
   const [dialog, setDialog] = useState<"period" | "definitions" | null>(null);
   return (
     <section aria-labelledby="attribution-title" data-figma-source="14:377" className={styles.page}>
       <PageHeader id="attribution-title" title="Every dollar, in perspective." subtitle="Performance · one period, clear attribution, and the economics behind growth.">
-        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{report?.datasetKey === "attribution-observed" ? "Reporting period" : "Last 30 days"}</Button>
         <Button style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("definitions")}>Metric definitions</Button>
       </PageHeader>
       <WorkspaceTabs tabs={LAUNCH_TABS("performance")} />
       <ViewShell query={query} subject="Performance attribution" emptyTitle="No performance data" emptyBody="The source responded, but nothing matches this period.">
         {(data) => <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
-      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={query.data?.data?.periodLabel ?? null} />
+      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
       <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
-        {dialog === "definitions" && <Definitions />}
+        {dialog === "definitions" && <Definitions data={query.data?.data ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
     </section>
@@ -47,15 +51,35 @@ const STATIC_DEFS: [string, string][] = [
   ["Attribution", "One winning method per order: discount code, then UTM, then platform-reported. Orders with none are unattributed, not assigned."],
 ];
 
-function Definitions() {
+function Definitions({ data }: { data: AttributionData | null }) {
   return (
     <div>
       <dl className={styles.defs} data-testid="static-definitions">
         {STATIC_DEFS.map(([t, d]) => <div key={t}><dt>{t}</dt><dd>{d}</dd></div>)}
       </dl>
+      {data && <PeriodEvidence data={data} />}
       <DictionaryRead />
     </div>
   );
+}
+
+function PeriodEvidence({ data }: { data: AttributionData }) {
+  const e = data.headlineEvidence;
+  const result = periodHeadline(data);
+  const amount = (n: number | null | undefined) => n == null ? "Unknown" : usdExact({ minorUnits: n, currency: "USD" });
+  return <section data-testid="period-economic-evidence">
+    <h3 className={styles.label}>Reporting-period evidence</h3>
+    <p className={styles.small}>{e ? `${e.source === "fixture" ? "Illustrative fixture" : "Source record"} · ${e.sourceRef} · ${e.cohortWindow.start} to ${e.cohortWindow.end} (${e.cohortWindow.timezone}) · ${e.cohortId}` : "Source and cost coverage unknown."}</p>
+    {data.datasetKey === "attribution-observed" && <p className={styles.small}>Report: {data.reportScope?.sourceRef ?? "unknown"}. Receipts: {data.receiptScope?.sourceRef ?? "unknown"}. Retained customers: {data.retainedCustomerScope?.sourceRef ?? "unknown"}.</p>}
+    <p className={styles.small}>Economic cost {amount(result.cost)}. Linked cash receipts {amount(result.cost === null ? null : result.allocation?.cashPaidMinor)}.</p>
+    <p className={styles.small}>Retention: {e?.retention ?? "unknown"}. Landed cost: {e?.landedCost ?? "unknown"}. Refund revision: {e?.refundRevision ?? "none supplied"}.</p>
+    {result.diagnostics.length > 0 && <p className={styles.small} role="status">Reconciliation required: {result.diagnostics.map(reason => reason.toLowerCase().replaceAll("_", " ")).join("; ")}.</p>}
+    {e && e.costs.length > 0 && <details><summary>Cost observations ({e.costs.length})</summary>
+      <ul className={styles.small}>{e.costs.map((row, i) => <li key={(row.evidenceId ?? row.key) + "/" + i}>{row.label} · {row.basis} · {row.currency === "USD" ? amount(row.minorUnits) : "Currency unresolved"} · obligation {row.obligationId ?? "unknown"} · source {row.evidenceId ?? "unknown"}</li>)}</ul>
+    </details>}
+    {result.allocation?.state === "provisional" && <p className={styles.small}>Cost includes an estimate.</p>}
+    {!!result.allocation?.duplicates.length && <p className={styles.small}>{result.allocation.duplicates.length} repeated evidence reference(s) counted once.</p>}
+  </section>;
 }
 
 /** The versioned dictionary, cost allocation and hand-checked cases behind the headline metrics. Read through the adapter; the read's state never hides the static definitions. */
@@ -70,7 +94,7 @@ function DictionaryRead() {
 
 function Dictionary({ dict }: { dict: MetricDictionaryData }) {
   const demo = useIsDemo();
-  const alloc = allocateCosts(dict.buckets);
+  const alloc = allocateCosts(dict.buckets, dict.allocationScope);
   return (
     <div data-testid="metric-dictionary">
       <p className={styles.small}>Dictionary {dict.version} · effective {dict.effective} · {dict.stage}.{demo ? " Demo fixture, not connected sources." : ""}</p>
@@ -85,10 +109,13 @@ function Dictionary({ dict }: { dict: MetricDictionaryData }) {
         ))}
         {dict.related.map((r) => <div key={r.label}><dt>{r.label}</dt><dd>{r.basis}</dd></div>)}
       </dl>
-      <h3 className={styles.label}>Cost allocation · {usd({ minorUnits: alloc.totalMinor, currency: "USD" })}, each bucket once</h3>
+      <h3 className={styles.label}>Illustrative cost allocation · {dict.allocationScope && dict.allocationScope.currency !== "USD" ? `Unavailable in USD (${dict.allocationScope.currency})`
+        : alloc.totalMinor === null ? "Unknown" : usd({ minorUnits: alloc.totalMinor, currency: "USD" })}</h3>
+      {dict.allocationVersion && <p className={styles.small}>Allocation {dict.allocationVersion}. An accrual and its payment share one obligation. Matching amounts count once economically. Cash requires a linked settlement. Conflicting records hold the total.</p>}
       <ul className={styles.small} data-testid="cost-buckets">
-        {dict.buckets.map((b) => <li key={b.key}>{b.label}: {usd({ minorUnits: b.minorUnits, currency: "USD" })} · {b.basis} · {b.note}</li>)}
+        {dict.buckets.map((b, i) => <li key={(b.evidenceId ?? b.key) + "/" + i}>{b.label}: {b.minorUnits === null || b.currency !== "USD" ? "Unresolved amount or currency" : usd({ minorUnits: b.minorUnits, currency: "USD" })} · {b.basis} · {b.note}</li>)}
       </ul>
+      {alloc.diagnostics.length > 0 && <p role="status" className={styles.small}>Example allocation unresolved: {alloc.diagnostics.join(", ")}.</p>}
       <h3 className={styles.label}>Calculation evidence · hand-checked cases</h3>
       <ul className={styles.small} data-testid="metric-cases">
         {dict.cases.map((c) => {
@@ -102,25 +129,25 @@ function Dictionary({ dict }: { dict: MetricDictionaryData }) {
 }
 
 function Body({ data, openDefinitions }: { data: AttributionData; openDefinitions: () => void }) {
-  const demo = useIsDemo();
+  const demo = useIsDemo() || data.datasetKey === "overview-original";
   const [reviewing, setReviewing] = useState(false);
   const [selected, setSelected] = useState(2);
   const net = data.netReceipts.value;
   const contribution = data.contribution.value;
   const orders = data.orders.value;
   const attributed = data.attribution.reduce((s, a) => s + a.orders, 0);
-  const unattributed = data.attribution.find((a) => a.key === "unattributed")?.orders ?? 0;
-  const spend = data.marketingSpend;
-  const cac = blendedCac(spend.minorUnits, data.newRetainedCustomers);
-  const merResult = merOf(net?.minorUnits ?? null, spend.minorUnits);
-  const aovResult = aovOf(net?.minorUnits ?? null, orders);
+  const unattributed = data.attribution.find((a) => a.key === "unattributed")?.orders;
+  const { cac, mer: merResult, cost, receiptsBound, customerCount } = periodHeadline(data);
+  const caveat = (r: typeof cac) => r.state === "provisional" ? CAVEAT_TEXT[r.reasonCode as Caveat] : null;
+  const spendText = cost === null ? "Unknown cost" : usd({ minorUnits: cost, currency: "USD" });
+  const aovResult = aovOf(receiptsBound ? net?.minorUnits ?? null : null, orders);
   const cacMinor = cac.value;
-  const perOrder = aovOf(contribution?.minorUnits ?? null, orders);
+  const perOrder = contributionPerOrder(receiptsBound ? contribution?.minorUnits ?? null : null, orders);
   const perOrderMinor = perOrder.value;
   const channelTotal = data.channels.reduce((s, c) => s + c.netReceipts.minorUnits, 0);
   const totals = weekTotals(data.weeks);
-  const shopifyLeads = data.weeks.every((w) => w.shopify.minorUnits > w.tiktok.minorUnits);
-  const week = data.weeks[selected] ?? data.weeks[0]!;
+  const shopifyLeads = data.weeks.length > 0 && data.weeks.every((w) => w.shopify.minorUnits > w.tiktok.minorUnits);
+  const week = data.weeks[selected] ?? data.weeks[0];
   const roiScale = 3;
   return (
     <>
@@ -132,8 +159,8 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
       <KpiGrid>
         <KpiCard label="Net receipts" context={`${orders === null ? "Orders unknown" : `${count(orders)} orders`} · AOV ${aovResult.value === null ? "N/A" : usdExact({ minorUnits: aovResult.value, currency: "USD" })}`} testId="metric-net-receipts"><MetricText value={data.netReceipts} format={usd} /></KpiCard>
         <KpiCard label="Contribution before marketing" context={contribution && net && net.minorUnits > 0 ? `${((100 * contribution.minorUnits) / net.minorUnits).toFixed(2)}% · proposed definition` : "Proposed definition · cost incomplete"} testId="metric-contribution"><MetricText value={data.contribution} format={usd} /></KpiCard>
-        <KpiCard label="Blended CAC" context={`${usd(spend)} ÷ ${count(data.newRetainedCustomers)} new retained customers`} testId="metric-cac">{moneyResult(cac)}</KpiCard>
-        <KpiCard label="MER" context="Net receipts ÷ marketing cost" testId="metric-mer">{multipleResult(merResult)}</KpiCard>
+        <KpiCard label="Blended CAC" context={`${spendText} ÷ ${customerCount === null ? "unknown" : count(customerCount)} new retained customers`} testId="metric-cac">{cac.value === null ? "N/A" : usdExact({ minorUnits: cac.value, currency: "USD" })}{caveat(cac) && <span className={styles.small} title={caveat(cac)!}> · Provisional</span>}</KpiCard>
+        <KpiCard label="MER" context="Net receipts ÷ marketing cost" testId="metric-mer">{merResult.value === null ? "N/A" : multiple(merResult.value)}{caveat(merResult) && <span className={styles.small} title={caveat(merResult)!}> · Provisional</span>}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "864fr 408fr" }}>
         <Card labelledBy="weekly-title">
@@ -162,26 +189,26 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
             </ul>
           </div>
           <hr className={styles.divider} />
-          <div className={styles.tooltip} role="status" aria-live="polite">
+          {week ? <div className={styles.tooltip} role="status" aria-live="polite">
             <strong>{week.label}</strong>
             <span>Shopify  {usd(week.shopify)}</span>
             <span>TikTok Shop  {usd(week.tiktok)}</span>
             <strong>Total  {usd({ minorUnits: week.shopify.minorUnits + week.tiktok.minorUnits, currency: "USD" })}</strong>
-          </div>
-          <p className={styles.small}>Source: {data.provenance.source} as of 29 Oct 2026 · week 5 has two days.</p>
+          </div> : <p role="status">Weekly receipt observations unavailable.</p>}
+          <p className={styles.small}>Source: {data.provenance.source}{demo && " as of 29 Oct 2026 · week 5 has two days."}</p>
         </Card>
         <Card labelledBy="cost-title">
           <SectionHeading id="cost-title" title="What does a customer cost?" note="Compare acquisition with contribution." />
           <DetailRow label="Blended CAC" value={cacMinor === null ? "N/A" : usdExact({ minorUnits: cacMinor, currency: "USD" })} />
           <div className={styles.track} aria-hidden="true">{cacMinor !== null && <span className={styles.fill} data-testid="cac-bar" style={{ width: "100%" }} />}</div>
           <DetailRow label="Contribution / order¹" value={perOrderMinor === null ? "N/A" : usdExact({ minorUnits: perOrderMinor, currency: "USD" })} />
-          <div className={styles.track} aria-hidden="true">{perOrderMinor !== null && cacMinor !== null && <span className={styles.fill} data-testid="contribution-bar" style={{ width: `${(ratio(perOrderMinor, cacMinor) * 100).toFixed(2)}%` }} />}</div>
+          <div className={styles.track} aria-hidden="true">{perOrderMinor !== null && perOrderMinor >= 0 && cacMinor !== null && <span className={styles.fill} data-testid="contribution-bar" style={{ width: `${(ratio(perOrderMinor, cacMinor) * 100).toFixed(2)}%` }} />}</div>
           {cacMinor !== null && perOrderMinor !== null && <div className={styles.btnRow}><Badge tone="warning" width={160}>Different bases</Badge></div>}
           <p className={styles.small} data-testid="cac-basis-note">¹ Before marketing. CAC is per new retained customer; contribution is per valid order, so the two are not a profit per customer.</p>
           <hr className={styles.divider} />
           <p className={styles.metric} data-testid="metric-platform-roas"><MetricText value={data.tiktokPlatformRoas} format={multiple} /></p>
-          <p className={styles.label}>TikTok platform ROAS</p>
-          <p className={styles.small}>Platform-reported purchase value ÷ platform spend. Separate from MER; never added to storefront orders.</p>
+          <p className={styles.label}>TikTok platform ROAS{data.tiktokPlatformRoas.value !== null && !data.tiktokRoasWindow ? " · Provisional" : ""}</p>
+          <p className={styles.small}>Platform-reported value ÷ spend. {data.tiktokRoasWindow ? `Window: ${data.tiktokRoasWindow.label} (${data.tiktokRoasWindow.sourceRef}).` : "Provisional · attribution window unknown."}</p>
           <div className={styles.btnRow}><Button variant="ghost" style={{ minWidth: 212 }} aria-haspopup="dialog" onClick={openDefinitions}>View definitions</Button></div>
         </Card>
       </div>
@@ -212,7 +239,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
       </div>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="coverage-title">
-          <SectionHeading id="coverage-title" title={`${count(unattributed)} orders need attribution review`} note="One winning method per order: code → UTM → platform." />
+          <SectionHeading id="coverage-title" title={unattributed === undefined ? "Unattributed order count unknown" : `${count(unattributed)} orders need attribution review`} note="One winning method per order: code → UTM → platform." />
           <BarList label="Orders by attribution method" cols="176px minmax(0, 1fr) 124px" gap={12} rows={data.attribution.map((a) => ({ key: a.key, label: a.label, value: `${count(a.orders)} · ${percent(a.orders, attributed, 0)}`, share: ratio(a.orders, attributed), ...(a.key === "unattributed" ? { tone: "warning" as const } : {}) }))} />
           <p className={styles.small}>Source: Orders mirror · {count(attributed)} orders · {data.periodLabel}.</p>
           <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 230 }} aria-haspopup="dialog" onClick={() => setReviewing(true)}>Review unattributed</Button></div>
@@ -233,7 +260,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
         onClose={() => setReviewing(false)}
         title="Unattributed orders"
         rows={[
-          { label: "Orders", value: `${count(unattributed)} of ${count(attributed)} (${percent(unattributed, attributed, 0)})` },
+          { label: "Orders", value: unattributed === undefined ? "Unknown" : `${count(unattributed)} of ${count(attributed)} (${percent(unattributed, attributed, 0)})` },
           { label: "Window", value: data.periodLabel },
           { label: "Precedence", value: "Discount code, then UTM, then platform-reported" },
           { label: "Provenance", value: `${data.provenance.source}; order rows aren't listed in this build` },

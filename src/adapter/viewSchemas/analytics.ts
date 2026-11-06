@@ -100,21 +100,44 @@ export const launchControlSchema = z.object({
 
 /* ---------- Attribution ---------- */
 
+const reportingWindow = z.object({ start: z.string().date(), end: z.string().date(), timezone: z.string().trim().min(1) }).strict().refine(w => w.start <= w.end, "Reversed reporting period");
+const costScope = z.object({ cohortId: z.string().trim().min(1), currency: z.string().length(3), period: reportingWindow, coverage: z.enum(["complete", "partial", "unknown"]) }).strict();
+const costObservation = z.object({ key: z.string(), label: z.string(), basis: z.enum(["paid", "accrued", "estimated"]),
+  minorUnits: z.number().int().safe().nonnegative().nullable(), alsoInCash: z.boolean(),
+  cohortId: z.string().optional(), obligationId: z.string().optional(), evidenceId: z.string().optional(), cashId: z.string().nullable().optional(),
+  currency: z.string().optional(), period: reportingWindow.optional(),
+});
+const metricObservationScope = z.object({
+  source: z.enum(["fixture", "source"]), sourceRef: z.string().trim().min(1), cohortId: z.string().trim().min(1),
+  currency: z.string().length(3), period: reportingWindow,
+}).strict();
+const platformWindow = z.object({ label: z.string().trim().min(1), sourceRef: z.string().trim().min(1) }).strict();
+const headlineEvidence = z.object({ source: z.enum(["fixture", "source"]), sourceRef: z.string().trim().min(1),
+  cohortId: z.string().trim().min(1), cohortWindow: reportingWindow, costScope, costs: z.array(costObservation).max(2000),
+  retention: z.enum(["mature", "immature", "unknown"]), landedCost: z.enum(["complete", "incomplete", "unknown"]),
+  refundRevision: z.string().trim().min(1).nullable(),
+}).strict();
+
 export const attributionSchema = z.object({
-  datasetKey: z.literal("overview-original"),
+  datasetKey: z.enum(["overview-original", "attribution-observed"]),
   periodLabel: z.string(),
+  reportScope: metricObservationScope.optional(), receiptScope: metricObservationScope.optional(), retainedCustomerScope: metricObservationScope.optional(),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
   orders: provenanceValueSchema(count),
   retainedUnits: count,
   contribution: provenanceValueSchema(moneySchema),
-  marketingSpend: nonNegativeMoney,
-  newRetainedCustomers: count,
+  marketingSpend: nonNegativeMoney.nullish().transform(v => v ?? null),
+  newRetainedCustomers: count.nullish().transform(v => v ?? null),
+  headlineEvidence: headlineEvidence.optional(), tiktokRoasWindow: platformWindow.nullish(),
   tiktokPlatformRoas: provenanceValueSchema(z.number().finite().nonnegative()),
   channels: z.array(channelTotals),
   weeks: z.array(z.object({ label: z.string(), note: z.string().nullable(), shopify: nonNegativeMoney, tiktok: nonNegativeMoney })),
   attribution: z.array(z.object({ key: z.enum(["code", "utm", "platform", "unattributed"]), label: z.string(), orders: count })),
   creators: z.array(z.object({ handle: z.string(), roi: z.number().finite() })),
   provenance: provenanceDisclosure,
+}).superRefine((v, ctx) => {
+  const amounts = [v.marketingSpend, v.netReceipts.value, v.contribution.value, ...v.channels.map(c => c.netReceipts), ...v.weeks.flatMap(w => [w.shopify, w.tiktok])];
+  if (amounts.some(m => m && m.currency !== "USD")) ctx.addIssue({ code: "custom", message: "This report requires comparable USD amounts." });
 });
 
 /* ---------- Paid media ---------- */
@@ -122,10 +145,10 @@ export const attributionSchema = z.object({
 const platform = z.enum(["meta", "tiktok"]);
 
 export const paidMediaSchema = z.object({
-  datasetKey: z.literal("paid-media-demo"),
+  datasetKey: z.enum(["paid-media-demo", "paid-media-observed"]),
   periodLabel: z.string(),
-  channels: z.array(z.object({ key: platform, label: z.string(), spend: nonNegativeMoney, impressions: count, clicks: count, platformPurchaseValue: nonNegativeMoney })),
-  creatorSampleEconomics: nonNegativeMoney,
+  channels: z.array(z.object({ key: platform, label: z.string(), spend: nonNegativeMoney.nullish().transform(v => v ?? null), impressions: count, clicks: count, platformPurchaseValue: nonNegativeMoney.nullish().transform(v => v ?? null), attributionWindow: platformWindow.nullish() })),
+  creatorSampleEconomics: nonNegativeMoney.nullish().transform(v => v ?? null),
   assets: z.array(
     z.object({
       id: z.string(),
@@ -139,6 +162,10 @@ export const paidMediaSchema = z.object({
   ),
   assetTotal: count,
   provenance: provenanceDisclosure,
+}).superRefine((v, ctx) => {
+  const amounts = [v.creatorSampleEconomics, ...v.channels.flatMap(c => [c.spend, c.platformPurchaseValue])];
+  if (amounts.some(m => m && m.currency !== "USD") || new Set(v.channels.map(c => c.key)).size !== v.channels.length)
+    ctx.addIssue({ code: "custom", message: "Paid media needs distinct reporting platforms and comparable USD amounts." });
 });
 
 /* ---------- Campaign funnel ---------- */
@@ -220,7 +247,8 @@ export const metricDictionarySchema = z.object({
   stage: z.literal("fixture-complete"),
   entries: z.array(z.object({ key: z.enum(["aov", "blendedCac", "mer", "platformRoas"]), label: z.string(), numerator: z.string(), denominator: z.string(), source: z.string(), currency: z.string(), window: z.string(), costBuckets: z.string(), refundTreatment: z.string() })),
   related: z.array(z.object({ label: z.string(), basis: z.string() })),
-  buckets: z.array(z.object({ key: z.string(), label: z.string(), basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative(), alsoInCash: z.boolean(), note: z.string() })),
+  buckets: z.array(costObservation.extend({ note: z.string() })).max(2000),
+  allocationScope: costScope.optional(), allocationVersion: z.string().optional(),
   cases: z.array(z.object({ id: z.string(), label: z.string(), input: caseInput, expected: z.object({ aov: z.string(), cac: z.string(), mer: z.string() }), handCalculation: z.string() })),
   sourceNote: z.string(),
 });

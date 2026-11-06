@@ -38,8 +38,8 @@ export function PaidMediaPage() {
         {(data) => <Body data={data} filters={filters} setFilter={setFilter} clear={() => setSearch({})} />}
       </ViewShell>
       <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={query.data?.data?.periodLabel ?? null} />
-      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }]}>
-        <p>The ad-source snapshots here are illustrative. Nothing opens, and no ad account is accessed.</p>
+      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }, ...(query.data?.data?.channels ?? []).map(c => ({ label: c.label + " attribution window", value: c.attributionWindow ? c.attributionWindow.label + " · " + c.attributionWindow.sourceRef : "Unknown · not supplied by the source" }))]}>
+        <p>{query.data?.data?.datasetKey === "paid-media-demo" ? "These are illustrative platform reports." : "Each reporting window comes from its platform report."}</p>
       </HandoffDialog>
     </section>
   );
@@ -49,38 +49,38 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
   const [asOf, setAsOf] = useState(false);
   const [rights, setRights] = useState<PaidMediaData["assets"][number] | null>(null);
   const [source, setSource] = useState<PaidMediaData["assets"][number] | null>(null);
-  const spend = data.channels.reduce((s, c) => s + c.spend.minorUnits, 0);
+  const spend = data.channels.length && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
   const impressions = data.channels.reduce((s, c) => s + c.impressions, 0);
   const clicks = data.channels.reduce((s, c) => s + c.clicks, 0);
-  const acquisition = spend + data.creatorSampleEconomics.minorUnits;
-  const lead = [...data.channels].sort((a, b) => b.spend.minorUnits - a.spend.minorUnits)[0];
+  const acquisition = spend === null || !data.creatorSampleEconomics ? null : spend + data.creatorSampleEconomics.minorUnits;
+  const lead = [...data.channels].sort((a, b) => (b.spend?.minorUnits ?? -1) - (a.spend?.minorUnits ?? -1))[0];
   const ranked = [...data.assets].sort((a, b) => b.clicks / b.impressions - a.clicks / a.impressions);
   const filtered = filters.rights !== "all" || filters.platform !== "all";
-  const m = (minorUnits: number) => usd({ minorUnits, currency: "USD" });
+  const m = (minorUnits: number | null | undefined) => minorUnits == null ? "Unknown" : usd({ minorUnits, currency: "USD" });
   return (
     <>
-      <Notice tone="violet" title={`Illustrative ad-source snapshots · ${data.periodLabel}`}>
-        Media spend is {m(spend)} of the {m(acquisition)} acquisition-cost fixture. Platform purchase value is reported separately from reconciled storefront receipts.
+      <Notice tone="violet" title={`${data.datasetKey === "paid-media-demo" ? "Illustrative ad-source snapshots" : "Ad source observations"} · ${data.periodLabel}`}>
+        Media spend is {m(spend)} of the {m(acquisition)} acquisition-cost total. Platform purchase value is reported separately from reconciled storefront receipts.
       </Notice>
       <KpiGrid>
-        <KpiCard label="Media spend" context={data.channels.map((c) => `${c.label} ${m(c.spend.minorUnits)}`).join(" + ")} testId="metric-media-spend">{m(spend)}</KpiCard>
-        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{compact(impressions)}</KpiCard>
-        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{compact(clicks)} / {pctText(clicks, impressions)}</KpiCard>
-        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{clicks > 0 ? dollars(spend / 100 / clicks) : "N/A"}</KpiCard>
+        <KpiCard label="Media spend" context={data.channels.map((c) => `${c.label} ${m(c.spend?.minorUnits)}`).join(" + ")} testId="metric-media-spend">{m(spend)}</KpiCard>
+        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{data.channels.length ? compact(impressions) : "Unknown"}</KpiCard>
+        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{data.channels.length ? compact(clicks) : "Unknown"} / {pctText(clicks, impressions)}</KpiCard>
+        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{spend !== null && clicks > 0 ? dollars(spend / 100 / clicks) : "N/A"}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="spend-title" className={styles.card20}>
-          <SectionHeading id="spend-title" title={lead && spend > 0 ? `${Math.round((100 * lead.spend.minorUnits) / spend)}% of paid spend is on ${lead.label}` : "Paid spend"} note="USD · same reporting period · source exports pending" />
-          <BarList label="Paid spend by channel" rows={data.channels.map((c) => ({ key: c.key, label: c.label, value: m(c.spend.minorUnits), share: ratio(c.spend.minorUnits, spend) }))} />
+          <SectionHeading id="spend-title" title={lead?.spend && spend !== null && spend > 0 ? `${Math.round((100 * lead.spend.minorUnits) / spend)}% of paid spend is on ${lead.label}` : "Paid spend"} note={data.datasetKey === "paid-media-demo" ? "USD · same reporting period · source exports pending" : "USD · reported period"} />
+          <BarList label="Paid spend by channel" rows={data.channels.map((c) => ({ key: c.key, label: c.label, value: m(c.spend?.minorUnits), share: c.spend && spend !== null ? ratio(c.spend.minorUnits, spend) : 0 }))} />
           <hr className={styles.divider} />
           <DetailRow label="Media total" value={m(spend)} />
-          <DetailRow label="Creator / sample economics" value={m(data.creatorSampleEconomics.minorUnits)} />
+          <DetailRow label="Creator / sample economics" value={m(data.creatorSampleEconomics?.minorUnits)} />
           <DetailRow label="Acquisition-cost total" value={m(acquisition)} />
           {/* The design fixes this note at two lines; text metrics differ by platform, so the height is reserved. */}
           <p className={styles.small} style={{ minHeight: 36 }}>Gifted-product economic cost is counted once; it is not added again to inventory-purchase cash outflow.</p>
         </Card>
         <Card labelledBy="ctr-title" className={styles.card20}>
-          <SectionHeading id="ctr-title" title={ranked[0] ? `${ranked[0].id} has the strongest click-through` : "Click-through by asset"} note={`CTR = clicks / impressions · ${data.assets.length === 4 ? "four" : data.assets.length} comparable demo assets`} />
+          <SectionHeading id="ctr-title" title={ranked[0] ? `${ranked[0].id} has the strongest click-through` : "Click-through by asset"} note={`CTR = clicks / impressions · ${data.assets.length === 4 ? "four" : data.assets.length} comparable ${data.datasetKey === "paid-media-demo" ? "demo assets" : "assets"}`} />
           {ranked.length === 0 ? <p className={styles.small}>No assets match the current filters.</p> : (
             <>
               <BarList label="Click-through rate by asset" rows={ranked.map((a) => ({ key: a.id, label: a.label, value: a.impressions > 0 ? `${(Math.round((100 * a.clicks) / a.impressions * 10) / 10).toString()}%` : "N/A", share: a.impressions > 0 ? ratio((100 * a.clicks) / a.impressions, 3) : 0 }))} />
@@ -97,10 +97,10 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
           columns={[{ label: "Channel", width: 170 }, { label: "Spend", width: 140 }, { label: "Impressions", width: 170 }, { label: "Clicks", width: 130 }, { label: "CTR", width: 120 }, { label: "CPM", width: 140 }, { label: "CPC", width: 140 }, { label: "Platform ROAS", width: 238 }]}
           rows={data.channels.map((c) => {
             const r = channelRates(c);
-            return { key: c.key, cells: [c.label, m(c.spend.minorUnits), count(c.impressions), count(c.clicks), r.ctr, r.cpm, r.cpc, r.roas] };
+            return { key: c.key, cells: [c.label, m(c.spend?.minorUnits), count(c.impressions), count(c.clicks), r.ctr, r.cpm, r.cpc, r.roas] };
           })}
         />
-        <p className={styles.small}>Platform-reported purchase values: {data.channels.map((c) => `${c.label} ${m(c.platformPurchaseValue.minorUnits)}`).join("; ")}. These reports are never added to Shopify/TikTok order totals or compared directly with MER.</p>
+        <p className={styles.small}>Platform-reported values: {data.channels.map((c) => `${c.label} ${m(c.platformPurchaseValue?.minorUnits)} (${c.attributionWindow?.label ?? "window unknown"})`).join("; ")}. These reports are never added to Shopify/TikTok order totals. {data.channels.some(c => !c.attributionWindow && c.platformPurchaseValue && c.spend && c.spend.minorUnits > 0) && "ROAS is provisional where the attribution window is unknown."}</p>
       </Card>
       <Card labelledBy="assets-title">
         <div className={styles.filters}>

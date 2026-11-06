@@ -81,7 +81,7 @@ export function readAnalyticsView<T>(request: ReadRequest<unknown>, fixture: Ove
     case "launchControl":
       return make<LaunchControlData>(launchControlDemo, "launch-control-demo@1") as ReadResponse<T>;
     case "attribution":
-      return make<AttributionData>(attributionDemo, "overview-original@1", (d) => ({ ...d, tiktokPlatformRoas: unknown("PLATFORM_SPEND_MISSING"), contribution: unknown("LANDED_COST_INCOMPLETE") })) as ReadResponse<T>;
+      return make<AttributionData>(attributionDemo, "overview-original@1", (d) => ({ ...d, tiktokPlatformRoas: unknown("PLATFORM_SPEND_MISSING"), contribution: unknown("LANDED_COST_INCOMPLETE"), headlineEvidence: d.headlineEvidence ? { ...d.headlineEvidence, landedCost: "incomplete" } : undefined })) as ReadResponse<T>;
     case "paidMedia": {
       const f = request.filters as Partial<PaidMediaFilters>;
       const assets = paidMediaDemo.assets.filter((a) => (!f.rights || f.rights === "all" || a.rights === f.rights) && (!f.platform || f.platform === "all" || a.platform === f.platform));
