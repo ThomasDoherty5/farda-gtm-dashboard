@@ -21,6 +21,11 @@ import {
   syntheticBinding, syntheticConfig, syntheticPacket,
 } from "./testFixtures.ts";
 
+function originalFreshReceipt({ stale, ...immutable }: StoredAssessment & { stale: boolean }): StoredAssessment {
+  expect(stale).toBe(false);
+  return immutable;
+}
+
 describe("actual creator-agent HTTP + SQLite service", () => {
   let app: ReturnType<typeof createAgentServer> | undefined;
   let origin: string;
@@ -64,7 +69,7 @@ describe("actual creator-agent HTTP + SQLite service", () => {
   }
 
   async function put(packet = syntheticPacket(), expectedVersion = 0, key = "synthetic-save-1", overrides: Record<string, unknown> = {}, token = SYNTHETIC_REVIEW_TOKEN) {
-    return request<StoredAssessment>(`/v1/creators/${packet.creatorId}`, {
+    return request<StoredAssessment & { stale: boolean }>(`/v1/creators/${packet.creatorId}`, {
       method: "PUT", headers: { "content-type": "application/json", "idempotency-key": key },
       body: JSON.stringify(writeBody(packet, expectedVersion, overrides)),
     }, token);
@@ -181,7 +186,7 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     const read = await request<StoredAssessment & { stale: boolean }>("/v1/creators/synthetic-creator");
     expect(read.status).toBe(200);
     expect(read.body).toEqual({ ...first.body, stale: false });
-    expect(app!.store.history("synthetic-creator")).toEqual([first.body]);
+    expect(app!.store.history("synthetic-creator")).toEqual([originalFreshReceipt(first.body)]);
   });
 
   it("refuses to reopen persisted evidence under a different workspace or account scope", async () => {
@@ -198,7 +203,7 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     const read = await request<StoredAssessment & { stale: boolean }>("/v1/creators/synthetic-creator");
     expect(read.status).toBe(200);
     expect(read.body).toEqual({ ...first.body, stale: false });
-    expect(app!.store.history("synthetic-creator")).toEqual([first.body]);
+    expect(app!.store.history("synthetic-creator")).toEqual([originalFreshReceipt(first.body)]);
   });
 
   it("replays an identical idempotency key and refuses a changed payload without overwriting history", async () => {
@@ -214,7 +219,7 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     const reused = await put(changed, 0, "synthetic-save-1");
     expect(reused.status).toBe(409);
     expect(reused.body).toMatchObject({ code: "IDEMPOTENCY_KEY_REUSED", executionCertainty: "notApplied" });
-    expect(app!.store.history(original.creatorId)).toEqual([first.body]);
+    expect(app!.store.history(original.creatorId)).toEqual([originalFreshReceipt(first.body)]);
   });
 
   it("requires correct expectedVersion and a new evidence/terms revision for material changes", async () => {
@@ -228,8 +233,11 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     const next = await put(changed, 1, "synthetic-save-2");
     expect(next.status).toBe(200);
     expect(next.body.revision).toBe(2);
-    expect(app!.store.history(original.creatorId)).toEqual([first.body, next.body]);
-    expect((await put(original)).body).toEqual(first.body);
+    expect(app!.store.history(original.creatorId)).toEqual([originalFreshReceipt(first.body), originalFreshReceipt(next.body)]);
+    const replay = await put(original);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual({ ...first.body, stale: true, assessment: { ...first.body.assessment, state: "reviewNeeded",
+      reasonCodes: [...new Set([...first.body.assessment.reasonCodes, "STALE_ASSESSMENT", "SUPERSEDED_ASSESSMENT"])] } });
   });
 
   it("rejects stale policy/configuration and forged input before persistence", async () => {
@@ -262,7 +270,7 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     expect(read.body.stale).toBe(true);
     expect(read.body.assessment.state).toBe("reviewNeeded");
     expect(read.body.assessment.reasonCodes).toContain("STALE_ASSESSMENT");
-    expect(app!.store.history("synthetic-creator")).toEqual([first.body]);
+    expect(app!.store.history("synthetic-creator")).toEqual([originalFreshReceipt(first.body)]);
     expect((await put(syntheticPacket(), 1, "synthetic-old-config-write", { configHash: first.body.assessment.config.hash })).status).toBe(409);
   });
 
@@ -302,7 +310,11 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     expect(creatorAssessmentSchema.parse(data.qualification)).toEqual(saved.body.assessment);
     expect(evidencePacketSchema.parse(data.agentEvidence)).toEqual(saved.body.packet);
     expect(data.readiness).toMatchObject({ state: "notReady" });
-    expect(response.capabilities.every((capability) => capability.state === "held")).toBe(true);
+    expect(response.capabilities).toEqual([
+      { actionKind: "saveEvidenceDraft", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] },
+      { actionKind: "recordDisagreement", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] },
+      { actionKind: "markWatched", state: "held", reasonCodes: ["J20_SOURCE_REVIEW_REQUIRED"] },
+    ]);
   });
 
   it("allows a cookie-authenticated adapter read while retaining CSRF protection for actual writes", async () => {

@@ -87,15 +87,22 @@ export class AgentStore {
   history(creatorId: string): StoredAssessment[] {
     return this.db.prepare("SELECT body FROM assessments WHERE creator_id=? ORDER BY revision").all(creatorId).map((row) => JSON.parse(String(row.body)) as StoredAssessment);
   }
-  save(packet: EvidencePacket, assessment: CreatorAssessment, expectedVersion: number, idempotencyKey: string): StoredAssessment {
+  save(packet: EvidencePacket, assessment: CreatorAssessment, expectedVersion: number, idempotencyKey: string,
+    normalizePacket: (packet: EvidencePacket) => EvidencePacket = value => value): StoredAssessment {
+    packet = normalizePacket(packet);
     const requestHash = digest({ packet, expectedVersion, policyVersion: assessment.policyVersion, configHash: assessment.config.hash });
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const prior = this.db.prepare("SELECT request_hash, response FROM requests WHERE key=?").get(idempotencyKey);
       if (prior) {
-        if (prior.request_hash !== requestHash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
+        const original = JSON.parse(String(prior.response)) as StoredAssessment;
+        // Legacy receipts retain their original bytes. Compare canonical identities so a
+        // privacy migration cannot turn an unchanged retry into another source write.
+        const canonicalPriorHash = digest({ packet: normalizePacket(original.packet), expectedVersion: original.revision - 1,
+          policyVersion: original.assessment.policyVersion, configHash: original.assessment.config.hash });
+        if (prior.request_hash !== requestHash && canonicalPriorHash !== requestHash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
         this.db.exec("COMMIT");
-        return JSON.parse(String(prior.response)) as StoredAssessment;
+        return original;
       }
       const latest = this.latest(packet.creatorId);
       if ((latest?.revision ?? 0) !== expectedVersion) throw new AgentConflict("VERSION_CONFLICT");
@@ -103,7 +110,7 @@ export class AgentStore {
       if (latest) {
         const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates });
         const termsDomain = (p: EvidencePacket) => p.activationGates;
-        if (digest(evidenceDomain(latest.packet)) !== digest(evidenceDomain(packet)) && latest.packet.evidenceRevision === packet.evidenceRevision)
+        if (digest(evidenceDomain(normalizePacket(latest.packet))) !== digest(evidenceDomain(packet)) && latest.packet.evidenceRevision === packet.evidenceRevision)
           throw new AgentConflict("EVIDENCE_REVISION_REUSED");
         if (digest(termsDomain(latest.packet)) !== digest(termsDomain(packet)) && latest.packet.termsRevision === packet.termsRevision)
           throw new AgentConflict("TERMS_REVISION_REUSED");

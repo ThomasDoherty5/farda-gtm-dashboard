@@ -6,7 +6,7 @@ import { mustClearProtectedData, AdapterError } from "./errors";
 import { scopeKey, useScope } from "./scope";
 import { dropProtectedData } from "./useView";
 
-export type SaveInput<P> = Pick<SaveResourceRequest<P>, "resourceKind" | "resourceRef" | "expectedVersion" | "payload">;
+export type SaveInput<P> = Pick<SaveResourceRequest<P>, "resourceKind" | "resourceRef" | "expectedVersion" | "payload"> & { idempotencyKey?: string };
 
 let requestCounter = 0;
 
@@ -24,7 +24,7 @@ export function useSave<P, T>() {
     networkMode: "always",
     mutationFn: (input) => {
       const logical = JSON.stringify([input.resourceKind, input.resourceRef, input.expectedVersion, input.payload]);
-      const idempotencyKey = keys.current.get(logical) ?? crypto.randomUUID();
+      const idempotencyKey = input.idempotencyKey ?? keys.current.get(logical) ?? crypto.randomUUID();
       keys.current.set(logical, idempotencyKey);
       if (!onlineManager.isOnline()) throw offlineNotSent(`save-offline-${++requestCounter}`);
       return ctx.adapter.saveResource<P, T>({ ...input, schemaVersion: SCHEMA_VERSION, operation: "saveResource", requestedScope: ctx.scope, idempotencyKey, requestId: `save-${++requestCounter}` });

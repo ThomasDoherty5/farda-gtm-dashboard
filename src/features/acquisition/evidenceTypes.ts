@@ -6,6 +6,7 @@
 import type { ProvenanceValue } from "@/adapter/contract";
 import type { CreatorAssessment } from "@/creator-agent/assessmentSchema";
 import type { EvidencePacket } from "@/creator-agent/evidence";
+import type { SourceReview } from "@/creator-agent/evidenceReviewContract";
 
 export type ObservationCategory = "hook" | "demonstration" | "framing" | "audio";
 export type Modality = "visual" | "audio";
@@ -79,6 +80,7 @@ export type EvidenceRecord = {
   qualification?: CreatorAssessment | null;
   /** The source packet behind the assessment, kept distinct from the editable legacy partial-review draft. */
   agentEvidence?: EvidencePacket | null;
+  sourceReview?: SourceReview;
 };
 
 /** What a save sends: the full desired draft. There is no "watched" field, by design. */

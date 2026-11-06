@@ -30,6 +30,11 @@ export const EXECUTION_LABELS: Record<ActionState, string> = {
 };
 
 const CAPABILITY_REASONS: Record<string, string> = {
+  REVIEWER_REQUIRED: "A reviewer role is required to record this change.",
+  REVIEW_CURRENT_EVIDENCE_OR_LIMIT: "Open current evidence and check its reviewer-entry limit before continuing.",
+  J20_SOURCE_REVIEW_REQUIRED: "Only a permitted source review can confirm watched evidence.",
+  SOURCE_STALE: "Refresh the source evidence before proposing changes.",
+  SOURCE_COVERAGE_PARTIAL: "Complete the source read before proposing changes.",
   APPROVAL_EXPIRED: "This approval expired. It needs a fresh preview.",
   ROLE_REQUIRED: "You don't have the role this decision needs.",
   EVIDENCE_REQUIRED: "Check the source first. This needs independent evidence.",

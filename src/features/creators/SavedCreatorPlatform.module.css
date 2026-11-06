@@ -1,0 +1,14 @@
+.filters,.board { display: flex; flex-wrap: wrap; gap: var(--space-16); }
+.filters label { display: grid; gap: var(--space-4); min-width: 0; font: var(--text-label); }
+.filters input,.filters select { max-width: 100%; min-height: 44px; padding: var(--space-8); border: 1px solid var(--color-muted); border-radius: var(--space-12); font: var(--text-body); }
+.board > section { flex: 1 1 208px; min-width: 0; }
+.card { display: grid; gap: var(--space-8); padding: var(--space-12); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-12); overflow-wrap: anywhere; }
+.card h4,.card p { margin: 0; }
+.history,.stageCounts { margin: 0; padding: 0; list-style: none; }
+.history li { padding-block: var(--space-4); }
+.stageCounts { display: grid; gap: var(--space-8); }
+.stageCounts li { display: grid; grid-template-columns: minmax(8rem,1fr) minmax(2rem,3fr) auto; gap: var(--space-12); align-items: center; font: var(--text-label); }
+.track { display: block; height: 8px; background: var(--color-violetSoft); border-radius: var(--space-999); }
+.track span { display: block; height: 100%; background: var(--color-violet); border-radius: inherit; }
+@media (max-width: 480px) { .filters label { width: 100%; } }
+

@@ -177,6 +177,12 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 
 Action kinds that screens send are also carried as capabilities: `cancelUnsent`, `decideApproval`, `dispatchApprovedAction`, `pauseBatch`, `pauseRun`, `reconcileSettlement`, `recordConfirmedSent`, `recordShippingDecision`, `prepareReturnTask`, `requestStockTransfer`, `requestTask`, `retryMonitorProfile`, and the seven collaboration commands.
 
+Native sandbox action added in the review-completion increment:
+
+| Action kind | Operation and binding | Result and owner |
+| -- | -- | -- |
+| `proposeCollaborationReview` | `requestApproval`; typed collaboration/kind/reason and optional exact deliverable/submission/outcome; empty entity refs and null approval/manifest/run | Durable local `approvalPending` proposal; J04 decision/dispatch held. `collaboration/NativeCollaboration`; see `collaboration-workflow.md`. |
+
 ## Resource kinds
 
 Sent by a screen through `useSave`. The request has no `actionKind`, so the demo adapter picks a service from `resourceKind` and then from a prefix of `resourceRef`.
@@ -233,6 +239,31 @@ Never raised by the demo: `UNAUTHENTICATED`, `LEASE_CONFLICT`, `CAPABILITY_UNVER
 Categories (`ErrorCategory`): `unauthenticated`, `forbidden`, `notFound`, `validation`, `conflict`, `approvalHold`, `capabilityHold`, `resourceHold`, `rateLimited`, `unavailable`, `outcomeUncertain`, `replayed`, `unknown`. `replayed` has no code mapped to it. `unknown` is the fallback for a code not in the map. `unauthenticated` and `forbidden` clear protected data (`mustClearProtectedData`).
 
 Error body (`AdapterErrorBody`, in `errors.ts`, not in `contract.ts`): `code`, `message`, `requestId`, `correlationId`, `retryable`, `retryAfterMs`, `fieldErrors?`, `currentVersion?`, `executionCertainty?`. No demo path sets `retryAfterMs`; `retryable` is true only for `SOURCE_UNAVAILABLE`.
+
+Native review-completion error codes (same adapter catalogue):
+
+| Error code | Category | Recovery |
+| -- | -- | -- |
+| `ASSET_EVIDENCE_UNVERIFIED` | unavailable | Verify the registered asset receipt. |
+| `SOURCE_VERSION_CHANGED` | conflict | Read current source membership and submission versions. |
+| `SOURCE_COVERAGE_INCOMPLETE` | capabilityHold | Complete the source read before exact request reconciliation. |
+| `OBSERVATION_OUTSIDE_REVIEW` | validation | Use a source-observed interval. |
+| `EVIDENCE_REVIEW_LIMIT` | resourceHold | Inspect the exact revision's immutable entry limit. |
+| `INVALID_COLLABORATION_REFERENCE` | validation | Reopen the scoped source link. |
+| `INVALID_PROPOSAL_TARGET` | validation | Read the exact current deliverable/submission. |
+| `SOURCE_RESPONSE_INVALID` | unavailable | Verify the native source response. |
+| `SOURCE_TIME_UNVERIFIED` | unavailable | Verify the source checked time. |
+| `SOURCE_STALE` | conflict | Refresh source evidence before proposing changes. |
+| `SOURCE_SCOPE_DENIED` | forbidden | Clear protected data and check source access. |
+| `SOURCE_COVERAGE_PARTIAL` | capabilityHold | Complete the source read. |
+| `SUBMISSION_UNVERIFIED` | capabilityHold | Verify the registered submission version. |
+| `OUTREACH_SUPPRESSED` | capabilityHold | Preserve suppression. |
+| `SUPPRESSION_UNVERIFIED` | capabilityHold | Verify outreach eligibility. |
+| `RELATIONSHIP_CLOSED` | capabilityHold | Preserve the closed relationship. |
+| `POSTING_OBLIGATION_UNVERIFIED` | capabilityHold | Verify accepted posting terms before a reminder. |
+| `CREATOR_PLATFORM_CURSOR_INVALID` | conflict | Reload the same view and filters. |
+| `CREATOR_PLATFORM_SCOPE_MISMATCH` | forbidden | Clear protected data and check account scope. |
+| `FUNNEL_NARROW_COHORT_WINDOW` | validation | Narrow cohort dates rather than truncating. |
 
 ## Vocabularies the contract does not define
 
@@ -372,6 +403,42 @@ Not on `main`. Read from each PR's diff against `main` on 2026-11-04. This secti
 | #38 | View `closePackage` | Filters `{ period, scenario? }`. Data `ClosePackage`. Screen `finance/ClosePackagePage`. Handler in `demoFinance.ts`. Capability `closePeriod` is `held` with the package's blocker codes as reasons (`ADJUSTMENT_REVIEW_OPEN`, `UNRESOLVED_DIFFERENCE`, `LANDED_COST_INCOMPLETE`, `CPA_SIGN_OFF_PENDING`, `EXPORT_INCOMPLETE`), or `unsupported` with `ALREADY_CLOSED`. Error `RECORD_NOT_FOUND`. | C-05, C-06 |
 | #39 | none | Only changes copy and layout on the creator pages. No view key, action kind or error code. | none |
 PRs #22, #23, #27, #31 and #34 add no view key, action kind, resource kind or error code that this register tracks. The task named #26, #29, #30, #32 and #35 to #39; #25, #28 and #33 are listed too because their diffs also change what the demo adapter answers.
+
+## Native review-completion increment — November 6
+
+The historical demo contracts above remain reproduction references. The native sandbox increment uses the existing adapter envelope and the versioned source schemas described in `review-completion-api.md`, `evidence-review.md`, `creator-platform-views.md` and `collaboration-workflow.md`.
+
+| Surface | Native contract |
+| -- | -- |
+| `evidenceRecord` | Exact creator/post plus optional immutable run. `sourceReview` binds media, evidence, policy, model, terms and annotation versions. |
+| `evidenceDraft`, `reviewerAssessment` | Append-only observations or disagreements, with the exact source basis and `er-` expected version. No source review completion or source fact overwrite. |
+| `socialCatBoard`, `tiktokBoard`, `socialCatDashboard`, `tiktokDashboard` | Saved canonical funnel projections with owner/search/network/cohort filters, scoped fixed-membership cursors and unknown provider-wide coverage. |
+| `collaborationDetail`, `collaborationEvidence` | Same canonical or scoped opaque collaboration reference; authoritative source membership and exact saved asset/portfolio evidence stay separate. |
+| `proposeCollaborationReview` | Operation `requestApproval`; empty `entityRefs`, null approval/manifest/run, exact source/proposal version and typed collaboration/deliverable/submission intent. Returns only a durable local `approvalPending` proposal, with `LOCAL_PROPOSAL_ONLY`; J04 decision/dispatch remains held. |
+
+New native error classifications and recovery:
+
+| Code | Category | Recovery |
+| -- | -- | -- |
+| `OBSERVATION_OUTSIDE_REVIEW` | validation | Choose an interval covered by the recorded source method. |
+| `EVIDENCE_REVIEW_LIMIT` | resourceHold | Inspect immutable history; the exact basis has reached its entry limit. |
+| `INVALID_COLLABORATION_REFERENCE` | validation | Reopen the collaboration from its current scoped list. |
+| `INVALID_PROPOSAL_TARGET` | validation | Read the current deliverable/submission before proposing again. |
+| `SOURCE_RESPONSE_INVALID` | unavailable | Verify the source response; never substitute fixtures. |
+| `SOURCE_TIME_UNVERIFIED` | unavailable | Obtain a source observation with a valid checked time. |
+| `SOURCE_STALE` | conflict | Refresh source evidence before a new proposal. |
+| `SOURCE_SCOPE_DENIED` | forbidden | Clear protected data and verify source access. |
+| `SOURCE_COVERAGE_PARTIAL` | capabilityHold | Complete the source read before proposing changes. |
+| `SUBMISSION_UNVERIFIED` | capabilityHold | Obtain the exact registered submission version. |
+| `OUTREACH_SUPPRESSED` | capabilityHold | Preserve suppression; no outbound proposal may bypass it. |
+| `SUPPRESSION_UNVERIFIED` | capabilityHold | Verify suppression status before outreach. |
+| `RELATIONSHIP_CLOSED` | capabilityHold | Preserve the closed relationship and its history. |
+| `POSTING_OBLIGATION_UNVERIFIED` | capabilityHold | Verify accepted posting terms before a reminder. |
+| `CREATOR_PLATFORM_CURSOR_INVALID` | conflict | Reload the list for the same view and filters. |
+| `CREATOR_PLATFORM_SCOPE_MISMATCH` | forbidden | Clear protected data and check account scope. |
+| `FUNNEL_NARROW_COHORT_WINDOW` | validation | Narrow the cohort date range instead of silently truncating. |
+
+`EVIDENCE_DISPUTED` is a qualification reason, not an HTTP success or permission. Identical resaves and revision-label changes cannot resolve it. Mutations retain explicit `executionCertainty`; an uncertain save requires independent readback before another request.
 
 ## Keeping the register honest
 

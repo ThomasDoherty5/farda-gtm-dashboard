@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createDecipheriv, createHmac } from "node:crypto";
 import { createAgentServer } from "./server.ts";
+import { protectCommentAuthors } from "./evidencePrivacy.ts";
+import { loadOperationsSecret } from "./operationsSecret.ts";
 import { bindConfig, type ConfigBinding } from "./config.ts";
 import { assessCreator } from "./policy.ts";
 import { POLICY_VERSION } from "./assessmentSchema.ts";
@@ -42,7 +45,9 @@ describe("actual agent sourcing and immutable assessment read models", () => {
       headers: { authorization: `Bearer ${SYNTHETIC_REVIEW_TOKEN}`, "content-type": "application/json", "idempotency-key": key },
       body: JSON.stringify({ expectedVersion, policyVersion: POLICY_VERSION, configHash: bindings.find((binding) => binding.current.modelId === modelId)?.hash ?? null, packet }) });
     expect(response.status).toBe(200);
-    return await response.json() as StoredAssessment;
+    const { stale, ...receipt } = await response.json() as StoredAssessment & { stale: boolean };
+    expect(stale).toBe(false);
+    return receipt;
   }
   async function read<T>(viewKey: string, filters: object = {}, scope: object = SYNTHETIC_SCOPE, token: string | null = SYNTHETIC_READ_TOKEN, page: { cursor: string | null; limit: number } = { cursor: null, limit: 100 }) {
     const response = await fetch(`${origin}/v1/read`, { method: "POST",
@@ -287,7 +292,11 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     expect(superseded).toMatchObject({ runId: unseen.runId, state: "reviewNeeded", stale: true, superseded: true, evidenceId: null });
     const oldAssessment = await read<AgentAssessmentRecord>("assessmentRecord", { creatorId: superseded.creatorId, assessmentId: superseded.runId });
     expect(oldAssessment.body.data!.assessedQualification).toEqual(unseen.assessment);
-    expect(oldAssessment.body.data!.agentEvidence).toEqual(unseen.packet);
+    // Legacy seeded receipts retain their original stored packet. Public reads protect commenter identifiers.
+    const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, environment: "sandbox" as const };
+    const publicPacket = protectCommentAuthors(unseen.packet, scope, loadOperationsSecret(app!.store.database, scope));
+    expect(publicPacket).not.toEqual(unseen.packet);
+    expect(oldAssessment.body.data!.agentEvidence).toEqual(publicPacket);
     const third = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: second.body.page.nextCursor!, limit: 100 });
     expect(third.body.page).toEqual({ nextCursor: null, hasMore: false });
     expect(third.body.data!.snapshot).toMatchObject({ id: snapshotId, offset: 200, returnedCount: 5, total: 205 });
@@ -335,14 +344,26 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     expect(fresh.body.data!.models[0]!.configVersion).toBe("synthetic-pagination-config-next");
   });
 
-  it("binds cursors to database identity, authorized scope and the current private credential", async () => {
+  it("does not let a reader decrypt or sign sourcing cursors with its authentication credential", async () => {
+    seed(3);
+    const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
+    const cursor = first.body.page.nextCursor!;
+    const bytes = Buffer.from(cursor.slice(4), "base64url");
+    const oldReaderKey = createHmac("sha256", SYNTHETIC_READ_TOKEN).update("farda.creator-sourcing.cursor.v1").digest();
+    const decipher = createDecipheriv("aes-256-gcm", oldReaderKey, bytes.subarray(0, 12));
+    decipher.setAuthTag(bytes.subarray(-16));
+    expect(() => Buffer.concat([decipher.update(bytes.subarray(12, -16)), decipher.final()])).toThrow();
+    expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 })).status).toBe(200);
+  });
+
+  it("binds cursors to a private database key, authorized scope and the current private credential", async () => {
     seed(3);
     const first = await read<AgentSourcingData>("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 1 });
     const cursor = first.body.page.nextCursor;
     await stop(); databasePath = join(directory, "replacement.sqlite"); await start();
     const replaced = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
-    expect(replaced.status).toBe(409);
-    expect(replaced.body).toMatchObject({ code: "CURSOR_SNAPSHOT_UNAVAILABLE" });
+    expect(replaced.status).toBe(400);
+    expect(replaced.body).toMatchObject({ code: "INVALID_CURSOR" });
     const otherScope = { ...SYNTHETIC_SCOPE, workspaceId: "synthetic-other-pagination-workspace" };
     await stop(); databasePath = join(directory, "other-scope.sqlite"); await start(undefined, otherScope);
     const foreign = await read("discoverySummary", {}, otherScope, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });

@@ -249,13 +249,21 @@ export class FunnelRepository {
     }
   }
   read(raw: FunnelFilters | unknown = {}) {
+    return this.snapshot(raw).projection;
+  }
+  /** The dashboard uses the same corrected events and current-stage engine with a fixed insertion watermark for pagination. */
+  snapshot(raw: FunnelFilters | unknown = {}, watermark?: number) {
     const f = funnelFilterSchema.parse(raw),
       now = this.now().getTime(),
       asOf = f.asOf ?? new Date(now).toISOString(),
       until = Date.parse(asOf);
     if (until > now) throw new FunnelError("FUNNEL_FUTURE_SNAPSHOT", 400);
-    const clauses = ["workspace=?", "account=?", "recorded_at<=?", "observed_at<=?", "cohort_start<=?"],
-      params: (string | number)[] = [this.scope.workspaceId, this.scope.accountId, until, until, until];
+    const head = Number(this.db.prepare("SELECT COALESCE(MAX(seq),0) AS head FROM funnel_events_v1 WHERE workspace=? AND account=?")
+      .get(this.scope.workspaceId, this.scope.accountId)!.head);
+    const bound = watermark ?? head;
+    if (!Number.isSafeInteger(bound) || bound < 0 || bound > head) throw new FunnelError("FUNNEL_INVALID_WATERMARK", 400);
+    const clauses = ["workspace=?", "account=?", "recorded_at<=?", "observed_at<=?", "cohort_start<=?", "seq<=?"],
+      params: (string | number)[] = [this.scope.workspaceId, this.scope.accountId, until, until, until, bound];
     if (f.start) {
       clauses.push("cohort_start>=?");
       params.push(Date.parse(f.start));
@@ -272,10 +280,7 @@ export class FunnelRepository {
       .prepare("SELECT body FROM funnel_events_v1 WHERE " + clauses.join(" AND ") + " ORDER BY seq LIMIT ?")
       .all(...params, RECEIPT_LIMIT + 1);
     if (rows.length > RECEIPT_LIMIT) throw new FunnelError("FUNNEL_NARROW_COHORT_WINDOW", 422);
-    return projectFunnel(
-      rows.map((row) => JSON.parse(String(row.body)) as FunnelEvent),
-      f,
-      new Date(until).toISOString(),
-    );
+    const events = rows.map(row => JSON.parse(String(row.body)) as FunnelEvent);
+    return { events, watermark: bound, projection: projectFunnel(events, f, new Date(until).toISOString()) };
   }
 }

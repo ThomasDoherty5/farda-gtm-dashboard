@@ -40,5 +40,5 @@ export function loadCreatorSourceRuntime(env: Record<string, string | undefined>
         activationRef: config.activationRef };
     } catch { throw new Error("FARDA_PROVIDER_HEALTH_CONFIG is invalid."); }
   })();
-  return { portfolioAuthority, assetAuthority: source?.authority, assetRegistryReader: source?.listRegistryPage, providerHealth };
+  return { portfolioAuthority, assetAuthority: source?.authority, assetRegistryReader: source?.listRegistryPage, collaborationSourceReader: source?.readCollaborationSnapshot, providerHealth };
 }

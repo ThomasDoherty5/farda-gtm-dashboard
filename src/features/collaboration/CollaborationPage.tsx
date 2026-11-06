@@ -3,6 +3,9 @@ import { useParams, useSearchParams } from "react-router-dom";
 import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import type { CommandPayload } from "@/adapter/demoCollaboration";
 import { useAction } from "@/adapter/useAction";
+import { scopeKey, useScope } from "@/adapter/scope";
+import type { NativeCollaborationData } from "@/creator-agent/collaborationWorkflowSchema";
+import { NativeCollaboration } from "./NativeCollaboration";
 import { useView } from "@/adapter/useView";
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -36,15 +39,21 @@ export function CollaborationPage() {
   const [search] = useSearchParams();
   const [evidenceId, setEvidenceId] = useState<string | null>(null);
   const tab = parseTab(search.get("tab"));
-  const query = useView<{ collaborationId: string }, CollaborationData>("collaborationDetail", { collaborationId });
-  const hasDetails = Boolean(query.data?.data && query.data.dataState !== "empty");
+  const context = useScope();
+  const {adapter}=context;
+  const query = useView<{ collaborationId: string }, CollaborationData|NativeCollaborationData>("collaborationDetail", { collaborationId });
+  const raw = query.data?.data;
+  const native = raw && "kind" in raw && raw.collaborationRef === collaborationId ? raw : null;
+  const fixture = raw && !("kind" in raw) && (adapter.kind === "demo" || raw.datasetKey === "collaboration-demo") && raw.collaborationId === collaborationId ? raw : null;
+  const hasDetails = Boolean((native || fixture) && query.data?.dataState !== "empty");
   const accessDenied = query.error instanceof AdapterError && mustClearProtectedData(query.error.category);
   const drawerOpen = evidenceId === collaborationId && hasDetails && !accessDenied;
   return (
     <section aria-labelledby="collab-title" data-figma-source={tab === "content" ? "9:436" : "9:299"} className={acquisition.page}>
       {!query.isPending && !query.data?.data && <BareTitle id="collab-title" title="One collaboration. The whole story." />}
       <Pending query={query} subject="the collaboration">
-        {query.data && (query.data.data && query.data.dataState !== "empty" ? <Body res={query.data as ReadResponse<CollaborationData>} data={query.data.data} tab={tab} openEvidence={() => setEvidenceId(collaborationId)} /> : <EmptyState state="Empty" title="No collaboration record"><p>The source responded, but this collaboration has no record.</p></EmptyState>)}
+        {fixture && adapter.kind!=="demo" && <p role="status">Illustrative collaboration fixture returned by this adapter.</p>}
+        {query.data && (native ? <NativeCollaboration key={JSON.stringify([scopeKey(context),collaborationId])} data={native} res={query.data} tab={tab} openEvidence={() => setEvidenceId(collaborationId)} reload={()=>query.refetch()}/> : fixture && query.data.dataState !== "empty" ? <Body res={query.data as ReadResponse<CollaborationData>} data={fixture} tab={tab} openEvidence={() => setEvidenceId(collaborationId)} /> : <EmptyState state="Empty" title="No collaboration record"><p>The source responded, but this collaboration has no record.</p></EmptyState>)}
       </Pending>
       {!query.isPending && !hasDetails && !accessDenied &&
         <Panel title="Saved collaboration evidence" headingId="saved-evidence-heading">

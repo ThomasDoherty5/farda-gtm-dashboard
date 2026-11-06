@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const FUNNEL_VERSION = "evt-inv.v1" as const;
 const id = z.string().trim().min(1).max(240);
-const iso = z.string().datetime({ offset: true });
+const iso = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)), "A valid timestamp is required.");
 const count = z.number().int().nonnegative().safe();
 const metric = z.number().finite().nullable();
 const nativeLink = z
@@ -120,6 +120,7 @@ const eventShape = z
     details: z
       .object({
         owner: id.nullable().optional(),
+        payoutOwner: z.enum(["shopify-collabs", "tiktok-shop", "external-affiliate", "manual-historical"]).optional(),
         blockers: z.array(id).max(25).default([]),
         nextAction: id.nullable().optional(),
         deliverableId: id.optional(),
