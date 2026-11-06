@@ -58,6 +58,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `campaignFunnel` | `campaignId`, `cohort` | CampaignFunnelData | `analytics/CampaignFunnelPage` | `demoAnalytics` | proposed + conflict | C-05. |
 | `channelCapabilities` | none | CapabilityData | `settings/CapabilitiesPage` | `demoSettings` | proposed |  |
 | `collaborationDetail` | `collaborationId` | CollaborationData | `collaboration/CollaborationPage` | `demoAdapter` | proposed |  |
+| `collaborationEvidence` | `collaborationId`; cursor pages | CollaborationEvidenceData | `collaboration/CollaborationEvidence` | `demoCollaborationEvidence` | scoped saved-record projection | The authenticated service reads exact collaboration links. |
 | `commissionLedger` | `scenario?` | CommissionLedger | `finance/CommissionLedgerPage` | `demoFinance` | proposed + conflict | C-06. |
 | `connectionsOverview` | none | ConnectionsData | `settings/ConnectionsPage` | `demoSettings` | proposed |  |
 | `consentEligibility` | none | ConsentData | `lifecycle/ConsentPage` | `demoLifecycle` | proposed |  |
@@ -203,6 +204,7 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `CAPABILITY_UNVERIFIED` | capabilityHold | never raised |
 | `FORBIDDEN` | forbidden | `demoAdapter`, `demoAnalytics`, `demoApprovals`, `demoMonitor`, `demoScorecards`, `useView` |
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
+| `INVALID_CURSOR` | validation | `demoCollaborationEvidence` |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
 | `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |

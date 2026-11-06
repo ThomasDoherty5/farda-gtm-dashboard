@@ -7,6 +7,10 @@ import { useView } from "@/adapter/useView";
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
+import { Drawer } from "@/components/Drawer";
+import { Panel } from "@/components/PageKit";
+import { AdapterError, mustClearProtectedData } from "@/adapter/errors";
+import { CollaborationEvidence } from "./CollaborationEvidence";
 import { EmptyState } from "@/components/EmptyState";
 import { SelectField, TextField } from "@/components/Field";
 import { formatMoney } from "@/components/MetricValue";
@@ -30,14 +34,25 @@ const RESULT_TONE: Record<string, BadgeTone> = { Pass: "success", "Needs review"
 export function CollaborationPage() {
   const { collaborationId = "" } = useParams();
   const [search] = useSearchParams();
+  const [evidenceId, setEvidenceId] = useState<string | null>(null);
   const tab = parseTab(search.get("tab"));
   const query = useView<{ collaborationId: string }, CollaborationData>("collaborationDetail", { collaborationId });
+  const hasDetails = Boolean(query.data?.data && query.data.dataState !== "empty");
+  const accessDenied = query.error instanceof AdapterError && mustClearProtectedData(query.error.category);
+  const drawerOpen = evidenceId === collaborationId && hasDetails && !accessDenied;
   return (
     <section aria-labelledby="collab-title" data-figma-source={tab === "content" ? "9:436" : "9:299"} className={acquisition.page}>
       {!query.isPending && !query.data?.data && <BareTitle id="collab-title" title="One collaboration. The whole story." />}
       <Pending query={query} subject="the collaboration">
-        {query.data && (query.data.data && query.data.dataState !== "empty" ? <Body res={query.data as ReadResponse<CollaborationData>} data={query.data.data} tab={tab} /> : <EmptyState state="Empty" title="No collaboration record"><p>The source responded, but this collaboration has no record.</p></EmptyState>)}
+        {query.data && (query.data.data && query.data.dataState !== "empty" ? <Body res={query.data as ReadResponse<CollaborationData>} data={query.data.data} tab={tab} openEvidence={() => setEvidenceId(collaborationId)} /> : <EmptyState state="Empty" title="No collaboration record"><p>The source responded, but this collaboration has no record.</p></EmptyState>)}
       </Pending>
+      {!query.isPending && !hasDetails && !accessDenied &&
+        <Panel title="Saved collaboration evidence" headingId="saved-evidence-heading">
+          <CollaborationEvidence key={collaborationId} collaborationId={collaborationId} />
+        </Panel>}
+      <Drawer open={drawerOpen} title="Saved collaboration evidence" onClose={() => setEvidenceId(null)}>
+        {drawerOpen && <CollaborationEvidence key={collaborationId} collaborationId={collaborationId} />}
+      </Drawer>
     </section>
   );
 }
@@ -55,7 +70,7 @@ type Spec = {
   payload: (values: Record<string, string>) => Omit<CommandPayload, "collaborationId">;
 };
 
-function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: CollaborationData; tab: Tab }) {
+function Body({ res, data, tab, openEvidence }: { res: ReadResponse<CollaborationData>; data: CollaborationData; tab: Tab; openEvidence: () => void }) {
   const [spec, setSpec] = useState<Spec | null>(null);
   const [ack, setAck] = useState<ActionResponse | null>(null);
   const [gifted, setGifted] = useState(false);
@@ -103,6 +118,7 @@ function Body({ res, data, tab }: { res: ReadResponse<CollaborationData>; data: 
         <div className={creators.contextActions}>
           <LinkButton variant="secondary" to={`/offers/${DEMO_OFFER_ID}`} style={{ minWidth: 208.5 }}>Current affiliate terms</LinkButton>
           <LinkButton variant="secondary" to="/creators/pipeline" style={{ minWidth: 208.5 }}>Full acquisition funnel</LinkButton>
+          <Button variant="secondary" aria-haspopup="dialog" onClick={openEvidence}>Saved evidence</Button>
         </div>
       </ContextBox>
       <StaleNotice res={res} />

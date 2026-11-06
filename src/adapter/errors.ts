@@ -22,6 +22,7 @@ const CODE_TO_CATEGORY: Record<string, ErrorCategory> = {
   /** Q-02. Returned only for a record inside the caller's verified scope. Outside it the answer is FORBIDDEN, so one tenant cannot probe another. */
   RECORD_NOT_FOUND: "notFound",
   VALIDATION_FAILED: "validation",
+  INVALID_CURSOR: "validation",
   POLICY_VIOLATION: "validation",
   STALE_VERSION: "conflict",
   APPROVAL_INVALID: "conflict",

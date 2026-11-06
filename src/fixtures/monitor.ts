@@ -173,10 +173,12 @@ export const hourlyRunDemo: HourlyRunData = {
 export type PostGmv =
   | { state: "reported"; amount: Money; window: string; definition: string }
   | { state: "not-reported" }
-  | { state: "not-applicable" };
+  | { state: "not-applicable" }
+  | { state: "unknown" }
+  | { state: "unavailable"; reason: string };
 
 export type PostPerformanceData = {
-  datasetKey: "post-demo";
+  datasetKey: "post-demo" | "post-performance";
   postId: string;
   handle: string;
   network: "TikTok" | "Instagram";
@@ -189,6 +191,11 @@ export type PostPerformanceData = {
   netSales: Money | null;
   /** TikTok-reported GMV is a platform figure before discounts and refunds. It is never retained net sales and is never summed into it. */
   gmv: PostGmv;
+  publicationProof?: {
+    postId: string; network: "TikTok" | "Instagram"; nativePostRef: string;
+    publishedAt: string; observedAt: string; sourceRef: string;
+  } | null | undefined;
+  attributionWindow?: { startDate: string; endDate: string; sourceRef: string } | null | undefined;
   dailyDeltas: { label: string; thousands: number }[];
   details: { creatorId: string; contentId: string; intake: string; metricSource: string; salesSource: string };
   collaborationId: string;
@@ -208,6 +215,8 @@ export const postPerformanceDemo: PostPerformanceData = {
   orders: 62,
   netSales: usd(2015),
   gmv: { state: "reported", amount: usd(3100), window: "Sep 30–Oct 29, 2026", definition: "TikTok Shop order value before discounts and refunds" },
+  publicationProof: { postId: "P-001", network: "TikTok", nativePostRef: "TT-DEMO-001", publishedAt: "2026-10-19T17:00:00Z", observedAt: "2026-10-29T17:04:00Z", sourceRef: "demo-native-post-observation-001" },
+  attributionWindow: { startDate: "2026-09-30", endDate: "2026-10-29", sourceRef: "demo-reconciled-orders-window" },
   dailyDeltas: deltas.map((d, i) => ({ label: String(19 + i), thousands: d })),
   details: { creatorId: "CR-010", contentId: "TT-DEMO-001", intake: "TikTok affiliate", metricSource: "Linked post snapshot", salesSource: "Reconciled orders" },
   collaborationId: "COL-010",

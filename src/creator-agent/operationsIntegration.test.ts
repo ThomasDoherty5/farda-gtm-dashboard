@@ -9,6 +9,7 @@ import { assetTestScope, syntheticAsset, syntheticAssetAuthority } from "./asset
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures.ts";
 import { syntheticPortfolioPacket } from "./portfolioTestFixtures.ts";
 import { SCHEMA_VERSION } from "../adapter/contract";
+import { AssetRepository } from "./assetStore.ts";
 
 describe("creator operations use the existing authenticated durable service", () => {
   let directory: string;
@@ -99,5 +100,37 @@ app.store.close(); console.log("native-service-initialized");`;
       requestedScope: { workspaceId: assetTestScope.workspaceId, accountIds: [assetTestScope.accountId], environment: "sandbox" }, filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 } });
     expect(shipping.status).toBe(503); expect(shipping.body.code).toBe("INTEGRATION_PENDING");
     expect(shipping.body).not.toHaveProperty("data");
+  });
+  it("serves exact-collaboration evidence through the authenticated reader contract", async () => {
+    await start();
+    const assets = new AssetRepository(app!.store.database, assetTestScope, syntheticAssetAuthority().authority);
+    for (let n = 0; n < 2; n++) await assets.ingest({ scope: assetTestScope, expectedVersion: 0,
+      submission: syntheticAsset({ assetId: `synthetic-http-${n}`, collaborationId: n === 0 ? "collaboration-a" : "collaboration-b" }) }, `synthetic-http-${n}`);
+    const body = { schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "collaborationEvidence", requestId: "synthetic-evidence-read",
+      requestedScope: { workspaceId: assetTestScope.workspaceId, accountIds: [assetTestScope.accountId], environment: "sandbox" },
+      filters: { collaborationId: "collaboration-a" }, period: null, sort: [], page: { cursor: null, limit: 1 } };
+    expect((await request("/v1/read", "POST", body, null)).status).toBe(401);
+    const result = await request("/v1/read", "POST", body);
+    expect(result.status).toBe(200);
+    expect(result.headers.get("cache-control")).toBe("no-store");
+    expect(result.body.data).toMatchObject({ kind: "collaboration-evidence", total: 1, records: [expect.objectContaining({ assetId: "synthetic-http-0", rightsState: "unknown" })] });
+    expect(result.body.data.records).toHaveLength(1);
+    const foreign = structuredClone(body); foreign.requestedScope.accountIds = ["foreign"];
+    expect((await request("/v1/read", "POST", foreign)).status).toBe(400);
+    expect((await request("/v1/read", "POST", { ...body, filters: { collaborationId: "empty" } })).body.data.total).toBe(0);
+  });
+  it("protects registry discovery and distinguishes unconfigured access from a verified empty read", async () => {
+    await start();
+    expect((await request("/v1/assets/registry?registry=content", "GET", undefined, null)).status).toBe(401);
+    expect((await request("/v1/assets/registry?registry=content")).status).toBe(503);
+    await stop();
+    await start({ assetRegistryReader: async (scope, query) => {
+      expect(scope).toEqual(assetTestScope); expect(query.registry).toBe("content");
+      return { registry: "content", observedAt: "2026-11-04T12:00:00.000Z", records: [], coverage: "complete", nextCursor: null, rights: "unverified" };
+    } });
+    const read = await request("/v1/assets/registry?registry=content&limit=1");
+    expect(read.status).toBe(200); expect(read.body.data).toMatchObject({ records: [], coverage: "complete", rights: "unverified" });
+    expect((await request("/v1/assets/registry?registry=content&registry=collaborations")).status).toBe(400);
+    expect((await request("/v1/assets/registry?registry=content&limit=101")).status).toBe(400);
   });
 });
