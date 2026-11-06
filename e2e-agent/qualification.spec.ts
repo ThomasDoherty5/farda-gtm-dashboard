@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, request as apiRequest, test } from "@playwright/test";
+import { expect, request as apiRequest, test, type Page, type TestInfo } from "@playwright/test";
 import { syntheticAgentEvidence } from "../src/test/creatorQualification";
 import { POLICY_VERSION } from "../src/creator-agent/assessmentSchema";
 
@@ -21,6 +21,12 @@ const reader = randomBytes(32).toString("hex");
 const reviewer = randomBytes(32).toString("hex");
 let child: ChildProcess | null = null;
 let startup = "";
+
+async function capture(page: Page, testInfo: TestInfo, name: string) {
+  const path = testInfo.outputPath(name + ".png");
+  await page.screenshot({ path });
+  await testInfo.attach(name, { path, contentType: "image/png" });
+}
 
 async function startService() {
   startup = "";
@@ -275,7 +281,7 @@ test("authenticated acquisition views show the actual empty scoped ledger at des
       await expect(page.getByTestId("live-acquisition")).toBeVisible();
       await expect(page.getByText("No acquisition events match", { exact: true })).toBeVisible();
       await expect(page.getByRole("main")).not.toContainText(/Mature synthetic cohort|Illustrative cohort/);
-      await testInfo.attach(`acquisition-empty-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+      await capture(page, testInfo, `acquisition-empty-${width}`);
     }
   } finally { await stopService(); }
 });
@@ -294,7 +300,7 @@ test("a reviewer saves a real offer and the reader sees retained reward evidence
     const receipt = await ack.json();
     expect(receipt).toMatchObject({ resourceVersion: "v1", record: { state: "proposed", acceptedRef: null, provider: null } });
     await expect(page.getByRole("heading", { name: "Terms that make sense." })).toBeVisible();
-    await testInfo.attach("saved-offer-desktop", { body: await page.screenshot(), contentType: "image/png" });
+    await capture(page, testInfo, "saved-offer-desktop");
     await stopService(); await startService();
     expect((await context.request.get(`${service}/v1/session`, { headers: { authorization: `Bearer ${reader}` } })).status()).toBe(200);
     await page.reload();
@@ -307,7 +313,7 @@ test("a reviewer saves a real offer and the reader sees retained reward evidence
       maturedMinor: null, contributionMinor: null, earnedMinor: null } });
     await expect(page.getByRole("heading", { level: 2, name: "Milestone rewards", exact: true })).toBeVisible();
     await page.setViewportSize({ width: 390, height: 844 });
-    await testInfo.attach("reward-evidence-phone", { body: await page.screenshot(), contentType: "image/png" });
+    await capture(page, testInfo, "reward-evidence-phone");
   } finally { await stopService(); }
 });
 
@@ -340,7 +346,7 @@ test("selected saved scorecards preview their exact runs and require review afte
     for (const width of [1440,390]) {
       await page.setViewportSize({width,height:900});
       await expect(table.getByRole("link",{name:id})).toBeVisible();
-      await testInfo.attach(`finite-preview-${width}`, {body:await page.screenshot(), contentType:"image/png"});
+      await capture(page, testInfo, `finite-preview-${width}`);
     }
     expect((await save(1)).status()).toBe(200);
     await page.reload();
