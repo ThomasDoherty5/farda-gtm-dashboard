@@ -11,12 +11,12 @@ export const pctText = (part: number, whole: number) => (whole > 0 ? `${((100 * 
 
 /** CTR, CPM, CPC and platform ROAS from the channel's own counts. A zero denominator shows N/A. */
 export function channelRates(c: PaidMediaData["channels"][number]) {
-  const spend = c.spend.minorUnits / 100;
+  const spend = c.spend?.currency === "USD" ? c.spend.minorUnits / 100 : null;
   return {
     ctr: pctText(c.clicks, c.impressions),
-    cpm: c.impressions > 0 ? money((spend / c.impressions) * 1000) : "N/A",
-    cpc: c.clicks > 0 ? money(spend / c.clicks) : "N/A",
-    roas: spend > 0 ? `${(c.platformPurchaseValue.minorUnits / c.spend.minorUnits).toFixed(2)}×` : "N/A",
+    cpm: spend !== null && c.impressions > 0 ? money((spend / c.impressions) * 1000) : "N/A",
+    cpc: spend !== null && c.clicks > 0 ? money(spend / c.clicks) : "N/A",
+    roas: spend !== null && spend > 0 && c.platformPurchaseValue?.currency === "USD" && c.spend ? `${(c.platformPurchaseValue.minorUnits / c.spend.minorUnits).toFixed(2)}×` : "N/A",
   };
 }
 

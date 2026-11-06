@@ -5,6 +5,8 @@ import { AdapterError } from "@/adapter/errors";
 import type { PermissionEvidence, PermissionRecord } from "@/adapter/demoSettings";
 import { useScope } from "@/adapter/scope";
 import { useSave } from "@/adapter/useSave";
+import type { SavedBindings } from "@/creator-agent/operationsView";
+import { SavedBindingPanel } from "./SavedOperations";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -31,7 +33,7 @@ export function CapabilitiesPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab = (CAPABILITY_TABS as readonly string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as CapabilityTab) : "capabilities";
-  const query = useView<Record<string, never>, CapabilityData>("channelCapabilities", {});
+  const query = useView<Record<string, never>, CapabilityData | SavedBindings>("channelCapabilities", {});
   const [planOpen, setPlanOpen] = useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
@@ -40,19 +42,19 @@ export function CapabilitiesPage() {
     <Page labelledBy="capabilities-title" source="66:641">
       <PageHeader id="capabilities-title" title="Ready means verified." subtitle="Provider capability, permission and live account access are three separate checks">
         <LinkButton variant="secondary" to="/settings/capabilities?tab=access" style={{ minWidth: 198 }}>Review evidence</LinkButton>
-        <Button aria-haspopup="dialog" style={{ minWidth: 200 }} disabledReason={data ? null : "Available once capabilities have loaded."} onClick={() => setPlanOpen(true)}>Plan validation</Button>
+        <Button aria-haspopup="dialog" style={{ minWidth: 200 }} disabledReason={!demo ? "The saved ledger is read-only." : data ? null : "Available once capabilities have loaded."} onClick={() => setPlanOpen(true)}>Plan validation</Button>
       </PageHeader>
       <SectionTabs label="Capability sections" tabs={CAPABILITY_TABS.map((t) => ({ label: TAB_LABEL[t], to: t === "capabilities" ? "/settings/capabilities" : `/settings/capabilities?tab=${t}`, width: TAB_WIDTH[t], current: t === tab }))} />
       <CadenceNotice title="Validate the route for each action">
         Daily discovery and direct lifestyle review require permitted access; hourly monitoring checks enrolled creators separately. Unsupported API capability does not grant browser permission.
       </CadenceNotice>
-      <Notice title={demo ? "No integration is connected in this demo" : "No integration is verified"}>
+      <Notice title={demo ? "No integration is connected in this demo" : "Account-specific permission evidence"}>
         Documented support is not account readiness. A browser route is an execution option after capability and provider authorization are verified; it is never a permission bypass.
       </Notice>
       <ReadState res={query.data} subject="Channel capabilities" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading capabilities…" />}
       {query.isError && <ViewError error={query.error} subject="Channel capabilities" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && (data ? <Body res={query.data as ReadResponse<CapabilityData>} data={data} tab={tab} demo={demo} planOpen={planOpen} closePlan={() => setPlanOpen(false)} /> : <EmptyState state="Empty" title="No capabilities listed"><p>The source responded, but no channel action is registered.</p></EmptyState>)}
+      {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="capabilities" tab={tab} /> : data && demo ? <Body res={query.data as ReadResponse<CapabilityData>} data={data} tab={tab} demo={demo} planOpen={planOpen} closePlan={() => setPlanOpen(false)} /> : <EmptyState state="Empty" title="No capabilities listed"><p>No account-scoped capability data is available.</p></EmptyState>)}
     </Page>
   );
 }

@@ -20,10 +20,13 @@ export type AssetRegistryPage = {
 export class AssetRegistryReadError extends Error {
   readonly code: string;
   readonly status: number;
-  constructor(code: string, status: number) { super(code); this.code = code; this.status = status; }
+  readonly authority: "expired"|"denied"|"unknown";
+  constructor(code: string, status: number, authority: "expired"|"denied"|"unknown" = "unknown") {
+    super(code); this.code = code; this.status = status; this.authority = authority;
+  }
 }
 const badResponse = () => new AssetRegistryReadError("SOURCE_RESPONSE_INVALID", 502);
-const missingAccess = () => new AssetRegistryReadError("SOURCE_ACCESS_UNAVAILABLE", 503);
+const missingAccess = (authority: "expired"|"denied"|"unknown" = "unknown") => new AssetRegistryReadError("SOURCE_ACCESS_UNAVAILABLE", 503, authority);
 const invalidQuery = () => new AssetRegistryReadError("SOURCE_QUERY_INVALID", 400);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const pageId = z.string().regex(uuidPattern).transform((id) => id.toLowerCase());
@@ -84,7 +87,9 @@ async function readJson(fetcher: typeof fetch, url: URL, token: string | null, b
     });
     if (!response.ok) {
       await response.body?.cancel();
-      if ([401, 403, 404].includes(response.status)) throw missingAccess();
+      if (response.status === 401) throw missingAccess("expired");
+      if (response.status === 403) throw missingAccess("denied");
+      if (response.status === 404) throw missingAccess();
       throw new AssetRegistryReadError("SOURCE_READ_FAILED", 503);
     }
     const reader = response.body?.getReader();
@@ -151,6 +156,17 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
   };
   async function notionToken() {
     try { return await config.notionToken(); } catch { throw missingAccess(); }
+  }
+  /** Native identity of the current integration, independent of any configured account label. */
+  async function readNotionWorkspace(): Promise<string|null> {
+    const identity = z.object({ object:z.literal("user"),type:z.literal("bot"),bot:z.object({workspace_id:pageId}) });
+    try {
+      const result=identity.safeParse(await readJson(fetcher,notionUrl("users/me"),await notionToken()));
+      return result.success ? result.data.bot.workspace_id : null;
+    } catch (error) {
+      if (error instanceof AssetRegistryReadError && (error.authority !== "unknown" || error.code !== "SOURCE_ACCESS_UNAVAILABLE")) throw error;
+      return null;
+    }
   }
   async function listRegistryPage(requestScope: AssetScope, input: AssetRegistryQuery): Promise<AssetRegistryPage> {
     if (!sameAssetScope(scope, requestScope)) throw new AssetRegistryReadError("SCOPE_DENIED", 403);
@@ -238,5 +254,5 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     } catch { return null; }
   }
   const authority: AssetAuthority = { ...unavailableAssetAuthority, resolveSource };
-  return { listRegistryPage, authority };
+  return { listRegistryPage, readNotionWorkspace, authority };
 }

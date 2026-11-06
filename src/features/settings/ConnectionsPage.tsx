@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
+import type { SavedBindings } from "@/creator-agent/operationsView";
+import { SavedBindingPanel } from "./SavedOperations";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -20,10 +22,11 @@ const DIALOG_TITLE = { openSource: "Source", openSetup: "Setup", viewDecision: "
 /** Connections and source health (Figma source 7:876, owner THO-305). Reads health; nothing here authenticates, enables or changes a provider. */
 export function ConnectionsPage() {
   const { adapter } = useScope();
-  const query = useView<Record<string, never>, ConnectionsData>("connectionsOverview", {});
+  const query = useView<Record<string, never>, ConnectionsData | SavedBindings>("connectionsOverview", {});
   const [outcome, setOutcome] = useState<"ok" | "failed" | null>(null);
   const [checking, setChecking] = useState(false);
   const demo = adapter.kind === "demo";
+  const data = query.data?.data;
 
   /** Check connections (CTRL-002): refresh the health observations. It never reports a healthy result the source didn't return. */
   const check = async () => {
@@ -47,12 +50,12 @@ export function ConnectionsPage() {
       <Notice kind="source" badge="Source" title="Browser execution + Zapier coordination">
         Browser tasks act inside the source tool. Zapier routes approvals, events and mirrors. Platform capabilities require validation before enabling unattended actions.
       </Notice>
-      {outcome === "ok" && <p role="status" className={kit.status} data-testid="check-status">Checked. {demo ? "Demo observations are unchanged and no provider was contacted." : "These are the health observations the source returned."}</p>}
+      {outcome === "ok" && <p role="status" className={kit.status} data-testid="check-status">Checked. {demo ? "Demo observations are unchanged and no provider was contacted." : "Refreshed the saved ledger observations. No provider check was started."}</p>}
       {/* A partial or stale read is said in words, not only by a badge. */}
       <ReadState res={query.data} subject="Connections" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading connections…" />}
       {query.isError && <ViewError error={query.error} subject="Connections" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && (query.data.data ? <Body res={query.data as ReadResponse<ConnectionsData>} data={query.data.data} demo={demo} /> : <EmptyState state="Empty" title="No connections yet"><p>The source responded, but no connection is registered.</p></EmptyState>)}
+      {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="connections" /> : data && demo ? <Body res={query.data as ReadResponse<ConnectionsData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="Connection observations unavailable"><p>The account-scoped connection ledger has no displayable response.</p></EmptyState>)}
     </Page>
   );
 }

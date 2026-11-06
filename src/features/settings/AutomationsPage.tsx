@@ -3,6 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { AdapterError } from "@/adapter/errors";
 import { useScope } from "@/adapter/scope";
 import { useAction } from "@/adapter/useAction";
+import type { SavedRuns } from "@/creator-agent/operationsView";
+import { SavedRunsPanel } from "./SavedOperations";
 import { useView } from "@/adapter/useView";
 import type { TaskRequest } from "@/adapter/demoSettings";
 import { Badge } from "@/components/Badge";
@@ -36,7 +38,7 @@ function RunsPage() {
   const { adapter } = useScope();
   const [search] = useSearchParams();
   const tab: Tab = (TABS as string[]).includes(search.get("tab") ?? "") ? (search.get("tab") as Tab) : "runs";
-  const query = useView<Record<string, never>, AutomationData>("automationRuns", {});
+  const query = useView<Record<string, never>, AutomationData | SavedRuns>("automationRuns", {});
   const [taskOpen, setTaskOpen] = useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
@@ -52,14 +54,14 @@ function RunsPage() {
       <CadenceNotice title="Daily sourcing and hourly monitoring" funnel>
         Daily runs discover permitted lifestyle prospects, collect direct evidence and propose finite invitations. Hourly runs monitor enrolled content and inbox activity. Both keep source permissions, current policy and exact approvals.
       </CadenceNotice>
-      <Notice kind="plain" title={demo ? "Demo · execution access is not validated" : "Execution access is not validated"}>
-        Run states below are examples. A human approves the exact outbound action; the browser works inside its source platform and saves the result.
+      <Notice kind="plain" title={demo ? "Demo · execution access is not validated" : "Saved automation evidence"}>
+        {demo ? "Run states below are examples. A human approves the exact outbound action; the browser works inside its source platform and saves the result." : "Saved traces describe work in this workspace and account. External execution and schedules require separate source evidence."}
       </Notice>
       <ReadState res={query.data} subject="Automation runs" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading runs…" />}
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && (data ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>The source responded, but no run has ever been recorded.</p></EmptyState>)}
-      {data && <TaskDialog open={taskOpen} data={data} demo={demo} onClose={() => setTaskOpen(false)} />}
+      {query.data && (data && "kind" in data ? <SavedRunsPanel data={data} tab={tab} /> : data && demo ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>No account-scoped run data is available.</p></EmptyState>)}
+      {data && !("kind" in data) && demo && <TaskDialog open={taskOpen} data={data} demo={demo} onClose={() => setTaskOpen(false)} />}
     </Page>
   );
 }

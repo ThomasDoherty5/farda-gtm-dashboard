@@ -71,7 +71,7 @@ describe("headline metric calculators, hand-checked", () => {
 
 describe("metric dictionary and cases (headline-metrics-cases)", () => {
   it("is versioned and defines all four headline metrics with every required field", () => {
-    expect(dict.version).toBe("headline-metrics@1");
+    expect(dict.version).toBe("headline-metrics@2");
     expect(dict.entries.map((e) => e.key)).toEqual(["aov", "blendedCac", "mer", "platformRoas"]);
     for (const e of dict.entries) {
       for (const f of [e.numerator, e.denominator, e.source, e.currency, e.window, e.costBuckets, e.refundTreatment]) expect(f.trim().length).toBeGreaterThan(0);
@@ -97,12 +97,12 @@ describe("metric dictionary and cases (headline-metrics-cases)", () => {
   });
 
   it("allocation: each bucket is counted once, tagged paid or estimated, and reconciles to the $7,000 and to paid media", () => {
-    const a = allocateCosts(dict.buckets);
+    const a = allocateCosts(dict.buckets, dict.allocationScope);
     expect(a.duplicates).toEqual([]);
     expect(a.totalMinor).toBe(overviewOriginal.marketingSpend.minorUnits);
     expect(a.byBasis).toEqual({ paid: 500_000, accrued: 0, estimated: 200_000 });
-    expect(a.byBasis.paid).toBe(paidMediaDemo.channels.reduce((s, c) => s + c.spend.minorUnits, 0));
-    expect(a.byBasis.estimated).toBe(paidMediaDemo.creatorSampleEconomics.minorUnits);
+    expect(a.byBasis?.paid).toBe(paidMediaDemo.channels.reduce((s, c) => s + c.spend.minorUnits, 0));
+    expect(a.byBasis?.estimated).toBe(paidMediaDemo.creatorSampleEconomics.minorUnits);
   });
 
   it("labels historical accepted fees apart from commission and states new acquisition has no upfront fee", () => {
@@ -122,7 +122,7 @@ describe("metric dictionary and cases (headline-metrics-cases)", () => {
 
   it("a repeated bucket is reported as a double count and not added", () => {
     const [media] = dict.buckets;
-    const a = allocateCosts([media!, media!]);
+    const a = allocateCosts([media!, media!], dict.allocationScope);
     expect(a.duplicates).toEqual(["media"]);
     expect(a.totalMinor).toBe(media!.minorUnits);
   });

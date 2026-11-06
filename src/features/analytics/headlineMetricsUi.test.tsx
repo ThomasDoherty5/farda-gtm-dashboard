@@ -25,7 +25,7 @@ describe("headline metrics on the attribution page", () => {
     open("/analytics/attribution");
     await user.click(await screen.findByRole("button", { name: "Metric definitions" }));
     const dict = await screen.findByTestId("metric-dictionary", {}, { timeout: 3000 });
-    expect(dict).toHaveTextContent("headline-metrics@1");
+    expect(dict).toHaveTextContent("headline-metrics@2");
     for (const k of ["aov", "blendedCac", "mer", "platformRoas"]) expect(within(dict).getByTestId(`definition-${k}`)).toHaveTextContent(/Source:.*Currency:.*Window:.*Cost buckets:.*Refunds:/);
     expect(within(dict).getByTestId("cost-buckets")).toHaveTextContent(/paid/);
     expect(within(dict).getByTestId("cost-buckets")).toHaveTextContent(/estimated/);
