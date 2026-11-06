@@ -93,7 +93,7 @@ describe("historical scorecards (37:74, 37:251)", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "Commerce potential, with proof." })).toBeInTheDocument();
     expect(await screen.findByTestId("score")).toHaveTextContent("86");
     expect(screen.getByRole("link", { name: "TT scorecard" })).toHaveAttribute("aria-current", "page");
-    expect(screen.getByText(/current TikTok Shop assessment uses its own published configuration/)).toBeInTheDocument();
+    expect(screen.getByText(/TikTok Shop agent uses its published v3 model/)).toBeInTheDocument();
   });
 
   it("FX-04: a missing rating shows Needs data and no total, instead of a rescaled score", async () => {

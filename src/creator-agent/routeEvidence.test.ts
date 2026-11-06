@@ -133,7 +133,7 @@ describe("authorized route assessment", () => {
     const mismatch = await inspect({...snapshot, provider:"external-affiliate"});
     expect(mismatch.routeEvidence).toMatchObject({status:"unknown",metrics:[]});
     const denied = await inspect({...snapshot, commerce:{...snapshot.commerce, productEligibility:{status:"fail",sourceRef:"fixture:ineligible"}}});
-    expect(denied.routeEvidence).toMatchObject({status:"failed",verifiedModelId:null});
+    expect(denied).toMatchObject({state:"hold",contentQualification:"pass",routeEvidence:{status:"failed",verifiedModelId:null}});
     expect(denied.score?.total).toBeNull();
     const pending = await inspect({...snapshot, commerce:{...snapshot.commerce, creatorEligibility:{status:"unknown",sourceRef:"fixture:no-link"}}});
     expect(pending.routeEvidence?.status).toBe("unknown");
@@ -144,10 +144,12 @@ describe("authorized route assessment", () => {
     const { inspect, snapshot } = example("tiktok-shop");
     if (snapshot.commerce.kind !== "tiktok-shop") throw Error("wrong fixture");
     const c = snapshot.commerce;
-    for (const patch of [{ creatorEligibility: { ...c.creatorEligibility, status: "unknown" } }, { sellerEligibility: { ...c.sellerEligibility, status: "fail" } },
-      { productEligibility: { ...c.productEligibility, status: "fail" } }, { nativeAttribution: { ...c.nativeAttribution, status: "unknown" } },
+    for (const patch of [{ creatorEligibility: { ...c.creatorEligibility, status: "unknown" } },
+      { nativeAttribution: { ...c.nativeAttribution, status: "unknown" } },
       { standardRate: { ...c.standardRate!, basisPoints: 1000 } }, { standardRate: { ...c.standardRate!, version: "unaccepted-v2" } }, { adsRate: { state: "unknown" } }])
       expect((await inspect({ ...snapshot, commerce: { ...c, ...patch } })).state).toBe("prospectiveInviteEligible");
+    for (const patch of [{ sellerEligibility: { ...c.sellerEligibility, status: "fail" } }, { productEligibility: { ...c.productEligibility, status: "fail" } }])
+      expect((await inspect({ ...snapshot, commerce: { ...c, ...patch } })).state).toBe("hold");
   });
 
   it("requires matching typed fact and reviewed rating, preserves absence and rejects spoofed managed proof fields", async () => {

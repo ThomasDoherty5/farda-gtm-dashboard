@@ -75,7 +75,8 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   const providerGates = sourceGates(packet, proof);
   gates.push(...providerGates);
   let state: CreatorAssessment["state"];
-  if (inviteGates.some((g) => g.state === "fail")) state = "hold";
+  // Unknown provider facts permit public sourcing. An explicit ineligibility for this checkout route blocks its invitation.
+  if (inviteGates.some((g) => g.state === "fail") || providerGates.some(g => g.id === "SOURCE:route" && g.state === "fail")) state = "hold";
   else if (inviteGates.some((g) => g.state === "unknown")) state = "reviewNeeded";
   else state = gates.every((g) => g.state === "pass") ? "activationReady" : "prospectiveInviteEligible";
   const baseline = deriveMetadataBaseline(packet.recentPosts);
