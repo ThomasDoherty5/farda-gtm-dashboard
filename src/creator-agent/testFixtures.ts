@@ -74,10 +74,9 @@ export function withActivationEvidence(packet: EvidencePacket): EvidencePacket {
 
 /** Private source fixture supplied to the server by its test harness, independently of the HTTP review payload. */
 export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId" | "checkoutRoute" | "termsRevision" | "evidenceRevision">,
-  ratings: Record<string, number | null> = {}): import("./routeEvidence.ts").ScorecardSourceSnapshot {
+  ratings: Record<string, number | null> = {}, criterionRef = (id: string) => `synthetic:criterion-proof:${id}`): import("./routeEvidence.ts").ScorecardSourceSnapshot {
   const provider = packet.checkoutRoute === "website" ? "external-affiliate" : "tiktok-shop";
   const pass = (sourceRef: string) => ({ status: "pass" as const, sourceRef });
-  const criterionRef = (id: string) => `synthetic:criterion-proof:${id}`;
   const windowStart = "2020-01-01T00:00:00Z";
   const windowEnd = "2020-02-01T00:00:00Z";
   return {

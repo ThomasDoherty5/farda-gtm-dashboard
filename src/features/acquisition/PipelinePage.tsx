@@ -267,4 +267,3 @@ function Body({ res, data, demo }: { res: ReadResponse<PipelineData>; data: Pipe
     </>
   );
 }
-

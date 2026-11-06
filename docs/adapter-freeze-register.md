@@ -204,6 +204,11 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `CAPABILITY_UNVERIFIED` | capabilityHold | never raised |
 | `FORBIDDEN` | forbidden | `demoAdapter`, `demoAnalytics`, `demoApprovals`, `demoMonitor`, `demoScorecards`, `useView` |
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
+| `CREATOR_IDENTITY_CHANGED` | conflict | An existing offer cannot be rebound to a different creator. |
+| `IDEMPOTENCY_KEY_REUSED` | conflict | The signed-in reviewer retried a command key with different input. |
+| `INVALID_INPUT` | validation | The service rejected an invalid request or schema before writing. |
+| `INVALID_OFFER_TERMS` | validation | The offer failed the terms or provider contract. |
+| `VERSION_CONFLICT` | conflict | The requested offer revision is not current; reload before modifying it. |
 | `INVALID_CURSOR` | validation | `demoCollaborationEvidence` |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |

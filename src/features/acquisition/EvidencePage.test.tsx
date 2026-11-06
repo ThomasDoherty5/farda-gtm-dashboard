@@ -9,7 +9,8 @@ import type { EvidenceRecord } from "./evidenceTypes";
 import { bindConfig } from "@/creator-agent/config";
 import approvedWebsiteManifest from "@/creator-agent/configurations/website-affiliate-v3.2026-11-04.json";
 import { assessCreator } from "@/creator-agent/policy";
-import { syntheticPacket, withActivationEvidence } from "@/creator-agent/testFixtures";
+import { resolveScorecardEvidence } from "@/creator-agent/routeEvidence";
+import { SYNTHETIC_SCOPE, syntheticPacket, syntheticSourceSnapshot, withActivationEvidence } from "@/creator-agent/testFixtures";
 
 const NEW_URL = "https://www.instagram.com/reel/NEWREEL0001/";
 const open = async (id = "demo-evidence-1", adapter = createDemoAdapter()) => {
@@ -260,11 +261,17 @@ describe("video evidence review", () => {
     packet.creatorId = "demo-creator-1";
     packet.ratings = { routine: 5, demo: 4 };
     packet.criterionRatings = { verifiedCommerce: 3, audienceAlignment: 4, reliability: 4, offerEconomics: 4 };
-    packet.criterionEvidenceRefs = Object.fromEntries(Object.keys(packet.criterionRatings).map((id) => [id, [`synthetic:approved-proof:${id}`]]));
+    const criterionRef = (id: string) => `synthetic:approved-proof:${id}`;
+    packet.criterionEvidenceRefs = Object.fromEntries(Object.keys(packet.criterionRatings).map((id) => [id, [criterionRef(id)]]));
     // Static JSON import works in jsdom; filesystem-based loadApprovedBindings is exercised by the real Node HTTP suite.
     const manifest = approvedWebsiteManifest[0]!;
     const binding = bindConfig(manifest.current, manifest.baseline, manifest.expectedBaselineHash);
-    const qualification = assessCreator(packet, binding);
+    const source = syntheticSourceSnapshot(packet, packet.criterionRatings, criterionRef);
+    const proof = await resolveScorecardEvidence({ resolve: () => source }, {
+      workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!,
+    }, packet);
+    expect(assessCreator(packet, binding).score!.total).toBeNull();
+    const qualification = assessCreator(packet, binding, proof);
     expect(qualification.score!.total).toBe(82);
     const { user } = await open("demo-evidence-1", withAgent(qualification, packet));
     expect(metric("Saved model")).toHaveTextContent("Bound when assessed");
