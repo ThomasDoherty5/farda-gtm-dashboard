@@ -95,9 +95,9 @@ export type PortfolioProposal = {
 export const portfolioReviewKey = (packet: Pick<PortfolioPacket, "programId" | "reviewWindow">) => digest({ programId: packet.programId, reviewWindow: packet.reviewWindow });
 
 /** Reviewed operational evidence only. No new score weights, commercial tiers, spend or provider actions. */
-export function reviewPortfolio(raw: unknown): PortfolioProposal {
+export function reviewPortfolio(raw: unknown, storedWindowKey?: string): PortfolioProposal {
   const packet = portfolioPacketSchema.parse(raw);
-  const reviewKey = portfolioReviewKey(packet);
+  const reviewKey = storedWindowKey ?? portfolioReviewKey(packet);
   const recommendations = packet.creators.map((c): PortfolioRecommendation => {
     const comparable = c.collaborations.filter((x) => {
       if (!x.posts.length || x.campaignId !== packet.campaignId) return false;
