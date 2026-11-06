@@ -13,9 +13,9 @@ export const collaborationEvidenceRecordSchema = z.discriminatedUnion("kind", [
   z.object({ ...common, kind: z.literal("review"), reviewKey: ref, revision: z.number().int().positive(), creatorId: ref,
     action, sourceVerified: z.boolean() }).strict(),
   z.object({ ...common, kind: z.literal("decision"), reviewKey: ref, revision: z.number().int().positive(), creatorId: ref,
-    action, decision: z.enum(["approved", "rejected"]), decidedAt: instant, linearDecisionRef: ref }).strict(),
+    action, decision: z.enum(["approved", "rejected"]), decidedAt: instant, linearDecisionRef: ref, sourceVerified: z.boolean().default(false) }).strict(),
   z.object({ ...common, kind: z.literal("participation"), creatorId: ref, decisionId: ref,
-    state: z.enum(["accepted", "declined", "activated", "outcome"]), occurredAt: instant, sourceReceiptRef: ref }).strict(),
+    state: z.enum(["accepted", "declined", "activated", "outcome"]), occurredAt: instant, sourceReceiptRef: ref, sourceVerified: z.boolean().default(false) }).strict(),
 ]);
 export const collaborationEvidenceSchema = z.object({
   kind: z.literal("collaboration-evidence"), source: z.literal("saved-agent-records"), collaborationId: ref, observedAt: instant,

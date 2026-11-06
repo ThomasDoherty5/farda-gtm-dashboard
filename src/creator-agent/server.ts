@@ -107,6 +107,7 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("evidenceRecord"), filters: z.object({ creatorId: z.string().min(1), evidenceId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(240) }).strict() }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
@@ -220,7 +221,7 @@ export function createAgentServer(options: AgentServerOptions) {
               complete: result.data.offset === 0 && remaining === 0, reasonCodes: result.data.offset > 0 || remaining > 0 ? ["SNAPSHOT_PAGE_PARTIAL"] : [] },
             capabilities: [], page: { nextCursor: result.nextCursor, hasMore: result.data.hasMore }, refresh: { nextPollAfterMs: null } });
         }
-        if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "Shipping source and label executor are not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+        if (input.viewKey === "shippingHub" || input.viewKey === "collaborationDetail") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
           const listing = store.listLatestPage({ limit: input.page.limit, snapshot: cursor ? { rowId: cursor.rowId, anchorRunId: cursor.anchorRunId } : undefined, after: cursor?.after });

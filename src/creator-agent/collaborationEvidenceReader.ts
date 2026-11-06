@@ -14,19 +14,19 @@ type Marks = z.infer<typeof marksSchema>;
 
 /** Exact collaboration membership is evaluated in SQLite before applying the page bound. */
 const sourceSql = `
- SELECT 'asset/'||a.asset_id||'/'||a.version AS key,'asset' AS kind,a.body AS body,NULL AS creator_id
+ SELECT 'asset/'||a.asset_id||'/'||a.version AS key,'asset' AS kind,a.body AS body,NULL AS creator_id,NULL AS source_mode
  FROM creator_assets a WHERE a.rowid<=? AND json_extract(a.body,'$.submission.collaborationId')=?
  UNION ALL
- SELECT 'review/'||r.review_key||'/'||r.revision||'/'||json_extract(c.value,'$.creatorId'),'review',r.body,json_extract(c.value,'$.creatorId')
+ SELECT 'review/'||r.review_key||'/'||r.revision||'/'||json_extract(c.value,'$.creatorId'),'review',r.body,json_extract(c.value,'$.creatorId'),NULL
  FROM portfolio_reviews r,json_each(r.body,'$.packet.creators') c
  WHERE r.rowid<=? AND EXISTS(SELECT 1 FROM json_each(c.value,'$.collaborations') x WHERE json_extract(x.value,'$.collaborationId')=?)
  UNION ALL
- SELECT 'decision/'||json_extract(d.body,'$.decisionId')||'/'||json_extract(c.value,'$.creatorId'),'decision',d.body,json_extract(c.value,'$.creatorId')
+ SELECT 'decision/'||json_extract(d.body,'$.decisionId')||'/'||json_extract(c.value,'$.creatorId'),'decision',d.body,json_extract(c.value,'$.creatorId'),json_extract(d.body,'$.sourceMode')
  FROM portfolio_decisions d JOIN portfolio_reviews r ON r.review_key=d.review_key AND r.revision=d.revision,json_each(r.body,'$.packet.creators') c
  WHERE d.rowid<=? AND EXISTS(SELECT 1 FROM json_each(c.value,'$.collaborations') x WHERE json_extract(x.value,'$.collaborationId')=?)
  AND EXISTS(SELECT 1 FROM json_each(d.body,'$.creatorDecisions') x WHERE json_extract(x.value,'$.creatorId')=json_extract(c.value,'$.creatorId'))
  UNION ALL
- SELECT 'participation/'||p.participation_id,'participation',p.body,p.creator_id
+ SELECT 'participation/'||p.participation_id,'participation',p.body,p.creator_id,json_extract(d.body,'$.sourceMode')
  FROM portfolio_participation p JOIN portfolio_decisions d ON d.decision_id=p.decision_id
  JOIN portfolio_reviews r ON r.review_key=d.review_key AND r.revision=d.revision,json_each(r.body,'$.packet.creators') c
  WHERE p.rowid<=? AND json_extract(c.value,'$.creatorId')=p.creator_id AND
@@ -38,6 +38,8 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
   if (!bound || bound.workspace_id !== scope.workspaceId || bound.account_id !== scope.accountId) throw new Error("DATABASE_SCOPE_MISMATCH");
   const key = createHmac("sha256", secret).update("collaboration-evidence.v1").digest();
   const scopeHash = createHmac("sha256", key).update(JSON.stringify(scope)).digest("hex");
+  const opaque = (raw: string) => "evidence:" + createHmac("sha256", key).update(raw).digest("hex");
+  const safeId = (raw: string) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,239}$/.test(raw) ? raw : opaque(raw);
   const encode = (data: z.infer<typeof cursorSchema>) => {
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
@@ -60,8 +62,8 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
     decisions: Number(db.prepare("SELECT COALESCE(MAX(rowid),0) AS n FROM portfolio_decisions").get()!.n),
     participation: Number(db.prepare("SELECT COALESCE(MAX(rowid),0) AS n FROM portfolio_participation").get()!.n),
   });
-  async function project(row: Record<string, unknown>): Promise<CollaborationEvidenceRecord> {
-    const common = { id: String(row.key) };
+  async function project(row: Record<string, unknown>, observations: Map<string, z.infer<typeof assetRightsSchema>>): Promise<CollaborationEvidenceRecord> {
+    const common = { id: opaque(String(row.key)) };
     const body = JSON.parse(String(row.body));
     const creatorId = String(row.creator_id);
     if (row.kind === "asset") {
@@ -74,34 +76,34 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
           const current = now();
           if (sameAssetScope(scope, r.scope) && r.assetId === asset.submission.assetId && r.assetVersion === asset.version
             && r.submissionHash === asset.submissionHash && r.checksum === asset.sourceEvidence.checksum
+            && r.productId === asset.submission.productId && r.productRevision === asset.submission.productRevision
             && Date.parse(r.observedAt) <= current && Date.parse(r.validUntil) > current) rights = r;
         }
       } catch { /* An unavailable rights observation has an explicit unknown projection. */ }
       const s = asset.submission;
-      const expired = rights?.endsAt && Date.parse(rights.endsAt) <= now();
+      if (rights) observations.set(common.id, rights);
       return { ...common, kind: "asset", assetId: s.assetId, version: asset.version, fileVersion: s.fileVersion,
         productId: s.productId, productRevision: s.productRevision, recordedAt: asset.recordedAt,
         parentAssetId: s.lineage?.parentAssetId ?? null, parentVersion: s.lineage?.parentVersion ?? null,
-        availability: asset.sourceEvidence.availability, reviewState: rights?.review ?? "unknown",
-        rightsState: rights?.status === "granted" && expired ? "expired" : rights?.status ?? "unknown", rightsObservedAt: rights?.observedAt ?? null };
+        availability: asset.sourceEvidence.availability, reviewState: "unknown", rightsState: "unknown", rightsObservedAt: null };
     }
     if (row.kind === "review") {
       const review = body as StoredPortfolioReview;
       const recommendation = review.proposal.recommendations.find(r => r.creatorId === creatorId)!;
       // Old records have no provenance. Only the explicit source-verified form is affirmative.
       const provenance = body.sourceEvidence as { mode?: string } | undefined;
-      return { ...common, kind: "review", reviewKey: review.reviewKey, revision: review.revision, creatorId,
+      return { ...common, kind: "review", reviewKey: review.reviewKey, revision: review.revision, creatorId: safeId(creatorId),
         recordedAt: review.recordedAt, action: recommendation.action, sourceVerified: provenance?.mode === "verified-weekly" || provenance?.mode === "verified-on-demand" };
     }
     if (row.kind === "decision") {
       const decision = body as StoredPortfolioDecision;
-      return { ...common, kind: "decision", reviewKey: decision.reviewKey, revision: decision.revision, creatorId,
+      return { ...common, kind: "decision", reviewKey: decision.reviewKey, revision: decision.revision, creatorId: safeId(creatorId),
         recordedAt: decision.recordedAt, action: decision.creatorDecisions.find(c => c.creatorId === creatorId)!.action,
-        decision: decision.decision, decidedAt: decision.decidedAt, linearDecisionRef: decision.linearDecisionRef };
+        decision: decision.decision, decidedAt: decision.decidedAt, linearDecisionRef: opaque(decision.linearDecisionRef), sourceVerified: row.source_mode === "source-verified" };
     }
     const participation = body as StoredPortfolioParticipation;
-    return { ...common, kind: "participation", creatorId: participation.creatorId, decisionId: participation.decisionId,
-      recordedAt: participation.recordedAt, state: participation.state, occurredAt: participation.occurredAt, sourceReceiptRef: participation.sourceReceiptRef };
+    return { ...common, kind: "participation", creatorId: safeId(participation.creatorId), decisionId: participation.decisionId,
+      recordedAt: participation.recordedAt, state: participation.state, occurredAt: participation.occurredAt, sourceReceiptRef: opaque(participation.sourceReceiptRef), sourceVerified: row.source_mode === "source-verified" };
   }
   return async (raw: unknown) => {
     const input = requestSchema.parse(raw);
@@ -114,11 +116,24 @@ export function createCollaborationEvidenceReader(db: DatabaseSync, scope: Asset
     const offset = cursor?.offset ?? 0;
     if (offset > total) throw new AgentConflict("EVIDENCE_SNAPSHOT_UNAVAILABLE");
     const rows = db.prepare(`SELECT * FROM (${sourceSql}) ORDER BY key LIMIT ? OFFSET ?`).all(...args, input.limit, offset);
-    const records = await Promise.all(rows.map(project));
+    const observations = new Map<string, z.infer<typeof assetRightsSchema>>();
+    const records = await Promise.all(rows.map(row => project(row, observations)));
+    const observedAt = now();
+    for (const record of records) {
+      if (record.kind !== "asset") continue;
+      const rights = observations.get(record.id);
+      const current = rights && Date.parse(rights.observedAt) <= observedAt && Date.parse(rights.validUntil) > observedAt;
+      if (!current) continue;
+      record.reviewState = rights.review;
+      if (rights.review === "accepted" && (rights.acceptedVersion !== record.version || !rights.approvalVersion)) record.reviewState = "pending";
+      record.rightsState = rights.status;
+      if (rights.status === "granted" && rights.endsAt && Date.parse(rights.endsAt) <= observedAt) record.rightsState = "expired";
+      record.rightsObservedAt = rights.observedAt;
+    }
     const hasMore = offset + records.length < total;
     const nextCursor = hasMore ? encode({ collaborationId: input.collaborationId, scope: scopeHash, marks: snapshot,
       offset: offset + records.length, limit: input.limit, expiresAt: cursor?.expiresAt ?? now() + 15 * 60_000 }) : null;
     return { data: collaborationEvidenceSchema.parse({ kind: "collaboration-evidence", source: "saved-agent-records", collaborationId: input.collaborationId,
-      observedAt: new Date(now()).toISOString(), records, total, offset, hasMore }), nextCursor };
+      observedAt: new Date(observedAt).toISOString(), records, total, offset, hasMore }), nextCursor };
   };
 }
