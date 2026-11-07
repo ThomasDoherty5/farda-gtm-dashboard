@@ -44,6 +44,9 @@ export const parameterSetSchema = z.object({
   freshnessMaxAgeMinutes: adopted(z.number().int().min(1).max(7 * 24 * 60)),
   stagePolicy: adopted(z.array(z.object({ ordinal: z.number().int().min(1).max(10), capMinor: minor.positive(), maxHeadroomBps: bps }).strict()).min(1).max(10)),
   founderCashCeilingMinor: adopted(minor.positive()),
+  /** Owner-adopted incremental-lift evidence for campaigns whose reporting includes organic and affiliate outcomes (GMV Max). */
+  incrementalEvidence: adopted(z.array(z.object({ provider: z.enum(PROVIDERS), providerAccountRef: ref, environment: z.enum(ENVIRONMENTS), nativeCampaignId: ref,
+    evidenceRef: ref }).strict()).max(50)).optional(),
 }).strict();
 export type ParameterSet = z.infer<typeof parameterSetSchema>;
 
@@ -119,6 +122,8 @@ export const healthSchema = z.object({
 export const treasurySchema = z.object({
   scope: scopeSchema, sourceRef: ref, observedAt: time, founderInvestedMinor: minor.nullable(), actualCashMinor: minor.nullable(),
   workingFloatMinor: minor.nullable(), commitmentsMinor: minor.nullable(),
+  /** Media spend for the stages controlled here that has already been charged to cash. Accrued spend above it is still owed. */
+  mediaChargedMinor: minor.nullable(),
   scheduledPayouts: z.array(z.object({ amountMinor: minor, expectedAt: time }).strict()).max(500), revenueForecastMinor: minor.nullable(),
 }).strict();
 
@@ -157,7 +162,7 @@ export type EconomicsView = {
 };
 export type TreasuryView = {
   state: "within" | "exceeds" | "unknown"; reasons: string[]; ceilingMinor: number | null; founderInvestedMinor: number | null;
-  spendableCashMinor: number | null; commitmentsMinor: number | null; mediaExposureMinor: number; projectedFounderInvestedMinor: number | null;
+  spendableCashMinor: number | null; commitmentsMinor: number | null; mediaExposureMinor: number; mediaChargedMinor: number | null; projectedFounderInvestedMinor: number | null;
   excludedPayoutsMinor: number; excludedForecastMinor: number | null; observedAt: string | null;
 };
 export type ObservationView = {

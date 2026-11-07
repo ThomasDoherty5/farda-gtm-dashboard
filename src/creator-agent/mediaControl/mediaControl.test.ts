@@ -39,7 +39,8 @@ function world() {
   const writes = new Map<string, unknown>();
   const executor = {
     calls: { publish: 0, mutate: 0 }, fail: null as null | "before" | "after", mutateFail: null as null | "before" | "after",
-    during: null as null | (() => Promise<void>),
+    during: null as null | (() => Promise<void>), readHook: null as null | (() => Promise<void>), readBackDown: false,
+    mutateHook: null as null | (() => void),
     createDraft(key: string, payload: { manifest: Manifest; nativeCampaignId: string | null }) {
       if (writes.has(key)) return writes.get(key);
       const id = payload.nativeCampaignId ?? `native:campaign-${native.size + 1}`;
@@ -60,6 +61,7 @@ function world() {
     },
     mutate(key: string, payload: { nativeCampaignId: string; action: string; dailyBudgetMinor: number | null }) {
       this.calls.mutate++;
+      if (this.mutateHook) { const f = this.mutateHook; this.mutateHook = null; f(); }
       if (this.mutateFail === "before") { this.mutateFail = null; throw new Error("connection reset"); }
       const n = native.get(payload.nativeCampaignId)!;
       if (payload.action === "pause") n.status = "PAUSED"; else n.dailyBudgetMinor = payload.dailyBudgetMinor;
@@ -69,7 +71,11 @@ function world() {
       return receipt;
     },
     read(key: string) { return writes.get(key) ?? null; },
-    readBack(id: string) { const n = native.get(id); return n ? { ...n, observedAt: clock.toISOString() } : null; },
+    readBack(id: string): unknown {
+      const current = () => { const n = native.get(id); return n && !this.readBackDown ? { ...n, observedAt: clock.toISOString() } : null; };
+      if (this.readHook) { const f = this.readHook; this.readHook = null; return f().then(current); }
+      return current();
+    },
   };
   const account = (provider: string, providerAccountRef: string) => ({ scope, provider, providerAccountRef, environment: "sandbox", kind: "advertiser",
     businessRef: "business:synthetic", market: "US", currency: "USD", timezone: "America/New_York", identityRef: "identity:synthetic-brand", identityApproved: true,
@@ -122,7 +128,7 @@ function world() {
   const orders: Record<string, unknown>[] = [];
   const feed = { complete: true, available: true };
   const treasury: Record<string, unknown> = { founderInvestedMinor: 2_500_000, actualCashMinor: 500_000, workingFloatMinor: 100_000, commitmentsMinor: 1_000_000,
-    scheduledPayouts: [], revenueForecastMinor: null };
+    mediaChargedMinor: 0, scheduledPayouts: [], revenueForecastMinor: null };
   const calls = { spendReport: 0 };
   const authority: MediaControlAuthority = {
     parameters: () => params,
@@ -271,7 +277,7 @@ describe("observe → propose → exact approve → bounded execute → reconcil
 });
 
 describe("THO-346 uncertainty and pause supersession", () => {
-  it("closes a pending launch superseded by a confirmed pause without publishing, and frees its reservation", async () => {
+  it("closes a pending launch superseded by a confirmed pause without publishing, and keeps its possible spend counted", async () => {
     const w = world();
     w.released();
     const c = await w.campaign();
@@ -286,12 +292,14 @@ describe("THO-346 uncertainty and pause supersession", () => {
     w.reportOver.delete(META);
     delete w.health.stock;
     const closed = await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l2");
-    expect(closed).toMatchObject({ reservation: "released", executionCertainty: "notApplied", campaignState: "draft",
+    // The campaign was live before the pause, so its reservation stays committed (paused) instead of freeing authorization.
+    expect(closed).toMatchObject({ reservation: "committed", executionCertainty: "notApplied", campaignState: "draft",
       heldReasons: ["NEW_DECISION_REQUIRED", "SUPERSEDED_BY_PAUSE"] });
     expect(w.executor.calls.publish).toBe(1);
     expect(w.native.get(nativeId)!.status).toBe("PAUSED");
-    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l3")).rejects.toThrow("SUPERSEDED_BY_PAUSE");
-    expect(w.control.observe("stage:initial", "o1").exposure.plannedMaxMinor).toBe(0);
+    expect(await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l3")).toMatchObject({ reservation: "committed", executionCertainty: "notApplied" });
+    expect(w.executor.calls.publish).toBe(1);
+    expect(w.control.observe("stage:initial", "o1").exposure.plannedMaxMinor).toBe(66_000);
   });
 
   it("reports a change whose media write is uncertain as uncertain, then reconciles it by its key", async () => {
@@ -398,11 +406,11 @@ describe("cumulative exposure: spend, pending authorizations, native caps and ap
     expect(w.executor.calls.publish).toBe(1);
   });
 
-  it("holds new dispatch when an untracked campaign is active in a stage account", async () => {
+  it("treats an untracked active campaign in a stage account as a safety trigger", async () => {
     const w = world();
     w.released();
     w.native.set("native:outside", { ...settingsFrom((await w.campaign()).manifest!, "native:outside"), status: "ACTIVE" });
-    expect(w.control.observe("stage:initial", "o1").holds).toContain(`UNTRACKED_ACTIVE_CAMPAIGN:meta:${META}:native:outside`);
+    expect(w.control.observe("stage:initial", "o1").safetyTriggers).toContain(`UNTRACKED_ACTIVE_CAMPAIGN:meta:${META}:native:outside`);
   });
 });
 
@@ -502,9 +510,8 @@ describe("contribution, allowable acquisition cost and platform attribution", ()
     const conv = (id: string, channel: string, orderRef: string | null, value = 12_800) => ({ conversionId: id, channel, orderSource: orderRef ? "shop:synthetic" : null,
       orderRef, convertedAt: ago(60 * 24), valueMinor: value });
     w.conversions.set(nativeId, [conv("c1", "native", "order-1"), conv("m1", "mirror", "order-1"), conv("c2", "native", null), conv("c3", "native", "order-2")]);
-    w.rowOver.set(nativeId, { includesOrganicAffiliate: true });
     const o = w.control.observe("stage:initial", "o1").economics;
-    expect(o.platform).toMatchObject({ purchases: 3, duplicatesRemoved: 1, valueMinor: 3 * 12_800, includesOrganicAffiliate: true, incrementalPaidRoas: null, comparable: true });
+    expect(o.platform).toMatchObject({ purchases: 3, duplicatesRemoved: 1, valueMinor: 3 * 12_800, includesOrganicAffiliate: false, incrementalPaidRoas: null, comparable: true });
     expect(o.canonical.orders).toBe(3);
     w.params.attributionWindow = P("attribution:7d-click");
     expect(w.control.observe("stage:initial", "o1b").economics.platform).toMatchObject({ comparable: false, purchases: null, valueMinor: null });
@@ -693,6 +700,165 @@ describe("stable cadence, treasury ceiling and no unauthorized stage escalation"
     expect(larger).toMatchObject({ state: "held", revision: 2, heldReasons: ["STAGE_CAP_NOT_ADOPTED"] });
     expect(w.control.read("stage:second")!.reservations).toEqual([]);
     expect(w.executor.calls.publish).toBe(1);
+  });
+});
+
+
+describe("review regressions (THO-347)", () => {
+  it("R1 a concurrent observe or launch inside the publish read-back window never frees an in-flight reservation", async () => {
+    const w = world();
+    w.released();
+    const one = await w.campaign("meta"), two = await w.campaign("meta");
+    let during: { observed: number; raced: unknown } | null = null;
+    w.executor.readHook = async () => {
+      const o = w.control.observe("stage:initial", "o-during");
+      const raced = await w.control.launch("stage:initial", { campaignId: two.campaignId }, "l2").catch((e: Error) => e.message);
+      const again = await w.control.launch("stage:initial", { campaignId: one.campaignId }, "l1-again").catch((e: Error) => e.message);
+      during = { observed: o.exposure.pendingMinor, raced: [raced, again] };
+    };
+    const won = await w.control.launch("stage:initial", { campaignId: one.campaignId }, "l1");
+    expect(during).toEqual({ observed: 66_000, raced: ["ALLOCATION_AUTHORIZATION_EXHAUSTED", "LAUNCH_IN_PROGRESS"] });
+    expect(won).toMatchObject({ reservation: "committed", executionCertainty: "applied" });
+    expect(w.executor.calls.publish).toBe(1);
+    const o = w.control.observe("stage:initial", "o1");
+    expect(o.exposure.allocations[0]).toMatchObject({ plannedMaxMinor: 66_000 });
+    expect(o.safetyTriggers).toEqual([]);
+  });
+
+  it("R1 pauses an untracked active campaign Farda can name, after its launch reservation was freed", async () => {
+    const w = world();
+    w.released();
+    const c = await w.campaign();
+    w.gates.set("fulfillment-support-cash", null);
+    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1")).rejects.toThrow("MEDIA_GATES_NOT_VERIFIED");
+    w.gates.delete("fulfillment-support-cash");
+    expect((await w.media.publish(c.campaignId, "direct-publish")).state).toBe("confirmed");
+    const nativeId = w.media.read(c.campaignId)!.native.nativeCampaignId!;
+    const run = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
+    expect(run.triggers).toContain(`UNTRACKED_ACTIVE_CAMPAIGN:meta:${META}:${nativeId}`);
+    expect(run.campaigns).toEqual([expect.objectContaining({ campaignId: c.campaignId, outcome: "paused" })]);
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+  });
+
+  it("R2 re-pauses a campaign re-activated outside Farda and resolves a failed pause only on a matched read-back", async () => {
+    const w = world();
+    const { nativeId } = await launched(w);
+    w.health.stock = { state: "failed", code: "stock:short" };
+    await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
+    w.native.get(nativeId)!.status = "ACTIVE";
+    const again = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-2");
+    expect(again.campaigns).toEqual([expect.objectContaining({ outcome: "paused" })]);
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+    delete w.health.stock;
+    w.native.get(nativeId)!.status = "ACTIVE";
+    expect(w.control.observe("stage:initial", "o1").safetyTriggers).toEqual(expect.arrayContaining([expect.stringMatching(/^PAUSED_CAMPAIGN_REACTIVATED/)]));
+    w.executor.mutateFail = "before";
+    expect((await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-3")).campaigns[0]!.outcome).toBe("failed");
+    w.executor.readBackDown = true;
+    const blind = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-4");
+    expect(blind.campaigns[0]!.outcome).toBe("failed");
+    expect(blind.incidents.find((i) => i.code.startsWith("PAUSE_FAILED"))!.resolvedAt).toBeNull();
+    w.executor.readBackDown = false;
+    const fixed = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-5");
+    expect(fixed.campaigns[0]!.outcome).toBe("paused");
+    expect(fixed.incidents.find((i) => i.code.startsWith("PAUSE_FAILED"))!.resolvedAt).not.toBeNull();
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+  });
+
+  it("R3 pauses when spend reaches the maximum test loss with unknown contribution, and fails closed on unadopted limits", async () => {
+    const w = world();
+    const { nativeId } = await launched(w);
+    w.params.diagnostic.maxTestLossMinor = A(30_000);
+    w.feed.available = false;
+    w.spend.set(nativeId, 30_000);
+    expect(w.control.observe("stage:initial", "o1").safetyTriggers).toContain("MAX_TEST_LOSS_UNDEMONSTRATED");
+    w.params.attributionWindow = P("attribution:7d-click");
+    w.params.diagnostic.maxTestLossMinor = A(100_000);
+    const tiktok = await w.campaign("tiktok");
+    await expect(w.control.launch("stage:initial", { campaignId: tiktok.campaignId }, "l2")).rejects.toThrow("PARAMETER_PROPOSED_NOT_ADOPTED:attributionWindow");
+    const v = world();
+    v.params.diagnostic.maxCpaMinor = P(6000);
+    const p = v.control.proposeStage(v.terms(), "s1");
+    v.control.decideStage(p.stageRef, v.approveStage(p), "d1");
+    expect(() => v.control.releaseStage(p.stageRef, "r1")).toThrow("PARAMETER_PROPOSED_NOT_ADOPTED:maxCpaMinor");
+    v.params.diagnostic.maxCpaMinor = A(6000);
+    v.params.minimumEvidence = null;
+    expect(() => v.control.releaseStage(p.stageRef, "r2")).toThrow("PARAMETER_NOT_ADOPTED:minimumEvidence");
+  });
+
+  it("R4 keeps GMV Max orders out of paid-incremental CPA unless incremental evidence is adopted", async () => {
+    const w = world();
+    const { nativeId } = await profitable(w);
+    w.rowOver.set(nativeId, { includesOrganicAffiliate: true });
+    const o = w.control.observe("stage:initial", "o1").economics;
+    expect(o.canonical.orders).toBe(0);
+    expect(o.canonicalCpaMinor).toBeNull();
+    expect(o.scale.state).toBe("unknown");
+    expect(o.scale.reasons).toContain(`NOT_INCREMENTAL_PAID:${nativeId}`);
+    expect(o.platform).toMatchObject({ includesOrganicAffiliate: true, incrementalPaidRoas: null });
+    (w.params as Record<string, unknown>).incrementalEvidence = A([{ provider: "meta", providerAccountRef: META, environment: "sandbox", nativeCampaignId: nativeId,
+      evidenceRef: "lift:synthetic-holdout" }]);
+    expect(w.control.observe("stage:initial", "o2").economics).toMatchObject({ canonical: { orders: 3 }, scale: { state: "met" } });
+  });
+
+  it("R5 counts media spend accrued but not yet charged against the founder cash ceiling, once", async () => {
+    const w = world();
+    await profitable(w);
+    Object.assign(w.treasury, { founderInvestedMinor: 3_000_000, commitmentsMinor: 1_252_000 });
+    const unbilled = w.control.observe("stage:initial", "o1").treasury;
+    expect(unbilled).toMatchObject({ state: "exceeds", mediaExposureMinor: 150_000, mediaChargedMinor: 0, projectedFounderInvestedMinor: 4_002_000 });
+    Object.assign(w.treasury, { mediaChargedMinor: 15_000 });
+    expect(w.control.observe("stage:initial", "o2").treasury).toMatchObject({ state: "within", mediaExposureMinor: 135_000, projectedFounderInvestedMinor: 3_987_000 });
+    Object.assign(w.treasury, { mediaChargedMinor: null });
+    expect(w.control.observe("stage:initial", "o3").treasury.reasons).toContain("TREASURY_MEDIA_CHARGED_UNKNOWN");
+  });
+
+  it("R6 holds on null spend after an out-of-order report, and fails closed when the campaign record is unreadable", async () => {
+    const w = world();
+    const { c, nativeId } = await launched(w);
+    w.spend.set(nativeId, 20_000);
+    w.control.observe("stage:initial", "o0");
+    w.reportOver.set(META, { sourceUpdatedAt: ago(60), observedAt: ago(50) });
+    const o = w.control.observe("stage:initial", "o1");
+    expect(o.holds).toContain(`SPEND_UNKNOWN:${c.campaignId}`);
+    expect(o.exposure.reasons).toContain(`SPEND_STALE:${c.campaignId}`);
+    w.reportOver.delete(META);
+    w.store.database.prepare("UPDATE media_campaigns SET body=? WHERE campaign_id=?").run("{", c.campaignId);
+    expect(w.control.observe("stage:initial", "o2").holds).toContain(`CAMPAIGN_RECORD_UNAVAILABLE:${c.campaignId}`);
+  });
+
+  it("R6 reports an unreadable mutation record after a possible effect as uncertain", async () => {
+    const w = world();
+    const { c } = await profitable(w);
+    const red = w.control.proposeChange("stage:initial", { campaignId: c.campaignId, kind: "reduce-budget", dailyBudgetMinor: 1000, rationale: "Slow down." }, "ch1");
+    const decisionRef = w.approveMutation(w.media.read(c.campaignId)!, w.media.readMutation(c.campaignId, red.mutationId!)!);
+    w.executor.mutateHook = () => { w.store.database.prepare("UPDATE media_mutations SET body=? WHERE mutation_id=?").run("{", red.mutationId!); };
+    await expect(w.control.applyChange(red.changeId, { decisionRef }, "ap1")).rejects.toBeInstanceOf(MediaControlUncertain);
+  });
+
+  it("R6 keeps the stage ordinal column in step with a re-proposal and never surfaces a raw UNIQUE error", () => {
+    const w = world();
+    w.control.proposeStage(w.terms({ stageRef: "stage:a", ordinal: 2 }), "s1");
+    expect(w.control.proposeStage(w.terms({ stageRef: "stage:a", ordinal: 3, capMinor: 300_000 }), "s2")).toMatchObject({ ordinal: 3, revision: 2 });
+    expect(w.control.proposeStage(w.terms({ stageRef: "stage:b", ordinal: 2 }), "s3")).toMatchObject({ ordinal: 2, state: "awaiting-approval" });
+    expect(() => w.control.proposeStage(w.terms({ stageRef: "stage:c", ordinal: 3, capMinor: 300_000 }), "s4")).toThrow("STAGE_ORDINAL_TAKEN");
+  });
+
+  it("R6 resolves a gates-not-verified incident once the media record shows every gate verified", async () => {
+    const w = world();
+    const { c } = await launched(w);
+    const db = w.store.database;
+    const stage = JSON.parse(String(db.prepare("SELECT body FROM media_control_stages WHERE stage_ref=?").get("stage:initial")!.body));
+    stage.incidents.push({ code: "GATES_NOT_VERIFIED_AT_PUBLISH", campaignId: c.campaignId, at: clock.toISOString(), decisionRef: stage.decisionRef, resolvedAt: null });
+    db.prepare("UPDATE media_control_stages SET body=? WHERE stage_ref=?").run(JSON.stringify(stage), "stage:initial");
+    const row = db.prepare("SELECT reservation_id, body FROM media_control_reservations WHERE campaign_id=?").get(c.campaignId)!;
+    const r = JSON.parse(String(row.body));
+    r.gates = [{ gate: "qualified-product-stock", state: "missing" }];
+    db.prepare("UPDATE media_control_reservations SET body=? WHERE reservation_id=?").run(JSON.stringify(r), row.reservation_id as string);
+    expect(w.control.observe("stage:initial", "o1").holds).not.toContain(`INCIDENT_OPEN:GATES_NOT_VERIFIED_AT_PUBLISH`);
+    const after = w.control.read("stage:initial")!;
+    expect(after.incidents[0]!.resolvedAt).not.toBeNull();
+    expect(after.reservations[0]!.gates.every((g) => g.state === "verified")).toBe(true);
   });
 });
 

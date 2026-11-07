@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { digest } from "../config.ts";
@@ -39,6 +40,8 @@ type StoredReservation = {
   reservationId: string; stageRef: string; campaignId: string; provider: MediaProvider; providerAccountRef: string; environment: "sandbox" | "production";
   nativeCampaignId: string | null; plannedMaxMinor: number; approvedLifetimeMinor: number; state: ReservationState; createdAt: string;
   confirmedAt: string | null; lastChangeAt: string | null; pausedAt: string | null; gates: { gate: string; state: string }[];
+  /** The in-flight launch lease. While unexpired, no other call may reconcile or release this reservation. */
+  lease?: { token: string; until: string } | null;
 };
 type StoredChange = Omit<ChangeView, "kind" | "stageRef" | "changeKind"> & { stageRef: string; kind: ChangeKind; createdAt: string };
 type SpendRow = {
@@ -50,10 +53,14 @@ type OrderRow = OrderFeed["orders"][number] & { key: string };
 type ConversionRow = { key: string; provider: string; nativeKey: string; channel: "native" | "mirror"; convertedAt: string; valueMinor: number; firstSeenAt: string };
 type Evaluation = {
   view: Omit<ObservationView, "observationId">; spendRows: SpendRow[]; orders: OrderRow[]; conversions: ConversionRow[];
-  reconcile: { reservationId: string; to: ReservationState; nativeCampaignId: string | null; gates: { gate: string; state: string }[] }[];
+  reconcile: { reservationId: string; to: ReservationState; nativeCampaignId: string | null; gates: { gate: string; state: string }[]; paused: boolean }[];
+  /** Active campaigns in stage accounts with no active reservation; campaignId is known when Farda launched it before. */
+  untracked: { key: string; campaignId: string | null }[];
+  gateUpdates: { reservationId: string; gates: { gate: string; state: string }[] }[];
 };
 
 const LIVE = ["ACTIVE", "IN_REVIEW"];
+const LAUNCH_LEASE_MS = 5 * 60_000;
 const NOT_WRITTEN = ["held", "draft", "approved", "rejected", "provider-rejected"];
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T | null => { const r = schema.safeParse(value); return r.success ? r.data : null; };
 const sameScope = (a: ControlScope, b: ControlScope) => a.workspaceId === b.workspaceId && a.accountId === b.accountId;
@@ -118,7 +125,13 @@ export class MediaReleaseController {
   }
   private requireStage(stageRef: string) { const s = this.loadStage(stageRef); if (!s) throw new AgentConflict("STAGE_UNKNOWN"); return s; }
   private saveStage(s: StoredStage) {
-    this.db.prepare("INSERT INTO media_control_stages VALUES(?,?,?) ON CONFLICT(stage_ref) DO UPDATE SET body=excluded.body").run(s.stageRef, s.terms.ordinal, JSON.stringify(s));
+    try {
+      this.db.prepare("INSERT INTO media_control_stages VALUES(?,?,?) ON CONFLICT(stage_ref) DO UPDATE SET ordinal=excluded.ordinal, body=excluded.body")
+        .run(s.stageRef, s.terms.ordinal, JSON.stringify(s));
+    } catch (error) {
+      if (/UNIQUE/.test(String((error as Error)?.message))) throw new AgentConflict("STAGE_ORDINAL_TAKEN");
+      throw error;
+    }
   }
   private stages(): StoredStage[] { return this.db.prepare("SELECT body FROM media_control_stages ORDER BY ordinal").all().map((r) => JSON.parse(String(r.body)) as StoredStage); }
   private move(s: StoredStage, state: StageState, sourceRef: string | null) { s.state = state; s.history.push({ state, at: this.iso(), ref: sourceRef }); }
@@ -226,6 +239,12 @@ export class MediaReleaseController {
     const { set, reasons: paramReasons } = this.parameters();
     const freshness = this.adopted("freshnessMaxAgeMinutes", set?.freshnessMaxAgeMinutes, paramReasons);
     const triggers: string[] = [], holds: string[] = [...paramReasons.filter((r) => r.includes("freshnessMaxAgeMinutes") || r === "PARAMETERS_UNAVAILABLE")];
+    // Launches and releases fail closed until the owner adopts the diagnostic limits, evidence threshold and attribution window.
+    if (set) {
+      this.adopted("maxTestLossMinor", set.diagnostic.maxTestLossMinor, holds); this.adopted("maxCpaMinor", set.diagnostic.maxCpaMinor, holds);
+      this.adopted("minimumEvidence", set.minimumEvidence, holds); this.adopted("attributionWindow", set.attributionWindow, holds);
+    }
+    const untracked: Evaluation["untracked"] = [], gateUpdates: Evaluation["gateUpdates"] = [];
     const corrections: ObservationView["corrections"] = [], freshnessView: ObservationView["freshness"] = [];
     const spendRows: SpendRow[] = [], reconcile: Evaluation["reconcile"] = [];
     const terms = s.terms, bps = terms.headroomBps;
@@ -263,8 +282,11 @@ export class MediaReleaseController {
         spendRows.push(reported);
         reportRows.set(key, { ...row, alloc: allocKey(a), fresh: reportFresh });
         if (LIVE.includes(row.status) && !allActive.has(key)) {
+          // Spend outside any reservation is a safety trigger: it is paused when Farda can name the campaign.
           const code = `UNTRACKED_ACTIVE_CAMPAIGN:${a.provider}:${a.providerAccountRef}:${row.nativeCampaignId}`;
-          holds.push(code); exposureReasons.push(code);
+          triggers.push(code); exposureReasons.push(code);
+          const known = this.reservations("1=1").find((r) => r.nativeCampaignId && campaignKey(r, r.nativeCampaignId) === key);
+          untracked.push({ key, campaignId: known?.campaignId ?? null });
         }
       }
     }
@@ -275,16 +297,17 @@ export class MediaReleaseController {
       const v = this.readCampaign(r.campaignId);
       views.set(r.campaignId, v);
       if (r.state !== "pending") continue;
+      // A launch still inside its in-flight lease belongs to the worker holding it; it stays reserved in full.
+      if (r.lease && ms(r.lease.until) > now) continue;
       const nativeId = r.nativeCampaignId ?? v?.native.nativeCampaignId ?? null;
       const row = nativeId ? reportRows.get(campaignKey(r, nativeId)) : undefined;
-      const live = v?.state === "confirmed" || (!!row && LIVE.includes(row.status));
-      const notWritten = !!v && NOT_WRITTEN.includes(v.state) && !v.execution.pending && !(row && LIVE.includes(row.status));
-      if (live) {
+      const settled = this.settle(v, !!row && LIVE.includes(row.status));
+      if (settled?.to === "committed") {
         const gates = v?.gates.map((g) => ({ gate: g.gate, state: g.state })) ?? [];
-        reconcile.push({ reservationId: r.reservationId, to: "committed", nativeCampaignId: nativeId, gates });
-        Object.assign(r, { state: "committed", nativeCampaignId: nativeId, confirmedAt: at, gates });
-      } else if (notWritten) {
-        reconcile.push({ reservationId: r.reservationId, to: "released", nativeCampaignId: nativeId, gates: [] });
+        reconcile.push({ reservationId: r.reservationId, to: "committed", nativeCampaignId: nativeId, gates, paused: settled.paused });
+        Object.assign(r, { state: "committed", nativeCampaignId: nativeId, confirmedAt: at, gates, pausedAt: settled.paused ? at : r.pausedAt });
+      } else if (settled?.to === "released") {
+        reconcile.push({ reservationId: r.reservationId, to: "released", nativeCampaignId: nativeId, gates: [], paused: false });
         mine.splice(mine.indexOf(r), 1);
       }
     }
@@ -300,7 +323,13 @@ export class MediaReleaseController {
       // A read-back counts only for the exact campaign, provider, account and environment, observed no later than now.
       const readback = rb && rb.nativeCampaignId === nativeId && rb.provider === r.provider && rb.providerAccountRef === r.providerAccountRef
         && rb.environment === r.environment && this.fresh(rb.observedAt, freshness) ? rb : null;
+      // Without the campaign record its rights cannot be checked: fail closed.
+      if (!v?.manifest) { holds.push(`CAMPAIGN_RECORD_UNAVAILABLE:${r.campaignId}`); exposureReasons.push(`CAMPAIGN_RECORD_UNAVAILABLE:${r.campaignId}`); }
       for (const c of v?.manifest?.creatives ?? []) if (!(ms(c.rightsExpiresAt) > now)) triggers.push(`RIGHTS_EXPIRED:${r.campaignId}`);
+      if (r.state === "committed" && v && v.gates.length && v.gates.every((g) => g.state === "verified")) {
+        if (r.gates.some((g) => g.state !== "verified")) gateUpdates.push({ reservationId: r.reservationId, gates: v.gates.map((g) => ({ gate: g.gate, state: g.state })) });
+        for (const i of s.incidents) if (!i.resolvedAt && i.code === "GATES_NOT_VERIFIED_AT_PUBLISH" && i.campaignId === r.campaignId) i.resolvedAt = at;
+      }
       if (r.state === "pending") {
         campaigns.push({ campaignId: r.campaignId, key: key ?? `pending|${r.reservationId}`, reservation: "pending", status: row?.status ?? v?.native.status ?? null,
           spendMinor: rowFresh ? row!.spendMinor : null, lifetimeBudgetMinor: r.approvedLifetimeMinor, boundMinor: r.plannedMaxMinor, endAt: null,
@@ -309,8 +338,11 @@ export class MediaReleaseController {
       }
       const lifetime = rowFresh ? row!.lifetimeBudgetMinor : readback?.lifetimeBudgetMinor ?? null;
       const endAt = rowFresh ? row!.endAt : readback?.endAt ?? null;
-      const justLaunched = !row && this.fresh(r.confirmedAt, freshness);
+      // Not yet reported only when no report row for it was ever stored; an ignored out-of-order report is not that.
+      const justLaunched = !row && !stored && this.fresh(r.confirmedAt, freshness);
       const spend = rowFresh ? row!.spendMinor : null;
+      if (spend === null) holds.push(`SPEND_UNKNOWN:${r.campaignId}`);
+      if (r.pausedAt && row && rowFresh && LIVE.includes(row.status)) triggers.push(`PAUSED_CAMPAIGN_REACTIVATED:${r.campaignId}`);
       const bound = lifetime === null ? null : lifetime + headroom(lifetime, bps);
       if (lifetime === null) exposureReasons.push(`NATIVE_LIFETIME_CAP_UNAVAILABLE:${r.campaignId}`);
       if (spend === null && !justLaunched) exposureReasons.push(`SPEND_STALE:${r.campaignId}`);
@@ -357,10 +389,13 @@ export class MediaReleaseController {
 
     const stageNative = new Map(mine.filter((r) => r.nativeCampaignId || views.get(r.campaignId)?.native.nativeCampaignId)
       .map((r) => [campaignKey(r, (r.nativeCampaignId ?? views.get(r.campaignId)!.native.nativeCampaignId)!), r]));
-    const { economics, orders, conversions } = this.economics(s, set, freshness, stageNative, reportRows, stageSpend, corrections, freshnessView);
+    const spendByKey = new Map(campaigns.map((c) => [c.key, c.spendMinor]));
+    const { economics, orders, conversions } = this.economics(s, set, freshness, stageNative, reportRows, stageSpend, spendByKey, corrections, freshnessView);
     if (economics.diagnostic.state === "breached") triggers.push("MAX_TEST_LOSS_REACHED");
-    if (economics.diagnostic.state === "unknown" && economics.diagnostic.maxTestLossMinor !== null && stageSpend !== null
-      && stageSpend >= economics.diagnostic.maxTestLossMinor) holds.push("TEST_LOSS_UNDEMONSTRATED");
+    // Spend at the adopted maximum test loss while contribution is unknown or negative cannot be shown to be within it: pause.
+    const contribution = economics.canonical.contributionMinor;
+    if (economics.diagnostic.maxTestLossMinor !== null && stageSpend !== null && stageSpend >= economics.diagnostic.maxTestLossMinor
+      && (contribution === null || contribution < 0)) triggers.push("MAX_TEST_LOSS_UNDEMONSTRATED");
 
     const health = this.health(s, freshnessView);
     for (const h of health) {
@@ -390,7 +425,7 @@ export class MediaReleaseController {
     return {
       view: { kind: "media-release-observation", stageRef: s.stageRef, observedAt: at, exposure, economics, health, treasury, freshness: freshnessView, corrections,
         safetyTriggers: uniqueTriggers, holds: uniqueHolds, recommendations, review: { open: review.open, nextReviewAt: review.nextReviewAt, nextSafetyCheckAt: review.nextSafetyCheckAt } },
-      spendRows, orders, conversions, reconcile,
+      spendRows, orders, conversions, reconcile, untracked, gateUpdates,
     };
   }
 
@@ -400,7 +435,7 @@ export class MediaReleaseController {
    */
   private economics(s: StoredStage, set: ParameterSet | null, freshness: number | null, stageNative: Map<string, StoredReservation>,
     reportRows: Map<string, SpendReport["campaigns"][number] & { alloc: string; fresh: boolean }>, spendMinor: number | null,
-    corrections: ObservationView["corrections"], freshnessView: ObservationView["freshness"]): { economics: EconomicsView; orders: OrderRow[]; conversions: ConversionRow[] } {
+    spendByKey: Map<string, number | null>, corrections: ObservationView["corrections"], freshnessView: ObservationView["freshness"]): { economics: EconomicsView; orders: OrderRow[]; conversions: ConversionRow[] } {
     const now = this.now().getTime(), at = this.iso(), unknown: string[] = [];
     const stageStart = ms(s.terms.startAt), stageEnd = ms(s.terms.endAt);
     // Canonical orders.
@@ -435,11 +470,20 @@ export class MediaReleaseController {
       effective.set(row.key, row);
     }
     for (const key of conflicts) unknown.push(`ORDER_FEED_CONFLICT:${key}`);
+    // GMV Max and other campaigns that count organic and affiliate outcomes are not incremental paid acquisition. Their orders and spend
+    // stay out of paid CPA unless the owner adopted incremental evidence for that exact campaign.
+    const evidenceReasons: string[] = [];
+    const lift = set?.incrementalEvidence === undefined ? null : this.adopted<{ provider: string; providerAccountRef: string; environment: string; nativeCampaignId: string }[]>(
+      "incrementalEvidence", set.incrementalEvidence, evidenceReasons);
+    const nonIncremental = new Set([...stageNative.keys()].filter((k) => reportRows.get(k)?.includesOrganicAffiliate
+      && !(lift ?? []).some((e) => campaignKey(e, e.nativeCampaignId) === k)));
+    const keyOf = (m: NonNullable<OrderRow["paidMediaMatch"]>) =>
+      [...stageNative.keys()].find((k) => k.endsWith(`|${m.nativeCampaignId}`) && k.startsWith(`campaign|${m.provider}|${m.providerAccountRef}|`)) ?? null;
     const matched = [...effective.values()].filter((o) => {
       const m = o.paidMediaMatch;
       if (!m || !(ms(o.placedAt) >= stageStart && ms(o.placedAt) <= Math.min(now, stageEnd))) return false;
-      const r = [...stageNative.entries()].find(([k]) => k.endsWith(`|${m.nativeCampaignId}`) && k.startsWith(`campaign|${m.provider}|${m.providerAccountRef}|`));
-      return !!r;
+      const k = keyOf(m);
+      return !!k && !nonIncremental.has(k);
     });
     // Contribution inputs, each adopted or unknown.
     const c = set?.contribution;
@@ -517,11 +561,14 @@ export class MediaReleaseController {
     const dReasons: string[] = [];
     const maxLoss = this.adopted<number>("maxTestLossMinor", set?.diagnostic.maxTestLossMinor, dReasons);
     const maxCpa = this.adopted<number>("maxCpaMinor", set?.diagnostic.maxCpaMinor, dReasons);
+    // Loss uses all stage spend (conservative); CPA uses only incremental paid spend and orders.
     const loss = spendMinor !== null && contribution !== null ? spendMinor - contribution : null;
-    const cpa = spendMinor !== null && orders ? Math.ceil(spendMinor / orders) : null;
+    const paidSpend = sum([...stageNative.keys()].filter((k) => !nonIncremental.has(k)).map((k) => spendByKey.get(k) ?? null));
+    const cpa = paidSpend !== null && orders ? Math.ceil(paidSpend / orders) : null;
     const allowable = perOrder === null ? null : Math.max(0, perOrder);
     const scaleUnknown: string[] = [], scaleNotMet: string[] = [];
     if (contribution === null) scaleUnknown.push("CONTRIBUTION_UNKNOWN");
+    for (const k of nonIncremental) scaleUnknown.push(`NOT_INCREMENTAL_PAID:${k.split("|").pop()}`);
     if (spendMinor === null) scaleUnknown.push("SPEND_UNKNOWN");
     const evidence = this.adopted<{ orders: number; spendMinor: number; days: number }>("minimumEvidence", set?.minimumEvidence, scaleUnknown);
     if (evidence) {
@@ -569,14 +616,18 @@ export class MediaReleaseController {
     const isFresh = ok && this.fresh(t!.observedAt, freshness);
     freshnessView.push({ source: "treasury", sourceUpdatedAt: ok ? t!.observedAt : null, observedAt: ok ? t!.observedAt : null, fresh: isFresh });
     if (!ok) reasons.push("TREASURY_UNAVAILABLE"); else if (!isFresh) reasons.push("TREASURY_STALE");
+    // Media exposure is each released stage's cap (or its spend, if higher) less what has already been charged to cash. Spend accrued but
+    // not yet billed is still owed, so it counts; charged spend is already out of cash, so it is not counted twice.
     let media = extra;
     for (const other of this.stages()) {
       if (other.state !== "released" && other.stageRef !== s.stageRef) continue;
       if (other.stageRef === s.stageRef && s.state !== "released") continue;
       const spent = other.stageRef === s.stageRef ? stageSpend : this.lastObservation(other)?.exposure.spendMinor ?? null;
-      // Unknown spend never shrinks the remaining authorization.
-      media += Math.max(0, other.terms.capMinor - (spent ?? 0));
+      media += Math.max(other.terms.capMinor, spent ?? 0);
     }
+    const charged = ok ? t!.mediaChargedMinor : null;
+    if (ok && charged === null) reasons.push("TREASURY_MEDIA_CHARGED_UNKNOWN");
+    media = Math.max(0, media - (charged ?? 0));
     const fields = ok ? { founder: t!.founderInvestedMinor, cash: t!.actualCashMinor, float: t!.workingFloatMinor, commitments: t!.commitmentsMinor } : null;
     if (fields) for (const [k, v] of Object.entries(fields)) if (v === null) reasons.push(`TREASURY_${k.toUpperCase()}_UNKNOWN`);
     const spendable = fields && fields.cash !== null && fields.float !== null ? Math.max(0, fields.cash - fields.float) : null;
@@ -584,7 +635,7 @@ export class MediaReleaseController {
       ? fields.founder + Math.max(0, fields.commitments + media - spendable) : null;
     const state = reasons.length || projected === null || ceiling === null ? "unknown" : projected > ceiling ? "exceeds" : "within";
     return { state, reasons, ceilingMinor: ceiling, founderInvestedMinor: fields?.founder ?? null, spendableCashMinor: spendable, commitmentsMinor: fields?.commitments ?? null,
-      mediaExposureMinor: media, projectedFounderInvestedMinor: projected, excludedPayoutsMinor: ok ? t!.scheduledPayouts.reduce((n, p) => n + p.amountMinor, 0) : 0,
+      mediaExposureMinor: media, mediaChargedMinor: charged, projectedFounderInvestedMinor: projected, excludedPayoutsMinor: ok ? t!.scheduledPayouts.reduce((n, p) => n + p.amountMinor, 0) : 0,
       excludedForecastMinor: ok ? t!.revenueForecastMinor : null, observedAt: ok ? t!.observedAt : null };
   }
 
@@ -602,8 +653,14 @@ export class MediaReleaseController {
     for (const rc of e.reconcile) {
       const r = this.reservations("reservation_id=?", rc.reservationId)[0];
       if (!r || r.state !== "pending") continue;
-      Object.assign(r, { state: rc.to, nativeCampaignId: rc.nativeCampaignId ?? r.nativeCampaignId, gates: rc.gates, confirmedAt: rc.to === "committed" ? this.iso() : null });
+      if (r.lease && ms(r.lease.until) > this.now().getTime()) continue;
+      Object.assign(r, { state: rc.to, nativeCampaignId: rc.nativeCampaignId ?? r.nativeCampaignId, gates: rc.gates, confirmedAt: rc.to === "committed" ? this.iso() : null,
+        pausedAt: rc.paused ? this.iso() : r.pausedAt, lease: null });
       this.saveReservation(r);
+    }
+    for (const g of e.gateUpdates) {
+      const r = this.reservations("reservation_id=?", g.reservationId)[0];
+      if (r) { r.gates = g.gates; this.saveReservation(r); }
     }
     const view: ObservationView = { ...e.view, observationId: `observation-${digest({ stage: s.stageRef, at: e.view.observedAt, n: this.observationCount() }).slice(0, 32)}` };
     this.db.prepare("INSERT INTO media_control_observations VALUES(?,?,?,?)").run(view.observationId, s.stageRef, view.observedAt, JSON.stringify(view));
@@ -711,11 +768,13 @@ export class MediaReleaseController {
   async launch(stageRef: string, body: unknown, key: string): Promise<LaunchView> {
     const { campaignId } = launchInputSchema.parse(body);
     this.bindKey(key, { op: "launch", stageRef, campaignId });
+    const token = randomUUID();
     const step = this.tx(() => {
       const s = this.requireStage(stageRef);
       const earlier = this.reservations("campaign_id=? AND active=1", campaignId)[0];
       if (earlier && earlier.stageRef !== stageRef) throw new AgentConflict("CAMPAIGN_IN_ANOTHER_STAGE");
       if (earlier?.state === "committed") return { s, r: earlier, refusal: null as string | null, send: false };
+      if (earlier?.lease && ms(earlier.lease.until) > this.now().getTime()) throw new AgentConflict("LAUNCH_IN_PROGRESS");
       if (s.state !== "released" || !s.decisionRef) throw new AgentConflict("STAGE_NOT_RELEASED");
       this.currentStageDecision(s, s.decisionRef);
       const { set } = this.parameters();
@@ -727,10 +786,11 @@ export class MediaReleaseController {
       if (existing?.state === "committed") return { s, r: existing, refusal: null, send: false };
       const v = this.readCampaign(campaignId);
       if (!v || !v.manifest) throw new AgentConflict("CAMPAIGN_UNKNOWN");
+      const lease = { token, until: new Date(this.now().getTime() + LAUNCH_LEASE_MS).toISOString() };
       // A confirmed pause is never undone by a later publish. A pending launch is handed back to the media module only so it closes the
       // superseded write without sending; nothing new is reserved or published.
       if (v.mutations.some((m) => m.action === "pause" && m.state === "confirmed") || existing?.pausedAt) {
-        if (existing?.state === "pending" && v.execution.pending) return { s, r: existing, refusal: null, send: true };
+        if (existing?.state === "pending" && v.execution.pending) { existing.lease = lease; this.saveReservation(existing); return { s, r: existing, refusal: null, send: true }; }
         throw new AgentConflict("SUPERSEDED_BY_PAUSE");
       }
       const binding = { provider: v.provider, providerAccountRef: v.manifest.account.providerAccountRef, environment: v.environment };
@@ -746,11 +806,13 @@ export class MediaReleaseController {
       if (a.plannedMaxMinor === null || view.exposure.plannedMaxMinor === null) return { s, r: existing ?? null, refusal: "EXPOSURE_UNDEMONSTRATED", send: false };
       if (a.plannedMaxMinor + reserved > alloc.capMinor) return { s, r: existing ?? null, refusal: "ALLOCATION_AUTHORIZATION_EXHAUSTED", send: false };
       if (view.exposure.plannedMaxMinor + reserved > s.terms.capMinor) return { s, r: existing ?? null, refusal: "STAGE_AUTHORIZATION_EXHAUSTED", send: false };
-      if (existing) return { s, r: existing, refusal: null, send: true };
+      // The in-flight lease is committed with the reservation, before the media module is called.
+      if (existing) { existing.lease = lease; this.saveReservation(existing); return { s, r: existing, refusal: null, send: true }; }
       const r: StoredReservation = {
         reservationId: `reservation-${digest({ stageRef, campaignId, revision: v.revision, n: this.reservations("1=1").length }).slice(0, 32)}`, stageRef, campaignId,
         provider: binding.provider, providerAccountRef: binding.providerAccountRef, environment: binding.environment, nativeCampaignId: v.native.nativeCampaignId,
         plannedMaxMinor: planned, approvedLifetimeMinor: lifetime, state: "pending", createdAt: this.iso(), confirmedAt: null, lastChangeAt: null, pausedAt: null, gates: [],
+        lease,
       };
       this.saveReservation(r);
       return { s, r, refusal: null, send: true };
@@ -764,13 +826,15 @@ export class MediaReleaseController {
     const after = campaign ?? this.readCampaign(campaignId);
     const r = this.tx(() => {
       const r = this.reservations("reservation_id=?", r0.reservationId)[0]!;
-      if (r.state !== "pending") return r;
-      if (after?.state === "confirmed") {
-        // A publish that landed before a confirmed pause is released and then paused: its spend still counts against the stage.
-        Object.assign(r, { state: "committed", confirmedAt: this.iso(), nativeCampaignId: after.native.nativeCampaignId, gates: after.gates.map((g) => ({ gate: g.gate, state: g.state })),
-          pausedAt: after.native.status === "PAUSED" ? this.iso() : r.pausedAt });
-        if (after.gates.some((g) => g.state !== "verified")) this.addIncident(r.stageRef, "GATES_NOT_VERIFIED_AT_PUBLISH", r.campaignId);
-      } else if (after && NOT_WRITTEN.includes(after.state) && !after.execution.pending && !after.receipts.some((x) => x.kind === "publish")) r.state = "released";
+      // A late result from a worker whose lease was taken over never moves the reservation.
+      if (r.state !== "pending" || r.lease?.token !== token) return r;
+      r.lease = null;
+      const settled = this.settle(after, false);
+      if (settled?.to === "committed") {
+        Object.assign(r, { state: "committed", confirmedAt: this.iso(), nativeCampaignId: after?.native.nativeCampaignId ?? r.nativeCampaignId,
+          gates: after?.gates.map((g) => ({ gate: g.gate, state: g.state })) ?? [], pausedAt: settled.paused ? this.iso() : r.pausedAt });
+        if (after?.state === "confirmed" && after.gates.some((g) => g.state !== "verified")) this.addIncident(r.stageRef, "GATES_NOT_VERIFIED_AT_PUBLISH", r.campaignId);
+      } else if (settled?.to === "released") r.state = "released";
       this.saveReservation(r);
       return r;
     });
@@ -780,6 +844,17 @@ export class MediaReleaseController {
       throw new MediaControlUncertain(failure instanceof Error ? failure.message : "MEDIA_PUBLISH_UNCERTAIN");
     }
     return this.launchView(r, after);
+  }
+  /**
+   * Where a pending launch stands, from a matched media record. Confirmed or live on the provider commits it. It is released only when the
+   * media record proves no publish write was ever attempted. A write that was attempted and then closed may still have spent, so it stays
+   * committed (bounded by its native cap) rather than freeing authorization. Anything else stays pending.
+   */
+  private settle(v: CampaignView | null, reportLive: boolean): { to: ReservationState; paused: boolean } | null {
+    if (v?.state === "confirmed" || reportLive) return { to: "committed", paused: v?.native.status === "PAUSED" };
+    if (!v || !NOT_WRITTEN.includes(v.state) || v.execution.pending) return null;
+    if (v.sourceEffects !== "publish-attempted") return { to: "released", paused: false };
+    return { to: "committed", paused: !LIVE.includes(v.native.status ?? "") };
   }
   private addIncident(stageRef: string, code: string, campaignId: string | null) {
     const s = this.loadStage(stageRef);
@@ -791,7 +866,7 @@ export class MediaReleaseController {
   private launchView(r: StoredReservation, v: CampaignView | null): LaunchView {
     return { kind: "media-release-launch", stageRef: r.stageRef, reservationId: r.reservationId, campaignId: r.campaignId, reservation: r.state, plannedMaxMinor: r.plannedMaxMinor,
       campaignState: v?.state ?? "unknown", heldReasons: v?.heldReasons ?? [],
-      executionCertainty: r.state === "committed" ? "applied" : r.state === "pending" ? "uncertain" : "notApplied" };
+      executionCertainty: r.state === "pending" ? "uncertain" : v?.state === "confirmed" ? "applied" : "notApplied" };
   }
 
   // ---------- propose and apply a change ----------
@@ -889,7 +964,10 @@ export class MediaReleaseController {
     if (!step.send) return this.changeView(step.c);
     let m: MutationView | null = null, failure: unknown = null;
     try { m = await this.media.applyMutation(step.c.campaignId, step.c.mutationId!, auth, `media-control:apply:${changeId}`); } catch (error) { failure = error; }
-    const latest = m ?? this.media.readMutation(step.c.campaignId, step.c.mutationId!);
+    let latest: MutationView | null = m, readFailed = false;
+    if (!latest) { try { latest = this.media.readMutation(step.c.campaignId, step.c.mutationId!); } catch { readFailed = true; } }
+    // After a possible provider effect, an unreadable record is uncertain, never an error that reads as not applied.
+    if (readFailed) throw new MediaControlUncertain(failure instanceof Error ? failure.message : "MEDIA_MUTATION_UNCERTAIN");
     const c = this.tx(() => {
       const c = this.loadChange(changeId)!;
       if (latest) {
@@ -926,25 +1004,30 @@ export class MediaReleaseController {
     this.bindKey(key, { op: "safety", stageRef, policyRef });
     const step = this.tx(() => {
       const s = this.requireStage(stageRef);
-      const view = this.persist(s, this.evaluate(s));
+      const e = this.evaluate(s);
+      const view = this.persist(s, e);
       const open = s.incidents.filter((i) => !i.resolvedAt && i.code.startsWith("PAUSE_FAILED")).map((i) => i.campaignId);
-      const targets = view.safetyTriggers.length || open.length ? this.reservations("stage_ref=? AND active=1", stageRef) : [];
+      const reserved = this.reservations("stage_ref=? AND active=1", stageRef).map((r) => r.campaignId);
+      const untracked = e.untracked.map((u) => u.campaignId).filter((c): c is string => !!c);
+      const targets = view.safetyTriggers.length ? [...new Set([...reserved, ...untracked])] : [...new Set(open.filter((c): c is string => !!c))];
       return { view, targets };
     });
     const runKey = digest({ key, stageRef }).slice(0, 24);
     const outcomes: SafetyRunView["campaigns"] = [];
-    for (const r of step.targets) {
-      if (r.pausedAt) { outcomes.push({ campaignId: r.campaignId, outcome: "already-paused", mutationId: null, code: null }); continue; }
+    // A stored pause is never trusted: every target goes to the media module, which reads the actual native status and pauses it if live.
+    for (const campaignId of step.targets) {
       let mutationId: string | null = null;
       try {
-        const m = this.media.proposeMutation(r.campaignId, { kind: "pause", dailyBudgetMinor: null }, `media-control:safety:${runKey}:${r.campaignId}`);
+        const m = this.media.proposeMutation(campaignId, { kind: "pause", dailyBudgetMinor: null }, `media-control:safety:${runKey}:${campaignId}`);
         mutationId = m.mutationId;
-        const applied = m.state === "confirmed" ? m : await this.media.applyMutation(r.campaignId, m.mutationId, { policyRef }, `media-control:safety-apply:${runKey}:${r.campaignId}`);
-        outcomes.push({ campaignId: r.campaignId, outcome: applied.state === "confirmed" ? "paused" : "failed", mutationId, code: applied.state === "confirmed" ? null : `PAUSE_${applied.state.toUpperCase()}` });
+        const applied = m.state === "confirmed" ? m : await this.media.applyMutation(campaignId, m.mutationId, { policyRef }, `media-control:safety-apply:${runKey}:${campaignId}`);
+        const pausedReadback = applied.state === "confirmed" && applied.after?.status === "PAUSED";
+        outcomes.push({ campaignId, outcome: pausedReadback ? "paused" : "failed", mutationId, code: pausedReadback ? null : `PAUSE_${applied.state.toUpperCase()}` });
       } catch (error) {
         const message = error instanceof Error ? error.message : "PAUSE_FAILED";
-        if (message === "NATIVE_CAMPAIGN_NOT_ACTIVE" || message === "CAMPAIGN_NOT_LIVE") outcomes.push({ campaignId: r.campaignId, outcome: "already-paused", mutationId, code: message });
-        else outcomes.push({ campaignId: r.campaignId, outcome: "failed", mutationId, code: message });
+        // The media module raises this only after a read-back matched to this campaign, provider, account and environment shows it not live.
+        if (message === "NATIVE_CAMPAIGN_NOT_ACTIVE") outcomes.push({ campaignId, outcome: "already-paused", mutationId, code: message });
+        else outcomes.push({ campaignId, outcome: "failed", mutationId, code: message });
       }
     }
     const result = this.tx(() => {
