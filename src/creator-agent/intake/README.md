@@ -1,51 +1,41 @@
-# J01 creator intake and identity resolution — THO-318
+# J01 creator intake
 
-This server-only module is the J01 implementation. It records native signups and daily-discovery candidates, resolves them to one canonical creator, and hands the result to Notion and Sheets through injected sinks. It never scores, invites, messages, reserves a sample or pays. Every result carries `outbound` flags that are `false` by construction.
+The scoped sandbox service accepts normalized signup, discovery, profile-change and reviewer-correction facts. It preserves the source identity, provenance and timestamps. The intake kernel writes canonical identity and campaign/brief observations through trusted Notion and Sheets sinks. It emits review work only after qualified canonical enrollment.
 
-It uses the existing scoped agent SQLite handle and creates only `intake_*` tables. Construct `IntakeRepository(db, scope, authority, now?)`. The server wires it to `POST /v1/intake` (reviewer credential, JSON, `Idempotency-Key`) and the reads below. Machine credentials stay server-side.
+## Identity and event ownership
 
-## Input and checks
+Native profile IDs and URL fingerprints belong to their publishing network and source account. Display names never merge people. A new native ID cannot inherit another known native ID through a recycled URL. Conflicting stored IDs or reviewed crosswalk entries quarantine the incoming event for review.
 
-The request is `{envelope, input}`. The envelope follows the shared job envelope. `mode` must be `observe` or `reconcile`: `propose` and `executeApproved` are refused because J01 has no outbound action. `accountRef` must match the server scope, `idempotencyKey` must match the header, and `inputHash` must be the canonical digest of `input`. Timestamps in the future and expired deadlines are refused.
+Source events are keyed by recruitment source, external source account and event ID. Every accepted idempotency key is reserved, including a new key replaying an existing event. Event reads accept an optional `accountId` query parameter. An ambiguous account-free event read returns a conflict.
 
-`input` holds the typed contract fields: `campaignRef`, `briefRef`, `sourceCandidate`, `recruitmentSource`, `trigger`, `eventId`, `occurredAt`, `observedAt`, `profileRefs`, `publishingNetworks`, `identityMapVersion`, `suppressionVersion` and `cursor`. Profiles are SourceRefs on `instagram` or `tiktok`, with the handle and source update time. Social Cat is a recruitment source, never a publishing network. Addresses must be plain https on the profile's own network: no login details, query string or fragment. A missing native ID stays `null`.
+The source route, current suppression list and reviewed identity map are checked again on replay and before dispatch. The trusted resolvers must return the current permitted snapshot for the supplied scope and requested version. A missing or obsolete version leaves enrollment pending. Observed opt-outs are sticky. A verified exclusion creates its own canonical revision, retaining earlier active observations and their audit history.
 
-Before anything is written, `authority.route(source, accountId)` must return `Ready`, for example from the capability ledger's `requireReady`. Anything else pauses that source, keeps its last cursor, writes no identity and answers 503 `SOURCE_<STATE>`. A denial never falls back to another route.
+## Immutable revision handoff
 
-## Identity
+Each creator revision freezes its canonical profile facts, campaign identity/provenance, brief version, source context and intended eligibility before a writer runs. A later revision cannot rebuild or overwrite these earlier bytes. Updates with unchanged profile text still advance the source watermark. Late records cannot reverse that watermark. Source-update, event, observation, handoff and verification times have separate meanings.
 
-- A profile resolves by its stored native ID, then a stored fingerprint of its address, then a reviewed crosswalk entry (`identityMapVersion`) for the native key and then the fingerprint key. The fingerprint is computed whenever the profile has an address, even when it also has a native ID. Display names never match people.
-- A profile first attached by fingerprint that later arrives with a native ID resolves to the same creator through its fingerprint. Its native-key row is attached to that creator and the fingerprint row stays. If the native key and the fingerprint already belong to different creators, the event goes to review (`IDENTITY_CONFLICT`).
-- A new creator is created only from a native ID, with a deterministic ID, so a replay cannot create a second person.
-- A fingerprint-only profile attaches to a creator only through a source signup, a reviewer's correction or a reviewed crosswalk. A discovery hit alone leaves it unresolved.
-- Profiles that resolve to two different creators go to review (`IDENTITY_CONFLICT`). They are not merged.
-- A renamed handle follows the native ID and keeps the old handle as an alias. A handle that another creator used before is flagged.
-- Relationships are per creator and campaign. Repeats reuse the active relationship. A closed relationship is never reopened, and its creator is `excluded` for that campaign.
+A durable SQLite claim serializes handoffs for each creator. The claim has a random ownership token and finite lease. Before every external upsert, the attempt and exact payload hash are persisted. A concurrent request can record a newer revision locally, but dispatch waits until any earlier uncertain external operation has a qualified outcome. Late acknowledgments from a replaced worker cannot modify the newer claim.
 
-## Suppression
+Notion receives the canonical creator revision first. Sheets then receives the same frozen revision with the exact Notion receipt as its canonical foreign key. Campaign and brief history remain attached to the appropriate relationship. Closed relationships stay closed.
 
-The suppression list version is read through `authority.suppression(version)`. Entries are stored and stay in force, so a later list that drops one does not lift it. A suppressed creator or profile is `excluded`. Suppression is checked against the creator, every profile already attached to it, and every profile key in the event (native and fingerprint), whether or not that profile is attached. A suppressed profile in the event therefore excludes the creator even when a discovery hit could not attach it. If the list version is unavailable, intake fails closed: the identity is still recorded but eligibility stays `identityPending`.
+## Sink contract
 
-## Times
+A configured sink implements `upsert(key, record, binding)` and `read(key, binding)`. The binding includes workspace/account scope, target, key, creator, revision, full-record hash, canonical Notion reference and a unique attempt ID. Each callback returns one of the typed terminal results.
 
-Each result has one evidence reference. It keeps the source event time, the newest source update time, the observation time and the local sync time separately. A late record whose source update time is older than the stored profile adds evidence but does not overwrite it (`LATE_SOURCE_RECORD`).
+- An `applied` receipt repeats every binding field, includes a receipt reference and source observation time, and declares a future verification expiry.
+- A `notApplied` receipt repeats the binding, identifies its source proof and explicitly states that the original attempt is terminal. The sink must fence that attempt so a delayed writer cannot apply afterward. This permits a new attempt only after current authorization is rechecked.
+- Null, malformed, denied, mismatched, stale or thrown responses remain uncertain. They never mean verified absence or permission to retry.
 
-## Handoffs
+The sinks must enforce keyed idempotency and creator-revision ordering at the canonical sources. A positive source receipt can reconcile an earlier operation after its local revision changed. Source permission remains required for further reads. A later revision can retire an older unattempted request, but cannot skip an uncertain external write.
 
-Local resolution commits first. Handoffs then run in order: `notion-creator-crm`, then `sheets-watchlist`, which carries the Notion receipt reference. Each has a key per creator revision. The revision goes up when a profile or relationship changes, and also when the eligibility or suppression state differs from what the current revision's handoffs carry, for example when a suppression excludes an active creator or an available suppression list moves it from `identityPending` to `active`. The new state then reaches Notion and Sheets under new keys. A thrown or unreadable sink result marks the handoff `uncertain`. The next replay of the same event, or a `reconcile` request, reads the key back before writing again, so a completed write is not repeated. A missing sink shows `unavailable` and does not block identity. A handoff that is not confirmed when the creator has a newer revision becomes `superseded` and is never written, so replaying an old event cannot overwrite newer data at a sink.
+Delivery attempts and their first terminal proofs remain in the audit table. A refresh can confirm the same exact saved record with a newer observation expiry. A purported absence cannot erase a previously confirmed write. Provider deletion, correction or inaccessible data requires source-owner reconciliation.
 
-No real Notion or Sheets connection exists yet. The sinks are injected by trusted server configuration; tests use synthetic in-memory sinks.
+## Read and monitor behavior
 
-## Output
+`GET /v1/intake/creators/:creatorId` returns scoped identity history. Event and source-status routes preserve the checkpoints. `monitorMembership(limit)` keeps the shared monitor shape and reports explicit bounded coverage. Active membership requires the latest local revision, current source/identity/suppression evidence, fresh qualified receipts from both targets and the exact Sheets-to-Notion foreign key. An expired proof requires source readback before new review work is emitted.
 
-The result has `creatorRef`, `profileRefs`, `relationshipRefs`, `identityState` (`resolved` or `needsReview`), `watchlistEligibility` (`active`, `identityPending` or `excluded`), `evidenceRefs`, sorted `reviewReasons`, `nextWork` (`J20` for an active discovery, `J02` for an active signup, otherwise null), `handoffs` and a `checkpoint` with the cursor and handoff keys.
+A known exclusion remains excluded. Unknown identity, permissions, handoff outcome or receipt coverage remains pending or unavailable. Legacy receipt-reference-only rows are retained but cannot assert verified source enrollment. New profiles migrate into account-scoped keys without discarding their canonical creator history.
 
-## Reads
+## Release boundary
 
-- `GET /v1/intake/events/:source/:eventId`: the stored result with current handoff states.
-- `GET /v1/intake/creators/:creatorId`: profiles, relationships, aliases and suppressions.
-- `GET /v1/intake/sources/:source/:accountId`: cursor, last event and pause state.
-
-## Not done here
-
-Live source signup readers, real Notion and Sheets writers, lifting a suppression, and reopening or merging creators are separate reviewed work. A relationship closure through `closeRelationship` bumps the creator revision; the next intake for that creator sends the new record.
+Unit and authenticated HTTP tests use synthetic identities and source-owned sink fixtures. The application has no qualified production Notion/Sheets writer bound by this implementation. The real route authority, current suppression/crosswalk readers, idempotent source writers with terminal-attempt fencing, source receipt validation and operational recovery still require their owners' integration proof. Scoring, invitation, messaging, samples and payment remain outside J01. This code does not activate a live creator program.

@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativeInventoryPage } from "./NativeInventoryPage";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -44,6 +46,10 @@ const unitsLabel = (m: Movement) => `${m.effect.delta > 0 ? "+" : "−"}${Math.a
  * asks for a transfer and moves nothing.
  */
 export function InventoryPage() {
+  return useScope().scope.environment === "demo" ? <DemoInventoryPage /> : <NativeInventoryPage />;
+}
+
+function DemoInventoryPage() {
   const [search, setSearch] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;
   const home = parseHome(search.get("home"));

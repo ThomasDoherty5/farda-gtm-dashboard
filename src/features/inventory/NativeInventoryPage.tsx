@@ -1,0 +1,69 @@
+import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { useView } from "@/adapter/useView";
+import { Button } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
+import { SelectField } from "@/components/Field";
+import { Kpi,KpiRow } from "@/components/Kpi";
+import { FactList,FlatTable,Notice,PageHeader,Panel,TwoColumns } from "@/components/Panels";
+import { OpsTabs } from "@/features/operations/OpsTabs";
+import { RecordShell } from "@/features/operations/RecordShell";
+import { available,positionHold,nativeInventorySchema,type NativeStock } from "@/creator-agent/stockSupportSchema";
+import { StockSupportProposal } from "./StockSupportProposal";
+
+export function NativeInventoryPage(){
+  const [search,setSearch]=useSearchParams();
+  const filters=Object.fromEntries(["home","sku","windowRef"].flatMap(k=>search.get(k)?[[k,search.get(k)!]]:[]));
+  const query=useView<typeof filters,NativeStock>("inventoryOverview",filters);
+  const [dialog,setDialog]=useState<"filters"|"source"|null>(null),[detail,setDetail]=useState<string|null>(null);
+  const [draft,setDraft]=useState<Record<string,string>>({});
+  const apply=()=>{const next=new URLSearchParams(search);for(const k of ["home","sku","windowRef"]){if(draft[k])next.set(k,draft[k]);else next.delete(k);}setSearch(next);setDialog(null);};
+  return <RecordShell query={query} id="stock-title" title="Stock by home" subject="inventory" figma="7:129">{(res,raw)=>{
+    const parsed=nativeInventorySchema.safeParse(raw);
+    if(!parsed.success || parsed.data.revision!==res.dataVersion || Object.entries(filters).some(([k,v])=>parsed.data.selected[k as keyof typeof parsed.data.selected]!==v)
+      || Object.keys(parsed.data.selected).length!==Object.keys(filters).length)
+      return <p role="alert">The stock response could not be verified for these filters. Refresh the inventory source.</p>;
+    const data=parsed.data,p=data.period,positions=p?.positions??[], movements=p?.movements??[];
+    const whole=positions.length>0 && data.coverage==="complete";
+    const total=(f:(r:typeof positions[number])=>number|null)=>{const vals=positions.map(f);return whole && vals.every(v=>v!==null)?vals.reduce<number>((n,v)=>n+(v??0),0):"Unknown";};
+    const selected=positions.find(r=>r.home+"/"+r.sku===detail);
+    return <>
+      <PageHeader id="stock-title" title="Stock by home" subtitle="Physical balances, reservations and source receipts.">
+        <StockSupportProposal key={JSON.stringify(data.selected)} data={data} res={res}/>
+        <Button variant="secondary" aria-haspopup="dialog" onClick={()=>{setDraft(filters);setDialog("filters");}}>Filter stock</Button>
+        <Button aria-haspopup="dialog" onClick={()=>{setDetail(null);setDialog("source");}}>Open inventory</Button>
+      </PageHeader><OpsTabs current="stock"/>
+      <Notice tone={data.stale||data.coverage==="partial"?"warning":"violet"} label="Source" title="Movement ledger and Shopify observation">{p?p.window.start+" through "+p.window.end:"No reporting window recorded"}. Observed {data.observedAt}. Balances require canonical movement and reservation receipts.</Notice>
+      {data.pending.total>0&&<Panel title="Transfer proposals awaiting review" subtitle={data.pending.rows.length+" of "+data.pending.total+" local proposals · source balances are unchanged"}>
+        {data.pending.rows.map(r=><p key={r.id}>{r.id} · {r.sku} · {r.from} → {r.to} · {r.units} units · {r.reasonCode}</p>)}</Panel>}
+      <KpiRow><Kpi label="On hand" context="Movement-derived physical balance">{total(r=>r.onHand?.units??null)}</Kpi><Kpi label="Reserved" context="Active order and sample reservations">{total(r=>r.reserved?.units??null)}</Kpi>
+      <Kpi label="Available" context="Physical less reserved">{total(available)}</Kpi>
+      <Kpi label="At risk" context="Locations below their SKU threshold">{whole&&positions.every(r=>available(r)!==null&&r.threshold!==null)?new Set(positions.filter(r=>available(r)!<r.threshold!).map(r=>r.home)).size:"Unknown"}</Kpi></KpiRow>
+      <Panel title="Inventory by location" subtitle="One row per home and SKU">
+        {positions.length?<FlatTable caption="Inventory by location" columns={["Location / SKU","On hand","Reserved","Available","Shopify observed","Health","Source"].map((label,i)=>({label,width:i===0?240:144}))}
+          rows={positions.map(r=>({key:r.home+"/"+r.sku,cells:[r.home+" / "+r.sku,r.onHand?.units??"Unknown",r.reserved?.units??"Unknown",available(r)??"Unknown",r.shopify?.units??"Unknown",
+            positionHold(r)==="STOCK_CONFLICT"?"Conflicting balances":positionHold(r)||r.threshold===null?"Evidence incomplete":available(r)!<r.threshold?"Low stock":"Healthy",
+            <Button key="source" variant="secondary" aria-haspopup="dialog" onClick={()=>{setDetail(r.home+"/"+r.sku);setDialog("source");}}>Inspect {r.home} / {r.sku}</Button>]}))}/>:<p>No position is recorded for this scope. On-hand and reserved balances are unknown.</p>}
+      </Panel>
+      <TwoColumns><Panel title="Every movement leaves a trace" subtitle="Missing receipts are excluded from physical and reserved balances">
+        {movements.length?<FlatTable caption="Movement log" columns={["Movement / order","Home / SKU","Type","Physical delta","Reserve delta","Receipt"].map((label,i)=>({label,width:i===0?240:144}))} rows={movements.map(m=>({key:m.ref,cells:[m.ref+(m.orderRef?" / "+m.orderRef:""),m.home+" / "+m.sku,m.type,m.physicalDelta??"Unknown",m.reserveDelta??"Unknown",m.receipt??"Missing · excluded"]}))}/>:<p>No movement records in this period and scope.</p>}
+      </Panel><Panel title="Home transfers" subtitle="Dispatch and destination receipt are separate events">
+        {p?.transfers.length?p.transfers.map(t=><section key={t.ref}><h3>{t.from} → {t.to} · {t.sku}</h3><FactList label={t.ref} rows={[
+          ["Transfer",t.ref],["Expected",t.units],["Dispatch",t.dispatchReceipt??"Unconfirmed"],["Received",t.received?t.received.units+" · "+t.received.receipt:"Not confirmed"],
+          ["Deadline",t.expectedBy??"Unknown"]]}/>
+          {t.received&&t.received.units!==t.units&&<p role="status">Receipt quantity differs. Review both source records.</p>}
+          {!t.received&&t.expectedBy&&t.expectedBy<data.observedAt.slice(0,10)&&<p role="status">Destination receipt is overdue. No units were credited here.</p>}
+        </section>):<p>No transfers recorded for these filters.</p>}</Panel></TwoColumns>
+      <Dialog open={dialog==="filters"} title="Stock filters" onClose={()=>setDialog(null)}>
+        <SelectField label="Home" value={draft.home??""} onChange={v=>setDraft({...draft,home:v})} options={[{value:"",label:"All homes"},...["H1","H2","H3"].map(value=>({value,label:value}))]}/>
+        <SelectField label="SKU" value={draft.sku??""} onChange={v=>setDraft({...draft,sku:v})} options={[{value:"",label:"All SKUs"},...data.skus.map(value=>({value,label:value}))]}/>
+        <SelectField label="Reporting period" value={draft.windowRef??""} onChange={v=>setDraft({...draft,windowRef:v,sku:""})} options={[{value:"",label:"Current source period"},...data.windows.map(w=>({value:w.ref,label:w.start+" through "+w.end}))]}/>
+        <Button onClick={apply}>Apply filters</Button><Button variant="secondary" onClick={()=>setDialog(null)}>Cancel</Button></Dialog>
+      <Dialog open={dialog==="source"} title={selected?"Position evidence":"Inventory evidence"} onClose={()=>setDialog(null)}>
+        <p>Movement and reservation balances are owned by the inventory ledger. Shopify's observed location quantity is a separate snapshot.</p>
+        {selected?<><FactList label="Position evidence" rows={[["Location",selected.home+" / "+selected.sku],["Physical receipt",selected.onHand?.receipt??"Unknown"],["Reservation receipt",selected.reserved?.receipt??"Unknown"],["Shopify receipt",selected.shopify?.receipt??"Unknown"]]}/>
+          {selected.reservations.map(r=><p key={r.ref}>{r.ref} · {r.kind} {r.orderRef} · {r.units} reserved</p>)}</>:<p>Version {data.revision}. No verified external ledger link was supplied.</p>}
+        <Button onClick={()=>setDialog(null)}>Close evidence</Button></Dialog>
+    </>;
+  }}</RecordShell>;
+}

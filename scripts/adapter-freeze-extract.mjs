@@ -81,7 +81,14 @@ for (const f of files) {
 
   // Action kinds, operations and resource kinds. Screens send them; handlers and capabilities name them.
   for (const m of text.matchAll(/actionKind:\s*([^,}\n]*)/g)) {
-    for (const k of literals(m[1].replace(/\w+\s*===\s*"[^"]*"/g, ""))) add("actionKinds", k, isFeature(f) && /operation:|\{ key:/.test(lineOf(text, m.index)) ? "sentBy" : "namedBy", path);
+    let expression = m[1];
+    // Follow a local literal/boolean-conditional alias used by shared forms. Do not
+    // guess dynamic values or include unrelated strings from later declarations.
+    if (/^\s*\w+\s*$/.test(expression)) {
+      const declaration = new RegExp(`\\b(?:const|let)\\s+${expression.trim()}\\s*=\\s*([^;\\n]+)`).exec(text)?.[1]?.split(",")[0]?.trim();
+      if (declaration && /^(?:[\w.!]+\s*\?\s*)?"\w+"(?:\s*:\s*"\w+")?$/.test(declaration)) expression = declaration;
+    }
+    for (const k of literals(expression.replace(/\w+\s*===\s*"[^"]*"/g, ""))) add("actionKinds", k, isFeature(f) && /operation:|\{ key:/.test(lineOf(text, m.index)) ? "sentBy" : "namedBy", path);
   }
   for (const m of text.matchAll(/actionKind\s*[!=]==\s*"(\w+)"/g)) add("actionKinds", m[1], "namedBy", path);
   for (const m of text.matchAll(/blockedReason\(\s*\w+,\s*"(\w+)"/g)) add("actionKinds", m[1], "namedBy", path);

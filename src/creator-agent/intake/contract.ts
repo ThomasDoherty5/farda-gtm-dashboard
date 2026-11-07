@@ -14,7 +14,7 @@ export const NETWORK_HOSTS: Record<Network, readonly string[]> = { instagram: ["
 
 export const opaqueRef = z.string().trim().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Use an opaque reference.")
   .refine((value) => !/^https?:/i.test(value), "Use an opaque reference, not an endpoint.");
-const time = z.string().datetime({ offset: true });
+const time = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)), "Use a finite source timestamp.");
 
 /** A public address: https, no login details, no query string or fragment. */
 export const sourceUrlSchema = z.string().url().max(500).refine((raw) => {
@@ -42,8 +42,11 @@ export const profileRefSchema = sourceRefSchema.extend({
   handle: z.string().trim().min(1).max(60).regex(/^[A-Za-z0-9._]+$/).nullable(),
   sourceUpdatedAt: time.nullable(),
 }).strict().superRefine((profile, ctx) => {
-  if (profile.url && !NETWORK_HOSTS[profile.source].includes(new URL(profile.url).hostname))
-    ctx.addIssue({ code: "custom", path: ["url"], message: "The address is not on this profile's network." });
+  if (profile.url) {
+    let host = "";
+    try { host = new URL(profile.url).hostname; } catch { /* The URL schema reports malformed input. */ }
+    if (!NETWORK_HOSTS[profile.source].includes(host)) ctx.addIssue({ code:"custom",path:["url"],message:"The address is not on this profile's network." });
+  }
 });
 export type ProfileRef = z.infer<typeof profileRefSchema>;
 
@@ -65,9 +68,12 @@ export const intakeInputSchema = z.object({
 }).strict().superRefine((input, ctx) => {
   if (new Set(input.publishingNetworks).size !== input.publishingNetworks.length)
     ctx.addIssue({ code: "custom", path: ["publishingNetworks"], message: "List each network once." });
-  for (const [index, profile] of input.profileRefs.entries())
+  for (const [index, profile] of input.profileRefs.entries()) {
     if (!input.publishingNetworks.includes(profile.source))
       ctx.addIssue({ code: "custom", path: ["profileRefs", index, "source"], message: "A profile's network must be one of the publishing networks." });
+    if (profile.sourceUpdatedAt && Date.parse(profile.sourceUpdatedAt) > Date.parse(input.observedAt))
+      ctx.addIssue({code:"custom",path:["profileRefs",index,"sourceUpdatedAt"],message:"A source update cannot follow its observation."});
+  }
   if (input.occurredAt && Date.parse(input.occurredAt) > Date.parse(input.observedAt))
     ctx.addIssue({ code: "custom", path: ["occurredAt"], message: "A source event cannot happen after it was observed." });
   if ((input.recruitmentSource === "reviewed-correction") !== (input.trigger === "correction"))
@@ -96,7 +102,7 @@ export const intakeRequestSchema = z.object({ envelope: intakeEnvelopeSchema, in
 /** A reviewed crosswalk maps a profile with no native ID (or a contested alias) to one canonical creator. */
 export const crosswalkSchema = z.object({
   version: opaqueRef,
-  entries: z.array(z.object({ network: z.enum(NETWORKS), profileKey: opaqueRef, creatorId: opaqueRef, reviewedRef: opaqueRef }).strict()).max(10_000),
+  entries: z.array(z.object({ network: z.enum(NETWORKS), accountId:opaqueRef, profileKey: opaqueRef, creatorId: opaqueRef, reviewedRef: opaqueRef }).strict()).max(10_000),
 }).strict();
 export type Crosswalk = z.infer<typeof crosswalkSchema>;
 
@@ -106,7 +112,7 @@ export const suppressionListSchema = z.object({
   entries: z.array(z.object({
     subject: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("creator"), creatorId: opaqueRef }).strict(),
-      z.object({ kind: z.literal("profile"), network: z.enum(NETWORKS), profileKey: opaqueRef }).strict(),
+      z.object({ kind: z.literal("profile"), network: z.enum(NETWORKS), accountId:opaqueRef, profileKey: opaqueRef }).strict(),
     ]),
     reason: z.enum(["opt-out", "do-not-contact", "relationship-closed", "legal-hold"]),
     sourceRef: opaqueRef,
@@ -117,7 +123,17 @@ export type SuppressionList = z.infer<typeof suppressionListSchema>;
 
 export const routeStateSchema = z.enum(["Ready", "Unverified", "Unsupported", "Denied"]);
 export type RouteState = z.infer<typeof routeStateSchema>;
-export const sinkReceiptSchema = z.object({ receiptRef: opaqueRef }).strict();
+export const HANDOFF_TARGETS = ["notion-creator-crm", "sheets-watchlist"] as const;
+export const sinkBindingSchema = z.object({
+  scope:z.object({workspaceId:opaqueRef,accountId:opaqueRef}).strict(),target:z.enum(HANDOFF_TARGETS),key:opaqueRef,creatorId:opaqueRef,
+  revision:z.number().int().positive(),recordHash:z.string().regex(/^[a-f0-9]{64}$/),canonicalReceiptRef:opaqueRef.nullable(),attemptId:opaqueRef,
+}).strict();
+export type SinkBinding = z.infer<typeof sinkBindingSchema>;
+export const sinkReceiptSchema = z.discriminatedUnion("state", [
+  sinkBindingSchema.extend({state:z.literal("applied"),receiptRef:opaqueRef,observedAt:time,validUntil:time}),
+  sinkBindingSchema.extend({state:z.literal("notApplied"),terminal:z.literal(true),receiptRef:opaqueRef,observedAt:time}),
+]);
+export type SinkReceipt = z.infer<typeof sinkReceiptSchema>;
 
 export const evidenceRefSchema = z.object({
   evidenceId: opaqueRef,
@@ -130,7 +146,6 @@ export const evidenceRefSchema = z.object({
 }).strict();
 export type EvidenceRef = z.infer<typeof evidenceRefSchema>;
 
-export const HANDOFF_TARGETS = ["notion-creator-crm", "sheets-watchlist"] as const;
 export const handoffSchema = z.object({
   target: z.enum(HANDOFF_TARGETS),
   key: opaqueRef,

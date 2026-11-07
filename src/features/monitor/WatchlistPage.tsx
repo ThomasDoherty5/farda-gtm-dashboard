@@ -8,6 +8,8 @@ import { Card, ChoiceButton, HandoffDialog, KpiCard, KpiGrid, ViewShell } from "
 import { DEMO_POST_ID, type MonitoringState, type WatchRow, type WatchlistData } from "@/fixtures/monitor";
 import a from "@/features/analytics/Analytics.module.css";
 import m from "./Monitor.module.css";
+import { useIsDemo } from "@/features/analytics/parts";
+import { NativeWatchlistPage } from "./NativeMonitorViews";
 
 const SOURCES = [{ value: "all", label: "All intake sources" }, { value: "social-cat", label: "Social Cat intake" }, { value: "tiktok-affiliate", label: "TikTok intake" }];
 const STATES = [{ value: "all", label: "All monitoring states" }, { value: "active", label: "Active" }, { value: "identity-review", label: "Identity review" }, { value: "excluded", label: "Excluded" }];
@@ -22,6 +24,9 @@ const HISTORY = [
 
 /** Creator watchlist (Figma source 25:166, owner THO-299, CTRL-058 to CTRL-062, CTRL-210 to CTRL-212). Enrollment never implies qualification or outreach. */
 export function WatchlistPage() {
+  return useIsDemo() ? <DemoWatchlistPage/> : <NativeWatchlistPage/>;
+}
+function DemoWatchlistPage() {
   const [search, setSearch] = useSearchParams();
   const filters = { source: allowed(SOURCES, search.get("source"), "all"), state: allowed(STATES, search.get("state"), "all"), cohort: allowed(COHORTS, search.get("cohort"), "launch-a") };
   const query = useView<WatchlistFilters, WatchlistData>("watchlist", { source: filters.source as WatchlistFilters["source"], state: filters.state as WatchlistFilters["state"], cohort: filters.cohort === "only-launch-a" ? "launch-a" : "all" }, null, { keepPrevious: true });

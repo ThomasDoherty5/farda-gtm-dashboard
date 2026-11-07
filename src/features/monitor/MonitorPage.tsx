@@ -11,6 +11,8 @@ import { DEMO_RUN_HOURLY_ID, type ContentMonitorData } from "@/fixtures/monitor"
 import { count, curvePoints, engagement, interactionsOf, ratePct, sumKnown, thousands } from "./monitorMath";
 import a from "@/features/analytics/Analytics.module.css";
 import m from "./Monitor.module.css";
+import { useIsDemo } from "@/features/analytics/parts";
+import { NativeContentMonitor } from "./NativeMonitorViews";
 
 const SOURCES = [{ value: "all", label: "All creator sources" }, { value: "tiktok-affiliate", label: "TikTok affiliate" }, { value: "social-cat", label: "Social Cat" }];
 const NETWORKS = [{ value: "all", label: "All post networks" }, { value: "tiktok", label: "TikTok" }, { value: "instagram", label: "Instagram" }];
@@ -20,6 +22,9 @@ const NETWORK_LABEL = { tiktok: "TikTok", instagram: "Instagram" } as const;
 
 /** Content monitor (Figma source 23:73, owner THO-299, CTRL-048 to CTRL-051, CTRL-222). Read-only: no monitor result authorizes outbound. */
 export function MonitorPage() {
+  return useIsDemo() ? <DemoMonitorPage/> : <NativeContentMonitor/>;
+}
+function DemoMonitorPage() {
   const [search, setSearch] = useSearchParams();
   const filters: MonitorFilters = {
     source: allowed(SOURCES, search.get("source"), "all") as MonitorFilters["source"],

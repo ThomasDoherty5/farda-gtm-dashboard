@@ -131,7 +131,8 @@ Sent by a screen through `useAction`. Payload shapes are the TypeScript types at
 | `cancelUnsent` | `controlRun` | `{ batchId, itemIds? }` | `canceled`, or `partiallySucceeded` (`SENT_OR_RUNNING_EXCLUDED`) | `STALE_VERSION`, `VALIDATION_FAILED` (nothing unsent) | `recruitment/BatchPage` | conflict (C-01) |
 | `reconcileSettlement` | `requestApproval` | `{ settlementId, matches: { statementRef, groupId }[] }` | `approvalPending` (`AWAITING_REVIEW`, next `reconciliationReview`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors.matches`, already submitted) | `finance/SettlementPage` | conflict (C-02, C-09) |
 | `requestTask` | `requestApproval` | `{ jobType, account, scope, reason }`; `expectedVersion: "v1"` is hard-coded | `approvalPending` (`AWAITING_APPROVAL`, next `decideApproval`) | `VALIDATION_FAILED` (`fieldErrors` per field) | `settings/AutomationsPage` | conflict (C-02, C-04) |
-| `requestStockTransfer` | `requestApproval` | `{ from, to, units, reason }`; a blank units box is sent as `NaN` | `approvalPending` (`AWAITING_APPROVAL`, next `sourceReceipt`) | `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors` per field; duplicate request), `QUOTA_OR_STOCK_HOLD` (`fieldErrors.units`) | `inventory/InventoryPage` | conflict (C-02, C-09) |
+| `requestStockTransfer` | `requestApproval` | Native: `{scope:{home?,sku?,windowRef?},sku,windowRef,from,to,units,reasonCode}` bound to `ss1-` version; positive whole units. Historical demo retains `{from,to,units,reason}`. | Native durable local `approvalPending`; exact actor/key receipt, no physical reservation or transfer. | `STALE_VERSION`, `VALIDATION_FAILED`, `IDEMPOTENCY_CONFLICT`, `QUOTA_OR_STOCK_HOLD`, `STOCK_BASIS_UNKNOWN`, `STOCK_CONFLICT`, `RECEIPTS_MISSING` | `inventory/StockSupportProposal` | native proposal; J04/J15 execution held |
+| `requestSupportHandoff` | `requestApproval` | `{caseId,reasonCode}` bound to current scoped case and `ss1-` version | Durable local `approvalPending`; exact actor/key receipt. No Intercom write, refund or replacement. | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED`, `IDEMPOTENCY_CONFLICT`, `CASE_HANDOFF_HELD` | `inventory/StockSupportProposal` | native proposal; J04/J16 execution held |
 | `recordShippingDecision` | `requestApproval` | `{ shipmentRef, exceptionId, decision: refund \| replacement \| null, reason }` | `approvalPending` (`AWAITING_SOURCE_RECEIPT`, next `sourceReceipt`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (already recorded; `fieldErrors.decision`, `fieldErrors.reason`) | `operations/ShippingExceptionPage` | conflict (C-02, C-07, C-09) |
 | `prepareReturnTask` | `requestApproval` | `{ returnRef, disposition, resolution, reason }` | `approvalPending` (`AWAITING_APPROVAL`, next `approval`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors` per field; already prepared) | `operations/ReturnPage` | conflict (C-02, C-07, C-09) |
 | `queueNextAction` | `requestApproval` | `{ collaborationId, actionKey }` | `approvalPending` (no reason code, next `decideApproval` available) | `RECORD_NOT_FOUND`, `STALE_VERSION` (no `currentVersion`), `POLICY_VIOLATION` (outreach suppressed), `VALIDATION_FAILED` | `collaboration/CollaborationPage` | conflict (C-02) |
@@ -216,6 +217,16 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `INVALID_OFFER_TERMS` | validation | The offer failed the terms or provider contract. |
 | `VERSION_CONFLICT` | conflict | The requested offer revision is not current; reload before modifying it. |
 | `INVALID_CURSOR` | validation | `demoCollaborationEvidence` |
+| `INVALID_MONITOR_CURSOR` | validation | The monitor cursor belongs to a different view, role, scope, filter or limit, or cannot be authenticated. |
+| `MONITOR_CURSOR_EXPIRED` | conflict | Refresh the expired monitor snapshot before continuing. |
+| `MONITOR_SNAPSHOT_CHANGED` | conflict | Source membership or snapshot basis changed; do not append mixed pages. |
+| `MONITOR_SOURCE_INVALID` | unavailable | The trusted monitor response failed source/schema validation. |
+| `INVALID_REQUEST` | validation | Unsupported source view/filter or malformed selection. |
+| `IDEMPOTENCY_CONFLICT` | conflict | A local request key was reused with different canonical parameters. |
+| `STOCK_BASIS_UNKNOWN` | capabilityHold | Physical, reservation or storefront source proof is missing. |
+| `STOCK_CONFLICT` | conflict | Authoritative balance or reservation evidence disagrees. |
+| `RECEIPTS_MISSING` | capabilityHold | A source movement lacks its qualifying receipt. |
+| `CASE_HANDOFF_HELD` | capabilityHold | The source case does not currently permit human handoff. |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
 | `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |

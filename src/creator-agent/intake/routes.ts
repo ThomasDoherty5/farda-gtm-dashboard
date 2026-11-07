@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AgentConflict } from "../store.ts";
 import { RECRUITMENT_SOURCES, opaqueRef } from "./contract.ts";
-import { IntakeRepository, IntakeSourceUnavailable } from "./repository.ts";
+import { IntakeRepository, IntakeReconciliationRequired, IntakeSourceUnavailable } from "./repository.ts";
 
 const source = z.enum(RECRUITMENT_SOURCES);
 type Input = { method: string; path: string; role: "reviewer" | "reader"; body?: unknown; idempotencyKey?: string };
@@ -17,8 +17,9 @@ export async function handleIntakeRoute(input: Input, repo: IntakeRepository) {
   try {
     if (input.method === "GET") {
       const [, , , kind, a, b, ...rest] = url.pathname.split("/");
-      if (rest.length || [...url.searchParams.keys()].length) return fail(400, "INVALID_INTAKE_QUERY");
-      const record = kind === "events" && a && b ? repo.event(source.parse(a), opaqueRef.parse(decodeURIComponent(b)))
+      const params=[...url.searchParams.keys()];
+      if (rest.length || params.length>1 || params.some(k=>kind!=="events" || k!=="accountId")) return fail(400,"INVALID_INTAKE_QUERY");
+      const record = kind === "events" && a && b ? repo.event(source.parse(a),opaqueRef.parse(decodeURIComponent(b)),url.searchParams.has("accountId")?opaqueRef.parse(url.searchParams.get("accountId")):undefined)
         : kind === "creators" && a && !b ? repo.creator(decodeURIComponent(a))
         : kind === "sources" && a && b ? repo.sourceStatus(source.parse(a), opaqueRef.parse(decodeURIComponent(b)))
         : undefined;
@@ -33,6 +34,7 @@ export async function handleIntakeRoute(input: Input, repo: IntakeRepository) {
   } catch (error) {
     if (error instanceof z.ZodError) return fail(422, "INVALID_INTAKE");
     if (error instanceof AgentConflict) return fail(409, error.message);
+    if (error instanceof IntakeReconciliationRequired) return {status:503,body:{code:error.message,executionCertainty:"uncertain"}};
     if (error instanceof IntakeSourceUnavailable) return fail(503, error.message);
     throw error;
   }

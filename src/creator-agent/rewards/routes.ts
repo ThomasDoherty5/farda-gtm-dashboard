@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AgentConflict } from "../store.ts";
 import { ref } from "./contract.ts";
-import { RewardRedemptionRepository, RewardSourceUnavailable } from "./repository.ts";
+import { RewardRedemptionRepository, RewardPurchaseUnknown, RewardSourceUnavailable } from "./repository.ts";
 
 type Input = { method: string; path: string; role: "reviewer" | "reader"; body?: unknown; idempotencyKey?: string };
 const sourceBody = (field: string) => z.object({ [field]: ref }).strict();
@@ -37,6 +37,7 @@ export async function handleRewardRoute(input: Input, repo: RewardRedemptionRepo
     if (action === "reconciliations") return { status: 200, body: repo.reconcile(id, sourceBody("cashRef").parse(input.body).cashRef as string, key) };
     return fail(404, "UNSUPPORTED_OPERATION");
   } catch (error) {
+    if (error instanceof RewardPurchaseUnknown) return {status:409,body:{code:error.message,executionCertainty:"uncertain"}};
     if (error instanceof z.ZodError) return fail(422, "INVALID_REWARD_REQUEST");
     if (error instanceof AgentConflict) return fail(409, error.message);
     if (error instanceof RewardSourceUnavailable) return fail(503, error.message);
