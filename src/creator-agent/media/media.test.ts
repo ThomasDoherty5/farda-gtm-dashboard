@@ -601,6 +601,24 @@ describe("review regressions", () => {
     await expect(w.repo.applyMutation(c.campaignId, edit.mutationId, { policyRef: "policy:auto-pause" }, "a1")).rejects.toThrow("SAFETY_POLICY_ONLY_PAUSES");
     expect(w.executor.calls.mutate).toBe(0);
   });
+  it("R10 never lets a held pause from a lagging read-back block a new pause attempt", async () => {
+    const w = world();
+    const c = await released(w);
+    const id = c.native.nativeCampaignId!;
+    const readBack = w.executor.readBack.bind(w.executor);
+    let reads = 0;
+    // The read-back after the pause write still shows the campaign live once.
+    w.executor.readBack = (nativeId: string) => { const n = readBack(nativeId); return ++reads === 2 && n ? { ...n, status: "ACTIVE" } : n; };
+    const first = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    expect(await w.repo.applyMutation(c.campaignId, first.mutationId, { policyRef: "policy:auto-pause" }, "a1"))
+      .toMatchObject({ state: "held", heldReasons: ["READBACK_MISMATCH:STATUS"] });
+    w.native.get(id)!.status = "ACTIVE";
+    const second = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m2");
+    expect(second.mutationId).not.toBe(first.mutationId);
+    expect(w.repo.readMutation(c.campaignId, first.mutationId)).toMatchObject({ state: "not-applied", heldReasons: ["READBACK_MISMATCH:STATUS", "SUPERSEDED_BY_NEW_PAUSE"] });
+    expect(await w.repo.applyMutation(c.campaignId, second.mutationId, { policyRef: "policy:auto-pause" }, "a2")).toMatchObject({ state: "confirmed", after: { status: "PAUSED" } });
+    expect(w.native.get(id)!.status).toBe("PAUSED");
+  });
   it("R4 moves a native draft recovered after an uncertain write, or after a browser handoff, back to draft", async () => {
     const w = world();
     w.seed();

@@ -769,7 +769,14 @@ export class PaidMediaRepository {
       const requestHash = digest({ campaignId, revision: s.revision, manifestHash: s.manifestHash, nativeCampaignId: s.nativeCampaignId, action: input.kind,
         dailyBudgetMinor: input.dailyBudgetMinor });
       const open = this.db.prepare("SELECT body FROM media_mutations WHERE campaign_id=? AND request_hash=? AND active=1").get(campaignId, requestHash);
-      if (open) return this.mutationView(JSON.parse(String(open.body)) as StoredMutation);
+      if (open) {
+        const prior = JSON.parse(String(open.body)) as StoredMutation;
+        // A held pause with no write in flight never blocks a new pause: it is closed and the new attempt reads the native state first.
+        if (!(prior.action === "pause" && prior.state === "held" && !prior.pending)) return this.mutationView(prior);
+        prior.heldReasons = [...prior.heldReasons, "SUPERSEDED_BY_NEW_PAUSE"];
+        this.moveMutation(prior, "not-applied", null);
+        this.saveMutation(prior);
+      }
       const reasons: string[] = [];
       if (input.kind === "edit-budget" && input.dailyBudgetMinor !== null) {
         const m = this.manifestOf(s);
