@@ -2,8 +2,8 @@
 
 Every view key, action kind, resource kind, operation and error code the front end assumes today, in one place, so the THO-283 owner can freeze the adapter contract in one pass.
 
-- **Stage: fixture-complete.** Everything here is read from the code on `main` (commit `2f0c24d`) and from open PRs #22 to #39. Nothing is integration-verified or production-authorized. THO-283 has not published a transport, so `src/adapter/contract.ts` is proposed and every item below is a proposal until it freezes.
-- **No backend URLs, hosts or paths are proposed here.** `VITE_FARDA_ADAPTER_BASE_URL` stays reserved (docs/intake.md).
+- **Stage varies by path.** Historical fixture proposals remain recorded alongside implemented native variants. The authenticated transport and scoped native service now exist; module documentation and revision-specific verification determine each route's actual stage. A native implementation never establishes provider permission or production execution by itself.
+- **No additional backend host is proposed here.** The transport uses its configured `VITE_FARDA_ADAPTER_BASE_URL`; see docs/intake.md for the current published integration boundary.
 - **Nothing here is copied from Linear or Figma.** Names, shapes and codes come from the source files named in each row.
 
 ## How to read the status column
@@ -13,6 +13,7 @@ Every view key, action kind, resource kind, operation and error code the front e
 | `contract` | Defined in `src/adapter/contract.ts` (or, for error codes, in the code-to-category table in `src/adapter/errors.ts`). |
 | `proposed` | Introduced by a screen or by the demo adapter. The contract has only `string` where it would go (`viewKey: string`, `actionKind: string`), so no screen can be wrong yet, and none is confirmed. |
 | `decided` | Answered in `docs/adapter-decisions.md` on 2026-11-04 by the project owner, as a default for the build. Implemented in the front end; not verified against any service, and the backend owner may change it. |
+| `native` | Typed authenticated service path exists. Its release evidence and source authority remain separate; see the owning module and current verification. |
 | `conflict` | Two or more screens, or a screen and the demo adapter, disagree. The conflict IDs (C-nn) are explained in [Conflicts](#conflicts-between-screens). |
 
 The register tables are checked against the source by `npm run test` (`src/adapter/freezeRegister.test.ts`, backed by `scripts/adapter-freeze-extract.mjs`). See [Keeping the register honest](#keeping-the-register-honest). The [Pending in open PRs](#pending-in-open-prs) section is outside that check.
@@ -21,7 +22,7 @@ The register tables are checked against the source by `npm run test` (`src/adapt
 
 | Area | Defined values |
 | -- | -- |
-| Operations (`ActionOperation`) | `previewAction`, `requestApproval`, `decideApproval`, `dispatchApprovedAction`, `inspectRun`, `reconcileRun`, `controlRun`. Reads use `readView`, saves use `saveResource`. |
+| Operations (`ActionOperation`) | `previewAction`, `requestApproval`, `decideApproval`, `dispatchApprovedAction`, `inspectRun`, `reconcileRun`, `controlRun`, `refreshObservation`. Reads use `readView`, saves use `saveResource`. |
 | Resource kinds (`SaveResourceRequest`) | `actionDraft`, `reviewerAssessment`, `evidenceDraft`, `configurationDraft` |
 | Action state (`ActionResponse.state`) | `draft`, `approvalPending`, `approved`, `queued`, `blocked`, `running`, `succeeded`, `partiallySucceeded`, `failed`, `outcomeUncertain`, `reconciling`, `paused`, `canceled` |
 | Data state (`ReadResponse.dataState`) | `ready`, `empty`, `partial`, `stale`, `unavailable` |
@@ -42,14 +43,15 @@ Which `operation` values screens send. The demo adapter routes `submitAction` by
 | `inspectRun` | contract | no screen | no | Runs are read as the `runDetail` view (C-14). `ActionRequest.operation` excludes it by type. |
 | `reconcileRun` | contract + conflict | `approvals/RunPage` | `demoApprovals` | `actionKind` is the request name (C-03). |
 | `controlRun` | contract + conflict | `approvals/RunPage`, `monitor/HourlyRunPage`, `recruitment/BatchPage` | `demoApprovals` (run pause), `demoMonitor`, `demoBatch` | Three unrelated payload shapes (C-01). |
+| `refreshObservation` | native | `settings/NativeHealthCheck` | none | Exact bounded `refreshOperationsHealth` read only. No input run reference; the existing J14 service owns any resulting run. Run-control requirements remain unchanged. |
 
 ## View keys
 
-Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `null` from every screen), `sort` (always `[]`), `page` (always `{ cursor: null, limit: 50 }`). The data type is the `T` in `ReadResponse<T>` named at the call site; most live in `src/fixtures/`.
+Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` and `page`. Bounded detail views use a null cursor; paged native lists continue with opaque scope/filter/role-bound cursors. Data types are declared at the call site and validated by the adapter registry. Demo and native variants remain separate.
 
 | View key | Filters sent | Response data type | Read by (screen, under `src/features/`) | Demo handler (under `src/adapter/`) | Status | Note |
 | -- | -- | -- | -- | -- | -- | -- |
-| `activationRetention` | none | ActivationData | `lifecycle/ActivationPage` | `demoLifecycle` | proposed |  |
+| `activationRetention` | none | ActivationData / NativeActivation | `lifecycle/ActivationPage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Anonymous matched cohort/window, nullable counts and export approval; app interaction is not ingestion. |
 | `approvalDetail` | `approvalId` | ApprovalDetail | `approvals/ApprovalPage` | `demoAdapter` | proposed | Shape in `features/approvals/types.ts`, marked PROPOSED (THO-283, THO-321). Demo id `demo-approval-forbidden` answers `FORBIDDEN`. |
 | `assessmentRecord` | `creatorId`, `assessmentId` | AssessmentData | `scorecards/AssessmentPage` | `demoAdapter` | proposed |  |
 | `attribution` | none | AttributionData | `analytics/AttributionPage` | `demoAnalytics` | proposed |  |
@@ -61,11 +63,11 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `collaborationEvidence` | `collaborationId`; cursor pages | CollaborationEvidenceData | `collaboration/CollaborationEvidence` | `demoCollaborationEvidence` | scoped saved-record projection | The authenticated service reads exact collaboration links. |
 | `commissionLedger` | `scenario?` | CommissionLedger | `finance/CommissionLedgerPage` | `demoFinance` | proposed + conflict | C-06. |
 | `connectionsOverview` | none | ConnectionsData | `settings/ConnectionsPage` | `demoSettings` | proposed |  |
-| `consentEligibility` | none | ConsentData | `lifecycle/ConsentPage` | `demoLifecycle` | proposed |  |
+| `consentEligibility` | none | ConsentData / NativeConsent | `lifecycle/ConsentPage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Exclusive source-defined consent categories and exact cohort; unknown is distinct from zero. |
 | `contentMonitor` | `source`, `network`, `window`, `q` | ContentMonitorData | `monitor/MonitorPage` | `demoMonitor` | proposed + conflict | C-05, C-16. Uses `keepPrevious`. |
 | `customerJourney` | none | CustomerJourneyData | `analytics/CustomerJourneyPage` | `demoAnalytics` | proposed |  |
 | `discoverySummary` | none | DiscoveryData | `acquisition/DiscoveryPage` | `demoAdapter` | proposed |  |
-| `emailFlow` | `flow` | EmailFlowData | `lifecycle/EmailFlowPage`, `lifecycle/SetupFlowPage` | `demoLifecycle` | proposed | Read by two pages. Allowed: `setup`, `early-access`, `abandoned-checkout`, `review-request`. |
+| `emailFlow` | `flow`, optional reviewer-only `draftRequestKey` | EmailFlowData / NativeEmailFlow | `lifecycle/EmailFlowPage`, `SetupFlowPage`, `NativeEmailFlowPage` | `demoLifecycle` | native + historical demo | Setup is read-only. Three editable flow catalogs, local draft/history and exact-key request proof; absent is not terminal. |
 | `evidenceRecord` | `creatorId`, `evidenceId` | EvidenceRecord | `acquisition/EvidencePage` | `demoAdapter` | proposed + conflict | C-07. Shape in `features/acquisition/evidenceTypes.ts`, marked PROPOSED (THO-283, THO-326). |
 | `financeDashboard` | `scenario?` | FinanceDashboard | `finance/FinanceAnalyticsPage`, `finance/FinanceDashboardPage` | `demoFinance` | proposed + conflict | C-06. Read by two pages. |
 | `fulfillmentAnalytics` | `days` (7 or 14) | FulfillmentAnalytics | `operations/FulfillmentAnalyticsPage` | `demoOps` | proposed + conflict | C-05 (period as `days`). Demo answers `VALIDATION_FAILED` for other values. |
@@ -75,7 +77,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `launchControl` | none | LaunchControlData | `analytics/LaunchControlPage` | `demoAnalytics` | proposed |  |
 | `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
-| `lifecycleOverview` | none | LifecycleData | `lifecycle/LifecyclePage` | `demoLifecycle` | proposed |  |
+| `lifecycleOverview` | none | LifecycleData / NativeLifecycle | `lifecycle/LifecyclePage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Source catalog/outcome evidence remains separate from local configuration and provider sends. |
 | `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
 | `offerRewards` | `offerId`, `scenario` | RewardsRecord | `scorecards/RewardsPage` | `demoScorecards` | proposed + conflict | C-06. Typed `scenario: string`; an unknown scenario is `RECORD_NOT_FOUND`. |
@@ -106,6 +108,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period` (always `
 | `socialCatDashboard` | `network` | SocialCatDashboardData | `creators/SocialCatPage` | `demoCreators` | proposed + conflict | C-05. Uses `keepPrevious`. |
 | `supportWorkspace` | `caseId`, `scenario?` | SupportWorkspace | `support/SupportPage` | `demoOps` | proposed + conflict | C-06. |
 | `teamPermissions` | none | TeamData | `settings/TeamPage` | `demoSettings` | proposed |  |
+| `operationsControl` | `section`, optional `targetRef`, reviewer-only `proposalRequestKey`, bounded `q`/`platform`/`mine`, reports-only `jobRef` | NativeOperationsControl | `settings/NativeOperationsControls` | native only | native | Supplemental source-owned team/run/report/capability/reconciliation detail. Existing paged lists and schedule drafts remain authoritative; no duplicate executor or ledger. |
 | `tiktokBoard` | `q` | TikTokBoardData | `creators/TikTokPage` | `demoCreators` | proposed + conflict | C-16. Uses `keepPrevious`. |
 | `tiktokDashboard` | none | TikTokDashboardData | `creators/TikTokPage` | `demoCreators` | proposed |  |
 | `watchlist` | `source`, `state`, `cohort` | WatchlistData | `monitor/WatchlistPage` | `demoMonitor` | proposed + conflict | C-05. The page maps its `only-launch-a` choice to `launch-a`, otherwise `all`. |
@@ -133,6 +136,8 @@ Sent by a screen through `useAction`. Payload shapes are the TypeScript types at
 | `requestTask` | `requestApproval` | `{ jobType, account, scope, reason }`; `expectedVersion: "v1"` is hard-coded | `approvalPending` (`AWAITING_APPROVAL`, next `decideApproval`) | `VALIDATION_FAILED` (`fieldErrors` per field) | `settings/AutomationsPage` | conflict (C-02, C-04) |
 | `requestStockTransfer` | `requestApproval` | Native: `{scope:{home?,sku?,windowRef?},sku,windowRef,from,to,units,reasonCode}` bound to `ss1-` version; positive whole units. Historical demo retains `{from,to,units,reason}`. | Native durable local `approvalPending`; exact actor/key receipt, no physical reservation or transfer. | `STALE_VERSION`, `VALIDATION_FAILED`, `IDEMPOTENCY_CONFLICT`, `QUOTA_OR_STOCK_HOLD`, `STOCK_BASIS_UNKNOWN`, `STOCK_CONFLICT`, `RECEIPTS_MISSING` | `inventory/StockSupportProposal` | native proposal; J04/J15 execution held |
 | `requestSupportHandoff` | `requestApproval` | `{caseId,reasonCode}` bound to current scoped case and `ss1-` version | Durable local `approvalPending`; exact actor/key receipt. No Intercom write, refund or replacement. | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED`, `IDEMPOTENCY_CONFLICT`, `CASE_HANDOFF_HELD` | `inventory/StockSupportProposal` | native proposal; J04/J16 execution held |
+| `proposeOperationsReview` | `requestApproval` | `{kind,targetRef,reason}` with finite task/takeover/repair/permissionEvidence kind, exact scope/actor and `oc1-` version | Durable local `approvalPending` with immutable manifest and exact request receipt. No task dispatch, assignment, source repair or permission grant. | `SOURCE_CHANGED`, `TASK_PERMISSION_UNVERIFIED`, `TASK_BUDGET_EXCEEDED`, `TAKEOVER_HELD`, `RECONCILIATION_INCOMPLETE`, `REPAIR_OWNERSHIP_HELD`, `PERMISSION_EVIDENCE_UNVERIFIED` | `settings/NativeOperationsControls` | native review proposal; source execution held |
+| `refreshOperationsHealth` | `refreshObservation` | `{targetRef}` with exact opaque binding, actor, current `oc1-` version and stable key | Existing bounded J14 observation only. Succeeded requires its actual current observation; unconfigured/denied/held and uncertain states retain their own receipts/reasons. No permission grant or business dispatch. | `STALE_VERSION`, `IDEMPOTENCY_CONFLICT`, source/health permission and target holds | `settings/NativeHealthCheck` | native bounded source read; existing probe/activation/lease authority applies |
 | `recordShippingDecision` | `requestApproval` | `{ shipmentRef, exceptionId, decision: refund \| replacement \| null, reason }` | `approvalPending` (`AWAITING_SOURCE_RECEIPT`, next `sourceReceipt`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (already recorded; `fieldErrors.decision`, `fieldErrors.reason`) | `operations/ShippingExceptionPage` | conflict (C-02, C-07, C-09) |
 | `prepareReturnTask` | `requestApproval` | `{ returnRef, disposition, resolution, reason }` | `approvalPending` (`AWAITING_APPROVAL`, next `approval`) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors` per field; already prepared) | `operations/ReturnPage` | conflict (C-02, C-07, C-09) |
 | `queueNextAction` | `requestApproval` | `{ collaborationId, actionKey }` | `approvalPending` (no reason code, next `decideApproval` available) | `RECORD_NOT_FOUND`, `STALE_VERSION` (no `currentVersion`), `POLICY_VIOLATION` (outreach suppressed), `VALIDATION_FAILED` | `collaboration/CollaborationPage` | conflict (C-02) |
@@ -191,7 +196,7 @@ Sent by a screen through `useSave`. The request has no `actionKind`, so the demo
 | Resource kind | Status | `resourceRef` | Payload | Errors | Sent by |
 | -- | -- | -- | -- | -- | -- |
 | `actionDraft` | contract | the offer id; `expectedVersion` is the record version | `OfferDraftPayload` (commission, compensation, provider, sample shipping, upfront fee in minor units, and others) | `RECORD_NOT_FOUND`, `STALE_VERSION`, `POLICY_VIOLATION` (`fieldErrors`); reason code `NO_CHANGE` on an identical save | `scorecards/OfferPage` |
-| `configurationDraft` | contract + conflict | `schedule-<jobId>` or `flow-<flow>` (C-15) | `ScheduleDraft` `{ cadence, localTime, timezone, activeCohortOverride }`, or `FlowDraft` `{ timing, template }` | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors`); `NO_CHANGE` | `settings/SchedulePage`, `lifecycle/EmailFlowPage` |
+| `configurationDraft` | contract; native resource dispatch explicit | `schedule-<opaque job reference>` or exactly `flow-early-access`/`flow-abandoned-checkout`/`flow-review-request` | Native schedule schema or strict flow event/timing/timezone/template catalog references and local title. Lifecycle canonical save `record` contains the full immutable scoped SaveReceipt, whose nested `record` is the DraftRecord. | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED`, source/catalog/permission holds; `NO_CHANGE` | `settings/SchedulePage`, `lifecycle/NativeEmailFlowPage` |
 | `evidenceDraft` | contract + conflict | the evidence ref, or `permission-<rowId>` (C-15); a first permission save sends `expectedVersion: null` | `EvidenceDraft` `{ mediaUrl, checkoutRoute, observations[] }`, or `PermissionEvidence` `{ rowId, reviewer, evidence, observedOn }` | `RECORD_NOT_FOUND`, `STALE_VERSION`, `VALIDATION_FAILED` (`fieldErrors`, including dotted paths such as `observations.0.text`); `NO_CHANGE` | `acquisition/EvidencePage`, `settings/CapabilitiesPage` |
 | `reviewerAssessment` | contract | none | none | none | no screen on `main`; added by PR #29 |
 
@@ -227,6 +232,24 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `STOCK_CONFLICT` | conflict | Authoritative balance or reservation evidence disagrees. |
 | `RECEIPTS_MISSING` | capabilityHold | A source movement lacks its qualifying receipt. |
 | `CASE_HANDOFF_HELD` | capabilityHold | The source case does not currently permit human handoff. |
+| `LIFECYCLE_SOURCE_UNCONFIGURED` | unavailable | No trusted lifecycle source is configured. |
+| `LIFECYCLE_SOURCE_UNAVAILABLE` | unavailable | The configured lifecycle source could not be read. |
+| `LIFECYCLE_SOURCE_INVALID` | unavailable | Source/schema/provenance validation failed. |
+| `LIFECYCLE_SOURCE_CONFLICT` | conflict | Source facts conflict under their version or observation basis. |
+| `LIFECYCLE_SOURCE_REGRESSED` | conflict | A newer source observation is already retained. |
+| `FLOW_CATALOG_UNAVAILABLE` | capabilityHold | No current same-flow event/timing/template catalog exists. |
+| `FLOW_CATALOG_SELECTION_INVALID` | validation | The submitted choice does not match the current flow catalog. |
+| `FLOW_DRAFT_DENIED` | forbidden | Current source authority forbids drafting this flow. |
+| `SETUP_FLOW_READ_ONLY` | forbidden | Setup is a source-owned read-only flow. |
+| `PERSISTENCE_UNCERTAIN` | outcomeUncertain | Reconcile the exact request before issuing another save. |
+| `INVALID_CONTROL_REFERENCE` | validation | An opaque scoped control reference could not be verified. |
+| `SOURCE_CHANGED` | conflict | Source facts changed before the proposal could commit. |
+| `TASK_PERMISSION_UNVERIFIED` | capabilityHold | Task account/action authority is unverified. |
+| `TASK_BUDGET_EXCEEDED` | resourceHold | A finite task plan exceeds registered bounds. |
+| `TAKEOVER_HELD` | capabilityHold | Current assignment/recovery evidence does not permit takeover review. |
+| `RECONCILIATION_INCOMPLETE` | capabilityHold | Source/mirror comparison coverage is incomplete. |
+| `REPAIR_OWNERSHIP_HELD` | capabilityHold | The discrepancy lacks permitted source-owned repair authority. |
+| `PERMISSION_EVIDENCE_UNVERIFIED` | capabilityHold | Submitted source evidence is not independently verified permission. |
 | `LEASE_CONFLICT` | conflict | never raised |
 | `MANIFEST_CHANGED` | conflict | `demoApprovals`, `demoEvidence`, `demoFinance`, `demoOnce`, `demoOps`, `demoScorecards` |
 | `OFFLINE_NOT_SENT` | unavailable | `useAction`, `useSave` (client-side: the browser was offline, so nothing was sent) |

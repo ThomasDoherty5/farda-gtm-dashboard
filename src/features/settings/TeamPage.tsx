@@ -1,3 +1,4 @@
+import { NativeControlsPage } from "./NativeOperationsControls";
 import { useState } from "react";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -14,6 +15,10 @@ import type { TeamData } from "@/fixtures/settings";
 
 /** Team and permissions (Figma source 7:1085, owner THO-305). Read only: roles are managed in the source tools, and viewing them grants nothing. */
 export function TeamPage() {
+  const {adapter}=useScope();
+  return adapter.kind === "demo" ? <DemoTeamPage/> : <NativeControlsPage section="team"/>;
+}
+function DemoTeamPage() {
   const { adapter } = useScope();
   const query = useView<Record<string, never>, TeamData>("teamPermissions", {});
   const [dialog, setDialog] = useState<"roles" | "owners" | null>(null);

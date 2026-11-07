@@ -95,6 +95,29 @@ describe("failures map to the right categories", () => {
       expect(e.message).not.toMatch(/Creator ZZ/);
     }
   });
+  it.each([
+    [403, "SOURCE_SCOPE_DENIED", "applied", "forbidden"],
+    [401, "SESSION_EXPIRED", "uncertain", "unauthenticated"],
+  ] as const)("preserves a typed %i write outcome without exposing denied source details", async (status, code, executionCertainty, category) => {
+    const body = { code, executionCertainty, retryable: true, message: "Synthetic private source observation exists" };
+    for (const call of [(a: ReturnType<typeof live>) => a.submitAction(act()), (a: ReturnType<typeof live>) => a.saveResource(save())]) {
+      const error = await fail(call(live(failingTransport(() => new TransportFailure("http", { status, body })))));
+      expect(error.category).toBe(category);
+      expect(error.body).toMatchObject({ code, executionCertainty, retryable: false });
+      expect(error.message).not.toContain("Synthetic private");
+    }
+  });
+  it("does not trust malformed certainty claims on an authentication refusal", async () => {
+    for (const status of [401, 403]) for (const body of [
+      { code: "SOURCE_SCOPE_DENIED", executionCertainty: "definitely-applied" },
+      { code: "SOURCE_SCOPE_DENIED", executionCertainty: "applied", retryable: "yes" },
+      { executionCertainty: "uncertain", message: "Synthetic private source observation exists" },
+    ]) {
+      const error = await fail(live(failingTransport(() => new TransportFailure("http", { status, body }))).submitAction(act()));
+      expect(error.body).toMatchObject({ code: status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN", executionCertainty: "notApplied", retryable: false });
+      expect(error.message).not.toContain("Synthetic private");
+    }
+  });
   it("429 keeps the retry delay", async () => {
     const e = await fail(live(failingTransport(() => new TransportFailure("http", { status: 429, retryAfterMs: 2000 }))).readView(read()));
     expect([e.body.retryable, e.body.retryAfterMs]).toEqual([true, 2000]);
@@ -211,6 +234,36 @@ describe("answers are validated before a screen sees them", () => {
     expect((await fail(live(rawTransport({ ...res, resourceRef: "other" })).saveResource(req))).body.code).toBe("OUTCOME_UNCERTAIN");
     const noRecord = Object.fromEntries(Object.entries(res).filter(([k]) => k !== "record"));
     expect((await fail(live(rawTransport(noRecord)).saveResource(req))).body.code).toBe("OUTCOME_UNCERTAIN");
+  });
+});
+
+describe("bounded observation refresh", () => {
+  const observation = (over: Partial<ActionRequest<unknown>> = {}) => act({ operation: "refreshObservation", actionKind: "refreshOperationsHealth",
+    approvalRef: null, manifestRef: null, expectedVersion: "oc1-" + "a".repeat(64), payload: { targetRef: "synthetic-opaque-target" }, ...over });
+  it("sends the bounded observation without inventing an input run and still rejects an unverified answer", async () => {
+    const log: TransportRequest[] = [];
+    const transport: Transport = { send: async request => { log.push(request); return {}; } };
+    const error = await fail(live(transport).submitAction(observation()));
+    expect(error.body).toMatchObject({ code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+    expect(log).toHaveLength(1);
+    expect(log[0]!.envelope).toMatchObject({ operation: "refreshObservation", actionKind: "refreshOperationsHealth" });
+    expect(log[0]!.envelope).not.toHaveProperty("runRef");
+  });
+  it("cannot borrow observation refresh for run control or carry approval/execution references", async () => {
+    const log: TransportRequest[] = [];
+    const adapter = live({ send: async request => { log.push(request); return {}; } });
+    for (const over of [{ actionKind: "pauseRun" }, { actionKind: "dispatchApprovedAction" }, { runRef: "invented-run" },
+      { approvalRef: "existing-approval" }, { manifestRef: "existing-manifest" }]) {
+      expect((await fail(adapter.submitAction(observation(over)))).body).toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+    }
+    expect(log).toEqual([]);
+  });
+  it("rejects a caller-supplied endpoint before any transport attempt", async () => {
+    const log: TransportRequest[] = [];
+    const adapter = live({ send: async request => { log.push(request); return {}; } });
+    expect((await fail(adapter.submitAction(observation({ payload: { targetRef: "synthetic-opaque-target", endpoint: "https://example.invalid" } })))).body)
+      .toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+    expect(log).toEqual([]);
   });
 });
 

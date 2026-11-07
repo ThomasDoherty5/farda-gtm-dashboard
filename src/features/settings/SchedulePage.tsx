@@ -1,3 +1,4 @@
+import { NativeOperationsControls } from "./NativeOperationsControls";
 import { useId, useState } from "react";
 import { useParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -54,6 +55,7 @@ export function SchedulePage() {
       {query.isError && <ViewError error={query.error} subject="This schedule" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (native ? <NativeScheduleEditor key={JSON.stringify([scopeKey(context),jobId])} data={native} res={query.data} reload={() => query.refetch()} />
         : demoData ? <Body res={query.data as ReadResponse<ScheduleData>} data={demoData} demo={demo} /> : <EmptyState state="Empty" title="No schedule yet"><p>The source responded, but this automation has no schedule.</p></EmptyState>)}
+      {!demo && native && <NativeOperationsControls section="reports" jobRef={jobId}/>}
       <InfoDialog open={dialog === "zapier"} title="Open Zapier" demo={demo} onClose={() => setDialog(null)}>
         <p>No verified Zapier link or sign-in handoff is available from the server, so none is offered. This page saves schedule drafts. Zapier execution requires a separate verified connection.</p>
       </InfoDialog>

@@ -43,6 +43,11 @@ import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthor
 import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
 import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
 import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, type MonitorSourceReader } from "./monitor/reader.ts";
+import { createLifecycleService } from "./lifecycle/repository.ts";
+import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifecycle/contract.ts";
+import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
+import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
+import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -63,6 +68,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority;
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
+  lifecycleSource?: LifecycleSourceReader;
+  operationsControlSource?: OperationsControlSource;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -85,6 +92,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
   let monitor: ReturnType<typeof createMonitorReader>;
+  let lifecycle: ReturnType<typeof createLifecycleService>;
+  let controls: ReturnType<typeof createOperationsControls>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -111,6 +120,12 @@ export function createAgentServer(options: AgentServerOptions) {
       funnel, intake, source: options.monitorSource, now: options.operations?.now });
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
+    lifecycle = createLifecycleService({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      source: options.lifecycleSource, now: options.operations?.now });
+    controls = createOperationsControls({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -192,12 +207,18 @@ export function createAgentServer(options: AgentServerOptions) {
     expectedVersion: z.string().regex(/^cw1-[a-f0-9]{64}$/), approvalRef: z.null(), manifestRef: z.null(), runRef: z.null().optional(),
     idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
   }).strict();
-  const localActionSchema = z.discriminatedUnion("actionKind", [collaborationActionSchema,
+  const adapterActionSchema = z.discriminatedUnion("actionKind", [collaborationActionSchema,
+    operationsControlAction.extend({ schemaVersion: z.literal(ADAPTER_SCHEMA), requestedScope: readBase.shape.requestedScope }),
+    operationsHealthAction.extend({ schemaVersion: z.literal(ADAPTER_SCHEMA), requestedScope: readBase.shape.requestedScope }),
     collaborationActionSchema.extend({ actionKind: z.literal("requestStockTransfer"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: transferIntent }),
     collaborationActionSchema.extend({ actionKind: z.literal("requestSupportHandoff"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: handoffIntent }),
   ]);
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
+    readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
+      period: z.null(), sort: z.array(z.never()).max(0) }),
+    ...lifecycleViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: lifecycleFilters[viewKey],
+      period: z.null(), sort: z.array(z.never()).max(0) })),
     ...monitorViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: monitorFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
     ...creatorPlatformKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: creatorPlatformFilterSchema,
@@ -351,6 +372,14 @@ export function createAgentServer(options: AgentServerOptions) {
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         const input = saveSchema.parse(await bodyOf(req));
         if (input.resourceKind === "configurationDraft") {
+          if (flowResourceSchema.safeParse(input.resourceRef).success) {
+            const saved = await lifecycle.saveDraft({ resourceKind: input.resourceKind, resourceRef: input.resourceRef,
+              expectedVersion: input.expectedVersion, payload: input.payload, idempotencyKey: input.idempotencyKey }, `agent-${auth.role}`);
+            return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+              scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
+              resourceVersion: saved.resourceVersion, persistedAt: saved.persistedAt, persistedByRef: saved.persistedByRef,
+              record: saved, reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
+          }
           const saved = schedules.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
@@ -377,9 +406,18 @@ export function createAgentServer(options: AgentServerOptions) {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
-        const input = localActionSchema.parse(await bodyOf(req));
+        const input = adapterActionSchema.parse(await bodyOf(req));
+        if (input.actionKind === "refreshOperationsHealth") {
+          const result = await controls.refreshHealth(input, "agent-reviewer", auth.role);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
+            approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
+            nextAction: { kind: "Inspect the source observation and its recovery context", ownerRef: null, dueAt: null, available: false },
+            nextPollAfterMs: null });
+        }
         const result = input.actionKind === "proposeCollaborationReview"
-          ? await collaborationWorkflow.propose(input, "agent-reviewer") : await stockSupport.propose(input, "agent-reviewer");
+          ? await collaborationWorkflow.propose(input, "agent-reviewer") : input.actionKind === "proposeOperationsReview"
+            ? await controls.propose(input, "agent-reviewer", auth.role) : await stockSupport.propose(input, "agent-reviewer");
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
           runRef: null, approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
@@ -405,6 +443,8 @@ export function createAgentServer(options: AgentServerOptions) {
         collaborationReview: { sourceAuthority: options.collaborationSourceReader ? "injected" : "notConnected", proposals: "durable", dispatch: "notConnected" },
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
+        lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
+        operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -433,6 +473,38 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")
+            return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+          const result = await lifecycle.read(input.viewKey, input.filters, `agent-${auth.role}`);
+          const held = result.stale || result.partial || result.empty;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.stale ? "stale" : result.partial ? "partial" : result.empty ? "empty" : "ready", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: 1, observedCount: result.empty ? 0 : 1, missingCount: result.empty ? 1 : 0,
+              complete: !held, reasonCodes: held ? ["LIFECYCLE_SOURCE_REVIEW_REQUIRED"] : [] },
+            capabilities: (result.capabilities ?? []).map(capability => ({ ...capability,
+              state: auth.role === "reviewer" ? capability.state : "denied",
+              reasonCodes: auth.role === "reviewer" ? capability.reasonCodes : ["REVIEWER_REQUIRED"] })),
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "operationsControl") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
+            return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+          const result = await controls.read(input.filters, `agent-${auth.role}`, auth.role);
+          const held = result.stale || result.partial || result.empty;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.stale ? "stale" : result.partial ? "partial" : result.empty ? "empty" : "ready", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: 1, observedCount: result.empty ? 0 : 1, missingCount: result.empty ? 1 : 0,
+              complete: !held, reasonCodes: held ? ["OPERATIONS_CONTROL_SOURCE_REVIEW_REQUIRED"] : [] },
+            capabilities: result.capabilities.map(capability => ({ ...capability,
+              state: auth.role === "reviewer" ? capability.state : "denied",
+              reasonCodes: auth.role === "reviewer" ? capability.reasonCodes : ["REVIEWER_REQUIRED"] })),
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "contentMonitor" || input.viewKey === "watchlist" || input.viewKey === "hourlyRun" || input.viewKey === "postPerformance") {
           const result = await monitor.read(input.viewKey, input.filters,
             { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role });
@@ -640,6 +712,11 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
+        ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
+      if (error instanceof OperationsControlError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty ?? "notApplied",
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });

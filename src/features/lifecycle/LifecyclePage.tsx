@@ -1,3 +1,4 @@
+import { NativeLifecyclePage } from "./NativeLifecycleViews";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -18,6 +19,11 @@ import styles from "./Lifecycle.module.css";
 
 /** Customer lifecycle (Figma source 5:289, owner THO-304). Aggregate counts only: no contact record, consent or send lives here. */
 export function LifecyclePage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoLifecyclePage /> : <NativeLifecyclePage />;
+}
+
+function DemoLifecyclePage() {
   const { adapter } = useScope();
   const query = useView<Record<string, never>, LifecycleData>("lifecycleOverview", {});
   const [dialog, setDialog] = useState<"definitions" | "tool" | null>(null);

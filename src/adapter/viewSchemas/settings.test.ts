@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- the negative cases corrupt typed fixtures on purpose, so they edit them untyped */
+import {controlSections,nativeOperationsControlSchema,type NativeOperationsControl} from "@/creator-agent/operationsControlsSchema";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import { SCHEMA_VERSION, readResponseSchema, type ReadRequest, type SaveResourceRequest } from "../contract";
@@ -23,10 +24,14 @@ const typeChecks: [
   Fits<z.infer<typeof teamPermissionsSchema>, TeamData>,
   Fits<z.infer<typeof automationRunsSchema>, AutomationData>,
   Fits<z.infer<typeof scheduleDetailSchema>, ScheduleData>,
-] = [true, true, true, true];
+  Fits<z.infer<typeof nativeOperationsControlSchema>, NativeOperationsControl>,
+] = [true, true, true, true, true];
 
 // Settings reads ignore the Overview fixture switch, so every fixture key must give the same parseable answer.
 const variants: { viewKey: string; filters: object; throws?: string }[] = [
+  ...controlSections.map(section=>({viewKey:"operationsControl",filters:{section}})),
+  {viewKey:"operationsControl",filters:{},throws:"VALIDATION_FAILED"},
+  {viewKey:"operationsControl",filters:{section:"team",targetRef:"not-a-demo-record"},throws:"RECORD_NOT_FOUND"},
   { viewKey: "connectionsOverview", filters: {} },
   { viewKey: "teamPermissions", filters: {} },
   { viewKey: "automationRuns", filters: {} },
@@ -39,7 +44,7 @@ const variants: { viewKey: string; filters: object; throws?: string }[] = [
 describe("settings view schemas: every demo response parses", () => {
   it("covers the settings view keys", () => {
     expect(Object.keys(settingsViewSchemas).sort()).toEqual([...new Set(variants.map((v) => v.viewKey))].sort());
-    expect(typeChecks).toHaveLength(4);
+    expect(typeChecks).toHaveLength(5);
   });
 
   for (const v of variants) {

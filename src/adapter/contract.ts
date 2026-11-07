@@ -156,6 +156,7 @@ export const actionOperations = [
   "inspectRun",
   "reconcileRun",
   "controlRun",
+  "refreshObservation",
 ] as const;
 export type ActionOperation = (typeof actionOperations)[number];
 

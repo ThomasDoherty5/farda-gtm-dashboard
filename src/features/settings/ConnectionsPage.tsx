@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { NativeOperationsControls } from "./NativeOperationsControls";
+import { useCallback, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
 import type { SavedBindings } from "@/creator-agent/operationsView";
+import type { NativeOperationsControl } from "@/creator-agent/operationsControlsSchema";
 import { SavedBindingPanel } from "./SavedOperations";
 import { useOperationsPages, useSavedDisplayFilters } from "./useOperationsPages";
 import { Badge } from "@/components/Badge";
@@ -26,6 +28,10 @@ export function ConnectionsPage() {
   const query = useOperationsPages<ConnectionsData | SavedBindings>("connectionsOverview", filters);
   const [outcome, setOutcome] = useState<"ok" | "failed" | null>(null);
   const [checking, setChecking] = useState(false);
+  const [healthOpen,setHealthOpen]=useState(false);
+  const [controlsReady,setControlsReady]=useState(false);
+  const controlsRefresh=useRef<(()=>Promise<NativeOperationsControl|null>)|null>(null);
+  const registerControlsRefresh=useCallback((refresh:(()=>Promise<NativeOperationsControl|null>)|null)=>{controlsRefresh.current=refresh;},[]);
   const demo = adapter.kind === "demo";
   const data = query.data?.data;
 
@@ -33,16 +39,19 @@ export function ConnectionsPage() {
   const check = async () => {
     setOutcome(null);
     setChecking(true);
-    const result = await query.refetch();
-    setChecking(false);
-    setOutcome(result.isError ? "failed" : "ok");
+    try {
+      const [result,control] = await Promise.all([query.refetch(),demo?Promise.resolve(null):controlsRefresh.current?.()??Promise.resolve(null)]);
+      const failed=result.isError||(!demo&&!control);
+      setOutcome(failed ? "failed" : "ok");
+      if(!demo&&!failed)setHealthOpen(true);
+    } finally { setChecking(false); }
   };
 
   return (
     <Page labelledBy="connections-title" source="7:876">
       <PageHeader titleWidth={860} id="connections-title" title="Connections & source health" subtitle="Know what is connected, who owns the data, and what needs attention.">
         <LinkButton variant="secondary" to="/automations?tab=zaps" style={{ minWidth: 176 }}>View Zapier</LinkButton>
-        <Button style={{ minWidth: 212 }} loading={checking} disabledReason={query.data ? null : "Available once the connection list has loaded."} onClick={() => void check()}>Check connections</Button>
+        <Button style={{ minWidth: 212 }} loading={checking} disabledReason={query.data&&(demo||controlsReady) ? null : "Available once the connection list and control evidence have loaded."} onClick={() => void check()}>Check connections</Button>
       </PageHeader>
       <AutomationNav current="connections" width={132} />
       <CadenceNotice title="Action-specific access">
@@ -58,6 +67,7 @@ export function ConnectionsPage() {
       {query.isError && <ViewError error={query.error} subject="Connections" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="connections" /> : data && demo ? <Body res={query.data as ReadResponse<ConnectionsData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="Connection observations unavailable"><p>The account-scoped connection ledger has no displayable response.</p></EmptyState>)}
       {query.paging}
+      {!demo && <NativeOperationsControls section="connections" onReady={setControlsReady} onRefreshReady={registerControlsRefresh} healthOpen={healthOpen} onHealthClose={()=>setHealthOpen(false)}/>}
     </Page>
   );
 }

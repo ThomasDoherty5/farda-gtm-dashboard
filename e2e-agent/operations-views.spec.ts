@@ -50,6 +50,7 @@ test("reads saved permissions, separates source freshness, and rechecks expiry t
   await expect(panel.getByRole("button", { name: "Inspect binding" })).toBeFocused();
   now += 60_000;
   await page.getByRole("button", { name: "Check connections" }).click();
+  await page.getByRole("dialog", { name: "Check registered connections" }).getByRole("button", { name: "Close", exact: true }).click();
   await expect(panel.getByText("Expired", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "Inspect available actions" }).click();
   await expect(page.getByTestId("saved-bindings")).toContainText("Expired");
@@ -109,9 +110,13 @@ test("describes an empty local ledger and clears its saved values when reader ac
   await expect(page.getByTestId("saved-bindings")).toContainText("Provider coverage is unknown");
   await write("/v1/connections/register", { registration, expectedRevision: 0 });
   await page.getByRole("button", { name: "Check connections" }).click();
+  await page.getByRole("dialog", { name: "Check registered connections" }).getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByTestId("saved-bindings")).toContainText("Read policy");
   await context.clearCookies();
   await page.getByRole("button", { name: "Check connections" }).click();
-  await expect(page.getByRole("heading", { name: "Sign in again" })).toBeVisible();
+  const deniedHeadings=page.getByRole("heading", { name: "Sign in again" });
+  await expect(deniedHeadings).toHaveCount(2);
+  await expect(deniedHeadings.nth(0)).toBeVisible();
+  await expect(deniedHeadings.nth(1)).toBeVisible();
   await expect(page.locator("main")).not.toContainText("Read policy");
 });

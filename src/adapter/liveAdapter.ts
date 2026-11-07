@@ -16,7 +16,7 @@ import {
 import { AdapterError, categorize, type AdapterErrorBody, type ErrorCategory } from "./errors";
 import { pendingTransport, TransportFailure, type Transport, type TransportRequest } from "./transport";
 import { adapterErrorBodySchema, saveResourceResponseSchema } from "./wire";
-import { viewSchemas, type ViewSchemas } from "./viewSchemas";
+import { actionPayloadSchemas, viewSchemas, type ViewSchemas } from "./viewSchemas";
 
 /**
  * The live adapter (THO-283, front-end half). It carries typed envelopes over an injected `Transport` and checks every
@@ -98,6 +98,7 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">, opt
       refuseForeignEnvironment(environment, request.requestedScope, request.requestId, true);
       requireKey(request);
       requireRunRef(request);
+      requireObservationRefresh(request);
       const raw = await exchange({ kind: "action", envelope: request as ActionRequest<unknown> }, opts?.signal);
       const parsed = actionResponseSchema.safeParse(raw);
       // A replay of the same idempotency key returns the first answer, so a write's requestId may be the original's.
@@ -201,6 +202,24 @@ const MESSAGES: Record<string, string> = {
   STOCK_CONFLICT: "Reconcile the conflicting stock and reservation receipts before continuing.",
   RECEIPTS_MISSING: "Verify the missing stock movement receipts before continuing.",
   CASE_HANDOFF_HELD: "This case does not currently permit the requested handoff.",
+  LIFECYCLE_SOURCE_UNCONFIGURED: "The lifecycle source has not been connected. Draft publication and delivery remain held.",
+  LIFECYCLE_SOURCE_UNAVAILABLE: "The lifecycle source is unavailable. Refresh its evidence before editing configuration.",
+  LIFECYCLE_SOURCE_INVALID: "The lifecycle source returned evidence that could not be verified.",
+  LIFECYCLE_SOURCE_CONFLICT: "The lifecycle source returned conflicting versions. Reconcile its evidence before continuing.",
+  LIFECYCLE_SOURCE_REGRESSED: "A newer lifecycle source observation is already recorded. Refresh the current source.",
+  FLOW_CATALOG_UNAVAILABLE: "No current event, timing and template catalog is available for this flow.",
+  FLOW_CATALOG_SELECTION_INVALID: "Choose an event, timing and template from the current catalog for this flow.",
+  FLOW_DRAFT_DENIED: "This flow does not currently allow configuration changes.",
+  SETUP_FLOW_READ_ONLY: "Setup configuration is a source-owned read-only view.",
+  PERSISTENCE_UNCERTAIN: "The save outcome is unknown. Reconcile its exact request before creating another save.",
+  INVALID_CONTROL_REFERENCE: "Open the selected control again from its current scoped source list.",
+  SOURCE_CHANGED: "The selected source changed. Refresh its current evidence before proposing a change.",
+  TASK_PERMISSION_UNVERIFIED: "The task's account and action permission has not been verified.",
+  TASK_BUDGET_EXCEEDED: "The finite task plan exceeds its registered bounds.",
+  TAKEOVER_HELD: "Human takeover is held. Review the source assignment and recovery context.",
+  RECONCILIATION_INCOMPLETE: "Complete the source and mirror comparison before requesting a repair.",
+  REPAIR_OWNERSHIP_HELD: "This discrepancy does not permit a source-owned repair proposal.",
+  PERMISSION_EVIDENCE_UNVERIFIED: "The permission evidence has not been independently verified.",
   SUBMISSION_UNVERIFIED: "A verified submission is required for this proposal.",
   OUTREACH_SUPPRESSED: "Outreach is suppressed for this collaboration.",
   SUPPRESSION_UNVERIFIED: "Verify suppression status before proposing outreach.",
@@ -266,8 +285,10 @@ function fromFailure(error: unknown, req: TransportRequest): AdapterError {
     : {};
   const codeIs = (...cats: ErrorCategory[]) => (known && cats.includes(categorize(known.code)) ? known.code : null);
 
-  if (status === 401) return build(codeIs("unauthenticated") ?? "UNAUTHENTICATED", { ...extra, executionCertainty: "notApplied" });
-  if (status === 403) return build(codeIs("forbidden") ?? "FORBIDDEN", { ...extra, executionCertainty: "notApplied" });
+  // Authorization may be lost after a durable write or observation. Keep a typed
+  // original outcome while the status still clears protected data and forbids retry.
+  if (status === 401) return build(codeIs("unauthenticated") ?? "UNAUTHENTICATED", { ...extra, executionCertainty: extra.executionCertainty ?? "notApplied" });
+  if (status === 403) return build(codeIs("forbidden") ?? "FORBIDDEN", { ...extra, executionCertainty: extra.executionCertainty ?? "notApplied" });
   if (status === 404) return build(codeIs("notFound") ?? "RECORD_NOT_FOUND", { ...extra, executionCertainty: extra.executionCertainty ?? "notApplied" });
   if (status === 429) return build(codeIs("rateLimited") ?? "RATE_LIMITED", { ...extra, retryable: true, executionCertainty: extra.executionCertainty ?? "notApplied" });
   if (status >= 500 || status === 0) return build(known && categorize(known.code) !== "unauthenticated" && categorize(known.code) !== "forbidden" ? known.code : "SOURCE_UNAVAILABLE", { ...extra, retryable: extra.retryable ?? true });
@@ -285,6 +306,17 @@ export function redact(text: string): string {
 }
 
 // ---- Checks on a successful answer ------------------------------------------------------------------
+
+/** A bounded observation creates its own J14 run; it cannot borrow run-control or execution authority. */
+function requireObservationRefresh(request: ActionRequest<unknown>) {
+  if (request.operation !== "refreshObservation") return;
+  const schema = actionPayloadSchemas.refreshOperationsHealth?.payload;
+  if (request.actionKind === "refreshOperationsHealth" && schema?.safeParse(request.payload).success &&
+      request.runRef == null && request.approvalRef === null && request.manifestRef === null && request.entityRefs.length === 0) return;
+  throw new AdapterError({ code: "VALIDATION_FAILED", message: "Observation refresh requires the exact bounded health request. Nothing was sent.",
+    requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied",
+    fieldErrors: { operation: "Use the scoped health target without run, execution or approval references." } });
+}
 
 /** Q-03: `controlRun` and `reconcileRun` name their run in the top-level `runRef`. Without one, nothing is sent. */
 function requireRunRef(request: ActionRequest<unknown>) {
