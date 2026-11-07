@@ -37,6 +37,12 @@ The existing draft/mark-watched controls are held for projected records. Review 
 
 All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
+### Overview and cross-channel analytics (THO-293)
+
+`overviewSummary`, `attribution`, `paidMedia` and `customerJourney` are computed in `src/creator-agent/analytics/` from optional trusted readers on `analyticsSources` (`orders`, `adPlatforms`, `sessions`, `support`), with the reporting timezone in `analyticsTimezone`. Filters accept only an optional `preset` (`last7Days`, `last30Days` default, `last90Days`; paid media also `rights` and `platform`); the envelope `period` is null or an event-time ISO date range. Anything else, a demo `scenario`, a cursor or a sort is `VALIDATION_FAILED`, and a foreign workspace, account or environment is `FORBIDDEN` before any reader is called. Errors use the D-14 body.
+
+A view with no required reader answers `ANALYTICS_SOURCE_UNCONFIGURED` (503); a missing optional reader leaves its figures unknown with a reason and the read `partial`. Each feed gets a server `freshnessState` (D-13: orders 15 minutes, ad platforms 26 hours; sessions and support use a proposed 24 hours). Native order feeds are authoritative; a mirror is compared, never added. Platform ROAS stays per platform and excludes GMV Max, which is reported separately as not incremental. MER, blended CAC and contribution stay unknown because creator costs and landed costs are not read here. `launchSnapshot`, `launchControl`, `launchReconciliation`, `campaignFunnel` and `metricDictionary` answer `INTEGRATION_PENDING` until they have a server projection.
+
 ### Creator intake (J01)
 
 `POST /v1/intake` records one signup or discovery candidate and resolves it to a canonical creator, without scoring, inviting, messaging, reserving or paying. Reads are under `/v1/intake/events`, `/v1/intake/creators` and `/v1/intake/sources`. The source route permission, suppression list, reviewed crosswalk and Notion/Sheets sinks are injected through `intakeAuthority`; none is connected yet. See [`src/creator-agent/intake/README.md`](../src/creator-agent/intake/README.md).

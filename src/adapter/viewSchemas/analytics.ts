@@ -14,7 +14,7 @@
  * - The helpers below are repeated in the sibling files on purpose, so each file stands alone.
  */
 import { z } from "zod";
-import { moneySchema, provenanceValueSchema } from "../contract";
+import { freshnessStateSchema, moneySchema, provenanceValueSchema, valueStateSchema } from "../contract";
 
 const count = z.number().int().nonnegative();
 const nonNegativeMoney = moneySchema.extend({ minorUnits: z.number().int().nonnegative() });
@@ -35,7 +35,24 @@ const postCounters = z.object({
 const channelKey = z.enum(["shopify", "tiktok"]);
 const channelTotals = z.object({ key: channelKey, label: z.string(), netReceipts: nonNegativeMoney, orders: count });
 
-export const overviewSummarySchema = z.object({
+/**
+ * A measure computed by the creator-agent service (THO-293 sandbox reads): its numerator, denominator, window, provenance and
+ * D-13 freshness travel with it. Known needs a finite value; unknown and not applicable carry null and a reason, never 0.
+ */
+const measureOperand = z.object({ label: z.string(), value: z.number().finite().nullable(), reasonCode: z.string().nullable() });
+export const measureSchema = z.object({
+  key: z.string().min(1), label: z.string(), unit: z.enum(["usdMinor", "count", "multiple", "percent", "stars"]),
+  state: valueStateSchema, value: z.number().finite().nullable(), reasonCode: z.string().nullable(),
+  numerator: measureOperand, denominator: measureOperand.nullable(),
+  window: z.object({ start: date, end: date, timezone: z.string().min(1) }), provenance: z.array(z.string()), freshnessState: freshnessStateSchema,
+}).superRefine((m, ctx) => {
+  if ((m.state === "known") !== (m.value !== null) || (m.state !== "known") !== (m.reasonCode !== null))
+    ctx.addIssue({ code: "custom", message: "A measure is known with a value, or unknown/not applicable with a reason." });
+});
+export type Measure = z.infer<typeof measureSchema>;
+const measures = z.array(measureSchema).max(60);
+
+const overviewOriginalSchema = z.object({
   datasetKey: z.literal("overview-original"),
   orders: provenanceValueSchema(count),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
@@ -53,6 +70,20 @@ export const overviewSummarySchema = z.object({
   attributedNetSales: provenanceValueSchema(nonNegativeMoney),
   posts: z.array(postCounters),
 });
+
+/** Served by the creator-agent from trusted order and ad-platform readers. A channel without a synced feed is null per day, never 0. */
+const overviewObservedSchema = overviewOriginalSchema.extend({
+  datasetKey: z.literal("overview-observed"),
+  marketingSpend: nonNegativeMoney.nullable(),
+  newRetainedCustomers: count.nullable(),
+  daily: z.array(z.object({ date, shopify: count.nullable(), tiktok: count.nullable() })),
+  window: z.object({ start: date, end: date, timezone: z.string().min(1) }),
+  // The content monitor is its own read (THO-299); this projection never invents posts.
+  posts: z.array(postCounters).max(0),
+  measures,
+});
+
+export const overviewSummarySchema = z.discriminatedUnion("datasetKey", [overviewOriginalSchema, overviewObservedSchema]);
 
 /* ---------- Launch snapshot ---------- */
 
@@ -124,7 +155,7 @@ export const attributionSchema = z.object({
   reportScope: metricObservationScope.optional(), receiptScope: metricObservationScope.optional(), retainedCustomerScope: metricObservationScope.optional(),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
   orders: provenanceValueSchema(count),
-  retainedUnits: count,
+  retainedUnits: count.nullish().transform(v => v ?? null),
   contribution: provenanceValueSchema(moneySchema),
   marketingSpend: nonNegativeMoney.nullish().transform(v => v ?? null),
   newRetainedCustomers: count.nullish().transform(v => v ?? null),
@@ -135,7 +166,9 @@ export const attributionSchema = z.object({
   attribution: z.array(z.object({ key: z.enum(["code", "utm", "platform", "unattributed"]), label: z.string(), orders: count })),
   creators: z.array(z.object({ handle: z.string(), roi: z.number().finite() })),
   provenance: provenanceDisclosure,
+  measures: measures.optional(),
 }).superRefine((v, ctx) => {
+  if (v.datasetKey === "overview-original" && v.retainedUnits === null) ctx.addIssue({ code: "custom", message: "The demo states its retained units." });
   const amounts = [v.marketingSpend, v.netReceipts.value, v.contribution.value, ...v.channels.map(c => c.netReceipts), ...v.weeks.flatMap(w => [w.shopify, w.tiktok])];
   if (amounts.some(m => m && m.currency !== "USD")) ctx.addIssue({ code: "custom", message: "This report requires comparable USD amounts." });
 });
@@ -162,6 +195,7 @@ export const paidMediaSchema = z.object({
   ),
   assetTotal: count,
   provenance: provenanceDisclosure,
+  measures: measures.optional(),
 }).superRefine((v, ctx) => {
   const amounts = [v.creatorSampleEconomics, ...v.channels.flatMap(c => [c.spend, c.platformPurchaseValue])];
   if (amounts.some(m => m && m.currency !== "USD") || new Set(v.channels.map(c => c.key)).size !== v.channels.length)
@@ -191,7 +225,7 @@ export const campaignFunnelSchema = z.object({
 
 /* ---------- Customer journey ---------- */
 
-export const customerJourneySchema = z.object({
+const customerJourneyDemoSchema = z.object({
   datasetKey: z.literal("customer-journey-demo"),
   commercePeriod: z.string(),
   sessions: provenanceValueSchema(count),
@@ -213,6 +247,19 @@ export const customerJourneySchema = z.object({
   cohorts: z.array(z.object({ metric: z.string(), grain: z.string(), window: z.string(), denominator: z.string(), inclusion: z.string(), version: z.string() })),
   provenance: provenanceDisclosure,
 });
+
+/** Served by the creator-agent. An unconfigured or unreported source leaves its fields null (N/A), never 0. */
+const customerJourneyObservedSchema = customerJourneyDemoSchema.extend({
+  datasetKey: z.literal("customer-journey-observed"),
+  productViewed: count.nullable(), checkoutStarted: count.nullable(), websiteOrders: count.nullable(), tiktokOrders: count.nullable(),
+  websiteNetReceipts: nonNegativeMoney.nullable(), globalAov: nonNegativeMoney.nullable(), globalOrders: count.nullable(),
+  tickets: z.array(z.object({ category: z.string(), count })).nullable(),
+  resolution: z.object({ byFin: count, byPeople: count, open: count }).nullable(),
+  returns: z.object({ returned: count, received: count, awaitingInspection: count, restocked: count, quarantined: count }).nullable(),
+  measures,
+});
+
+export const customerJourneySchema = z.discriminatedUnion("datasetKey", [customerJourneyDemoSchema, customerJourneyObservedSchema]);
 
 /* ---------- Source freshness and reconciliation ---------- */
 

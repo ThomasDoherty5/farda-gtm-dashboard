@@ -233,6 +233,9 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `RECEIPTS_MISSING` | capabilityHold | A source movement lacks its qualifying receipt. |
 | `CASE_HANDOFF_HELD` | capabilityHold | The source case does not currently permit human handoff. |
 | `LIFECYCLE_SOURCE_UNCONFIGURED` | unavailable | No trusted lifecycle source is configured. |
+| `ANALYTICS_SOURCE_UNCONFIGURED` | unavailable | A required THO-293 analytics source (orders or ad platforms) has no injected reader. |
+| `ANALYTICS_SOURCE_UNAVAILABLE` | unavailable | A required analytics source reader failed or answered nothing; retryable. |
+| `ANALYTICS_SOURCE_INVALID` | unavailable | An analytics source answer failed schema, period or time validation; nothing is shown as zero. |
 | `LIFECYCLE_SOURCE_UNAVAILABLE` | unavailable | The configured lifecycle source could not be read. |
 | `LIFECYCLE_SOURCE_INVALID` | unavailable | Source/schema/provenance validation failed. |
 | `LIFECYCLE_SOURCE_CONFLICT` | conflict | Source facts conflict under their version or observation basis. |

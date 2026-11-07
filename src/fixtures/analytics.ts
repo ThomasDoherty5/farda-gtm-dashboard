@@ -5,6 +5,7 @@ import { metricDictionaryDemo } from "./headlineMetrics";
  * fixtures (FE01-03): money that also appears on the Overview is derived from `overviewOriginal`, so the two reconcile.
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
+import type { Measure } from "@/adapter/viewSchemas/analytics";
 import { DEMO_NOW, overviewOriginal } from "./overview";
 
 const usd = (dollars: number): Money => ({ minorUnits: Math.round(dollars * 100), currency: "USD" });
@@ -159,7 +160,7 @@ export type AttributionData = {
   retainedCustomerScope?: MetricObservationScope;
   netReceipts: ProvenanceValue<Money>;
   orders: ProvenanceValue<number>;
-  retainedUnits: number;
+  retainedUnits: number | null;
   contribution: ProvenanceValue<Money>;
   marketingSpend: Money | null;
   newRetainedCustomers: number | null;
@@ -171,6 +172,7 @@ export type AttributionData = {
   attribution: { key: "code" | "utm" | "platform" | "unattributed"; label: string; orders: number }[];
   creators: { handle: string; roi: number }[];
   provenance: Provenance;
+  measures?: Measure[];
 };
 
 const o = overviewOriginal;
@@ -231,6 +233,7 @@ export type PaidMediaData = {
   /** Assets before any filter, so the table can state its denominator. */
   assetTotal: number;
   provenance: Provenance;
+  measures?: Measure[];
 };
 
 export const paidMediaDemo = {
@@ -286,7 +289,16 @@ export const campaignFunnelDemo: CampaignFunnelData = {
 
 /* ---------- Commerce, support and reviews (Figma 30:721) ---------- */
 
-export type CustomerJourneyData = {
+export type CustomerJourneyData = CustomerJourneyDemoData | CustomerJourneyObservedData;
+/** Served by the creator-agent (THO-293). A source that is not connected or did not report leaves its fields null, never 0. */
+export type CustomerJourneyObservedData = Omit<CustomerJourneyDemoData, "datasetKey" | "productViewed" | "checkoutStarted" | "websiteOrders" | "tiktokOrders" | "websiteNetReceipts" | "globalAov" | "globalOrders" | "tickets" | "resolution" | "returns"> & {
+  datasetKey: "customer-journey-observed";
+  productViewed: number | null; checkoutStarted: number | null; websiteOrders: number | null; tiktokOrders: number | null;
+  websiteNetReceipts: Money | null; globalAov: Money | null; globalOrders: number | null;
+  tickets: CustomerJourneyDemoData["tickets"] | null; resolution: CustomerJourneyDemoData["resolution"] | null; returns: CustomerJourneyDemoData["returns"] | null;
+  measures: Measure[];
+};
+export type CustomerJourneyDemoData = {
   datasetKey: "customer-journey-demo";
   commercePeriod: string;
   sessions: ProvenanceValue<number>;
@@ -306,7 +318,7 @@ export type CustomerJourneyData = {
   provenance: Provenance;
 };
 
-export const customerJourneyDemo: CustomerJourneyData = {
+export const customerJourneyDemo: CustomerJourneyDemoData = {
   datasetKey: "customer-journey-demo",
   commercePeriod: "30 Sep–29 Oct 2026",
   sessions: known(16_000),

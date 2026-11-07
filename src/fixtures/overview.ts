@@ -7,12 +7,13 @@
  */
 import type { Money, ProvenanceValue, SourceRef } from "@/adapter/contract";
 import type { PostCounters } from "@/features/overview/metrics";
+import type { Measure } from "@/adapter/viewSchemas/analytics";
 
 export const DEMO_NOW = "2026-11-02T17:00:00.000Z";
 export const DEMO_WORKSPACE = "demo-workspace";
 export const DEMO_ACCOUNT = "demo-account-farda";
 
-export type OverviewData = {
+export type OverviewOriginalData = {
   datasetKey: "overview-original";
   orders: ProvenanceValue<number>;
   netReceipts: ProvenanceValue<Money>;
@@ -30,6 +31,17 @@ export type OverviewData = {
   attributedNetSales: ProvenanceValue<Money>;
   posts: PostCounters[];
 };
+
+/** Served by the creator-agent from trusted sources (THO-293). Unknown stays null with a reason; there are no monitor posts here. */
+export type OverviewObservedData = Omit<OverviewOriginalData, "datasetKey" | "marketingSpend" | "newRetainedCustomers" | "daily"> & {
+  datasetKey: "overview-observed";
+  marketingSpend: Money | null;
+  newRetainedCustomers: number | null;
+  daily: { date: string; shopify: number | null; tiktok: number | null }[];
+  window: { start: string; end: string; timezone: string };
+  measures: Measure[];
+};
+export type OverviewData = OverviewOriginalData | OverviewObservedData;
 
 const shopify: SourceRef = {
   source: "shopify",
@@ -97,7 +109,7 @@ const dailyReceipts: [string, number, number][] = [
   ["2026-10-29", 30426, 10219]
 ];
 
-export const overviewOriginal: OverviewData = {
+export const overviewOriginal: OverviewOriginalData = {
   datasetKey: "overview-original",
   orders: known(400),
   netReceipts: known(usd(1_259_600)),

@@ -48,6 +48,8 @@ import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifec
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
 import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
+import { createAnalyticsReader, isAnalyticsViewKey, isPendingAnalyticsViewKey } from "./analytics/reader.ts";
+import { AnalyticsError, type AnalyticsSources } from "./analytics/sources.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -70,6 +72,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
+  /** THO-293 analytics source readers (orders, ad platforms, sessions, support). Absent readers read as unconfigured, never demo data. */
+  analyticsSources?: AnalyticsSources; analyticsTimezone?: string;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -94,6 +98,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
+  let analytics: ReturnType<typeof createAnalyticsReader>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -126,6 +131,8 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
+    analytics = createAnalyticsReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      sources: options.analyticsSources, now: options.operations?.now, timezone: options.analyticsTimezone });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -256,6 +263,36 @@ export function createAgentServer(options: AgentServerOptions) {
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   };
+  /** THO-293 analytics reads. Canonical D-14 error bodies; exact scope is refused (D-4) before any source is read. */
+  const analyticsEnvelope = z.object({
+    schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1).max(240),
+    requestedScope: z.object({ workspaceId: z.string(), accountIds: z.array(z.string()).max(10), environment: z.string() }).strict(),
+    viewKey: z.string(), filters: z.unknown(), period: z.unknown(), sort: z.array(z.never()).max(0),
+    page: z.object({ cursor: z.null(), limit: z.number().int().min(1).max(100) }).strict(),
+  }).strict();
+  const analyticsFailure = (res: ServerResponse, status: number, code: string, message: string, requestId: string | null, retryable = false) =>
+    reply(res, status, { code, message, requestId, correlationId: null, retryable, retryAfterMs: null, executionCertainty: "notApplied" });
+  async function readAnalytics(res: ServerResponse, body: unknown) {
+    const parsed = analyticsEnvelope.safeParse(body);
+    const requestId = parsed.success ? parsed.data.requestId : null;
+    if (!parsed.success) return analyticsFailure(res, 400, "VALIDATION_FAILED", "The read request is not a valid analytics read.", null);
+    const input = parsed.data, scope = input.requestedScope;
+    if (scope.workspaceId !== options.workspaceId || scope.environment !== "sandbox" || scope.accountIds.length !== 1 || scope.accountIds[0] !== options.accountId)
+      return analyticsFailure(res, 403, "FORBIDDEN", "You don't have access to this.", requestId);
+    if (isPendingAnalyticsViewKey(input.viewKey))
+      return analyticsFailure(res, 503, "INTEGRATION_PENDING", "This launch or campaign read has no server projection yet. No demo data is served.", requestId);
+    if (!isAnalyticsViewKey(input.viewKey)) return analyticsFailure(res, 400, "VALIDATION_FAILED", "Unknown analytics view.", requestId);
+    try {
+      const result = await analytics.read(input.viewKey, input.filters, input.period);
+      return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId,
+        scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "creator-agent.scope.v1" },
+        dataVersion: result.version, dataState: result.dataState, data: result.data, sourceFreshness: result.sourceFreshness, coverage: result.coverage,
+        capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+    } catch (error) {
+      if (error instanceof AnalyticsError) return analyticsFailure(res, error.status, error.code, error.message, requestId, error.retryable);
+      throw error;
+    }
+  }
   const server = createServer(async (req, res) => {
     try {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
@@ -444,6 +481,7 @@ export function createAgentServer(options: AgentServerOptions) {
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
+        analyticsReads: Object.fromEntries((["orders", "adPlatforms", "sessions", "support"] as const).map(key => [key, options.analyticsSources?.[key] ? "injected" : "notConnected"])),
         operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
@@ -472,7 +510,10 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const input = readSchema.parse(await bodyOf(req));
+        const body = await bodyOf(req);
+        const viewKey = typeof body === "object" && body !== null && "viewKey" in body ? body.viewKey : undefined;
+        if (isAnalyticsViewKey(viewKey) || isPendingAnalyticsViewKey(viewKey)) return await readAnalytics(res, body);
+        const input = readSchema.parse(body);
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")

@@ -39,60 +39,64 @@ function Body({ data }: { data: CustomerJourneyData }) {
   const sessions = data.sessions.state === "known" ? data.sessions.value : null;
   const delivered = data.deliveredUnits.state === "known" ? data.deliveredUnits.value : null;
   const rated = data.reviews.ratedCount.state === "known" ? data.reviews.ratedCount.value : null;
-  const ticketTotal = data.tickets.reduce((s, t) => s + t.count, 0);
-  const topTicket = [...data.tickets].sort((a, b) => b.count - a.count)[0];
-  const ticketScale = niceScale(Math.max(0, ...data.tickets.map((t) => t.count)));
+  const observed = data.datasetKey === "customer-journey-observed";
+  // Served data leaves an unreported figure null. It reads N/A, never 0.
+  const n = (v: number | null) => (v === null ? "N/A" : count(v));
+  const tickets = data.tickets ?? [];
+  const ticketTotal = data.tickets === null ? null : tickets.reduce((s, t) => s + t.count, 0);
+  const topTicket = [...tickets].sort((a, b) => b.count - a.count)[0];
+  const ticketScale = niceScale(Math.max(0, ...tickets.map((t) => t.count)));
   const reviewScale = niceScale(Math.max(0, ...data.reviews.stars.map((s) => s.count)));
-  const conversion = sessions === null ? null : rate(data.websiteOrders, sessions, 2);
-  const supportLoad = delivered === null ? null : rate(ticketTotal, delivered, 1);
-  const returnRate = delivered === null ? null : rate(data.returns.returned, delivered, 1);
+  const conversion = sessions === null || data.websiteOrders === null ? null : rate(data.websiteOrders, sessions, 2);
+  const supportLoad = delivered === null || ticketTotal === null ? null : rate(ticketTotal, delivered, 1);
+  const returnRate = delivered === null || data.returns === null ? null : rate(data.returns.returned, delivered, 1);
   const rating = rated === null ? null : averageRating(data.reviews.stars);
   const ratingPoints = data.reviews.stars.reduce((s, r) => s + r.star * r.count, 0);
-  const aov = data.websiteOrders > 0 ? usdExact({ minorUnits: Math.round(data.websiteNetReceipts.minorUnits / data.websiteOrders), currency: "USD" }) : "N/A";
+  const aov = data.websiteOrders !== null && data.websiteNetReceipts !== null && data.websiteOrders > 0 ? usdExact({ minorUnits: Math.round(data.websiteNetReceipts.minorUnits / data.websiteOrders), currency: "USD" }) : "N/A";
   return (
     <>
-      <Notice tone="violet" title="Illustrative sources · each metric keeps its own cohort">
-        Commerce: Shopify website, {data.commercePeriod}. Service: {delivered === null ? "delivered-unit cohort unknown" : `${count(delivered)} delivered customer units`} over the last 14 days. Source selection, reconciliation and production feeds remain pending.
+      <Notice tone="violet" title={observed ? "Sandbox sources · each metric keeps its own cohort" : "Illustrative sources · each metric keeps its own cohort"}>
+        Commerce: Shopify website, {data.commercePeriod}. Service: {delivered === null ? "delivered-unit cohort unknown" : `${count(delivered)} delivered customer units`} over the last 14 days. {observed ? "Read through the authenticated sandbox service; production feeds remain separate." : "Source selection, reconciliation and production feeds remain pending."}
       </Notice>
       <KpiGrid>
         <KpiCard label="Website sessions" context="Shopify storefront source only" testId="metric-sessions"><MetricText value={data.sessions} format={count} /></KpiCard>
-        <KpiCard label="Store conversion" context={sessions === null ? "Needs a selected sessions source" : `${count(data.websiteOrders)} Shopify orders ÷ ${count(sessions)} sessions`} testId="metric-conversion">{conversion === null ? "N/A" : `${conversion}%`}</KpiCard>
-        <KpiCard label="Support load" context={delivered === null ? "Needs a delivered cohort" : `${ticketTotal} tickets ÷ ${count(delivered)} delivered units × 100`} testId="metric-support-load">{supportLoad === null ? "N/A" : `${supportLoad} / 100`}</KpiCard>
+        <KpiCard label="Store conversion" context={sessions === null ? "Needs a selected sessions source" : `${n(data.websiteOrders)} Shopify orders ÷ ${count(sessions)} sessions`} testId="metric-conversion">{conversion === null ? "N/A" : `${conversion}%`}</KpiCard>
+        <KpiCard label="Support load" context={delivered === null || ticketTotal === null ? "Needs a delivered cohort and ticket counts" : `${ticketTotal} tickets ÷ ${count(delivered)} delivered units × 100`} testId="metric-support-load">{supportLoad === null ? "N/A" : `${supportLoad} / 100`}</KpiCard>
         <KpiCard label="Average rating" context={rated === null ? "Needs the ratings feed" : `${ratingPoints} rating points ÷ ${rated} rated reviews`} testId="metric-rating">{rating === null ? "N/A" : `${rating} / 5`}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="flow-title" className={styles.card20}>
-          <SectionHeading id="flow-title" title={sessions === null ? `${count(data.websiteOrders)} valid orders; sessions unknown` : `${count(data.websiteOrders)} valid orders from ${count(sessions)} sessions`} note="A single selected sessions source prevents duplicate traffic counts." />
+          <SectionHeading id="flow-title" title={sessions === null ? `${n(data.websiteOrders)} valid orders; sessions unknown` : `${n(data.websiteOrders)} valid orders from ${count(sessions)} sessions`} note="A single selected sessions source prevents duplicate traffic counts." />
           <BarList label="Store conversion flow" rows={[
             { key: "sessions", label: "Sessions", value: sessions === null ? "N/A" : count(sessions), share: sessions === null ? 0 : 1 },
-            { key: "viewed", label: "Product viewed", value: count(data.productViewed), share: sessions === null ? 0 : ratio(data.productViewed, sessions) },
-            { key: "checkout", label: "Checkout started", value: count(data.checkoutStarted), share: sessions === null ? 0 : ratio(data.checkoutStarted, sessions) },
-            { key: "orders", label: "Valid orders", value: count(data.websiteOrders), share: sessions === null ? 0 : ratio(data.websiteOrders, sessions) },
+            { key: "viewed", label: "Product viewed", value: n(data.productViewed), share: sessions === null || data.productViewed === null ? 0 : ratio(data.productViewed, sessions) },
+            { key: "checkout", label: "Checkout started", value: n(data.checkoutStarted), share: sessions === null || data.checkoutStarted === null ? 0 : ratio(data.checkoutStarted, sessions) },
+            { key: "orders", label: "Valid orders", value: n(data.websiteOrders), share: sessions === null || data.websiteOrders === null ? 0 : ratio(data.websiteOrders, sessions) },
           ]} />
           <hr className={styles.divider} />
-          <DetailRow label="Shopify net receipts" value={usd(data.websiteNetReceipts)} />
-          <DetailRow label="Shopify AOV" value={`${aov} · ${usd(data.websiteNetReceipts)} / ${count(data.websiteOrders)}`} />
-          <p className={styles.small}>TikTok Shop's {count(data.tiktokOrders)} orders are excluded from this website conversion numerator. Global AOV remains {usdExact(data.globalAov)} across {count(data.globalOrders)} valid orders.</p>
+          <DetailRow label="Shopify net receipts" value={data.websiteNetReceipts === null ? "N/A" : usd(data.websiteNetReceipts)} />
+          <DetailRow label="Shopify AOV" value={`${aov} · ${data.websiteNetReceipts === null ? "N/A" : usd(data.websiteNetReceipts)} / ${n(data.websiteOrders)}`} />
+          <p className={styles.small}>TikTok Shop's {n(data.tiktokOrders)} orders are excluded from this website conversion numerator. Global AOV {data.globalAov === null ? "is N/A" : `remains ${usdExact(data.globalAov)}`} across {n(data.globalOrders)} valid orders.</p>
           <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 250 }} aria-haspopup="dialog" onClick={() => setSource("commerce")}>Open commerce source</Button></div>
         </Card>
         <Card labelledBy="support-title" className={styles.card20}>
-          <SectionHeading id="support-title" title={topTicket ? `${topTicket.category} accounts for ${percent(topTicket.count, ticketTotal, 0)} of tickets` : "Support categories"} note={`${ticketTotal} tickets from the same delivered-unit cohort · no message text`} />
-          <BarList label="Support tickets by category" rows={data.tickets.map((t) => ({ key: t.category, label: t.category, value: String(t.count), share: ratio(t.count, ticketScale) }))} />
+          <SectionHeading id="support-title" title={topTicket && ticketTotal !== null ? `${topTicket.category} accounts for ${percent(topTicket.count, ticketTotal, 0)} of tickets` : "Support categories"} note={ticketTotal === null ? "Ticket counts unavailable from the source" : `${ticketTotal} tickets from the same delivered-unit cohort · no message text`} />
+          <BarList label="Support tickets by category" rows={tickets.map((t) => ({ key: t.category, label: t.category, value: String(t.count), share: ratio(t.count, ticketScale) }))} />
           <hr className={styles.divider} />
-          <DetailRow label="Resolved by Fin" value={String(data.resolution.byFin)} />
-          <DetailRow label="Resolved by people" value={String(data.resolution.byPeople)} />
-          <DetailRow label="Open / handed off" value={String(data.resolution.open)} />
+          <DetailRow label="Resolved by Fin" value={n(data.resolution?.byFin ?? null)} />
+          <DetailRow label="Resolved by people" value={n(data.resolution?.byPeople ?? null)} />
+          <DetailRow label="Open / handed off" value={n(data.resolution?.open ?? null)} />
           <div className={styles.btnRow}><LinkButton to={`/support/cases/${DEMO_SUPPORT_CASE_ID}`} style={{ minWidth: 250 }}>Review support queue</LinkButton></div>
         </Card>
       </div>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="returns-title" className={styles.card20}>
-          <SectionHeading id="returns-title" title="A return ends with a verified outcome" note={delivered === null ? `${data.returns.returned} returned units · return rate needs a delivered cohort.` : `${data.returns.returned} returned units / ${count(delivered)} delivered units = ${returnRate}% return rate.`} />
+          <SectionHeading id="returns-title" title="A return ends with a verified outcome" note={data.returns === null ? "Returned units unavailable from the source." : delivered === null ? `${data.returns.returned} returned units · return rate needs a delivered cohort.` : `${data.returns.returned} returned units / ${count(delivered)} delivered units = ${returnRate}% return rate.`} />
           <p className={styles.metric} data-testid="metric-return-rate">{returnRate === null ? "N/A" : `${returnRate}%`}</p>
-          <DetailRow label="Received and inspected" value={`${data.returns.received} units`} />
-          <DetailRow label="Awaiting inspection" value={`${data.returns.awaitingInspection} units`} />
-          <DetailRow label="Restocked from inspected" value={`${data.returns.restocked} units`} />
-          <DetailRow label="Quarantined from inspected" value={`${data.returns.quarantined} units`} />
+          <DetailRow label="Received and inspected" value={`${n(data.returns?.received ?? null)} units`} />
+          <DetailRow label="Awaiting inspection" value={`${n(data.returns?.awaitingInspection ?? null)} units`} />
+          <DetailRow label="Restocked from inspected" value={`${n(data.returns?.restocked ?? null)} units`} />
+          <DetailRow label="Quarantined from inspected" value={`${n(data.returns?.quarantined ?? null)} units`} />
           <p className={styles.small}>Refunds and physical returns are separate events. Restock only after inspection; replacements link the original order. Source Orders owns refund and retained-unit totals.</p>
           <div className={styles.btnRow}><LinkButton variant="secondary" to={`/returns/${DEMO_RETURN_ID}`} style={{ minWidth: 232 }}>Open return cases</LinkButton></div>
         </Card>
@@ -113,7 +117,7 @@ function Body({ data }: { data: CustomerJourneyData }) {
         title={source === "reviews" ? "Review outcomes source" : "Commerce source"}
         rows={[{ label: "Source", value: source === "reviews" ? "Ratings-only review feed" : "Shopify storefront" }, { label: "Link", value: "No verified source link in this build" }]}
       >
-        <p>These figures are illustrative. Nothing opens, and no store or review account is accessed.</p>
+        <p>{observed ? "These figures come from the sandbox service. Nothing opens, and no store or review account is accessed from the browser." : "These figures are illustrative. Nothing opens, and no store or review account is accessed."}</p>
       </HandoffDialog>
     </>
   );
