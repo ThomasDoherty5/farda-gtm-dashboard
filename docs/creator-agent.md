@@ -37,6 +37,10 @@ The existing draft/mark-watched controls are held for projected records. Review 
 
 All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
+### Paid-media drafts (THO-346)
+
+`/v1/media/` inventories advertiser accounts and per-operation capabilities, compiles an immutable, hashed campaign manifest from the actual checkout, creates a paused native draft and reads its settings back before release is requested. Publishing needs an exact J04 Linear decision for that revision, manifest and read-back, all five media gates and a Ready publish capability; a denied API capability never falls back to a browser route, and an uncertain write is reconciled by its key and native campaign before any retry. Every source and the provider executor are injected through `mediaAuthority`; none is connected, and production stays held. See [`src/creator-agent/media/README.md`](../src/creator-agent/media/README.md).
+
 ## Weight binding
 
 The owner-approved `2026-11-04.launch-v1` website and TikTok bindings are versioned under `src/creator-agent/configurations/` and loaded by the launcher by default. They preserve the explicitly adopted route percentages, existing arithmetic and80/65 bands. Historical v2 fixtures remain unchanged and are never a fallback. An explicitly unbound embedded/test instance still reports unknown numeric configuration and cannot activate.
