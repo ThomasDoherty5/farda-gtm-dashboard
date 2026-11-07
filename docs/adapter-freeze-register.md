@@ -106,6 +106,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `shippingException` | `shipmentId`, `exceptionId` | ShippingExceptionDetail | `operations/ShippingExceptionPage` | `demoOps` | proposed + conflict | C-07. |
 | `socialCatBoard` | `owner` | SocialCatBoardData | `creators/SocialCatPage` | `demoCreators` | proposed | Uses `keepPrevious`. Demo refuses unknown owners. |
 | `socialCatDashboard` | `network` | SocialCatDashboardData | `creators/SocialCatPage` | `demoCreators` | proposed + conflict | C-05. Uses `keepPrevious`. |
+| `sourcingPlan` | none (empty object, strict) | SourcingPlan (`kind: "agent-sourcing-plan"`) | `acquisition/LivePlanView` | `demoAdapter` (unconfigured) | native read-only projection | THO-287 plan detail on a live adapter. J19 source injected server-side; unconfigured, unavailable, stale and partial states are explicit. |
 | `supportWorkspace` | `caseId`, `scenario?` | SupportWorkspace | `support/SupportPage` | `demoOps` | proposed + conflict | C-06. |
 | `teamPermissions` | none | TeamData | `settings/TeamPage` | `demoSettings` | proposed |  |
 | `operationsControl` | `section`, optional `targetRef`, reviewer-only `proposalRequestKey`, bounded `q`/`platform`/`mine`, reports-only `jobRef` | NativeOperationsControl | `settings/NativeOperationsControls` | native only | native | Supplemental source-owned team/run/report/capability/reconciliation detail. Existing paged lists and schedule drafts remain authoritative; no duplicate executor or ledger. |

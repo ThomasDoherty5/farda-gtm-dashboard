@@ -21,7 +21,7 @@ import { readCreatorsView } from "./demoCreators";
 import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
 import { branchesDemo } from "@/fixtures/pipelineBranches";
-import { discoveryDemo } from "@/fixtures/discovery";
+import { discoveryDemo, sourcingPlanDemo } from "@/fixtures/discovery";
 import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
 import { AdapterError } from "./errors";
@@ -87,6 +87,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (financeView) return financeView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, { ...discoveryDemo, versions: { ...discoveryDemo.versions, policyVersion: policy.policy.version } }, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
+      if (request.viewKey === "sourcingPlan")
+        return respondWith(request, sourcingPlanDemo, { dataVersion: "sourcing-plan-demo@1", dataState: "unavailable", capabilities: [{ actionKind: "startLiveDiscovery", state: "held", reasonCodes: ["SOURCE_AUTOMATION_NOT_CONNECTED"] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerRewards") return readRewards<T>(request as ReadRequest<{ offerId: string; scenario?: string }>, fixture);

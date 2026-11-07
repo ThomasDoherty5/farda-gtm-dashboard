@@ -1,5 +1,5 @@
 /**
- * Runtime schemas for recruitmentQueue, invitationDraft, batchDetail, pipelineSummary and discoverySummary.
+ * Runtime schemas for recruitmentQueue, invitationDraft, batchDetail, pipelineSummary, discoverySummary and sourcingPlan.
  *
  * Unknown versus zero: several fields are `number | null` in the fixtures, where null means unknown (pipeline
  * `reached` and `medianDays`, batch `nativeInvitations`). They accept null and never coerce it to 0. Fields that
@@ -18,6 +18,7 @@ import { z } from "zod";
 import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
 import { livePipelineSchema } from "@/creator-agent/funnelContract";
 import { agentSourcingSchema } from "@/creator-agent/readViews";
+import { sourcingPlanSchema } from "@/creator-agent/sourcing/contract";
 import { provenanceValueSchema } from "../contract";
 import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
 
@@ -190,4 +191,6 @@ export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),
   pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,
+  /** The served daily plan detail (THO-287). Strict: unknown counts carry a reason and unlike capacity units never merge. */
+  sourcingPlan: sourcingPlanSchema,
 };
