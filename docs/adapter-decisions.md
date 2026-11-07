@@ -57,6 +57,14 @@ Writes (`/v1/action`, `/v1/save`) carry the CSRF token from the session call in 
 - D-1 and D-11 define what a reference service built for testing implements. That service (`tools/reference-server/`) is a test double, not the production backend, and it is the only thing that implements the paths above.
 - Everything else is for the backend owner.
 
+## Bounded native observation refresh
+
+The native health control uses the additive `refreshObservation` operation with the exact `refreshOperationsHealth` action and typed scoped target. It creates no input run reference: the existing bounded J14 service owns any resulting run and its configured probe, approval, activation and lease gates. `controlRun` and `reconcileRun` still require their real existing run references under Q-03.
+
+The adapter rejects other action kinds, arbitrary payload fields and approval, manifest, entity or run references on observation refresh. The service returns actual observation receipts and preserves denied, stale, held and uncertain states; a prior observation remains historical when current permission or freshness changes. This operation does not authorize a business write, provider permission grant or general tool execution.
+
+A validated write-error outcome remains authoritative when access is lost after submission. HTTP 401/403 still clears protected data, uses a neutral authorization message and prevents automatic retry; it does not overwrite a typed `applied` or `uncertain` outcome with `notApplied`. Original-key reconciliation remains required before another observation or proposal.
+
 ## Not decided here
 
 Vendor and hosting choices, the identity provider, database technology, and anything about provider accounts. Those belong to the backend owner and the company.

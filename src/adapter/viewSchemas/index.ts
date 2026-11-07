@@ -18,7 +18,7 @@ import { opsActionSchemas, opsViewSchemas } from "./ops";
 import { recruitmentViewSchemas } from "./recruitment";
 import { scorecardsViewSchemas } from "./scorecards";
 import { shippingHubViewSchemas } from "./shippingHub";
-import { settingsViewSchemas } from "./settings";
+import { settingsActionSchemas, settingsViewSchemas } from "./settings";
 
 export type ViewSchemas = Readonly<Record<string, z.ZodTypeAny>>;
 export type ActionPayloadSchemas = Readonly<Record<string, { payload: z.ZodTypeAny }>>;
@@ -39,4 +39,4 @@ export const viewSchemas: ViewSchemas = mergeSchemas<z.ZodTypeAny>("view key", [
   lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas,
 ]);
 
-export const actionPayloadSchemas: ActionPayloadSchemas = mergeSchemas("action kind", [approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas]);
+export const actionPayloadSchemas: ActionPayloadSchemas = mergeSchemas<{ payload: z.ZodTypeAny }>("action kind", [approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas]);

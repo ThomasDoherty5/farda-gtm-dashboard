@@ -1,3 +1,4 @@
+import { NativeEmailFlowPage } from "./NativeEmailFlowPage";
 import { useState } from "react";
 import { AdapterError } from "@/adapter/errors";
 import { useScope } from "@/adapter/scope";
@@ -26,6 +27,11 @@ const TITLES: Record<Exclude<FlowKey, "setup">, string> = { "early-access": "A w
  * saving it never enables a flow or sends anything. The three consent, suppression and duplicate policies are locked: the server enforces them.
  */
 export function EmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoEmailFlowPage flow={flow} /> : <NativeEmailFlowPage flow={flow} />;
+}
+
+function DemoEmailFlowPage({ flow }: { flow: Exclude<FlowKey, "setup"> }) {
   const { adapter } = useScope();
   const query = useView<{ flow: string }, EmailFlowData>("emailFlow", { flow });
   const data = query.data?.data ?? null;

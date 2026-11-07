@@ -15,6 +15,7 @@
  * Saving a draft never enables or publishes a flow, and nothing here can say a message was sent.
  */
 import { z } from "zod";
+import { nativeLifecycleSchema, nativeEmailFlowSchema, nativeConsentSchema, nativeActivationSchema } from "@/creator-agent/lifecycle/contract";
 
 export const FLOW_KEY_VALUES = ["setup", "early-access", "abandoned-checkout", "review-request"] as const;
 export const flowKeySchema = z.enum(FLOW_KEY_VALUES);
@@ -104,10 +105,10 @@ export const activationRetentionSchema = z
   });
 
 export const lifecycleViewSchemas: Record<string, z.ZodTypeAny> = {
-  lifecycleOverview: lifecycleOverviewSchema,
-  emailFlow: emailFlowSchema,
-  consentEligibility: consentEligibilitySchema,
-  activationRetention: activationRetentionSchema,
+  lifecycleOverview: z.union([nativeLifecycleSchema, lifecycleOverviewSchema]),
+  emailFlow: z.union([nativeEmailFlowSchema, emailFlowSchema]),
+  consentEligibility: z.union([nativeConsentSchema, consentEligibilitySchema]),
+  activationRetention: z.union([nativeActivationSchema, activationRetentionSchema]),
 };
 
 /* ---------- actions ---------- */

@@ -1,3 +1,4 @@
+import { NativeConsentPage } from "./NativeLifecycleViews";
 import { useRef, useState } from "react";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -21,6 +22,11 @@ import styles from "./Lifecycle.module.css";
  * Unknown consent is held, never counted as opted in, and a snapshot whose categories don't add up is refused rather than drawn.
  */
 export function ConsentPage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoConsentPage /> : <NativeConsentPage />;
+}
+
+function DemoConsentPage() {
   const { adapter } = useScope();
   const query = useView<Record<string, never>, ConsentData>("consentEligibility", {});
   const [providerOpen, setProviderOpen] = useState(false);

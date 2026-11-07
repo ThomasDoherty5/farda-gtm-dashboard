@@ -1,3 +1,4 @@
+import { NativeControlsPage } from "./NativeOperationsControls";
 import { useState } from "react";
 import type { ActionResponse } from "@/adapter/contract";
 import type { RepairPayload } from "@/adapter/demoReconciliation";
@@ -17,6 +18,10 @@ import { AutomationNav } from "./shared";
 
 /** Nightly reconciliation and conflict repair (FE13-05, `?tab=reconciliation`). A repair is requested here and applied by the source owner after approval. */
 export function ReconciliationPage() {
+  const {adapter}=useScope();
+  return adapter.kind === "demo" ? <DemoReconciliationPage/> : <NativeControlsPage section="reconciliation"/>;
+}
+function DemoReconciliationPage() {
   const { adapter } = useScope();
   const query = useView<Record<string, never>, ReconciliationData>("nightlyReconciliation", {});
   const action = useAction<RepairPayload>();

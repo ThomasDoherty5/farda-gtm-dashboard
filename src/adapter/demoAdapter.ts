@@ -1,4 +1,5 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
+import {nativeOperationsControlSchema,operationsControlFilters,type NativeOperationsControl} from "@/creator-agent/operationsControlsSchema";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
@@ -68,6 +69,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "operationsControl") return readDemoOperationsControl(request) as ReadResponse<T>;
       if (request.viewKey === "nightlyReconciliation") return reconciliation.read(request) as ReadResponse<T>;
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
@@ -139,6 +141,29 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       return evidence.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
     },
   };
+}
+
+/** Explicit, read-only synthetic native shapes; never source permission or a stored provider receipt. */
+function readDemoOperationsControl(request:ReadRequest<unknown>):ReadResponse<NativeOperationsControl>{
+  const parsed=operationsControlFilters.safeParse(request.filters);
+  if(!parsed.success)err("VALIDATION_FAILED","Choose an explicit operations-control section.",request.requestId);
+  const f=parsed.data;
+  if(f.targetRef||f.jobRef)err("RECORD_NOT_FOUND","Native opaque records are not present in the demo.",request.requestId);
+  const details:Record<NativeOperationsControl["section"],[string,string][]>= {
+    connections:[["Provider","Synthetic provider"],["Permission","Unknown"],["Source health","Not connected"]],
+    team:[["Provider role","Unknown"],["Owner","Unknown"],["Backup","Unknown"]],
+    runs:[["Job category","Daily evidence review"],["Finite plan","Synthetic example only"],["Named assignment","Unknown"]],
+    reports:[["Cadence","Weekdays — synthetic draft"],["Timezone","America/Los_Angeles"],["Destination","Unknown"],["Last complete","Unknown"]],
+    capabilities:[["Attribution test","Refund reversal — synthetic example"],["Observed result","Unknown"],["Permission","Unverified"]],
+    reconciliation:[["Grain","Order — synthetic example"],["Currency","USD"],["Source amount","Unknown"],["Mirror amount","Unknown"],["Field ownership","Unknown"]],
+  };
+  const version="oc1-"+"d".repeat(64);
+  const data=nativeOperationsControlSchema.parse({kind:"native-operations-controls",section:f.section,version,observedAt:DEMO_NOW,
+    actorRef:"agent-reader",role:"reader",sourceState:"notConnected",sourceObservedAt:null,
+    records:[{id:"demo-control-"+f.section,title:"Demo · "+f.section+" evidence",details:details[f.section]}],actions:[],healthTargets:[],localRuns:[],
+    localCoverage:{returned:0,total:0,partial:false},runFilterEvidence:{matched:0,unknownPlatform:0,assignment:"named-principal-unverified"},handoffs:[],history:[],historyCoverage:{returned:0,total:0,partial:false},
+    proposalReconciliation:f.proposalRequestKey?{requestKey:f.proposalRequestKey,actorRef:"agent-reader",state:"unverified",baseVersion:null,actionRef:null,manifestDigest:null,payloadDigest:null,createdAt:null,reason:null}:null});
+  return respondWith(request,data,{dataVersion:version,capabilities:[{actionKind:"proposeOperationsReview",state:"denied",reasonCodes:["DEMO_NO_SOURCE_AUTHORITY"]},{actionKind:"refreshOperationsHealth",state:"held",reasonCodes:["DEMO_NO_SOURCE_AUTHORITY"]}]});
 }
 
 /** A write with no idempotency key can't be retried safely, so it is refused before anything is applied. */

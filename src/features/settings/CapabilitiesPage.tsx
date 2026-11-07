@@ -1,3 +1,4 @@
+import { NativeOperationsControls } from "./NativeOperationsControls";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -36,6 +37,7 @@ export function CapabilitiesPage() {
   const filters = useSavedDisplayFilters(tab);
   const query = useOperationsPages<CapabilityData | SavedBindings>("channelCapabilities", filters);
   const [planOpen, setPlanOpen] = useState(false);
+  const [controlsReady,setControlsReady]=useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
 
@@ -43,7 +45,7 @@ export function CapabilitiesPage() {
     <Page labelledBy="capabilities-title" source="66:641">
       <PageHeader id="capabilities-title" title="Ready means verified." subtitle="Provider capability, permission and live account access are three separate checks">
         <LinkButton variant="secondary" to="/settings/capabilities?tab=access" style={{ minWidth: 198 }}>Review evidence</LinkButton>
-        <Button aria-haspopup="dialog" style={{ minWidth: 200 }} disabledReason={!demo ? "The saved ledger is read-only." : data ? null : "Available once capabilities have loaded."} onClick={() => setPlanOpen(true)}>Plan validation</Button>
+        <Button aria-haspopup="dialog" style={{ minWidth: 200 }} disabledReason={data&&(demo||controlsReady) ? null : "Available once capabilities and control evidence have loaded."} onClick={() => setPlanOpen(true)}>Plan validation</Button>
       </PageHeader>
       <SectionTabs label="Capability sections" tabs={CAPABILITY_TABS.map((t) => ({ label: TAB_LABEL[t], to: t === "capabilities" ? "/settings/capabilities" : `/settings/capabilities?tab=${t}`, width: TAB_WIDTH[t], current: t === tab }))} />
       <CadenceNotice title="Validate the route for each action">
@@ -57,6 +59,7 @@ export function CapabilitiesPage() {
       {query.isError && <ViewError error={query.error} subject="Channel capabilities" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="capabilities" tab={tab} /> : data && demo ? <Body res={query.data as ReadResponse<CapabilityData>} data={data} tab={tab} demo={demo} planOpen={planOpen} closePlan={() => setPlanOpen(false)} /> : <EmptyState state="Empty" title="No capabilities listed"><p>No account-scoped capability data is available.</p></EmptyState>)}
       {query.paging}
+      {!demo && <NativeOperationsControls section="capabilities" onReady={setControlsReady} planOpen={planOpen} onPlanClose={()=>setPlanOpen(false)}/>}
     </Page>
   );
 }
