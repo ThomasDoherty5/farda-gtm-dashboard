@@ -68,7 +68,8 @@ import { composeActionDomains } from "./actionDomains.ts";
 import { JobRuntime } from "./jobs/runtime.ts";
 import { RuntimeError, type RuntimeAuthority, type RuntimeRegistry } from "./jobs/runtimeSchema.ts";
 import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type RuntimeMachineBinding } from "./jobs/runtimeApi.ts";
-import { createSourcingPlanReader, isSourcingPlanRead, SourcingError } from "./sourcing/reader.ts";
+import { createSourcingPlanReader, SourcingError } from "./sourcing/reader.ts";
+import { SOURCING_PLAN_VIEW, sourcingPlanFilters } from "./sourcing/contract.ts";
 import type { SourcingPlanSourceReader } from "./sourcing/source.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
@@ -364,6 +365,7 @@ export function createAgentServer(options: AgentServerOptions) {
       proposalRequestKey: z.string().trim().min(1).max(240).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal(SOURCING_PLAN_VIEW), filters: sourcingPlanFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
   ]);
   const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
   const requestIds = new WeakMap<IncomingMessage, string>();
@@ -652,11 +654,13 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const body = await bodyOf(req);
-        // The daily sourcing plan is reached only after the shared authentication and per-principal read admission
-        // above. Its refusals are thrown as SourcingError and rendered by the shared error envelope below.
-        if (isSourcingPlanRead(body)) return reply(res, 200, await sourcingPlan.respond(body, auth.role, ADAPTER_SCHEMA));
-        const input = readSchema.parse(body);
+        const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === SOURCING_PLAN_VIEW) {
+          // Shared authentication, read admission and the read union (scope, envelope, filters) have all passed before the
+          // source is read. Source refusals are thrown as SourcingError and rendered by the shared error envelope below.
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          return reply(res, 200, await sourcingPlan.respond(input, auth.role, ADAPTER_SCHEMA));
+        }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const recovery = input.filters.requestKey === undefined ? null

@@ -67,7 +67,7 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect((await call("/v1/capabilities")).body.dailySourcingPlan).toEqual({ sourceAuthority: "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" });
   });
 
-  it("denies unauthenticated and out-of-scope reads with no data and without touching the source", async () => {
+  it("refuses unauthenticated and out-of-scope reads like every other read view, with no data and without touching the source", async () => {
     const { counter, source } = tracked(() => sourcingSourceFixture());
     const { read } = await start({ sourcingPlanSource: source });
     const anonymous = await read({}, "none");
@@ -75,10 +75,10 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect(anonymous.body).not.toHaveProperty("data");
     for (const scope of [{ ...requestedScope, workspaceId: "synthetic-foreign-workspace" }, { ...requestedScope, accountIds: ["synthetic-foreign-account"] },
       { ...requestedScope, accountIds: [sourcingTestScope.accountId, "synthetic-foreign-account"] }, { ...requestedScope, environment: "production" }]) {
+      // The shared read union fixes the scope, so a foreign scope is invalid input (400), as on every other /v1/read view.
       const denied = await read({ requestedScope: scope });
-      expect(denied.status).toBe(403);
-      expectCanonicalError(denied.body, "FORBIDDEN", 403);
-      expect(denied.body.message).toBe("Access is not currently permitted.");
+      expect(denied.status).toBe(400);
+      expectCanonicalError(denied.body, "INVALID_INPUT", 400);
     }
     expect(counter.reads).toBe(0);
   });
@@ -118,8 +118,8 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     const plan = sourcingPlanSchema.parse(partial.data).plan!;
     expect(plan.steps[3]!.count).toEqual({ value: null, missingReason: "J20_REVIEW_INCOMPLETE" });
     expect(plan.capacity[1]).toMatchObject({ state: "unknown", dispatchBlocked: true, remaining: { value: null } });
-    // 5 steps + 10 expected capacity rows + 7 identity counts + 12 run counts.
-    expect(partial.coverage).toMatchObject({ expectedCount: 34, observedCount: 24, missingCount: 10, complete: false });
+    // 5 steps + 10 expected capacity rows + 7 identity counts + 11 setup values + 12 run counts.
+    expect(partial.coverage).toMatchObject({ expectedCount: 45, observedCount: 35, missingCount: 10, complete: false });
 
     // A new source version must also be a newer observation; an equal time under another version is a conflict.
     clock.now = sourcingTestTime + 1000;
@@ -134,23 +134,22 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect(sourcingPlanSchema.parse(stale.data).plan!.capacity.every((r) => r.dispatchBlocked)).toBe(true);
   });
 
-  it("rejects forged filters, cursors and envelope fields with canonical errors before the source is read", async () => {
+  it("rejects forged filters, cursors and envelope fields through the shared read union before the source is read", async () => {
     const { counter, source } = tracked(() => sourcingSourceFixture());
     const { read } = await start({ sourcingPlanSource: source });
     for (const filters of [{ fixture: "discovery-demo" }, { scenario: "ready" }, { workspaceId: "synthetic-foreign-workspace" }, { sourceAccount: "synthetic-other" }, null]) {
       const forged = await read({ filters });
-      expect(forged.status).toBe(422);
-      expectCanonicalError(forged.body, "VALIDATION_FAILED", 422);
-      expect(Object.keys(forged.body.fieldErrors).every((key: string) => key.startsWith("filters"))).toBe(true);
+      expect(forged.status).toBe(400);
+      expectCanonicalError(forged.body, "INVALID_INPUT", 400);
     }
     for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }]) {
       const refused = await read(overrides);
-      expect(refused.status).toBe(422);
-      expectCanonicalError(refused.body, "VALIDATION_FAILED", 422);
+      expect(refused.status).toBe(400);
+      expectCanonicalError(refused.body, "INVALID_INPUT", 400);
     }
     const cursor = await read({ page: { cursor: "sc1.synthetic", limit: 50 } });
-    expect(cursor.status).toBe(422);
-    expectCanonicalError(cursor.body, "INVALID_CURSOR", 422);
+    expect(cursor.status).toBe(400);
+    expectCanonicalError(cursor.body, "INVALID_CURSOR", 400);
     expect(counter.reads).toBe(0);
   });
 
@@ -169,7 +168,7 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     mode = "valid-date";
     expect((await read()).status).toBe(200);
     for (const [next, status, code] of [["malformed", 502, "SOURCE_RESPONSE_INVALID"], ["impossible-date", 502, "SOURCE_RESPONSE_INVALID"],
-      ["denied", 403, "SOURCE_AUTHORITY_DENIED"], ["foreign", 403, "SOURCE_SCOPE_DENIED"]] as const) {
+      ["denied", 503, "SOURCE_AUTHORITY_DENIED"], ["foreign", 403, "SOURCE_SCOPE_DENIED"]] as const) {
       mode = next;
       const result = await read();
       expect(result.status).toBe(status);
@@ -241,16 +240,32 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect((await read({}, "reviewer")).status).toBe(200);
   });
 
-  it("judges the lease over HTTP at response time, after the source read has completed", async () => {
-    // The clock advances 1ms per read once the source has answered; the lease ends exactly when the response is projected.
+  it("judges the lease over HTTP at the response time it reports", async () => {
+    // The clock advances 1ms per reading once the source has answered, and the lease ends 2ms after the source time.
     const clock = { now: sourcingTestTime, ticking: false };
     const snapshot = sourcingSourceFixture();
     snapshot.validUntil = new Date(sourcingTestTime + 2).toISOString();
     const { read } = await start({ operations: { now: () => clock.ticking ? ++clock.now : clock.now },
       sourcingPlanSource: async () => { clock.ticking = true; return structuredClone(snapshot); } });
     const result = planEnvelope.parse((await read()).body);
-    expect(result).toMatchObject({ dataState: "stale", coverage: { complete: false }, sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_STALE" }] });
-    expect(sourcingPlanSchema.parse(result.data)).toMatchObject({ sourceState: "expired", freshness: "stale", plan: { schedule: { effectiveState: "draft" } } });
+    const data = sourcingPlanSchema.parse(result.data);
+    // A current answer is current at the time it reports; otherwise it is stale and the schedule is not active.
+    if (data.sourceState === "current") expect(Date.parse(data.observedAt)).toBeLessThan(Date.parse(data.validUntil!));
+    else expect(result).toMatchObject({ dataState: "stale", data: { plan: { schedule: { effectiveState: "draft" } } } });
+
+    // The lease lapses while the source is awaited: the response is stale over HTTP.
+    clock.ticking = false; clock.now = sourcingTestTime + 10;
+    const lapsing = { ...sourcingSourceFixture(sourcingTestScope, sourcingTestTime + 10), version: "synthetic-plan-source-lapsing" };
+    lapsing.validUntil = new Date(sourcingTestTime + 11).toISOString();
+    const second = await start({ operations: { now: () => clock.now }, sourcingPlanSource: async () => { clock.now = sourcingTestTime + 12; return structuredClone(lapsing); } });
+    expect(planEnvelope.parse((await second.read()).body)).toMatchObject({ dataState: "stale", sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_STALE" }] });
+  });
+
+  it("answers a source refusing the server's credential as an upstream outage, not as the caller being forbidden", async () => {
+    const { read } = await start({ sourcingPlanSource: async () => { throw new SourcingError("UPSTREAM_DENIED", 401); } });
+    const refused = await read();
+    expect(refused.status).toBe(503);
+    expectCanonicalError(refused.body, "SOURCE_AUTHORITY_DENIED", 503);
   });
 
   it("leaves every other read view on the shared read union", async () => {

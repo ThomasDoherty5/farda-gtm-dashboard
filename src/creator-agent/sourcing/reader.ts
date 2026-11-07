@@ -1,10 +1,9 @@
 import { createHmac } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { z } from "zod";
 import { digest } from "../config.ts";
 import type { OperationsScope } from "../operations.ts";
 import {
-  SOURCING_CLOCK_SKEW_MS, SOURCING_PLAN_MAX_AGE_MS, SOURCING_PLAN_VIEW, capacityUnits, recruitmentSources, runStateKeys, sourcingPlanFilters, sourcingPlanSchema,
+  SOURCING_CLOCK_SKEW_MS, SOURCING_PLAN_MAX_AGE_MS, capacityUnits, recruitmentSources, runStateKeys, sourcingPlanFilters, sourcingPlanSchema,
   type CapacityKind, type MissingReason, type ObservedCount, type SourcingPlan, type SourcingPlanBody,
 } from "./contract.ts";
 import { SourcingError, sourcingSnapshotSchema, type SourcingPlanSourceReader, type SourcingSnapshot } from "./source.ts";
@@ -14,9 +13,11 @@ type Role = "reader" | "reviewer";
 type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: SourcingPlanSourceReader; now?: () => number; sourceTimeoutMs?: number };
 /** `validUntil` is the earlier of the source's lease and the server's maximum age. */
 type SourceRead = { snapshot: SourcingSnapshot | null; state: SourcingPlan["sourceState"]; reason: string | null; validUntil: string | null };
-/** A verified snapshot with its lease bounds. Whether the lease still holds is decided at projection time, never before. */
-type Observation = { snapshot: SourcingSnapshot; leaseEnd: number; ageLimit: number };
+/** A parsed, in-scope snapshot. Its clock checks, persistence and lease are all decided at projection time, never before. */
+type Observation = { snapshot: SourcingSnapshot; factsHash: string };
 type Capability = { actionKind: string; state: "available" | "held" | "denied"; reasonCodes: string[] };
+/** The already-parsed `/v1/read` request for this view. */
+type SourcingPlanRequest = { requestId: string; requestedScope: { workspaceId: string; accountIds: string[]; environment: string }; filters: unknown };
 export type SourcingPlanReadResult = {
   data: SourcingPlan; version: string; dataState: "ready" | "partial" | "stale" | "unavailable";
   /** Counts are null, not zero, when no plan was read: nothing is known about what was expected. */
@@ -52,7 +53,9 @@ export function createSourcingPlanReader(options: Options) {
     try {
       raw = await Promise.race([source({ ...scope }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("SOURCE_TIMEOUT")), timeoutMs); })]);
     } catch (error) {
-      if (error instanceof SourcingError && (error.status === 401 || error.status === 403)) fail("SOURCE_AUTHORITY_DENIED", 403);
+      // The source refused this server's own credential. That is an upstream outage, not the caller being forbidden:
+      // the browser keeps its data and does not say "No access".
+      if (error instanceof SourcingError && (error.status === 401 || error.status === 403)) fail("SOURCE_AUTHORITY_DENIED", 503);
       return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE", validUntil: null };
     } finally { clearTimeout(timer); }
     if (raw === null) return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE", validUntil: null };
@@ -61,11 +64,12 @@ export function createSourcingPlanReader(options: Options) {
     if (!parsed.success) fail("SOURCE_RESPONSE_INVALID", 502);
     const s = parsed.data!;
     if (digest(s.scope) !== digest(scope)) fail("SOURCE_SCOPE_DENIED", 403);
-    const current = now();
-    // A small, documented clock skew is tolerated; an observation further in the future is refused.
-    if (!Number.isFinite(current) || Date.parse(s.observedAt) > current + SOURCING_CLOCK_SKEW_MS) fail("SOURCE_RESPONSE_INVALID", 502);
     const { observedAt, validUntil, ...facts } = s; void observedAt; void validUntil;
-    const factsHash = digest(facts);
+    return { snapshot: s, factsHash: digest(facts) };
+  }
+
+  /** Records the source head. Runs only after the snapshot passed its clock check, so a refused snapshot never becomes the head. */
+  function persist({ snapshot: s, factsHash }: Observation) {
     tx(() => {
       const previous = db.prepare("SELECT facts_hash FROM sourcing_plan_source_versions WHERE version=?").get(s.version);
       if (previous && previous.facts_hash !== factsHash) fail("SOURCE_VERSION_CHANGED", 409);
@@ -75,13 +79,13 @@ export function createSourcingPlanReader(options: Options) {
       db.prepare("INSERT OR IGNORE INTO sourcing_plan_source_versions VALUES(?,?)").run(s.version, factsHash);
       db.prepare("INSERT INTO sourcing_plan_source_head VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,observed_at=excluded.observed_at").run(s.version, s.observedAt);
     });
-    // The server's maximum age applies whatever lease the source claims.
-    const ageLimit = Date.parse(s.observedAt) + SOURCING_PLAN_MAX_AGE_MS;
-    return { snapshot: s, leaseEnd: Math.min(Date.parse(s.validUntil), ageLimit), ageLimit };
   }
 
-  /** Lease, maximum age and coverage, judged at `at`: the time the response is projected, after every await has settled. */
-  function classify({ snapshot: s, leaseEnd, ageLimit }: Observation, at: number): SourceRead {
+  /** Lease, maximum age and coverage, judged at `at`: the one clock reading the response is projected at. */
+  function classify(s: SourcingSnapshot, at: number): SourceRead {
+    // The server's maximum age applies whatever lease the source claims.
+    const ageLimit = Date.parse(s.observedAt) + SOURCING_PLAN_MAX_AGE_MS;
+    const leaseEnd = Math.min(Date.parse(s.validUntil), ageLimit);
     const expired = leaseEnd <= at;
     const reason = !expired ? s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null : ageLimit <= at && ageLimit <= Date.parse(s.validUntil) ? "SOURCE_MAX_AGE_EXCEEDED" : "SOURCE_STALE";
     return { snapshot: s, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current", reason, validUntil: new Date(leaseEnd).toISOString() };
@@ -115,10 +119,14 @@ export function createSourcingPlanReader(options: Options) {
       const leaseExpired = read.state === "expired" || r.validUntil !== null && Date.parse(r.validUntil) <= at;
       const aged = r.observedAt !== null && at - Date.parse(r.observedAt) > SOURCING_PLAN_MAX_AGE_MS;
       const resetPassed = r.resetAt !== null && Date.parse(r.resetAt) <= at && (r.observedAt === null || Date.parse(r.observedAt) < Date.parse(r.resetAt));
+      // A remaining allowance with an unknown limit or usage is not a current reading: the row stays unknown and blocks
+      // dispatch, while the known remaining value is still served as data.
+      const dimensionUnknown = ![r.limit, r.used].every(resolved);
       const state = r.remaining.missingReason === "NOT_APPLICABLE" ? "notApplicable" as const : r.remaining.value === null ? "unknown" as const
-        : leaseExpired || aged || resetPassed ? "stale" as const : "current" as const;
-      const blockReason = state === "notApplicable" ? null : state === "unknown" ? r.remaining.missingReason === "CAPACITY_NOT_REPORTED" ? "CAPACITY_NOT_REPORTED" : "CAPACITY_UNKNOWN"
-        : state === "stale" ? resetPassed ? "CAPACITY_RESET_STALE" : aged ? "CAPACITY_MAX_AGE_EXCEEDED" : "CAPACITY_LEASE_EXPIRED" : r.remaining.value === 0 ? "CAPACITY_EXHAUSTED" : null;
+        : leaseExpired || aged || resetPassed ? "stale" as const : dimensionUnknown ? "unknown" as const : "current" as const;
+      const blockReason = state === "notApplicable" ? null : r.remaining.value === 0 && state !== "stale" ? "CAPACITY_EXHAUSTED"
+        : state === "unknown" ? r.remaining.value !== null ? "CAPACITY_DIMENSION_UNKNOWN" : r.remaining.missingReason === "CAPACITY_NOT_REPORTED" ? "CAPACITY_NOT_REPORTED" : "CAPACITY_UNKNOWN"
+        : state === "stale" ? resetPassed ? "CAPACITY_RESET_STALE" : aged ? "CAPACITY_MAX_AGE_EXCEEDED" : "CAPACITY_LEASE_EXPIRED" : null;
       return { ...r, receipt: r.receipt ? alias("receipt", r.receipt) : null, state, dispatchBlocked: blockReason !== null, blockReason };
     });
     const capacityHolds = capacity.filter((r) => r.blockReason).map((r) => `${r.blockReason}:${r.source}:${r.kind}`);
@@ -138,26 +146,38 @@ export function createSourcingPlanReader(options: Options) {
     if (role !== "reader" && role !== "reviewer") fail("FORBIDDEN", 403);
     if (!sourcingPlanFilters.safeParse(rawFilters).success) fail("VALIDATION_FAILED", 422);
     const observation = await observe();
-    // Re-read the clock once the source observation (and its head write) has completed. A lease that ends while the
-    // source is awaited is expired here, so it can never be projected as current, active or complete.
+    // One clock reading, taken once the source has answered, decides the skew check, the head write, the lease, freshness
+    // and schedule, and is the response time. A lease that ends while the source is awaited is expired here, and a clock
+    // step between two readings can never let a future observation through.
     const at = now();
-    if (!Number.isFinite(at)) fail("SOURCE_RESPONSE_INVALID", 502);
-    const s = "leaseEnd" in observation ? classify(observation, at) : observation, observedAt = new Date(at).toISOString();
+    let s: SourceRead;
+    if ("factsHash" in observation) {
+      // A small, documented clock skew is tolerated; an observation further in the future is refused.
+      if (!Number.isFinite(at) || Date.parse(observation.snapshot.observedAt) > at + SOURCING_CLOCK_SKEW_MS) fail("SOURCE_RESPONSE_INVALID", 502);
+      persist(observation);
+      s = classify(observation.snapshot, at);
+    } else s = observation;
+    const observedAt = new Date(at).toISOString();
     const plan = s.snapshot ? project(s.snapshot, s, at) : null;
     const data = sourcingPlanSchema.parse({
       kind: "agent-sourcing-plan", observedAt, sourceAsOf: s.snapshot?.observedAt ?? null, sourceVersion: s.snapshot ? alias("source", s.snapshot.version) : null,
       validUntil: s.validUntil, freshness: s.state === "expired" ? "stale" : s.snapshot ? "current" : "unknown",
       coverage: s.snapshot?.coverage ?? "unknown", sourceState: s.state, missingReason: s.reason, plan,
     });
-    // The full expected set: every step, every expected capacity row, every identity count and, once a run exists, every run count.
+    // The full expected set: every step, every expected capacity row, every identity count, every setup value and, once a run
+    // exists, every run count.
     let expectedCount = 0, observedCount = 0;
     const tally = (values: ObservedCount[]) => { expectedCount += values.length; observedCount += values.filter(resolved).length; };
     if (plan) {
       tally(plan.steps.map((x) => x.count));
-      // A capacity row is observed only when it is current and every displayed dimension (limit, used, remaining) is known
-      // or not applicable. A valid remaining grant still stands, but an unknown limit or usage keeps coverage partial.
-      expectedCount += plan.capacity.length;
-      observedCount += plan.capacity.filter((r) => r.state === "notApplicable" || r.state === "current" && [r.limit, r.used, r.remaining].every(resolved)).length;
+      // A capacity row is observed only when current (every displayed dimension known) or wholly not applicable.
+      expectedCount += plan.capacity.length; observedCount += plan.capacity.filter((r) => r.state === "current" || r.state === "notApplicable").length;
+      // Setup the schedule depends on: each account, its access and session, the two versions and, unless the schedule is
+      // unconfigured (where none exists), its cadence, timezone and next run. Unknown setup is never ready.
+      const unconfigured = plan.schedule.declaredState === "unconfigured";
+      const setup = [...plan.sources.flatMap((a) => [a.accountRef !== null, a.access !== "unknown", a.session !== "unknown"]), plan.icpVersion !== null, plan.policyVersion !== null,
+        unconfigured || plan.schedule.cadence !== null, unconfigured || plan.schedule.timezone !== null, unconfigured || plan.schedule.nextRunAt !== null];
+      expectedCount += setup.length; observedCount += setup.filter(Boolean).length;
       const { evidenceRefs: _refs, ...identity } = plan.identity; void _refs;
       tally(Object.values(identity));
       const run = plan.latestRun;
@@ -180,21 +200,13 @@ export function createSourcingPlanReader(options: Options) {
   }
 
   /**
-   * Success body for `POST /v1/read`. It runs behind the server's shared authentication and per-principal read admission;
-   * every refusal is thrown as a SourcingError for the shared error envelope. Nothing reaches the source before scope and filters pass.
+   * Success body for `POST /v1/read`. The server parses the request through its shared read union (scope, envelope, filters
+   * and cursor) behind its shared authentication and read admission; source refusals are thrown as SourcingError for the
+   * shared error envelope.
    */
-  async function respond(raw: unknown, role: Role, schemaVersion: string) {
-    const issues = (error: z.ZodError, prefix: string) => Object.fromEntries(error.issues.slice(0, 20).map((i) => [[prefix, ...i.path].filter(Boolean).join(".") || "request", i.message]));
-    const envelope = envelopeSchema(schemaVersion).safeParse(raw);
-    if (!envelope.success) throw new SourcingError("VALIDATION_FAILED", 422, issues(envelope.error, ""));
-    const input = envelope.data;
+  async function respond(input: SourcingPlanRequest, role: Role, schemaVersion: string) {
     const requested = input.requestedScope;
-    if (requested.workspaceId !== scope.workspaceId || requested.environment !== scope.environment || requested.accountIds.length !== 1 || requested.accountIds[0] !== scope.accountId)
-      fail("FORBIDDEN", 403);
-    if (input.page.cursor !== null) fail("INVALID_CURSOR", 422);
-    const filters = sourcingPlanFilters.safeParse(input.filters);
-    if (!filters.success) throw new SourcingError("VALIDATION_FAILED", 422, issues(filters.error, "filters"));
-    const result = await read(filters.data, role);
+    const result = await read(input.filters, role);
     const freshnessState = result.data.sourceState === "unconfigured" ? "neverSynced" : result.data.sourceState === "unavailable" || result.data.sourceState === "expired" ? "error"
       : result.data.sourceState === "partial" ? "partial" : "current";
     return {
@@ -209,12 +221,3 @@ export function createSourcingPlanReader(options: Options) {
   }
   return { read, respond };
 }
-
-const envelopeSchema = (schemaVersion: string) => z.object({
-  schemaVersion: z.literal(schemaVersion), operation: z.literal("readView"), requestId: z.string().trim().min(1).max(240), viewKey: z.literal(SOURCING_PLAN_VIEW),
-  requestedScope: z.object({ workspaceId: z.string().max(240), accountIds: z.array(z.string().max(240)).max(10), environment: z.string().max(40) }).strict(),
-  filters: z.unknown(), period: z.null(), sort: z.array(z.never()).max(0), page: z.object({ cursor: z.string().max(4100).nullable(), limit: z.number().int().min(1).max(100) }).strict(),
-}).strict();
-
-/** True when a `/v1/read` body names the daily sourcing plan, so the server routes it here before the shared read union. */
-export const isSourcingPlanRead = (raw: unknown) => typeof raw === "object" && raw !== null && (raw as { viewKey?: unknown }).viewKey === SOURCING_PLAN_VIEW;

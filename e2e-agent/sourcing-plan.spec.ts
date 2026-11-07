@@ -56,12 +56,14 @@ test("the daily plan detail reads the served sourcing plan over actual HTTP and 
     await expect(page.getByTestId("live-plan-schedule")).toContainText("Draft · not active · source claims active");
     await expect(page.getByTestId("live-plan-schedule-holds")).toContainText("BROWSER_SESSION_CLOSED:tiktok-shop");
 
-    // A source denial clears the plan rather than leaving the last answer on screen.
+    // The source refusing the server's own credential is an upstream outage: the page says the data is unavailable,
+    // never that this user has no access, and shows no plan it could not read.
     denied = true;
     await page.reload();
+    await expect(page.getByText("Data unavailable")).toBeVisible();
+    await expect(page.getByText("No access to this account")).toHaveCount(0);
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByTestId("live-plan-versions")).toHaveCount(0);
-    await expect(page.getByText("No access to this account")).toBeVisible();
   } finally { await app.close(); }
 
   // With no source configured, the same route says so: no demo plan and no zeros.

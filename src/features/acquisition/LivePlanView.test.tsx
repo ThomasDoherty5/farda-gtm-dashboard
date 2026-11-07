@@ -4,6 +4,7 @@ import { SCHEMA_VERSION, type ReadRequest } from "@/adapter/contract";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { TransportFailure, type Transport } from "@/adapter/transport";
+import { AdapterError, mustClearProtectedData } from "@/adapter/errors";
 import { AgentStore } from "@/creator-agent/store";
 import { apiErrorEnvelope } from "@/creator-agent/apiErrorEnvelope";
 import { createSourcingPlanReader } from "@/creator-agent/sourcing/reader";
@@ -28,7 +29,7 @@ function served(snapshot: SourcingSnapshot | null | (() => Promise<unknown>), at
   const requests: ReadRequest<unknown>[] = [];
   const transport: Transport = { send: async ({ envelope }) => {
     requests.push(envelope as ReadRequest<unknown>);
-    try { return await reader.respond(JSON.parse(JSON.stringify(envelope)), role, SCHEMA_VERSION); }
+    try { return await reader.respond(JSON.parse(JSON.stringify(envelope)) as ReadRequest<Record<string, never>>, role, SCHEMA_VERSION); }
     catch (error) {
       if (!(error instanceof SourcingError)) throw error;
       throw new TransportFailure("http", { status: error.status, body: apiErrorEnvelope(error.status,
@@ -90,13 +91,30 @@ describe("the live daily plan detail", () => {
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 
-  it("shows the denial message from a real source refusal, and no plan data", async () => {
+  it("treats the source refusing the server's credential as unavailable data, not as the user having no access", async () => {
     const { adapter } = served(async () => { throw new SourcingError("UPSTREAM_DENIED", 403); });
+    const failure = await adapter.readView({ schemaVersion: SCHEMA_VERSION, operation: "readView", requestId: "synthetic-denied-read", viewKey: "sourcingPlan",
+      requestedScope: { workspaceId, accountIds, environment: "sandbox" }, filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 } }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AdapterError);
+    expect((failure as AdapterError).category).toBe("unavailable");
+    expect(mustClearProtectedData((failure as AdapterError).category)).toBe(false);
     renderRoute("/creators/discovery?view=plan", adapter);
-    expect(await screen.findByText("No access to this account")).toBeInTheDocument();
-    expect(screen.getByText(/You don't have permission to view this account's data/)).toBeInTheDocument();
+    expect(await screen.findByText("Data unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("No access to this account")).not.toBeInTheDocument();
     expect(screen.queryByTestId("live-plan-versions")).not.toBeInTheDocument();
-    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
+  it("shows a remaining allowance with an unknown limit as Unknown and blocked, keeping the remaining value", async () => {
+    const snapshot = sourcingSourceFixture(serviceScope);
+    snapshot.capacity[0]!.limit = { value: null, missingReason: "SOURCE_LIMIT_NOT_PUBLISHED" };
+    renderRoute("/creators/discovery?view=plan", served(snapshot).adapter);
+    await screen.findByTestId("live-plan-schedule");
+    const social = row("Source capacity in native units", "Social Cat · Invitations");
+    expect(social).toHaveTextContent("30 invitations");
+    expect(social).toHaveTextContent("Unknown");
+    expect(social).toHaveTextContent("Blocked · CAPACITY_DIMENSION_UNKNOWN");
+    expect(social).not.toHaveTextContent("Current");
+    expect(social).not.toHaveTextContent("Not blocked by this row");
   });
 
   it("tells a reader that the reviewer role is required, without implying a reviewer could request approval now", async () => {
