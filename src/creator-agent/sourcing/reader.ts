@@ -165,31 +165,25 @@ export function createSourcingPlanReader(options: Options) {
     };
   }
 
-  /** Adapter envelope for `POST /v1/read`. Every refusal is a canonical D-14 error body; nothing reaches the source before scope and filters pass. */
-  async function respond(raw: unknown, role: Role, schemaVersion: string): Promise<{ status: number; body: unknown }> {
-    const requestId = typeof (raw as { requestId?: unknown })?.requestId === "string" ? String((raw as { requestId: string }).requestId).slice(0, 240) : null;
-    const refuse = (status: number, code: string, message: string, fieldErrors?: Record<string, string>) => ({ status, body: {
-      code, message, requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" as const, ...(fieldErrors ? { fieldErrors } : {}) } });
+  /**
+   * Success body for `POST /v1/read`. It runs behind the server's shared authentication and per-principal read admission;
+   * every refusal is thrown as a SourcingError for the shared error envelope. Nothing reaches the source before scope and filters pass.
+   */
+  async function respond(raw: unknown, role: Role, schemaVersion: string) {
     const issues = (error: z.ZodError, prefix: string) => Object.fromEntries(error.issues.slice(0, 20).map((i) => [[prefix, ...i.path].filter(Boolean).join(".") || "request", i.message]));
     const envelope = envelopeSchema(schemaVersion).safeParse(raw);
-    if (!envelope.success) return refuse(422, "VALIDATION_FAILED", "The daily sourcing plan request is not valid.", issues(envelope.error, ""));
+    if (!envelope.success) throw new SourcingError("VALIDATION_FAILED", 422, issues(envelope.error, ""));
     const input = envelope.data;
     const requested = input.requestedScope;
     if (requested.workspaceId !== scope.workspaceId || requested.environment !== scope.environment || requested.accountIds.length !== 1 || requested.accountIds[0] !== scope.accountId)
-      return refuse(403, "FORBIDDEN", "This scope is not available.");
-    if (input.page.cursor !== null) return refuse(422, "INVALID_CURSOR", "The daily sourcing plan has one page.");
+      fail("FORBIDDEN", 403);
+    if (input.page.cursor !== null) fail("INVALID_CURSOR", 422);
     const filters = sourcingPlanFilters.safeParse(input.filters);
-    if (!filters.success) return refuse(422, "VALIDATION_FAILED", "The daily sourcing plan accepts no filters.", issues(filters.error, "filters"));
-    let result: SourcingPlanReadResult;
-    try { result = await read(filters.data, role); }
-    catch (error) {
-      if (!(error instanceof SourcingError)) throw error;
-      const message = error.status === 403 ? "This source is not available." : error.status === 409 ? "The sourcing source changed. Refresh to read the current plan." : "The sourcing source returned an unreadable plan.";
-      return refuse(error.status, error.code, message);
-    }
+    if (!filters.success) throw new SourcingError("VALIDATION_FAILED", 422, issues(filters.error, "filters"));
+    const result = await read(filters.data, role);
     const freshnessState = result.data.sourceState === "unconfigured" ? "neverSynced" : result.data.sourceState === "unavailable" || result.data.sourceState === "expired" ? "error"
       : result.data.sourceState === "partial" ? "partial" : "current";
-    return { status: 200, body: {
+    return {
       schemaVersion, requestId: input.requestId, scope: { ...requested, authorizationScopeVersion: "creator-agent.scope.v1" },
       dataVersion: result.version, dataState: result.dataState, data: result.data,
       sourceFreshness: [{ sourceRef: { source: "j19-daily-sourcing", accountId: scope.accountId, sourceId: null, canonicalId: result.data.plan?.planRef ?? null, url: null,
@@ -197,7 +191,7 @@ export function createSourcingPlanReader(options: Options) {
       lastSourceSuccessAt: result.data.sourceAsOf, observedAt: result.data.observedAt, mirroredAt: null,
       staleReasonCode: freshnessState === "current" ? null : result.data.missingReason, freshnessState }],
       coverage: result.coverage, capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null },
-    } };
+    };
   }
   return { read, respond };
 }

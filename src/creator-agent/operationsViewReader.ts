@@ -93,7 +93,9 @@ export function readOperationsView(input: Input) {
         }),
         records: rows.map(row => {
           const run = input.jobs.getRun(String(row.run_id));
-          const results = run.items.flatMap(item => item.result ? [item.result.artifactRef] : []);
+          const results = run.items.flatMap(item => item.result
+            ? [item.result.schemaVersion === "job-local-result.v1" ? item.result.artifactRef : item.result.receiptRef]
+            : []);
           return { id: alias("run", run.runId), job: alias("job", run.jobId), correlation: alias("event", run.eventId), version: run.definition.version, mode: run.definition.mode,
             observedAt: run.observedAt, state: run.state, items: run.counts.total, completed: run.counts.completed, blockers: safeReasons(run.blockerCodes),
             receiptCount: results.length, receipt: results[0] ? alias("receipt", results[0]) : null };

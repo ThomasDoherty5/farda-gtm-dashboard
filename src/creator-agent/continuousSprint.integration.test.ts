@@ -85,14 +85,16 @@ describe("continuous sprint authenticated integration boundaries", () => {
   it("does not certify a missing request from stale or partial source evidence", async () => {
     let clock = Date.parse(stockTestTime), partial = false;
     const { read } = await start({ operations: { now: () => clock }, stockSupportSource: {
-      readInventory: async scope => ({ ...inventorySourceFixture(scope), coverage: partial ? "partial" : "complete" }),
+      readInventory: async scope => ({ ...inventorySourceFixture(scope),
+        observedAt: partial ? new Date(clock).toISOString() : stockTestTime, coverage: partial ? "partial" : "complete" }),
       readSupport: async scope => supportSourceFixture(scope),
     } });
     clock += 16 * 60_000;
     const stale = await read("inventoryOverview", { proposalRequestKey: "uncertain-original-key" }, true);
     expect(stale.status).toBe(409);
     expect(stale.data.code).toBe("SOURCE_STALE");
-    clock = Date.parse(stockTestTime); partial = true;
+    // Renew the source observation without moving the service/admission clock backward.
+    partial = true;
     const incomplete = await read("inventoryOverview", { proposalRequestKey: "uncertain-original-key" }, true);
     expect(incomplete.status).toBeGreaterThanOrEqual(400);
     expect(incomplete.data.code).toBe("SOURCE_COVERAGE_PARTIAL");

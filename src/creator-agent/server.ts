@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { evidencePacketSchema } from "./evidence.ts";
-import type { ConfigBinding } from "./config.ts";
+import { digest, type ConfigBinding } from "./config.ts";
 import { AGENT_SCHEMA_VERSION, POLICY_VERSION, AGENT_VERSION } from "./assessmentSchema.ts";
 import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
@@ -14,7 +14,7 @@ import { handlePortfolioRoute } from "./portfolioRoutes.ts";
 import { AssetRepository } from "./assetStore.ts";
 import { handleAssetRoute } from "./assetRoutes.ts";
 import type { AssetAuthority } from "./assets.ts";
-import { agentAssessmentRecordSchema, agentSourcingSchema } from "./readViews.ts";
+import { agentAssessmentRecordSchema, agentSourcingSchema, nativeRecruitmentViewSchema } from "./readViews.ts";
 import { createOperations, operationsErrorStatus, safeOperationsProjection, OPERATIONS_SCHEMA_VERSION, type OperationsOptions } from "./operations.ts";
 import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader.ts";
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
@@ -31,14 +31,23 @@ import { protectCommentAuthors } from "./evidencePrivacy.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
+import { OfferPolicyError } from "./offers/policy.ts";
+import type { CommercialPolicySource } from "./commercialPolicy/contract.ts";
+import { withCommercialOffers } from "./commercialPolicy/approvalGuard.ts";
+import { createCommercialProjection, CommercialProjectionError, type CommercialProjection } from "./commercialPolicy/projection.ts";
+import { createRecruitmentSourceReader, recruitmentFiltersSchema, RecruitmentSourceError, type RecruitmentSource } from "./commercialPolicy/recruitment.ts";
 import { IntakeRepository, type IntakeAuthority } from "./intake/repository.ts";
 import { handleIntakeRoute } from "./intake/routes.ts";
 import { RewardRedemptionRepository, type RewardAuthority } from "./rewards/repository.ts";
 import { handleRewardRoute } from "./rewards/routes.ts";
-import { routeId as offerIdSchema } from "./offers/contract.ts";
+import { createRewardDomainBridge, type RewardRegistration } from "./rewards/approvalBridge.ts";
+import type { RewardDomainSource } from "./rewards/canonicalContract.ts";
+import { routeId as offerIdSchema, type AssessmentBasis } from "./offers/contract.ts";
 import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelStore.ts";
 import { funnelFilterSchema } from "./funnelContract.ts";
 import { readScorecardPreview, scorecardPreviewFilters } from "./scorecardPreview.ts";
+import { createMediaComposition, type MediaComposition, type MediaDomainBindings } from "./mediaComposition.ts";
+import { createMediaResources } from "./mediaResources.ts";
 import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
 import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
 import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
@@ -48,7 +57,18 @@ import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifec
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
 import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
-import { createSourcingPlanReader, isSourcingPlanRead } from "./sourcing/reader.ts";
+import { createActionFoundation, assertMachineTokens, type ActionFoundationBindings } from "./actionFoundation.ts";
+import { foundationActionSchema, domainActionSchema } from "./actions/wire.ts";
+import { ActionServiceError } from "./actions/contract.ts";
+import { ApprovalError } from "./approvals/contract.ts";
+import { DispatchError } from "./jobs/dispatchSchema.ts";
+import { apiRequestKind } from "./apiRequestLimits.ts";
+import { apiErrorEnvelope } from "./apiErrorEnvelope.ts";
+import { composeActionDomains } from "./actionDomains.ts";
+import { JobRuntime } from "./jobs/runtime.ts";
+import { RuntimeError, type RuntimeAuthority, type RuntimeRegistry } from "./jobs/runtimeSchema.ts";
+import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type RuntimeMachineBinding } from "./jobs/runtimeApi.ts";
+import { createSourcingPlanReader, isSourcingPlanRead, SourcingError } from "./sourcing/reader.ts";
 import type { SourcingPlanSourceReader } from "./sourcing/source.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
@@ -73,6 +93,13 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
   sourcingPlanSource?: SourcingPlanSourceReader;
+  /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
+  commercialPolicy?: CommercialPolicySource;
+  recruitmentSource?: RecruitmentSource;
+  rewardDomain?: { source: RewardDomainSource; registration: RewardRegistration };
+  mediaDomain?: MediaDomainBindings;
+  actionFoundation?: ActionFoundationBindings;
+  runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -80,6 +107,19 @@ const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), 
 export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
+  assertMachineTokens(options.actionFoundation, options.readToken, options.reviewToken);
+  if (options.runtime?.machine) {
+    const token = options.runtime.machine.token;
+    if (token.length < 32 || [options.readToken, options.reviewToken, options.actionFoundation?.worker?.token,
+      options.actionFoundation?.decisionRelay?.token].some(other => other !== undefined && safeEqual(token, other)))
+      throw new Error("Runtime machine authority requires its own distinct server-only credential.");
+  }
+  if (options.commercialPolicy && options.offerAuthority?.commercialPolicy && options.commercialPolicy !== options.offerAuthority.commercialPolicy)
+    throw new Error("One shared commercial policy source is required");
+  const commercialPolicy = options.commercialPolicy ?? options.offerAuthority?.commercialPolicy;
+  if (commercialPolicy && options.rewardAuthority?.commercialPolicy && commercialPolicy !== options.rewardAuthority.commercialPolicy)
+    throw new Error("Reward consumers require one shared commercial policy source");
+  if (options.rewardDomain && !commercialPolicy) throw new Error("Reward domain requires the shared commercial policy source");
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
   let operations: ReturnType<typeof createOperations>;
   let providerHealth: ReturnType<typeof createProviderHealth>;
@@ -98,9 +138,17 @@ export function createAgentServer(options: AgentServerOptions) {
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
   let sourcingPlan: ReturnType<typeof createSourcingPlanReader>;
+  let actionFoundation: ReturnType<typeof createActionFoundation>;
+  let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
+  let mediaDomain: MediaComposition | undefined;
+  let runtime: JobRuntime;
+  let runtimeApi: ReturnType<typeof createRuntimeApi>;
+  let commercialProjection: ReturnType<typeof createCommercialProjection>;
+  let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
+      commercialPolicy,
       assessment: creatorId => {
         const record = store.latest(creatorId);
         if (!record) return null;
@@ -108,14 +156,20 @@ export function createAgentServer(options: AgentServerOptions) {
         return { runId: record.runId, creatorId, route: record.packet.checkoutRoute, modelId: assessment.modelId, configHash: assessment.config.hash,
           policyVersion: assessment.policyVersion, state: assessment.state, termsRevision: record.packet.termsRevision, stale };
       },
-    });
+    }, { now: options.operations?.now });
     intake = new IntakeRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.intakeAuthority);
-    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.rewardAuthority);
+    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId },
+      { ...options.rewardAuthority, commercialPolicy: commercialPolicy ?? options.rewardAuthority?.commercialPolicy },
+      () => new Date((options.operations?.now ?? Date.now)()));
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    commercialProjection = createCommercialProjection({ offers, db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret, now: options.operations?.now });
+    recruitment = createRecruitmentSourceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      source: options.recruitmentSource, secret: operationsSecret, now: options.operations?.now });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
     stockSupport = createStockSupportWorkflow(store.database,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
@@ -133,6 +187,52 @@ export function createAgentServer(options: AgentServerOptions) {
     sourcingPlan = createSourcingPlanReader({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       source: options.sourcingPlanSource, now: options.operations?.now });
+    if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
+      registration: options.rewardDomain.registration, now: options.operations?.now,
+    });
+    if (options.mediaDomain) mediaDomain = createMediaComposition({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      bindings: options.mediaDomain, now: options.operations?.now,
+      stageApprovals: { resolveCurrentProof: binding => actionFoundation.approvals.resolveCurrentProof(binding),
+        assertCurrentProof: (proof, timestamp) => actionFoundation.approvals.assertCurrentProof(proof, timestamp) } });
+    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : [])]);
+    if (mediaDomain && actionBindings) actionBindings = { ...actionBindings, resources: createMediaResources(actionBindings.resources, mediaDomain) };
+    if (actionBindings?.approvals?.registry) actionBindings = { ...actionBindings, approvals: { ...actionBindings.approvals,
+      registry: withCommercialOffers(actionBindings.approvals.registry, offers, options.operations?.now) } };
+    if (actionBindings?.worker) {
+      const worker = actionBindings.worker;
+      actionBindings = { ...actionBindings, worker: { ...worker, assertCurrent: (proof, timestamp) => {
+        // Ownership can change while machine/source proof is awaited. Recheck inside the
+        // existing dispatch transaction and immediately before each effect as well.
+        if (runtime?.ownsRun(proof.runRef)) throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
+        worker.assertCurrent(proof, timestamp);
+        if (runtime?.ownsRun(proof.runRef)) throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
+      } } };
+    }
+    actionFoundation = createActionFoundation({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, jobs: operations.jobs, ledger: operations.ledger,
+      bindings: actionBindings, now: options.operations?.now,
+      commercialEligibility: manifest => {
+        if (!["invitation", "activation", "shipment"].includes(manifest.draft.phase)) return new Map();
+        const phase = manifest.draft.phase as "invitation" | "activation" | "shipment";
+        return new Map(manifest.items.map(item => {
+          const selected = manifest.draft.commercialOffers?.find(row => row.itemRef === item.itemRef);
+          return [item.itemRef, commercialProjection.project({ creatorId: item.targetRef, offerId: selected?.offerRef,
+            offerVersion: selected?.offerVersion, phase })];
+        }));
+      } });
+    runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
+      registry: options.runtime?.registry ?? { registrations: new Map(), executors: new Map() },
+      authority: options.runtime?.authority, now: options.operations?.now });
+    runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
+      // Public reads already consume the shared transport admission below. Standalone
+      // runtime gateways retain their default own admission; machine writes always do.
+      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -194,6 +294,19 @@ export function createAgentServer(options: AgentServerOptions) {
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret),
       stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
   };
+  const commercialBasis = (stored: StoredAssessment): AssessmentBasis => {
+    const record = current(stored, store.latest(stored.packet.creatorId)?.runId !== stored.runId);
+    return { creatorId: stored.packet.creatorId, runId: stored.runId, route: stored.packet.checkoutRoute, modelId: record.assessment.modelId,
+      configHash: record.assessment.config.hash, policyVersion: record.assessment.policyVersion, termsRevision: stored.packet.termsRevision,
+      state: record.assessment.state, stale: record.stale };
+  };
+  const assertCommercialBasis = (creatorId: string, runId: string, expected: AssessmentBasis | null) => {
+    const stored = store.findRun(creatorId, runId);
+    if (digest(stored ? commercialBasis(stored) : null) !== digest(expected))
+      throw new CommercialProjectionError("COMMERCIAL_PROJECTION_CHANGED", 409);
+  };
+  const commercialSelection = { offerId: offerIdSchema.optional(), offerVersion: z.string().regex(/^v[1-9]\d*$/).optional(),
+    phase: z.enum(["invitation", "activation", "shipment"]).optional() };
   const readBase = z.object({
     schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
     requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
@@ -221,7 +334,11 @@ export function createAgentServer(options: AgentServerOptions) {
     collaborationActionSchema.extend({ actionKind: z.literal("requestSupportHandoff"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: handoffIntent }),
   ]);
   const readSchema = z.discriminatedUnion("viewKey", [
+    readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(1400) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
+    readBase.extend({ viewKey: z.literal("recruitmentQueue"), filters: recruitmentFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
       period: z.null(), sort: z.array(z.never()).max(0) }),
     ...lifecycleViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: lifecycleFilters[viewKey],
@@ -230,7 +347,7 @@ export function createAgentServer(options: AgentServerOptions) {
       period: z.null(), sort: z.array(z.never()).max(0) })),
     ...creatorPlatformKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: creatorPlatformFilterSchema,
       period: z.null(), sort: z.array(z.never()).max(0) })),
-    readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ offerId: offerIdSchema }).strict() }),
+    readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ ...commercialSelection, offerId: offerIdSchema }).strict() }),
     readBase.extend({ viewKey: z.literal("offerRewards"), filters: z.object({ offerId: offerIdSchema }).strict() }),
     readBase.extend({ viewKey: z.literal("pipelineSummary"), filters: funnelFilterSchema }),
     readBase.extend({ viewKey: z.literal("pipelineBranches"), filters: funnelFilterSchema }),
@@ -239,7 +356,7 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("channelCapabilities"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("automationRuns"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
+    readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1), ...commercialSelection }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
     readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -248,9 +365,12 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
+  const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
+  const requestIds = new WeakMap<IncomingMessage, string>();
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
-    res.end(JSON.stringify(body));
+    const req = responseRequests.get(res);
+    res.end(JSON.stringify(status >= 400 ? apiErrorEnvelope(status, body, req ? requestIds.get(req) ?? null : null) : body));
   };
   const bodyOf = async (req: IncomingMessage): Promise<unknown> => {
     const chunks: Buffer[] = [];
@@ -261,12 +381,40 @@ export function createAgentServer(options: AgentServerOptions) {
       if (size > 1_048_576) throw new Error("BODY_TOO_LARGE");
       chunks.push(buffer);
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (body && typeof body === "object" && "requestId" in body && typeof body.requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(body.requestId))
+      requestIds.set(req, body.requestId);
+    return body;
   };
   const server = createServer(async (req, res) => {
+    responseRequests.set(res, req);
     try {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
       if (path === "/health" && req.method === "GET") return reply(res, 200, { service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION });
+      if (path === "/v1/runtime/machine") {
+        const machine = options.runtime?.machine;
+        if (!machine) throw new RuntimeApiError("RUNTIME_MACHINE_NOT_CONFIGURED", 503, "uncertain");
+        if (!req.headers.authorization?.startsWith("Bearer ") || !safeEqual(req.headers.authorization.slice(7), machine.token))
+          throw new RuntimeApiError("UNAUTHENTICATED", 401, "uncertain");
+        if (req.method !== "POST" || new URL(req.url!, "http://localhost").search)
+          return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "uncertain" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "uncertain" });
+        const parsed = runtimeApiCommandSchema.safeParse(await bodyOf(req));
+        if (!parsed.success) throw new RuntimeApiError("INVALID_INPUT", 422, "uncertain");
+        return reply(res, 200, await runtimeApi.execute(parsed.data.operation, parsed.data.input, req.headers.authorization));
+      }
+      if (path === "/v1/worker/dispatch" || path === "/v1/approvals/observe") {
+        // These are distinct machine-only authorities. Browser sessions and the shared reviewer/reader cannot execute them.
+        const kind = path === "/v1/worker/dispatch" ? "worker" : "decisionRelay";
+        actionFoundation.authenticateMachine(kind, req.headers.authorization);
+        if (req.method !== "POST" || new URL(req.url!, "http://localhost").search) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const raw = await bodyOf(req);
+        if (kind === "worker" && raw && typeof raw === "object" && "runRef" in raw && typeof raw.runRef === "string" && runtime.ownsRun(raw.runRef))
+          throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
+        return reply(res, 200, await (kind === "worker" ? actionFoundation.executeWorker(raw, req.headers.authorization)
+          : actionFoundation.observeDecision(raw, req.headers.authorization)));
+      }
       if (path === "/v1/session" && req.method === "GET") {
         let authenticated = authorize(req);
         if (!authenticated && req.headers.authorization?.startsWith("Basic ")) {
@@ -274,6 +422,8 @@ export function createAgentServer(options: AgentServerOptions) {
           if (name === "reader" && token && safeEqual(token, options.readToken)) authenticated = { role: "reader", session: null };
         }
         if (!authenticated) return reply(res, 401, { code: "AUTH_REQUIRED" }, req.headers.accept?.includes("text/html") ? { "www-authenticate": 'Basic realm="Farda agent reader", charset="UTF-8"' } : {});
+        const admission = actionFoundation.limits.admit(`agent-${authenticated.role}`, "read");
+        if (!admission.admitted) return reply(res, 429, { code: "RATE_LIMITED", retryAfterMs: admission.retryAfterMs }, { "retry-after": String(Math.ceil(admission.retryAfterMs / 1000)) });
         for (const [key, session] of sessions) if (session.expiresAt <= Date.now()) sessions.delete(key);
         if (sessions.size >= 1000) return reply(res, 429, { code: "SESSION_CAPACITY" });
         const token = randomBytes(32).toString("hex");
@@ -282,12 +432,27 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, { csrfToken: session.csrf, role: session.role, principal: `agent-${session.role}`, scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "creator-agent.scope.v1" } }, { "set-cookie": `farda_agent=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${options.secureCookies ? "; Secure" : ""}` });
       }
       const auth = authorize(req);
-      if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED", executionCertainty: "notApplied" });
+      if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED",
+        executionCertainty: apiRequestKind(req.method ?? "GET", path) === "read" ? "notApplied" : "uncertain" });
       // Cookie-authorized writes require both CSRF proof and exact same-origin. Machine bearer requests are separate.
       if (req.method !== "GET" && path !== "/v1/read" && auth.session) {
         const origin = options.publicOrigin ?? `http://${req.headers.host}`;
         if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== auth.session.csrf)
-          return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "notApplied" });
+          return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "uncertain" });
+      }
+      const kind = apiRequestKind(req.method ?? "GET", path);
+      const admission = actionFoundation.limits.admit(`agent-${auth.role}`, kind);
+      if (!admission.admitted) return reply(res, 429, { code: "RATE_LIMITED", retryAfterMs: admission.retryAfterMs,
+        // Admission refusal describes this transport attempt. It cannot prove the result of a previous lost acknowledgment.
+        ...(kind === "write" ? { executionCertainty: "uncertain" } : {}) }, { "retry-after": String(Math.ceil(admission.retryAfterMs / 1000)) });
+      const artifact = /^\/v1\/action-artifacts\/([A-Za-z0-9][A-Za-z0-9._:-]{0,239})$/.exec(path);
+      if (artifact && req.method === "GET") {
+        if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected artifact query");
+        const exported = await actionFoundation.domains.downloadExport(artifact[1]!, { principalRef: `agent-${auth.role}` });
+        res.writeHead(200, { "content-type": exported.receipt.contentType, "content-length": Buffer.byteLength(exported.body),
+          "content-disposition": 'attachment; filename="ledger-export.csv"', "cache-control": "no-store", "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; frame-ancestors 'none'" });
+        return res.end(exported.body);
       }
       if (path === "/v1/identity" && req.method === "GET") return reply(res, 200, {
         service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION, role: auth.role,
@@ -371,7 +536,8 @@ export function createAgentServer(options: AgentServerOptions) {
           return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         const key = req.headers["idempotency-key"];
         const result = handleOfferRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
-          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, offers);
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined,
+          actorRef: `agent-${auth.role}` }, offers);
         if (result) return reply(res, result.status, result.body);
       }
       if (path === "/v1/save" && req.method === "POST") {
@@ -413,7 +579,10 @@ export function createAgentServer(options: AgentServerOptions) {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
-        const input = adapterActionSchema.parse(await bodyOf(req));
+        const raw = await bodyOf(req);
+        const native = foundationActionSchema.safeParse(raw), domain = domainActionSchema.safeParse(raw);
+        if (native.success || domain.success) return reply(res, 200, await actionFoundation.execute(raw, `agent-${auth.role}`));
+        const input = adapterActionSchema.parse(raw);
         if (input.actionKind === "refreshOperationsHealth") {
           const result = await controls.refreshHealth(input, "agent-reviewer", auth.role);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
@@ -453,6 +622,9 @@ export function createAgentServer(options: AgentServerOptions) {
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
+        actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
+          dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
+          ledgerExport: options.actionFoundation?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -481,11 +653,64 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const body = await bodyOf(req);
-        if (isSourcingPlanRead(body)) {
-          const result = await sourcingPlan.respond(body, auth.role, ADAPTER_SCHEMA);
-          return reply(res, result.status, result.body);
-        }
+        // The daily sourcing plan is reached only after the shared authentication and per-principal read admission
+        // above. Its refusals are thrown as SourcingError and rendered by the shared error envelope below.
+        if (isSourcingPlanRead(body)) return reply(res, 200, await sourcingPlan.respond(body, auth.role, ADAPTER_SCHEMA));
         const input = readSchema.parse(body);
+        if (input.viewKey === "launchControl") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const recovery = input.filters.requestKey === undefined ? null
+            : await actionFoundation.domains.recoverReadinessRequest(input.filters.requestKey, { principalRef: `agent-${auth.role}` });
+          const latest = await actionFoundation.readReadiness(`agent-${auth.role}`);
+          if (recovery?.intent && recovery.intent.targetRef !== latest.targetRef) return reply(res, 403, { code: "FORBIDDEN", executionCertainty: "uncertain" });
+          const data = { ...latest, requestRecovery: recovery };
+          const incomplete = data.gates.some(gate => gate.state === "unknown");
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: data.version,
+            dataState: incomplete ? "partial" : "ready", data, sourceFreshness: [],
+            coverage: { expectedCount: data.gates.length, observedCount: data.gates.filter(gate => gate.state !== "unknown").length,
+              missingCount: data.gates.filter(gate => gate.state === "unknown").length, complete: !incomplete,
+              reasonCodes: incomplete ? ["READINESS_GATES_UNOBSERVED"] : [] },
+            capabilities: [{ actionKind: "recordLaunchReadiness", state: auth.role !== "reviewer" ? "denied" : data.phaseAllowed ? "available" : "held",
+              reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : data.phaseAllowed ? [] : ["READINESS_PHASE_REQUIRED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "approvalDetail" || input.viewKey === "runDetail") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.viewKey === "runDetail" && input.filters.runId.startsWith("rt-run-")) {
+            const data = await runtimeApi.readRun(input.filters.runId, `agent-${auth.role}`);
+            data.runRef = input.filters.runId;
+            return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+              scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: versionOfData(data),
+              dataState: data.sourceCoverage === "partial" ? "partial" : "ready", data, sourceFreshness: [],
+              coverage: { expectedCount: data.sourceCoverage === "partial" ? null : data.counts.total, observedCount: data.counts.total,
+                missingCount: data.sourceCoverage === "partial" ? null : 0, complete: data.sourceCoverage === "complete",
+                reasonCodes: data.sourceCoverage === "partial" ? ["RUNTIME_WINDOW_PARTIAL"] : [] }, capabilities: [],
+              page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+          }
+          const principal = { principalRef: `agent-${auth.role}` };
+          const data = input.viewKey === "approvalDetail" ? await actionFoundation.service.readApproval(input.filters.approvalId, principal)
+            : await actionFoundation.service.readRun(input.filters.runId, principal);
+          const capability = (actionKind: string, allowed: boolean, reason: string) => ({ actionKind,
+            state: auth.role !== "reviewer" ? "denied" : allowed ? "available" : "held",
+            reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : allowed ? [] : [reason] });
+          const capabilities = data.kind === "native-approval" ? [
+            capability("requestApproval", data.requestState === "local" && !["canceled", "rejected", "editRequired"].includes(data.current.state), "APPROVAL_REQUEST_ALREADY_RECORDED"),
+            capability("reconcileApproval", true, "APPROVAL_REQUEST_UNVERIFIED"),
+            capability("dispatchApprovedAction", data.current.state === "approved", "APPROVAL_REQUIRED"),
+            capability("decideApproval", false, "APPROVAL_CHANNEL_REQUIRED"),
+          ] : [
+            capability("pauseRun", data.control === "active" && !["completed", "cancelled"].includes(data.current.state), "NOTHING_TO_PAUSE"),
+            capability("cancelUnsent", data.control !== "cancelled" && data.current.state !== "completed", "NOTHING_TO_CANCEL"),
+            capability("resumeRun", data.control === "paused", "RUN_NOT_PAUSED"),
+            capability("lookup", true, "SOURCE_RECONCILIATION_CAPABILITY_UNAVAILABLE"),
+          ];
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: data.version,
+            dataState: "ready", data, sourceFreshness: [],
+            coverage: { expectedCount: data.items.length, observedCount: data.items.length, missingCount: 0, complete: true,
+              reasonCodes: [] }, capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")
@@ -575,9 +800,18 @@ export function createAgentServer(options: AgentServerOptions) {
         }
         if (input.viewKey === "batchDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
-          const data = readScorecardPreview(store, input.filters.selection, current);
+          const projections: CommercialProjection[] = [], basisFences: (() => void)[] = [];
+          const data = readScorecardPreview(store, input.filters.selection, current, (member, assessment) => {
+            const captured = structuredClone(assessment);
+            basisFences.push(() => assertCommercialBasis(member.creatorId, member.runId, captured));
+            const projection = commercialProjection.project({ creatorId: member.creatorId, offerId: member.offerId,
+              offerVersion: member.offerVersion, phase: member.phase ?? "invitation", assessment });
+            projections.push(projection); return projection.data;
+          });
           const unavailable = data.items.filter(item => item.status === "unavailable").length;
           const partial = unavailable > 0 || data.items.some(item => item.stale);
+          for (const projection of projections) projection.assertCurrent();
+          for (const assertBasis of basisFences) assertBasis();
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
             dataState: !data.items.length ? "empty" : partial ? "partial" : "ready", data,
@@ -585,11 +819,43 @@ export function createAgentServer(options: AgentServerOptions) {
               complete: !partial, reasonCodes: partial ? ["REVIEW_EXACT_RUN_OR_CHANGED_PROOF"] : [] },
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
+        if (input.viewKey === "recruitmentQueue") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const source = await recruitment.read(input.filters, `agent-${auth.role}`, input.page.limit), projections: CommercialProjection[] = [];
+          const snapshot = source.snapshot, basisFences: (() => void)[] = [];
+          const rows = snapshot.rows.map(row => {
+            const stored = row.runId === null ? null : store.findRun(row.creatorId, row.runId);
+            const basis = stored ? commercialBasis(stored) : null;
+            if (row.runId !== null) { const runId = row.runId, captured = structuredClone(basis); basisFences.push(() => assertCommercialBasis(row.creatorId, runId, captured)); }
+            const projection = commercialProjection.project({ creatorId: row.creatorId, offerId: row.offerId ?? undefined,
+              offerVersion: row.offerVersion ?? undefined, phase: row.phase, assessment: basis });
+            projections.push(projection);
+            return { opportunityRef: recruitment.alias("opportunity", row.opportunityRef), creatorId: row.creatorId, runId: row.runId,
+              offerId: row.offerId, offerVersion: row.offerVersion, phase: row.phase, network: row.network, route: row.route,
+              assessment: stored && basis ? { state: basis.state!, score: stored.assessment.score?.total ?? null, stale: basis.stale } : null,
+              commercialEligibility: projection.data };
+          });
+          const data = nativeRecruitmentViewSchema.parse({ kind: "native-recruitment", filters: input.filters, observedAt: snapshot.observedAt,
+            validUntil: snapshot.validUntil, sourceAlias: recruitment.alias("source", snapshot.sourceRef), rows,
+            coverage: { returned: rows.length, total: snapshot.total, complete: snapshot.complete }, dispatchAuthorized: false });
+          source.assertCurrent(); for (const projection of projections) projection.assertCurrent(); source.assertCurrent();
+          for (const assertBasis of basisFences) assertBasis();
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: !snapshot.complete ? "partial" : rows.length ? "ready" : "empty", data, sourceFreshness: [],
+            coverage: { expectedCount: snapshot.total, observedCount: rows.length, missingCount: snapshot.total === null ? null : snapshot.total - rows.length,
+              complete: snapshot.complete, reasonCodes: snapshot.complete ? [] : ["RECRUITMENT_SOURCE_PARTIAL"] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "offerDraft" || input.viewKey === "offerRewards") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
-          const data = input.viewKey === "offerDraft" ? offers.readOffer(input.filters.offerId) : offers.readRewards(input.filters.offerId);
+          const original = input.viewKey === "offerDraft" ? offers.readOffer(input.filters.offerId) : offers.readRewards(input.filters.offerId);
+          const projection = input.viewKey === "offerDraft" && original?.kind === "agent-offer" ? commercialProjection.project({ creatorId: original.terms.creatorId,
+            offerId: input.filters.offerId, offerVersion: input.filters.offerVersion, phase: input.filters.phase ?? "invitation" }) : null;
+          const data = original?.kind === "agent-offer" && projection ? { ...original, commercialEligibility: projection.data } : original;
           const gaps = data?.kind === "agent-offer" ? data.blockers : data?.unknowns ?? [];
           const stale = data?.kind === "agent-offer" && data.assessment !== null && !data.assessmentCurrent;
+          projection?.assertCurrent();
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
             dataState: !data ? "empty" : stale ? "stale" : gaps.length ? "partial" : "ready", data,
@@ -694,16 +960,23 @@ export function createAgentServer(options: AgentServerOptions) {
           });
         }
         if (input.viewKey === "assessmentRecord") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const stored = store.findRun(input.filters.creatorId, input.filters.assessmentId);
           if (!stored) return reply(res, 404, { code: "RECORD_NOT_FOUND" });
           const superseded = store.latest(input.filters.creatorId)?.runId !== stored.runId;
           const record = current(stored, superseded);
+          const basis = commercialBasis(stored);
+          const projection = commercialProjection.project({ creatorId: stored.packet.creatorId, offerId: input.filters.offerId,
+            offerVersion: input.filters.offerVersion, phase: input.filters.phase ?? "invitation", assessment: basis });
           const data = agentAssessmentRecordSchema.parse({
             kind: "creator-v3", creatorId: stored.packet.creatorId, assessmentId: stored.runId, runId: stored.runId,
             evidenceId: superseded ? null : stored.packet.posts[0]?.postId ?? null,
             qualification: record.assessment, assessedQualification: stored.assessment, agentEvidence: record.packet,
             recordedAt: stored.recordedAt, revision: stored.revision, stale: record.stale, superseded,
+            commercialEligibility: projection.data,
           });
+          projection.assertCurrent();
+          assertCommercialBasis(stored.packet.creatorId, stored.runId, basis);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data), dataState: record.stale ? "stale" : "ready", data,
             sourceFreshness: [], coverage: { expectedCount: 3, observedCount: record.assessment.packet.qualifyingPosts, missingCount: Math.max(0, 3 - record.assessment.packet.qualifyingPosts), complete: record.assessment.contentQualification === "pass", reasonCodes: record.assessment.reasonCodes },
@@ -725,11 +998,29 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof CommercialProjectionError || error instanceof RecruitmentSourceError)
+        return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty });
+      if (error instanceof RuntimeError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
+        ...(error instanceof RuntimeApiError && error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}) });
+      if (error instanceof ActionServiceError || error instanceof DispatchError) return reply(res,
+        error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? 502 : error.status,
+        { code: error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? "OUTCOME_UNCERTAIN" : error.code,
+          executionCertainty: error.executionCertainty,
+          ...(error instanceof ActionServiceError && error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}),
+          ...(error instanceof DispatchError && error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}) });
+      if (error instanceof ApprovalError) {
+        const denied = ["AUTHORITY_REQUIRED", "SLACK_ACTOR_MISMATCH", "APPROVAL_INGRESS_UNVERIFIED", "FOUNDER_REQUIRED", "SECOND_PERSON_REQUIRED"].includes(error.code);
+        return reply(res, denied ? 403 : 502, { code: denied ? "FORBIDDEN" : "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+      }
+      if (error instanceof OfferPolicyError) return reply(res, error.status, { code: error.code, reasonCodes: error.reasonCodes,
+        rowIndex: error.rowIndex, executionCertainty: error.executionCertainty });
       if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       if (error instanceof OperationsControlError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty ?? "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
+      if (error instanceof SourcingError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
@@ -755,7 +1046,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }

@@ -55,7 +55,17 @@ Coverage counts the full expected set: the five steps, four capacity rows per pl
 
 ### Reward redemption (THO-348)
 
-`/v1/rewards/redemptions` prepares, decides, purchases, records outcomes for and reconciles one redemption per mature J11 entitlement. It needs an exact J04 decision before any purchase, holds proposed terms as proposed, and reads an uncertain purchase back before retrying. Every source and the purchase executor are injected through `rewardAuthority`; none is connected. See [`src/creator-agent/rewards/README.md`](../src/creator-agent/rewards/README.md).
+`/v1/rewards/redemptions` prepares and reads one local redemption per mature J11 entitlement. The private `rewardDomain` binding composes native purchase/reconciliation with the one shared J04 and job runner. Actual founder approval, the current earned programme, provider evidence and exclusive money/physical-stock grants precede purchase; a direct legacy purchase route cannot execute. Uncertain native outcomes retain the original attempt. Sources remain unconfigured by default. See [`src/creator-agent/rewards/README.md`](../src/creator-agent/rewards/README.md).
+
+### Canonical paid-media consumers
+
+Private `mediaDomain` configuration composes the existing paid-media repository and contribution controller on the application's SQLite with shared J04 and bounded jobs. Registered actions cover paused native draft, publication, budget change, finite safety pause and local stage authorization. Exact approved account routing has no fallback. Legacy direct media approval, release, publication and mutation HTTP routes are not mounted; raw decision callbacks cannot execute.
+
+The initial $1,500 stage is one pool across its exact account allocations. Recording the cap spends $0; each later source action needs its own exact current approval. Publication and increases revalidate the original stage authorization, exclusive lifetime-cap-plus-headroom reservation and all five conditions: qualified product, permissioned content, functioning checkout, attribution and fulfillment. A separate finite status-only pause retains its own current native permission and quota requirements when growth is held.
+
+A native result must bind the original operation, account, manifest and attempt and match the requested settings. Mismatches remain uncertain until exact source readback. Provider rejection is a terminal recorded outcome, not successful publication or permission to resend. Reconciliation records positive original-attempt closure under current read authority; any later retry still needs current write preflight. Confirmed receipts and historical liabilities remain immutable.
+
+Contribution and treasury use adopted inputs and actual retained commerce facts. Proposed costs, unknown cash and scheduled revenue do not release commitments. No source adapter, advertiser account, adoption, spend release or production activation is configured by this implementation. The full provider-specific reporting screens retain their own acceptance. See [`media/README.md`](../src/creator-agent/media/README.md) and [`mediaControl/README.md`](../src/creator-agent/mediaControl/README.md).
 
 ## Weight binding
 

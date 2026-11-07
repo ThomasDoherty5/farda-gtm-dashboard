@@ -1,0 +1,19 @@
+# Current commercial policy
+
+This module validates a source-owned acquisition policy and exact historical performance-reward terms. It does not adopt a policy, create an approval ledger, determine a J11 entitlement, or perform a provider action. Candidate price/rate/reward constants remain illustrative proposals unless a qualified source supplies the exact effective version.
+
+`CommercialPolicySource` supplies current acquisition policy and a reward policy by exact programme/version. Its synchronous `assertCurrent` and `assertRewardCurrent` methods must inspect the owning source/cache after any asynchronous source work. Echoing a supplied snapshot is not qualification. Missing, malformed, wrong-scope, future, expired, revoked or proposed authority cannot release an action. A remote adapter must populate its independently verified current source snapshot before calling these synchronous methods.
+
+The current acquisition snapshot binds source/account, owner/adoption, policy and commission versions, permitted recruitment/publishing/checkout routes and actual provider accounts, claim/disclosure requirements, separate sample/shipping caps, and the exact price catalogue. It delegates unconditional compensation validation to the existing shared commission-only evaluator. An unknown policy never falls back to the demo policy for permission.
+
+Performance rewards have their own programme/version, exact matured-sales milestones, all-in caps/options and adoption/funding/economics provenance. `RewardPolicySnapshot` separates those historical terms from current execution permission and a pause on **new acquisition**. The old earned amount is supplied by J11; a newer cap, a programme pause or a new acquisition profitability calculation must not reprice or cancel it. Consumers require current execution permission before purchasing. A valid historical policy is not a J04 decision or an available budget allocation.
+
+Material hashes exclude renewable observation leases, while final assertions still check those leases. Policy or terms changes invalidate current acquisition eligibility; immutable offers, source replies and accepted/earned history remain separate. All fixtures in this module are explicitly synthetic.
+
+## Shared approval consumer
+
+The central server wraps its one J04 registry with `withCommercialOffers`. Acquisition invitations, activation and shipment require an ordered exact `commercialOffers` mapping for every immutable manifest item. The registry selects saved offers; a browser cannot post these policy proofs. Each item binds its actual creator, provider account, offer terms and product revision. Sample units and sample/shipping exposure cannot exceed the saved per-creator allowance or multiply through repeated offers. Different offer versions in a finite batch use `commercialTermsVersion`; J04 policy and commercial policy remain independently versioned.
+
+The wrapper hashes current source-backed commercial material, then rechecks the actual offer, model/configuration, suppression, reply resolution and source policy in the final J04 fence. It creates no permission, sample reservation or execution grant. Earned reward and historical liability phases retain their own authority and do not become acquisition. Old acquisition manifests without current offer evidence remain held.
+
+`basisHash` is owned by this wrapper. The underlying registry's final fence receives its own original draft shape with that annotation removed from the observed draft and manifest draft; the real J04 identity, hash, item hashes and decision evidence remain unchanged. This source projection is never stored, signed or dispatched as a different approval. The wrapper first independently validates the real annotated manifest and current commercial proof. Source adapters still inspect backing state and may never treat the projection as a new authorization.

@@ -1,3 +1,4 @@
+import { NativeRecruitment } from "./NativeRecruitment";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -39,6 +40,9 @@ const draftChecks = (d: Draft) => ({
 
 /** Social Cat recruitment (Figma source 38:131, owner THO-298). A draft only: nothing here sends, approves or accepts. */
 export function RecruitmentPage() {
+  return useScope().adapter.kind === "demo" ? <DemoRecruitmentPage/> : <NativeRecruitment/>;
+}
+function DemoRecruitmentPage() {
   const demo = useScope().adapter.environment === "demo";
   const [search, setSearch] = useSearchParams();
   const networks = allowed(NETWORKS, search.get("networks"), RECRUITMENT_DEFAULT.networks);

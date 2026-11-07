@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { creatorAssessmentSchema } from "./assessmentSchema.ts";
 import { evidencePacketSchema } from "./evidence.ts";
+import { commercialEligibilityViewSchema } from "./commercialPolicy/views.ts";
 
 /** Browser-safe shapes for actual agent read models. Historical/demo contracts remain separate. */
 const text = z.string().min(1);
@@ -59,6 +60,7 @@ export const agentAssessmentRecordSchema = z.object({
   kind: z.literal("creator-v3"), creatorId: text, assessmentId: text, runId: text, evidenceId: text.nullable(),
   qualification: creatorAssessmentSchema, assessedQualification: creatorAssessmentSchema, agentEvidence: evidencePacketSchema,
   recordedAt: instant, revision, stale: z.boolean(), superseded: z.boolean(),
+  commercialEligibility: commercialEligibilityViewSchema.optional(),
 }).strict().superRefine((record, ctx) => {
   if (record.assessmentId !== record.runId)
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["assessmentId"], message: "An assessment address identifies its exact saved run." });
@@ -80,3 +82,22 @@ export const agentAssessmentRecordSchema = z.object({
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A superseded run is historical and cannot link silently to the latest evidence packet." });
 });
 export type AgentAssessmentRecord = z.infer<typeof agentAssessmentRecordSchema>;
+
+/** Explicit source opportunity membership; existing score history is a separate observation. */
+export const nativeRecruitmentViewSchema = z.object({
+  kind: z.literal("native-recruitment"),
+  filters: z.object({ networks: z.enum(["both", "instagram", "tiktok"]), route: z.enum(["queue", "inbound", "outbound"]) }).strict(),
+  observedAt: instant, validUntil: instant, sourceAlias: z.string().regex(/^recruitment-source-[a-f0-9]{64}$/),
+  rows: z.array(z.object({ opportunityRef: z.string().regex(/^recruitment-opportunity-[a-f0-9]{64}$/), creatorId: text,
+    runId: text.nullable(), offerId: text.nullable(), offerVersion: z.string().regex(/^v[1-9]\d*$/).nullable(), phase: z.enum(["invitation", "activation", "shipment"]),
+    network: z.enum(["instagram", "tiktok", "unknown"]), route: z.enum(["inbound", "outbound", "unknown"]),
+    assessment: z.object({ state, score: z.number().finite().nullable(), stale: z.boolean() }).strict().nullable(),
+    commercialEligibility: commercialEligibilityViewSchema,
+  }).strict()).max(100),
+  coverage: z.object({ returned: z.number().int().nonnegative().max(100), total: z.number().int().nonnegative().safe().nullable(), complete: z.boolean() }).strict(),
+  dispatchAuthorized: z.literal(false),
+}).strict().superRefine((value, ctx) => {
+  if (value.coverage.returned !== value.rows.length || value.coverage.total !== null && value.coverage.total < value.rows.length || value.coverage.complete && value.coverage.total !== value.rows.length)
+    ctx.addIssue({ code: "custom", message: "Recruitment source coverage must match the bounded rows." });
+});
+export type NativeRecruitmentView = z.infer<typeof nativeRecruitmentViewSchema>;

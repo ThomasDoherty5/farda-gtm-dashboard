@@ -17,6 +17,7 @@ import { AdapterError, categorize, type AdapterErrorBody, type ErrorCategory } f
 import { pendingTransport, TransportFailure, type Transport, type TransportRequest } from "./transport";
 import { adapterErrorBodySchema, saveResourceResponseSchema } from "./wire";
 import { actionPayloadSchemas, viewSchemas, type ViewSchemas } from "./viewSchemas";
+import { domainActionSchema } from "../creator-agent/actions/wire";
 
 /**
  * The live adapter (THO-283, front-end half). It carries typed envelopes over an injected `Transport` and checks every
@@ -99,6 +100,7 @@ export function createLiveAdapter(environment: Exclude<Environment, "demo">, opt
       requireKey(request);
       requireRunRef(request);
       requireObservationRefresh(request);
+      requireDomainEffect(request);
       const raw = await exchange({ kind: "action", envelope: request as ActionRequest<unknown> }, opts?.signal);
       const parsed = actionResponseSchema.safeParse(raw);
       // A replay of the same idempotency key returns the first answer, so a write's requestId may be the original's.
@@ -254,8 +256,10 @@ function fromFailure(error: unknown, req: TransportRequest): AdapterError {
       correlationId: extra.correlationId ?? null,
       retryable,
       retryAfterMs: extra.retryAfterMs ?? failure.retryAfterMs,
-      ...(extra.fieldErrors ? { fieldErrors: extra.fieldErrors } : {}),
-      ...(extra.currentVersion !== undefined ? { currentVersion: extra.currentVersion } : {}),
+      ...(!NEUTRAL.includes(category) && extra.fieldErrors ? { fieldErrors: extra.fieldErrors } : {}),
+      ...(!NEUTRAL.includes(category) && extra.currentVersion !== undefined ? { currentVersion: extra.currentVersion } : {}),
+      ...(!NEUTRAL.includes(category) && extra.reasonCodes ? { reasonCodes: extra.reasonCodes } : {}),
+      ...(!NEUTRAL.includes(category) && extra.rowIndex !== undefined ? { rowIndex: extra.rowIndex } : {}),
       ...(write ? { executionCertainty: extra.executionCertainty ?? certainty(undefined) } : {}),
     });
   };
@@ -280,9 +284,13 @@ function fromFailure(error: unknown, req: TransportRequest): AdapterError {
         retryAfterMs: known.retryAfterMs ?? failure.retryAfterMs,
         fieldErrors: known.fieldErrors ? Object.fromEntries(Object.entries(known.fieldErrors).map(([k, v]) => [k, redact(v)])) : undefined,
         currentVersion: known.currentVersion,
+        reasonCodes: known.reasonCodes,
+        rowIndex: known.rowIndex,
         executionCertainty: known.executionCertainty,
       }
-    : {};
+    // A new server code does not erase a validated durable outcome. Keep its certainty while the HTTP status still
+    // chooses a neutral authorization error and clears protected data; unknown text/fields remain untrusted.
+    : { executionCertainty: body?.executionCertainty };
   const codeIs = (...cats: ErrorCategory[]) => (known && cats.includes(categorize(known.code)) ? known.code : null);
 
   // Authorization may be lost after a durable write or observation. Keep a typed
@@ -306,6 +314,14 @@ export function redact(text: string): string {
 }
 
 // ---- Checks on a successful answer ------------------------------------------------------------------
+
+/** Source decision records and exports have separate exact operations; neither borrows dispatch authority. */
+function requireDomainEffect(request: ActionRequest<unknown>) {
+  if (request.operation !== "exportSnapshot" && request.operation !== "recordSourceDecision" && request.actionKind !== "exportLedger" && request.actionKind !== "recordLaunchReadiness") return;
+  if (domainActionSchema.safeParse(request).success) return;
+  throw new AdapterError({ code: "VALIDATION_FAILED", message: "Use the exact source-record or authorized snapshot-export request.",
+    requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+}
 
 /** A bounded observation creates its own J14 run; it cannot borrow run-control or execution authority. */
 function requireObservationRefresh(request: ActionRequest<unknown>) {

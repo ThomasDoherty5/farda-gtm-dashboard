@@ -5,6 +5,7 @@ import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { TransportFailure, type Transport } from "@/adapter/transport";
 import { AgentStore } from "@/creator-agent/store";
+import { apiErrorEnvelope } from "@/creator-agent/apiErrorEnvelope";
 import { createSourcingPlanReader } from "@/creator-agent/sourcing/reader";
 import type { SourcingSnapshot } from "@/creator-agent/sourcing/source";
 import { sourcingSourceFixture, sourcingTestSecret as secret, sourcingTestTime } from "@/creator-agent/sourcing/fixtures.testkit";
@@ -17,8 +18,8 @@ const serviceScope = { workspaceId, accountId: accountIds[0]!, environment: "san
 afterEach(() => { for (const store of stores.splice(0)) store.close(); });
 
 /**
- * The service's own `/v1/read` handling (`respond`): the exact envelope or canonical error body and status the HTTP server sends,
- * delivered as the HTTP transport would, so the live adapter checks scope, status and schema. The test scope is the service scope.
+ * The service's own `/v1/read` handling (`respond`): the exact envelope, or the refusal rendered through the server's shared error
+ * envelope with its status, delivered as the HTTP transport would, so the live adapter checks scope, status and schema. The test scope is the service scope.
  */
 function served(snapshot: SourcingSnapshot | null | (() => Promise<unknown>), at = sourcingTestTime, role: "reader" | "reviewer" = "reviewer") {
   const store = new AgentStore(":memory:", serviceScope); stores.push(store);
@@ -27,9 +28,12 @@ function served(snapshot: SourcingSnapshot | null | (() => Promise<unknown>), at
   const requests: ReadRequest<unknown>[] = [];
   const transport: Transport = { send: async ({ envelope }) => {
     requests.push(envelope as ReadRequest<unknown>);
-    const { status, body } = await reader.respond(JSON.parse(JSON.stringify(envelope)), role, SCHEMA_VERSION);
-    if (status !== 200) throw new TransportFailure("http", { status, body });
-    return body;
+    try { return await reader.respond(JSON.parse(JSON.stringify(envelope)), role, SCHEMA_VERSION); }
+    catch (error) {
+      if (!(error instanceof SourcingError)) throw error;
+      throw new TransportFailure("http", { status: error.status, body: apiErrorEnvelope(error.status,
+        { code: error.code, executionCertainty: "notApplied", fieldErrors: error.fieldErrors }, (envelope as ReadRequest<unknown>).requestId) });
+    }
   } };
   return { adapter: createLiveAdapter("sandbox", { transport }), requests };
 }

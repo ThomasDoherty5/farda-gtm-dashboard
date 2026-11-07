@@ -12,6 +12,10 @@ import { ViewError } from "@/components/ViewError";
 import { HourlyRunPage } from "@/features/monitor/HourlyRunPage";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, SourceDialog, blockedReason, dateTime } from "./shared";
 import type { ControlPayload, ReconcilePayload, RunCounts, RunDetail } from "./types";
+import { nativeRunViewSchema, type NativeRunView } from "@/creator-agent/actions/views";
+import { NativeRunPage } from "./NativeRunPage";
+import { safeRuntimeRunSchema, type SafeRuntimeRun } from "@/creator-agent/jobs/runtimeViews";
+import { RuntimeRunPage } from "./RuntimeRunPage";
 import styles from "./Approvals.module.css";
 
 type Res = ReadResponse<RunDetail>;
@@ -24,7 +28,9 @@ const COUNT_LABELS: Record<keyof RunCounts, string> = { confirmed: "Confirmed", 
  */
 export function RunPage() {
   const [search] = useSearchParams();
+  const { runId } = useParams();
   const tab = search.get("tab");
+  if (runId?.startsWith("rt-run-") && tab !== "recovery") return <Run tab="approval" />;
   if (tab !== "approval" && tab !== "recovery") return <HourlyRunPage />;
   return <Run tab={tab} />;
 }
@@ -33,13 +39,26 @@ function Run({ tab }: { tab: Tab }) {
   const { adapter } = useScope();
   const { runId = "" } = useParams();
   const filters = useMemo(() => ({ runId }), [runId]);
-  const query = useView<{ runId: string }, RunDetail>("runDetail", filters);
-  const data = query.data?.data ?? null;
+  const query = useView<{ runId: string }, RunDetail | NativeRunView | SafeRuntimeRun>("runDetail", filters);
+  const raw = query.data?.data ?? null;
+  const data = raw && !("kind" in raw) ? raw : null;
   const source = data?.source ?? "";
   const uncertain = data?.state === "outcomeUncertain";
   const control = useAction<ControlPayload>();
   const [dialog, setDialog] = useState<"source" | "slack" | "takeover" | null>(null);
   const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { control: "pause" } });
+
+  if (raw && "kind" in raw) {
+    if (raw.kind === "registered-runtime-run") {
+      const parsed = safeRuntimeRunSchema.safeParse(raw);
+      if (!parsed.success) return <section><h1>Run unavailable</h1><p role="alert">The registered run response did not match its contract. No action is available.</p></section>;
+      return <>{query.isError && <ViewError error={query.error} subject="This run" hasPriorData onRetry={() => void query.refetch()} />}<RuntimeRunPage res={{ ...query.data!, data: parsed.data,
+        ...(query.isError || query.isFetching ? { dataState: "stale" as const } : {}) }} tab={tab} refresh={() => void query.refetch()} /></>;
+    }
+    const parsed = nativeRunViewSchema.safeParse(raw);
+    if (!parsed.success) return <section><h1>Run unavailable</h1><p role="alert">The native run response did not match its contract. No action is available.</p></section>;
+    return <>{query.isError && <ViewError error={query.error} subject="This run" hasPriorData onRetry={() => void query.refetch()} />}<NativeRunPage res={{ ...query.data!, data: parsed.data, ...(query.isError || query.isFetching ? { dataState: "stale" as const } : {}) }} tab={tab} refresh={() => void query.refetch()} /></>;
+  }
 
   return (
     <section aria-labelledby="run-title" data-figma-source={tab === "approval" ? "5:13" : "5:156"} className={styles.page}>

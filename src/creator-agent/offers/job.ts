@@ -2,12 +2,12 @@ import { z } from "zod";
 import { digest } from "../config.ts";
 import { offerTermsSchema, type OfferRecord, type OfferScope, type OfferTerms } from "./contract.ts";
 
-const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:true});
+const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:true}).refine(value=>Number.isFinite(Date.parse(value)));
 /** An internal reviewer-facing J03 proposal operation. Job registration and dispatch are separate owners. */
 export const offerJobEnvelopeSchema=z.object({
   jobId:z.literal("J03"),jobVersion:z.literal("creator-offer.v1"),mode:z.literal("propose"),
   actor:z.object({id:z.literal("agent-reviewer"),role:z.literal("reviewer")}).strict(),
-  accountRef:z.object({workspaceId:id,accountId:id}).strict(),policyVersion:z.literal("commission-only-v1"),
+  accountRef:z.object({workspaceId:id,accountId:id}).strict(),policyVersion:id,
   inputHash:z.string().regex(/^[a-f0-9]{64}$/),idempotencyKey:z.string().trim().min(1).max(240),correlationId:id,
   requestedAt:time,deadline:time.nullable(),checkpoint:z.null(),
 }).strict();

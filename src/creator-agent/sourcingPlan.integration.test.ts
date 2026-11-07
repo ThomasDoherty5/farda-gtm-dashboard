@@ -42,9 +42,10 @@ afterEach(async () => {
 });
 
 const planEnvelope = readResponseSchema(viewSchemas.sourcingPlan!);
-/** D-14: every refusal carries the full canonical body and nothing else. */
-function expectCanonicalError(body: Record<string, unknown>, code: string) {
-  expect(adapterErrorBodySchema.strict().parse(body)).toMatchObject({ code, requestId: expect.any(String), correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+/** D-14: every refusal is the server's shared error envelope, carrying the full canonical body and nothing else. */
+function expectCanonicalError(body: Record<string, unknown>, code: string, status: number) {
+  expect(adapterErrorBodySchema.strict().parse(body)).toMatchObject({ code, requestId: "synthetic-sourcing-plan-read", correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    retryable: status >= 500, retryAfterMs: null, executionCertainty: "notApplied" });
   expect(Object.keys(body).sort()).toEqual(["code", "correlationId", "executionCertainty", "message", "requestId", "retryAfterMs", "retryable", ...("fieldErrors" in body ? ["fieldErrors"] : [])].sort());
   expect(body).not.toHaveProperty("data");
 }
@@ -76,8 +77,8 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
       { ...requestedScope, accountIds: [sourcingTestScope.accountId, "synthetic-foreign-account"] }, { ...requestedScope, environment: "production" }]) {
       const denied = await read({ requestedScope: scope });
       expect(denied.status).toBe(403);
-      expectCanonicalError(denied.body, "FORBIDDEN");
-      expect(denied.body.message).toBe("This scope is not available.");
+      expectCanonicalError(denied.body, "FORBIDDEN", 403);
+      expect(denied.body.message).toBe("Access is not currently permitted.");
     }
     expect(counter.reads).toBe(0);
   });
@@ -139,17 +140,17 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     for (const filters of [{ fixture: "discovery-demo" }, { scenario: "ready" }, { workspaceId: "synthetic-foreign-workspace" }, { sourceAccount: "synthetic-other" }, null]) {
       const forged = await read({ filters });
       expect(forged.status).toBe(422);
-      expectCanonicalError(forged.body, "VALIDATION_FAILED");
+      expectCanonicalError(forged.body, "VALIDATION_FAILED", 422);
       expect(Object.keys(forged.body.fieldErrors).every((key: string) => key.startsWith("filters"))).toBe(true);
     }
     for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }]) {
       const refused = await read(overrides);
       expect(refused.status).toBe(422);
-      expectCanonicalError(refused.body, "VALIDATION_FAILED");
+      expectCanonicalError(refused.body, "VALIDATION_FAILED", 422);
     }
     const cursor = await read({ page: { cursor: "sc1.synthetic", limit: 50 } });
     expect(cursor.status).toBe(422);
-    expectCanonicalError(cursor.body, "INVALID_CURSOR");
+    expectCanonicalError(cursor.body, "INVALID_CURSOR", 422);
     expect(counter.reads).toBe(0);
   });
 
@@ -172,7 +173,7 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
       mode = next;
       const result = await read();
       expect(result.status).toBe(status);
-      expectCanonicalError(result.body, code);
+      expectCanonicalError(result.body, code, status);
     }
   });
 
@@ -186,7 +187,7 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
       snapshot = s;
       const refused = await read();
       expect(refused.status).toBe(502);
-      expectCanonicalError(refused.body, "SOURCE_RESPONSE_INVALID");
+      expectCanonicalError(refused.body, "SOURCE_RESPONSE_INVALID", 502);
       expect(JSON.stringify(refused.body)).not.toContain(text);
       s.steps[0]!.nextAction = "RESOLVE_IDENTITIES"; s.steps[3]!.count.missingReason = text;
       const again = await read();
@@ -208,7 +209,7 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     snapshot = { ...sourcingSourceFixture(sourcingTestScope, clock.now + SOURCING_CLOCK_SKEW_MS + 1), version: "synthetic-plan-source-future" };
     const future = await read();
     expect(future.status).toBe(502);
-    expectCanonicalError(future.body, "SOURCE_RESPONSE_INVALID");
+    expectCanonicalError(future.body, "SOURCE_RESPONSE_INVALID", 502);
   });
 
   it("persists the source head in SQLite so a regressed snapshot is refused after a restart", async () => {
@@ -221,7 +222,23 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     const second = await start({ databasePath, sourcingPlanSource: async () => sourcingSourceFixture() }, { now: sourcingTestTime + 120_000 });
     const regressed = await second.read();
     expect(regressed.status).toBe(409);
-    expectCanonicalError(regressed.body, "SOURCE_VERSION_CHANGED");
+    expectCanonicalError(regressed.body, "SOURCE_VERSION_CHANGED", 409);
+  });
+
+  it("goes through the shared per-principal read admission, refusing over the limit with the shared envelope and no source read", async () => {
+    const { counter, source } = tracked(() => sourcingSourceFixture());
+    const { read } = await start({ sourcingPlanSource: source });
+    for (let i = 0; i < 120; i++) expect((await read()).status).toBe(200);
+    const limited = await read();
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toMatch(/^[1-9]\d*$/);
+    expect(adapterErrorBodySchema.strict().parse(limited.body)).toMatchObject({ code: "RATE_LIMITED", requestId: null, retryable: true,
+      retryAfterMs: expect.any(Number), executionCertainty: "notApplied" });
+    // Admission refuses before the body is read, so neither the request id nor the source is touched.
+    expect(limited.body).not.toHaveProperty("data");
+    expect(counter.reads).toBe(120);
+    // Admission is per principal: the reviewer is still admitted.
+    expect((await read({}, "reviewer")).status).toBe(200);
   });
 
   it("leaves every other read view on the shared read union", async () => {
