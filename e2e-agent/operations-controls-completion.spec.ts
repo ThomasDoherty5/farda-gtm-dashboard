@@ -181,9 +181,14 @@ test("actual runtime and admitted report services show their distinct source sta
  await page.getByRole("link",{name:"Inspect runtime recovery",exact:true}).click();
  await expect(page.getByRole("heading",{name:"Resume from verified evidence.",exact:true})).toBeVisible();
  expect(evidence.runtime.state.sourceCalls).toBe(0);expect(evidence.reporting.state.calls).toHaveLength(0);
- await page.goto("/automations?tab=zaps");evidence.reporting.state.readAllowed=false;
+ await page.goto("/automations?tab=zaps");
+ // Establish the permitted view before withdrawing its real source authority.
+ // goto waits for navigation, not the asynchronous protected evidence read.
+ await expect(page.getByRole("heading",{name:"Report receipt and recovery",exact:true})).toBeVisible();
+ const refresh=page.getByRole("button",{name:"Refresh source evidence",exact:true});await expect(refresh).toBeVisible();
+ evidence.reporting.state.readAllowed=false;
  const denied=page.waitForResponse(r=>r.url().endsWith("/v1/read")&&r.request().postDataJSON()?.viewKey==="operationsControl"&&r.status()===403);
- await page.getByRole("button",{name:"Refresh source evidence",exact:true}).click();await denied;
+ await refresh.click();await denied;
  await expect(page.getByRole("heading",{name:"Report receipt and recovery",exact:true})).toHaveCount(0);
  await capture(page,info,"report-read-authority-withdrawn");
 });
