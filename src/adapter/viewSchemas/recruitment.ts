@@ -17,7 +17,7 @@
 import { z } from "zod";
 import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
 import { livePipelineSchema } from "@/creator-agent/funnelContract";
-import { agentSourcingSchema } from "@/creator-agent/readViews";
+import { agentSourcingSchema, nativeRecruitmentViewSchema } from "@/creator-agent/readViews";
 import { provenanceValueSchema } from "../contract";
 import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
 
@@ -184,7 +184,7 @@ const historicalDiscoverySummary = z.object({
 const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchema]);
 
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
-  recruitmentQueue,
+  recruitmentQueue: z.union([nativeRecruitmentViewSchema, recruitmentQueue]),
   invitationDraft,
   batchDetail: z.union([scorecardPreviewSchema, batchDetail]),
   pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),

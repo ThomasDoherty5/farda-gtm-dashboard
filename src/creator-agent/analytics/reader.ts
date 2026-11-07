@@ -12,10 +12,7 @@ import {
 /** THO-293 views this module serves from trusted sources. */
 export const analyticsViewKeys = ["overviewSummary", "attribution", "paidMedia", "customerJourney"] as const;
 export type AnalyticsViewKey = typeof analyticsViewKeys[number];
-/** THO-293 views with no server projection yet. They answer a typed INTEGRATION_PENDING, never demo data. */
-export const pendingAnalyticsViewKeys = ["launchSnapshot", "launchControl", "launchReconciliation", "campaignFunnel", "metricDictionary"] as const;
 export const isAnalyticsViewKey = (key: unknown): key is AnalyticsViewKey => (analyticsViewKeys as readonly unknown[]).includes(key);
-export const isPendingAnalyticsViewKey = (key: unknown): key is typeof pendingAnalyticsViewKeys[number] => (pendingAnalyticsViewKeys as readonly unknown[]).includes(key);
 
 /* ---------- Filters and period (D-11) ---------- */
 

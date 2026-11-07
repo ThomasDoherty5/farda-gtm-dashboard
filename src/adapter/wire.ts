@@ -15,6 +15,8 @@ export const adapterErrorBodySchema = z.object({
   retryAfterMs: z.number().nullable().optional(),
   fieldErrors: z.record(z.string()).optional(),
   currentVersion: z.string().nullable().optional(),
+  reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/)).max(100).optional(),
+  rowIndex: z.number().int().min(0).max(99).nullable().optional(),
   /** Q-04 requires it on every write error. It stays optional here so a server that omits it is read as `uncertain` by the live adapter, never as `notApplied`. */
   executionCertainty: executionCertaintySchema.optional(),
 });

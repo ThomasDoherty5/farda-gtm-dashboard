@@ -20,6 +20,10 @@
  */
 import { z } from "zod";
 import { actionResponseSchema, actionStateSchema, environmentSchema, executionModeSchema, moneySchema, sourceRefSchema } from "../contract";
+import { nativeApprovalViewSchema, nativeRunViewSchema } from "../../creator-agent/actions/views";
+import { safeRuntimeRunSchema } from "../../creator-agent/jobs/runtimeViews";
+import { exportPayloadSchema, readinessPayloadSchema, reference } from "../../creator-agent/actions/contract";
+import { previewPayload } from "../../creator-agent/actions/wire";
 
 const nonBlank = z.string().trim().min(1);
 const iso = z.string().datetime({ offset: true });
@@ -172,8 +176,8 @@ export const runDetailSchema = z
   });
 
 export const approvalViewSchemas: Record<string, z.ZodTypeAny> = {
-  approvalDetail: approvalDetailSchema,
-  runDetail: runDetailSchema,
+  approvalDetail: z.union([nativeApprovalViewSchema, approvalDetailSchema]),
+  runDetail: z.union([nativeRunViewSchema, safeRuntimeRunSchema, runDetailSchema]),
 };
 
 /* ---------- action responses ---------- */
@@ -201,7 +205,7 @@ export const decidePayloadSchema = z.discriminatedUnion("decision", [
   z.object({ decision: z.literal("editRequired"), editedMessage: nonBlank, reason: text.optional() }).strict(),
 ]);
 /** Dispatch carries nothing of its own: what is sent is the approved version, named by `approvalRef` and `expectedVersion`. */
-export const dispatchPayloadSchema = z.object({}).strict();
+export const dispatchPayloadSchema = z.object({ itemRefs: z.array(reference).min(1).max(100).refine(values => new Set(values).size === values.length).optional() }).strict();
 export const controlPayloadSchema = z.object({ control: z.literal("pause") }).strict();
 const reconcilePayload = <R extends "lookup" | "recordConfirmedSent" | "freshAttempt">(request: R) => z.object({ request: z.literal(request) }).strict();
 
@@ -213,4 +217,11 @@ export const approvalActionSchemas: Record<string, { payload: z.ZodTypeAny }> = 
   lookup: { payload: reconcilePayload("lookup") },
   recordConfirmedSent: { payload: reconcilePayload("recordConfirmedSent") },
   freshAttempt: { payload: reconcilePayload("freshAttempt") },
+  previewAction: { payload: previewPayload },
+  requestApproval: { payload: z.object({}).strict() },
+  reconcileApproval: { payload: z.object({}).strict() },
+  cancelUnsent: { payload: z.object({ control: z.literal("cancel") }).strict() },
+  resumeRun: { payload: z.object({ control: z.literal("resume") }).strict() },
+  exportLedger: { payload: exportPayloadSchema },
+  recordLaunchReadiness: { payload: readinessPayloadSchema },
 };

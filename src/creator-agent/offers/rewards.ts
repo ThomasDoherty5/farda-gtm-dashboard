@@ -1,12 +1,14 @@
 import { z } from "zod";
 import { TIERS, scopeSchema, type RewardRecord } from "./contract.ts";
-const id=z.string().trim().min(1).max(180), minor=z.number().int().nonnegative().max(100_000_000), instant=z.string().datetime({offset:true});
+const id=z.string().trim().min(1).max(180), minor=z.number().int().nonnegative().max(100_000_000), instant=z.string().datetime({offset:true}).refine(value=>Number.isFinite(Date.parse(value)));
 const order=z.object({canonicalId:id,nativeId:id,source:z.enum(["website","tiktok-shop","mirror"]),revision:z.number().int().positive(),
   status:z.enum(["matured","pending","excluded"]),lines:z.array(z.object({lineRef:id,eligible:z.boolean(),merchandiseMinor:minor,sellerDiscountMinor:minor,
     platformDiscountMinor:minor,reimbursedMinor:minor.nullable(),refundedMinor:minor}).strict()).min(1).max(50)}).strict();
 export const rewardSourceSchema=z.object({scope:scopeSchema,creatorId:id,sourceRef:id,observedAt:instant,coveredRoutes:z.array(z.enum(["website","tiktok-shop"])).max(2),
   orders:z.array(order).max(10000), paused:z.boolean(), commissionMinor:minor.nullable(),costsExcludingRewardsAndCommissionMinor:minor.nullable(),
-  awards:z.array(z.object({tier:z.enum(["tech","phone","vacation"]),earnedRef:id,selection:id.nullable(),redemptionRef:id.nullable(),redeemedMinor:minor.nullable()}).strict()).max(30),
+  awardsComplete:z.boolean().optional(),
+  awards:z.array(z.object({tier:z.enum(["tech","phone","vacation"]),earnedRef:id,selection:id.nullable(),redemptionRef:id.nullable(),redeemedMinor:minor.nullable(),
+    amountMinor:minor.optional(),programmeRef:id.optional(),rewardVersion:id.optional(),sourceVersion:id.optional()}).strict()).max(100),
 }).strict();
 export type RewardSource=z.infer<typeof rewardSourceSchema>;
 export function projectRewards(offerId:string,creatorId:string,version:string,source:RewardSource|null,priorAwards:RewardSource["awards"]=[]):RewardRecord {
@@ -44,18 +46,23 @@ export function projectRewards(offerId:string,creatorId:string,version:string,so
     }
   }
   const complete=!!source && !unknowns.length;
-  const awards=new Map(priorAwards.map(a=>[a.tier,a]));
+  const awards=new Map(priorAwards.map(a=>[a.earnedRef,a]));
   for(const a of source?.awards??[]) {
-    const old=awards.get(a.tier);
-    if(old && old.earnedRef!==a.earnedRef) throw new Error("CONFLICTING_MILESTONE_RECEIPTS");
+    const old=awards.get(a.earnedRef);
+    if(old && (old.tier!==a.tier || old.amountMinor!==undefined && (old.amountMinor!==a.amountMinor || old.programmeRef!==a.programmeRef || old.rewardVersion!==a.rewardVersion))) throw new Error("CONFLICTING_MILESTONE_RECEIPTS");
     if(old?.redemptionRef && (a.redemptionRef!==old.redemptionRef || a.redeemedMinor!==old.redeemedMinor)) throw new Error("CONFLICTING_REDEMPTION_RECEIPTS");
     if(a.redemptionRef===null && a.redeemedMinor!==null)throw new Error("REDEMPTION_RECEIPT_REQUIRED");
-    if ((a.redeemedMinor??0)>TIERS.find(t=>t.id===a.tier)!.additionalMinor) throw new Error("REDEMPTION_EXCEEDS_EARNED");
-    awards.set(a.tier,a);
+    if (a.amountMinor!==undefined && (a.redeemedMinor??0)>a.amountMinor) throw new Error("REDEMPTION_EXCEEDS_EARNED");
+    awards.set(a.earnedRef,a);
   }
-  const tiers=TIERS.map(t=>{const a=awards.get(t.id);return {id:t.id, earned:a?true:complete?false:null,
-    redeemedMinor:a?a.redemptionRef?a.redeemedMinor:0:complete?0:null, selection:a?.selection??null};});
-  const earned=tiers.some(t=>t.earned===null)?null:TIERS.reduce((n,t)=>n+(awards.has(t.id)?t.additionalMinor:0),0);
+  const allAwards=[...awards.values()],awardCoverage=source?.awardsComplete===true;
+  const amountsVerified=allAwards.every(a=>a.amountMinor!==undefined && !!a.programmeRef && !!a.rewardVersion && !!a.sourceVersion);
+  if(!awardCoverage)unknowns.push("Reward entitlement coverage unverified");
+  if(!amountsVerified)unknowns.push("Legacy award amount and programme version unverified; candidate tiers are not entitlement evidence");
+  const tiers=TIERS.map(t=>{const group=allAwards.filter(a=>a.tier===t.id);return {id:t.id, earned:group.length?true:awardCoverage?false:null,
+    redeemedMinor:group.length?group.every(a=>!a.redemptionRef || a.redeemedMinor!==null)?group.reduce((sum,a)=>sum+(a.redemptionRef?a.redeemedMinor??0:0),0):null:awardCoverage?0:null,
+    selection:group.length===1?group[0]?.selection??null:null};});
+  const earned=awardCoverage&&amountsVerified?allAwards.reduce((sum,a)=>sum+a.amountMinor!,0):null;
   const redeemed=tiers.every(t=>t.redeemedMinor!==null)?tiers.reduce((n,t)=>n+(t.redeemedMinor??0),0):null;
   return {kind:"agent-rewards",offerId,creatorId,version,sourceRef:source?.sourceRef??null,observedAt:source?.observedAt??null,status:source?"observed":"unobserved",
     maturedMinor:complete?matured:null,pendingMinor:complete?pending:null,excludedMinor:complete?excluded:null,refundedMinor:complete?refunded:null,duplicateMirrors:mirrors,pendingOrders:complete?pendingOrders:null,

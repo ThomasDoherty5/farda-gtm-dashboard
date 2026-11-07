@@ -13,7 +13,9 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
   let app: ReturnType<typeof createAgentServer>;
   let origin: string;
   let source: CollaborationSourceSnapshot | null;
+  let clock: number;
   beforeEach(async () => {
+    clock = Date.now();
     source = collaborationSnapshotSchema.parse({ scope, id: "synthetic-collaboration", sourceRevision: "synthetic-source-v1", sourceRef: "source:synthetic-collaboration",
       observedAt: new Date().toISOString(), coverage: "complete", title: "Synthetic collaboration", platform: "Social Cat", creatorRef: null, campaignRef: null,
       stage: "Content pending", nextAction: "Review content",
@@ -21,7 +23,8 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
         graceDays: null, observationUntil: null, retainedSampleCost: null, historicalFee: null },
       sample: { state: null, observedAt: null, sourceRef: null }, suppression: { state: "unknown", sourceRef: null }, history: [], deliverables: [] });
     app = createAgentServer({ databasePath: ":memory:", readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: scope.workspaceId, accountId: scope.accountId, collaborationSourceReader: async (_scope, id) => id === "synthetic-collaboration" ? source : null });
+      workspaceId: scope.workspaceId, accountId: scope.accountId, operations: { now: () => clock },
+      collaborationSourceReader: async (_scope, id) => id === "synthetic-collaboration" ? source : null });
     await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
     const address = app.server.address();
     if (!address || typeof address === "string") throw new Error("Expected test server.");
@@ -93,6 +96,9 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
     const first = await post("/v1/action", proposal(initial.body.dataVersion));
     expect(first.status).toBe(200);
     for (let index = 0; index < 51; index++) {
+      // Model permitted traffic across multiple windows, retaining all52 receipts and the original history lookup.
+      clock += 2100;
+      source!.observedAt = new Date(clock).toISOString();
       const current = await post("/v1/read", readRequest("collaborationDetail", "synthetic-collaboration"));
       const next = proposal(current.body.dataVersion);
       const response = await post("/v1/action", { ...next, idempotencyKey: "synthetic-following-proposal-" + index,

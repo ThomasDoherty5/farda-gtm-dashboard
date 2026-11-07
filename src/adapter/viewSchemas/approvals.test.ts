@@ -91,7 +91,7 @@ const runIds = demoScenarios.runs.map(([id]) => id);
 describe("the registry", () => {
   it("has exactly these view keys and action kinds", () => {
     expect(Object.keys(approvalViewSchemas).sort()).toEqual(["approvalDetail", "runDetail"]);
-    expect(Object.keys(approvalActionSchemas).sort()).toEqual(["decideApproval", "dispatchApprovedAction", "freshAttempt", "lookup", "pauseRun", "recordConfirmedSent"]);
+    expect(Object.keys(approvalActionSchemas).sort()).toEqual(["cancelUnsent", "decideApproval", "dispatchApprovedAction", "exportLedger", "freshAttempt", "lookup", "pauseRun", "previewAction", "reconcileApproval", "recordConfirmedSent", "recordLaunchReadiness", "requestApproval", "resumeRun"]);
   });
 });
 

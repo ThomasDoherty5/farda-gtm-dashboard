@@ -1,6 +1,8 @@
 // Compares a rendered page with a Figma capture. Needs a running app (npm run dev) and a capture from
 // the Figma MCP. Captures stay in the gitignored .handoff/figma folder because this repository is public.
 // Usage: node scripts/compare-figma.mjs <url-path> <capture.png> [threshold] [max-percent]
+// Optional FIGMA_COMPARE_BROWSER_CHANNEL selects an installed browser; FIGMA_COMPARE_STORAGE_STATE accepts an
+// explicit private authenticated test session. Keep that state and FIGMA_COMPARE_OUTPUT_DIR outside public artifacts.
 // An optional crop-height compares only the top of the page, for a screen that is taller on purpose.
 // With max-percent, exits 1 if the page size differs or more pixels than that differ.
 // A page that is taller on purpose can be judged in aligned parts: SEGMENTS="0-840;1008-1200@-58" compares render rows
@@ -13,12 +15,13 @@ import { PNG } from "pngjs";
 
 const [path = "/overview", capture = ".handoff/figma/overview-10-217.png", threshold = "0.1", maxPercent, cropHeight] = process.argv.slice(2);
 const base = process.env.BASE_URL ?? "http://localhost:5173";
-const out = ".handoff/figma/compare";
+const out = process.env.FIGMA_COMPARE_OUTPUT_DIR ?? ".handoff/figma/compare";
 mkdirSync(out, { recursive: true });
 
 const figma = PNG.sync.read(readFileSync(capture));
-const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: figma.width, height: figma.height }, deviceScaleFactor: 1, reducedMotion: "reduce", locale: "en-US", timezoneId: "America/Los_Angeles" });
+const browser = await chromium.launch({ channel: process.env.FIGMA_COMPARE_BROWSER_CHANNEL });
+const page = await browser.newPage({ viewport: { width: figma.width, height: figma.height }, deviceScaleFactor: 1, reducedMotion: "reduce", locale: "en-US", timezoneId: "America/Los_Angeles",
+  ...(process.env.FIGMA_COMPARE_STORAGE_STATE ? { storageState: process.env.FIGMA_COMPARE_STORAGE_STATE } : {}) });
 await page.goto(base + path, { waitUntil: "networkidle" });
 await page.evaluate(() => document.fonts.ready);
 const fonts = await page.evaluate(() => [...document.fonts].filter((f) => f.status === "loaded").map((f) => `${f.family} ${f.weight}`));

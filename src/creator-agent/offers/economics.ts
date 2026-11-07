@@ -3,8 +3,10 @@ import { BUNDLES, costKeys, type OfferTerms, type ProviderFacts } from "./contra
 const rateAmount = (minor: number, bps: number) => Math.round(minor * bps / 10_000);
 
 /** Net merchandise excludes shipping, tax and subscriptions. Sample units belong to the seeded cohort once. */
-export function offerScenario(terms: OfferTerms, label: "base" | "downside") {
-  const line = terms[label], bundle = BUNDLES.find(b=>b.id===line.bundle)!;
+export type OfferPrices = ReadonlyArray<{ id: string; units: number; merchandiseMinor: number; shippingMinor: number }>;
+export function offerScenario(terms: OfferTerms, label: "base" | "downside", prices: OfferPrices = BUNDLES) {
+  const line = terms[label], bundle = prices.find(b=>b.id===line.bundle);
+  if(!bundle || line.refundPerOrderMinor+line.sellerDiscountMinor+line.platformCouponMinor>bundle.merchandiseMinor)throw new Error("INVALID_PRICE_ALLOCATION");
   const missing: string[] = [];
   const cost = (key: typeof costKeys[number]) => {
     const value = terms.costs[key].minor;
@@ -43,7 +45,7 @@ export function offerScenario(terms: OfferTerms, label: "base" | "downside") {
     perOrderMarginMinor:perOrder===null?null:Math.round(perOrder), breakEvenOrders:breakEven, reserveMinor:reserve, earnedRewardMinor:earned,
     paidCommissionCashMinor:terms.costs.commissionAlreadyPaid.minor, missing: [...new Set(missing)] };
 }
-export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | null, verifiedCostKeys: Set<string>, now: string, verifiedFunding = new Set<string>()) {
+export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | null, verifiedCostKeys: Set<string>, now: string, verifiedFunding = new Set<string>(), prices: OfferPrices = BUNDLES) {
   const blockers: string[] = [];
   if (!provider) blockers.push("Provider terms and program entitlement unverified");
   else {
@@ -72,7 +74,7 @@ export function proposalBlockers(terms: OfferTerms, provider: ProviderFacts | nu
   for (const key of costKeys.filter(k=>k!=="commissionAlreadyPaid" && (k!=="samplePostagePerCreator" || terms.sample.requested)))
     if(!verifiedCostKeys.has(key)) blockers.push(`Cost evidence unverified: ${key}`);
   for (const label of ["base","downside"] as const) {
-    const scenario=offerScenario(terms,label);
+    const scenario=offerScenario(terms,label,prices);
     if(terms[label].platformCouponMinor>0 && !verifiedFunding.has(label)) blockers.push(`Platform subsidy unverified: ${label}`);
     if(scenario.contributionMinor===null || scenario.contributionMinor<=0 || !scenario.orders) blockers.push(`Cohort payback unproven: ${label}`);
   }

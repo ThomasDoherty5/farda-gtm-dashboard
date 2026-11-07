@@ -40,9 +40,11 @@ function counted(sources: AnalyticsSources = syntheticAnalyticsSources()) {
   const wrapped = Object.fromEntries(Object.entries(sources).map(([key, read]) => [key, async (request: AnalyticsSourceRequest) => { calls.push(key); return read!(request); }]));
   return { calls, sources: wrapped as AnalyticsSources };
 }
+/** The shared API error envelope (apiErrorEnvelope.ts): public metadata only, a fresh correlation id, never data. */
 const expectCanonical = (body: Record<string, unknown>, code: string) => {
   expect(Object.keys(body).sort()).toEqual(CANONICAL);
-  expect(body).toMatchObject({ code, correlationId: null, retryAfterMs: null, executionCertainty: "notApplied" });
+  expect(body).toMatchObject({ code, retryAfterMs: null, executionCertainty: "notApplied" });
+  expect(body.correlationId).toMatch(/^[0-9a-f-]{36}$/);
   expect(typeof body.message).toBe("string");
   expect(body).not.toHaveProperty("data");
 };
@@ -52,24 +54,54 @@ afterEach(async () => {
 });
 
 describe("THO-293 analytics reads through the authenticated creator-agent service", () => {
-  it("denies unauthenticated and wrong-scope reads before any source is read", async () => {
+  it("denies unauthenticated and wrong-scope reads through the shared read path before any source is read", async () => {
     const { calls, sources } = counted();
     const { post, envelope } = await start({ analyticsSources: sources });
     expect((await post(envelope("overviewSummary"), null)).status).toBe(401);
     expect((await post(envelope("overviewSummary"), "synthetic-wrong-token-000000000000000000")).status).toBe(401);
     for (const scope of [{ ...requestedScope, workspaceId: "foreign-workspace" }, { ...requestedScope, accountIds: ["foreign-account"] },
       { ...requestedScope, accountIds: [analyticsTestScope.accountId, "foreign-account"] }, { ...requestedScope, environment: "production" }, { ...requestedScope, environment: "demo" }]) {
-      for (const view of [...served, "launchSnapshot"]) {
+      for (const view of served) {
         const result = await post(envelope(view, {}, { requestedScope: scope }));
-        expect(result.status).toBe(403);
-        expectCanonical(result.body, "FORBIDDEN");
+        expect(result.status).toBe(400);
+        expectCanonical(result.body, "INVALID_INPUT");
         expect(result.body.requestId).toBe("synthetic-analytics-read");
       }
     }
     expect(calls).toEqual([]);
   });
 
-  it("returns 200 with each source's unconfigured, never-synced state and N/A figures when no reader is connected; pending views never fall back to demo data", async () => {
+  it("consumes the shared per-principal read admission", async () => {
+    const { calls, sources } = counted();
+    const { post, envelope } = await start({ analyticsSources: sources });
+    // The shared transport admission (apiRequestLimits.ts) allows 120 reads per principal per minute; analytics reads count against it.
+    for (let i = 0; i < 120; i++) {
+      const view = served[i % served.length]!;
+      expect((await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}))).status).toBe(200);
+    }
+    const sourceCalls = calls.length;
+    const limited = await post(envelope("overviewSummary"));
+    expect(limited.status).toBe(429);
+    // Admission is refused before the body is read, exactly as for every other read.
+    expect(limited.body).toMatchObject({ code: "RATE_LIMITED", requestId: null, retryable: true, executionCertainty: "notApplied" });
+    expect(calls.length).toBe(sourceCalls);
+    // Another principal has its own allowance.
+    expect((await post(envelope("overviewSummary"), SYNTHETIC_REVIEW_TOKEN)).status).toBe(200);
+  });
+
+  it("does not hold or reroute launch views: launchControl answers from its own service, the rest keep the shared schema", async () => {
+    const { post, envelope } = await start();
+    const control = await post(envelope("launchControl", {}));
+    // With no readiness source injected, main's launch control answers its own typed state, never this module's hold.
+    expect(control.body.code).toBe("READINESS_SOURCE_UNCONFIGURED");
+    for (const view of ["launchSnapshot", "launchReconciliation", "campaignFunnel", "metricDictionary"]) {
+      const result = await post(envelope(view, {}));
+      expect(result.status).toBe(400);
+      expectCanonical(result.body, "INVALID_INPUT");
+    }
+  });
+
+  it("returns 200 with each source's unconfigured, never-synced state and N/A figures when no reader is connected", async () => {
     const { post, envelope, capabilities } = await start();
     for (const view of served) {
       const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}));
@@ -80,11 +112,6 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
       expect(result.body.sourceFreshness.every((f: { freshnessState: string; lastSourceSuccessAt: unknown }) => f.freshnessState === "neverSynced" && f.lastSourceSuccessAt === null)).toBe(true);
       expect(result.body.coverage).toMatchObject({ observedCount: 0, complete: false });
       expect(JSON.stringify(result.body.data)).not.toMatch(/"state":"known"/);
-    }
-    for (const view of ["launchSnapshot", "launchControl", "launchReconciliation", "campaignFunnel", "metricDictionary"]) {
-      const result = await post(envelope(view, view === "campaignFunnel" ? { campaignId: "x", cohort: "first-wave" } : {}));
-      expect(result.status).toBe(503);
-      expectCanonical(result.body, "INTEGRATION_PENDING");
     }
     expect((await capabilities()).analyticsReads).toEqual({ orders: "notConnected", adPlatforms: "notConnected", sessions: "notConnected", support: "notConnected" });
   });
@@ -149,19 +176,22 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
   it("refuses forged filters, periods and envelopes with a canonical validation error and no source access", async () => {
     const { calls, sources } = counted();
     const { post, envelope } = await start({ analyticsSources: sources });
-    const forged: [string, unknown, Record<string, unknown>][] = [
-      ["overviewSummary", { scenario: "happy" }, {}], ["overviewSummary", { fixture: "FX-01-happy-read" }, {}], ["attribution", { workspaceId: "other" }, {}],
-      ["paidMedia", { rights: "all", platform: "google" }, {}], ["customerJourney", { preset: "allTime" }, {}],
-      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-12-01", timezone: "UTC", basis: "eventTime" } }],
-      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "observationTime" } }],
-      ["overviewSummary", { preset: "last7Days" }, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "eventTime" } }],
-      ["overviewSummary", {}, { sort: [{ field: "orders", direction: "desc" }] }], ["overviewSummary", {}, { page: { cursor: "next", limit: 50 } }],
-      ["overviewSummary", {}, { schemaVersion: "2020-01-01" }], ["overviewSummary", {}, { adapterOverride: "demo" }], ["overviewSummary", {}, { requestId: "" }],
+    // Envelope, filter and period shape are refused by the shared read schema; period rules that need the clock by the reader.
+    const forged: [string, unknown, Record<string, unknown>, string][] = [
+      ["overviewSummary", { scenario: "happy" }, {}, "INVALID_INPUT"], ["overviewSummary", { fixture: "FX-01-happy-read" }, {}, "INVALID_INPUT"],
+      ["attribution", { workspaceId: "other" }, {}, "INVALID_INPUT"],
+      ["paidMedia", { rights: "all", platform: "google" }, {}, "INVALID_INPUT"], ["customerJourney", { preset: "allTime" }, {}, "INVALID_INPUT"],
+      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-12-01", timezone: "UTC", basis: "eventTime" } }, "VALIDATION_FAILED"],
+      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "observationTime" } }, "INVALID_INPUT"],
+      ["overviewSummary", { preset: "last7Days" }, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "eventTime" } }, "VALIDATION_FAILED"],
+      ["overviewSummary", {}, { sort: [{ field: "orders", direction: "desc" }] }, "INVALID_INPUT"], ["overviewSummary", {}, { page: { cursor: "next", limit: 50 } }, "INVALID_CURSOR"],
+      ["overviewSummary", {}, { schemaVersion: "2020-01-01" }, "INVALID_INPUT"], ["overviewSummary", {}, { adapterOverride: "demo" }, "INVALID_INPUT"],
+      ["overviewSummary", {}, { requestId: "" }, "INVALID_INPUT"],
     ];
-    for (const [view, filters, overrides] of forged) {
+    for (const [view, filters, overrides, code] of forged) {
       const result = await post(envelope(view, filters, overrides));
       expect(result.status, JSON.stringify([view, filters, overrides])).toBe(400);
-      expectCanonical(result.body, "VALIDATION_FAILED");
+      expectCanonical(result.body, code);
     }
     expect(calls).toEqual([]);
     // Valid explicit period is accepted.

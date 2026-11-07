@@ -8,6 +8,7 @@ import type { LaunchControlData, LaunchGate } from "@/fixtures/analytics";
 import { checkProposal, goBlockedReason, summarizeGates } from "./launchRules";
 import { Card, HandoffDialog, KpiCard, KpiGrid, Notice, PageHeader, SectionHeading, Table, ViewShell, WorkspaceTabs, count, dateTime, useIsDemo } from "./parts";
 import styles from "./Analytics.module.css";
+import { NativeLaunchControl } from "./NativeLaunchControl";
 
 export const LAUNCH_TABS = (current: "snapshot" | "control" | "performance") => [
   { label: "GTM overview", to: "/launch?view=snapshot", current: current === "snapshot" },
@@ -19,6 +20,10 @@ const compactUsd = (minorUnits: number) => `$${new Intl.NumberFormat("en-US").fo
 
 /** Launch control (Figma source 14:74, owner THO-293, CTRL-197 to CTRL-201). Records readiness; never activates a launch. */
 export function LaunchControlPage() {
+  return useIsDemo() ? <DemoLaunchControl /> : <NativeLaunchControl />;
+}
+
+function DemoLaunchControl() {
   const query = useView<Record<string, never>, LaunchControlData>("launchControl", {});
   const gatesRef = useRef<HTMLHeadingElement>(null);
   const [notion, setNotion] = useState(false);

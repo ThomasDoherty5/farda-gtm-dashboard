@@ -10,12 +10,15 @@ import { offerScenario } from "./economics";
 import { OfferRepository, type OfferAuthority } from "./repository";
 import { handleOfferRoute } from "./routes";
 import { projectRewards, type RewardSource } from "./rewards";
+import { commercialPolicyFixture, commercialSourceFixture } from "../commercialPolicy/fixtures.testkit";
+import { digest } from "../config";
 
 const scope:OfferScope={workspaceId:"fictional-workspace",accountId:"fictional-account"};
 const tmp:string[]=[];
 afterEach(()=>{for(const p of tmp.splice(0))rmSync(p,{recursive:true,force:true});});
 function proposal() {
   const t=newOfferTerms("creator-example","website","brief-test");
+  t.rewardVersion=null;
   t.programRef="program-example";t.recruitmentSource="Social Cat";t.publishingNetwork="Instagram";t.expiresAt="2098-02-01T00:00:00Z";
   t.commission.effectiveAt="2020-01-01T00:00:00Z";
   t.manifest={...t.manifest,campaignRef:"campaign-example",productRef:"bottle",productRevision:"r1",guidanceRefs:["guide"],claimsRefs:["claims"],contactRoute:"program inbox"};
@@ -33,13 +36,19 @@ function eligibleBasis(t:OfferTerms,termsRevision:string,state:AssessmentBasis["
 function provider(t:OfferTerms) {
   return {scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:"program-source",validUntil:"2099-01-01T00:00:00Z",facts:{
     provider:t.provider,programRef:t.programRef,sourceRef:"program-source",observedAt:"2020-01-01T00:00:00Z",validUntil:"2099-01-01T00:00:00Z",
-    supportsPercentage:true,supportsFixedPerSale:false,actualCommission:t.commission,payoutOwner:"native billing",trackingOwner:"provider",
+    providerAccountRef:"synthetic-provider-account",supportsPercentage:true,supportsFixedPerSale:false,actualCommission:t.commission,payoutOwner:"synthetic-payout-owner",trackingOwner:"synthetic-attribution-owner",recruitment:{source:"social-cat",campaignRef:"synthetic-campaign",campaignVersion:"v1",collaboration:"affiliate",sourceRef:"synthetic-campaign-source",observedAt:"2020-01-01T00:00:00Z",validUntil:"2099-01-01T00:00:00Z"},
     attributionWindowDays:30,precedence:"code before link",conflictRule:"eligible last click",holdDays:30,payoutSchedule:"matured next cycle",payoutThresholdMinor:1000,
     onboarding:"granted",feeTreatment:"per order quote",refundRule:"line-level retained merchandise",fundingRule:"verified reimbursements only"}};
 }
 function authority(t:OfferTerms):OfferAuthority {
-  return {provider,cost:(ref:string)=>{const key=costKeys.find(k=>t.costs[k].sourceRef===ref)!;return {scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,
-    sourceRef:ref,validUntil:"2099-01-01T00:00:00Z",costKey:key,minor:t.costs[key].minor,currency:"USD",productRef:t.manifest.productRef,productRevision:t.manifest.productRevision};}};
+  const policy=commercialPolicyFixture({...scope,environment:"sandbox"});policy.validUntil="2099-01-01T00:00:00Z";
+  const commercial=commercialSourceFixture(policy);
+  const auth:OfferAuthority={commercialPolicy:commercial.source,provider,cost:(ref:string)=>{const key=costKeys.find(k=>t.costs[k].sourceRef===ref)!;return {scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,
+    sourceRef:ref,validUntil:"2099-01-01T00:00:00Z",costKey:key,minor:t.costs[key].minor,currency:"USD",productRef:t.manifest.productRef,productRevision:t.manifest.productRevision};},
+    suppression:()=>({scope:{...scope,environment:"sandbox"},creatorId:t.creatorId,sourceRef:"synthetic-suppression",sourceVersion:"v1",state:"clear",observedAt:"2020-01-01T00:00:00Z",validUntil:"2099-01-01T00:00:00Z"})};
+  auth.assertCurrent=fence=>{if(digest(fence.provider)!==digest(provider(t).facts) || digest(fence.assessment)!==digest(auth.assessment?.(t.creatorId)??null) ||
+    digest(fence.suppression)!==digest(auth.suppression?.(t.creatorId,{...scope,environment:"sandbox"})))throw new Error("Synthetic source changed");};
+  return auth;
 }
 const route=(repo:OfferRepository,body:unknown,over:Partial<Parameters<typeof handleOfferRoute>[0]>={})=>handleOfferRoute({method:"POST",path:"/v1/offers/offer-a",role:"reviewer",idempotencyKey:"request-1",body,...over},repo);
 describe("immutable scoped offer proposals and forecasts",()=>{
@@ -80,7 +89,7 @@ describe("immutable scoped offer proposals and forecasts",()=>{
     t.base.fundedCouponMinor=300;t.commission.shopAdsRateBps=500;
     expect(offerScenario(t,"base")).toMatchObject({merchandiseMinor:15894,commissionMinor:2385});
     expect(offerTermsSchema.safeParse({...t,offerCodeAddsDiscount:true}).success).toBe(false);
-    expect(offerTermsSchema.safeParse({...t,base:{...t.base,refundPerOrderMinor:5598}}).success).toBe(false);
+    expect(()=>offerScenario({...t,base:{...t.base,refundPerOrderMinor:5598}},"base")).toThrow("INVALID_PRICE_ALLOCATION");
     expect(offerTermsSchema.safeParse({...t,manifest:{...t.manifest,claims:["proof-of-ingestion"]}}).success).toBe(false);
   });
   it("preserves proposals over restart, rejects fees, conflicts and unauthorized source decisions",()=>{
@@ -104,9 +113,10 @@ describe("immutable scoped offer proposals and forecasts",()=>{
   it("allows exact owner and creator receipts, invalidates material terms and preserves prior obligations",()=>{
     const db=new AgentStore(":memory:",scope),t=proposal(),auth=authority(t),repo=new OfferRepository(db.database,scope,auth);
     const v1=repo.saveFromAdapter("offer-a",null,t,"k1");expect(v1.blockers).toEqual([]);
+    const decisions=new Map<string,unknown>();auth.decision=ref=>decisions.get(ref);
     const decision=(kind:"owner-approved"|"creator-accepted",sourceRef:string)=>{
-      auth.decision=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef,offerId:"offer-a",version:"v1",
-        manifestHash:v1.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2099-01-01T00:00:00Z"});
+      decisions.set(sourceRef,{scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef,offerId:"offer-a",version:"v1",
+        providerAccountRef:"synthetic-provider-account",manifestHash:v1.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2099-01-01T00:00:00Z"});
       return repo.decision("offer-a",{version:"v1",kind,sourceRef},sourceRef);
     };
     expect(()=>decision("owner-approved","unscored")).toThrow("CURRENT_INVITATION_SCORECARD_REQUIRED");
@@ -137,9 +147,10 @@ describe("immutable scoped offer proposals and forecasts",()=>{
       validUntil:"2099-01-01T00:00:00Z",scenario:"base",bundle:"single",currency:"USD",advertisedDiscountMinor:100,reimbursedMinor:100,feeTreatment:"standard"});
     const v=repo.saveFromAdapter("offer-a",held.version,t,"refresh");expect(v.blockers).toEqual([]);expect(v.manifestHash).not.toBe(held.manifestHash);
     auth.assessment=()=>eligibleBasis(t,v.manifestHash);
+    const decisions=new Map<string,unknown>();auth.decision=ref=>decisions.get(ref);
     for(const kind of ["owner-approved","creator-accepted"] as const) {
-      auth.decision=()=>({scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:kind,offerId:"offer-a",version:v.version,
-        manifestHash:v.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2090-01-01T01:00:00+01:00"});
+      decisions.set(kind,{scope,creatorId:t.creatorId,provider:t.provider,programRef:t.programRef,sourceRef:kind,offerId:"offer-a",version:v.version,
+        providerAccountRef:"synthetic-provider-account",manifestHash:v.manifestHash,decision:kind,occurredAt:new Date().toISOString(),validUntil:"2090-01-01T01:00:00+01:00"});
       repo.decision("offer-a",{version:v.version,kind,sourceRef:kind},kind);
     }
     expect(repo.onboarding("offer-a")).toMatchObject({postingObligations:[],accepted:{validUntil:"2090-01-01T00:00:00.000Z"}});
@@ -160,7 +171,7 @@ function reward():RewardSource{
   const order={canonicalId:"canonical-order",nativeId:"native-order",source:"website" as const,revision:1,status:"matured" as const,lines:[line]};
   return {scope,creatorId:"creator-example",sourceRef:"reward-source-1",observedAt:"2020-01-02T00:00:00Z",coveredRoutes:["website","tiktok-shop"],
     orders:[order,{...order,source:"mirror",nativeId:"mirror-native"}, {...order,canonicalId:"pending",nativeId:"pending-native",status:"pending"}],
-    paused:false,commissionMinor:123800,costsExcludingRewardsAndCommissionMinor:200000,awards:[{tier:"tech",earnedRef:"award",redemptionRef:null,redeemedMinor:null,selection:null}]};
+    awardsComplete:true,paused:false,commissionMinor:123800,costsExcludingRewardsAndCommissionMinor:200000,awards:[{tier:"tech",earnedRef:"award",amountMinor:30000,programmeRef:"synthetic-programme",rewardVersion:"synthetic-earned-v1",sourceVersion:"synthetic-award-source-v1",redemptionRef:null,redeemedMinor:null,selection:null}]};
 }
 it("keeps canonical orders, late refunds, repeated claims, delayed redemption and incurred liability independent",()=>{
   const db=new AgentStore(":memory:",scope),src=reward(),repo=new OfferRepository(db.database,scope,{reward:()=>src});
@@ -170,7 +181,7 @@ it("keeps canonical orders, late refunds, repeated claims, delayed redemption an
   src.sourceRef="reward-2";src.observedAt="2020-02-01T01:00:00+01:00";src.orders[0]!.lines[0]!.refundedMinor=600000;src.paused=true;src.awards=[];
   expect(repo.recordReward("offer-a",src.sourceRef,"r2")).toMatchObject({maturedMinor:20000,earnedMinor:30000,outstandingMinor:30000,paused:true});
   src.observedAt="2019-01-01T00:00:00Z";expect(()=>repo.recordReward("offer-a",src.sourceRef,"stale")).toThrow("STALE_REWARD_SNAPSHOT");
-  src.sourceRef="reward-3";src.observedAt="2020-03-01T00:00:00Z";src.awards=[{tier:"tech",earnedRef:"award",redemptionRef:"redeem",redeemedMinor:25000,selection:"earbuds"}];
+  src.sourceRef="reward-3";src.observedAt="2020-03-01T00:00:00Z";src.awards=[{tier:"tech",earnedRef:"award",amountMinor:30000,programmeRef:"synthetic-programme",rewardVersion:"synthetic-earned-v1",sourceVersion:"synthetic-award-source-v1",redemptionRef:"redeem",redeemedMinor:25000,selection:"earbuds"}];
   expect(repo.recordReward("offer-a",src.sourceRef,"r3")).toMatchObject({redeemedMinor:25000,outstandingMinor:5000});
   src.coveredRoutes=["website"];expect(projectRewards("offer-a",src.creatorId,"v1",src).maturedMinor).toBeNull();
   db.close();

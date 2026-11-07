@@ -1,9 +1,9 @@
 import { z } from "zod";
 
-const id = z.string().trim().min(1).max(180);
+const id = z.string().min(1).max(180).refine(value=>value.trim()===value,"Reference whitespace is not normalized.");
 export const routeId = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,119}$/);
 const text = z.string().trim().min(1).max(600);
-const time = z.string().datetime({ offset: true });
+const time = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)), "A finite timestamp is required.");
 const nullableText = text.nullable();
 const money = z.number().int().min(0).max(100_000_000);
 const count = z.number().int().min(0).max(10_000);
@@ -57,15 +57,14 @@ const scenario = z.object({
   bundle: z.enum(["single","duo","trio"]), orders: count, shopAdsOrders: count, refundPerOrderMinor: money,
   sellerDiscountMinor: money, platformCouponMinor: money, fundedCouponMinor: money.nullable(), platformFundingRef:id.nullable().optional(),
 }).strict().superRefine((x,c) => {
-  const b=BUNDLES.find(b=>b.id===x.bundle)!;
-  if(x.shopAdsOrders>x.orders || x.refundPerOrderMinor+x.sellerDiscountMinor+x.platformCouponMinor>b.merchandiseMinor ||
+  if(x.shopAdsOrders>x.orders ||
     (x.fundedCouponMinor!==null && x.fundedCouponMinor>x.platformCouponMinor))
     c.addIssue({code:"custom",message:"Order allocation exceeds available counts or merchandise"});
 });
 export const offerTermsSchema = z.object({
   creatorId: routeId, recruitmentSource: id, publishingNetwork: id, checkoutRoute: checkoutSchema,
   provider: z.enum(["shopify-collabs","tiktok-shop","external-affiliate"]), programRef: id.nullable(),
-  policyVersion: z.literal("commission-only-v1"), pricingVersion: z.literal(CANDIDATE_VERSION), rewardVersion: z.literal(CANDIDATE_VERSION),
+  policyVersion: id, pricingVersion: id, rewardVersion: id.nullable(), rewardProgrammeRef: id.nullable().optional(),
   relationship: z.literal("commission-only"), upfrontFeeMinor: z.literal(0), guaranteedFeeMinor: z.literal(0),
   commission, sample: z.object({ requested: z.boolean(), seededCreators: count, unitsPerCreator: count, merchandiseCapMinor: money.nullable(), shippingCapMinor: money.nullable() }).strict(),
   offerCodeAddsDiscount: z.literal(false), stacking: z.literal("one-seller-discount"), subscriptionRequired: z.literal(false),
@@ -97,10 +96,13 @@ export const scenarioResultSchema = z.object({
 }).strict();
 export const providerFactsSchema = z.object({
   sourceRef:id, observedAt:time, validUntil:time, provider:z.enum(["shopify-collabs","tiktok-shop","external-affiliate"]), programRef:id,
+  providerAccountRef:id.optional(),
   supportsPercentage:z.boolean(), supportsFixedPerSale:z.boolean(), actualCommission:commission, payoutOwner:id,
   attributionWindowDays:count.nullable(), precedence:nullableText, conflictRule:nullableText, holdDays:count.nullable(),
   payoutSchedule:nullableText, payoutThresholdMinor:money.nullable(), onboarding:nullableText, feeTreatment:nullableText,
   fundingRule:nullableText, refundRule:nullableText, trackingOwner:id,
+  recruitment:z.object({source:z.enum(["social-cat","tiktok"]),campaignRef:id,campaignVersion:id,collaboration:z.enum(["affiliate","paid","gifted","unknown"]),
+    sourceRef:id,observedAt:time,validUntil:time}).strict().optional(),
 }).strict();
 export const offerRecordSchema = z.object({
   kind:z.literal("agent-offer"), offerId:routeId, version:id, revision:count, recordedAt:time, manifestHash:id,
@@ -108,6 +110,10 @@ export const offerRecordSchema = z.object({
   scenarios:z.array(scenarioResultSchema).length(2), provider:providerFactsSchema.nullable(), blockers:z.array(text),
   state:z.enum(["proposed","approved","accepted"]), ownerApprovalRef:id.nullable(), acceptedRef:id.nullable(),
   history:z.array(z.object({version:id,hash:id,at:time}).strict()).max(100), historyTotal:count,
+  commercial:z.object({state:z.enum(["unknown","proposed","effective","held"]),policyVersion:id.nullable(),policyHash:id.nullable(),
+    pricingVersion:id.nullable(),pricingBasis:z.enum(["candidate","source"]),
+    bundles:z.array(z.object({id:z.enum(["single","duo","trio"]),units:count.positive(),merchandiseMinor:money,shippingMinor:money}).strict()).min(1).max(3).nullable().optional(),
+    rewardVersion:id.nullable(),reasonCodes:z.array(id),replyRevision:count}).strict().optional(),
 }).strict();
 export type OfferRecord = z.infer<typeof offerRecordSchema>;
 export type ProviderFacts = z.infer<typeof providerFactsSchema>;

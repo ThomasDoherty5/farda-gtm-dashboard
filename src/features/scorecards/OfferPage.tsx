@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { AdapterError } from "@/adapter/errors";
 import { useView } from "@/adapter/useView";
 import { useSave } from "@/adapter/useSave";
@@ -10,8 +10,8 @@ import { SectionTabs } from "@/components/SectionTabs";
 import { Card, HandoffDialog, KpiCard, ViewShell, useIsDemo } from "@/features/analytics/parts";
 import { DEMO_ASSESSMENT_CONTENT_ID, DEMO_CREATOR_ID, type OfferDraftPayload, type OfferDraftRecord, type Provider } from "@/fixtures/scorecards";
 import { economics, parseCommission, parseDollars, usd2, usdAuto } from "./scorecardMath";
-import { AgentOffer, NewOffer } from "./SavedOffer";
-import type { OfferRecord } from "@/creator-agent/offers/contract";
+import { AgentOffer, NewOffer, type CommercialOfferRecord } from "./SavedOffer";
+import { commercialSelectionFromSearch } from "@/features/commercial/selection";
 import { WATERFALL, waterfallBars } from "./waterfall";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
@@ -38,11 +38,15 @@ export function OfferPage() {
   return <OfferRead offerId={offerId} />;
 }
 function OfferRead({ offerId }: { offerId: string }) {
-  const query = useView<{ offerId: string }, OfferDraftRecord | OfferRecord>("offerDraft", { offerId });
+  const [search] = useSearchParams();
+  const selection = commercialSelectionFromSearch(search);
+  const filters = { ...(selection ?? {}), offerId };
+  const query = useView<typeof filters, OfferDraftRecord | CommercialOfferRecord>("offerDraft", filters);
+  if (selection === null || selection.offerId !== undefined && selection.offerId !== offerId) return <section className={a.page}><h1 id="offer-title">Terms that make sense.</h1><p role="alert">Invalid exact offer selection. No current commercial result is displayed.</p></section>;
   return (
     <section aria-labelledby="offer-title" data-figma-source="65:634" className={a.page}>
       <ViewShell query={query} subject="The offer" emptyTitle="No offer" emptyBody="The source responded, but there is no offer record to show.">
-        {(record, response) => "kind" in record ? record.offerId === offerId ? <AgentOffer key={record.offerId} record={record} canEdit={response.capabilities.some(c=>c.actionKind==="saveOfferDraft" && c.state==="available")} /> : <p role="alert">Offer identity mismatch.</p> : <Offer record={record} />}
+        {(record, response) => "kind" in record ? record.offerId === offerId ? <AgentOffer key={record.offerId} record={record} current={!query.isError && !query.isFetching && !query.isPlaceholderData && response.dataState !== "stale"} canEdit={response.capabilities.some(c=>c.actionKind==="saveOfferDraft" && c.state==="available")} /> : <p role="alert">Offer identity mismatch.</p> : <Offer record={record} />}
       </ViewShell>
       {query.data?.dataState === "empty" && query.data.capabilities.some(c=>c.actionKind === "saveOfferDraft" && c.state === "available") && <LinkButton to="/offers/new">Draft creator offer</LinkButton>}
       {!query.data?.data && <h1 id="offer-title" style={{ font: "var(--text-h1)", margin: 0 }}>Terms that make sense.</h1>}
