@@ -109,3 +109,9 @@ export class DispatchError extends Error {
 
 /** Server-injected machine authority, never supplied through the browser. */
 export type DispatchWorker = {workerRef:string;assertCurrent:()=>void};
+
+/** Read-only latest durable provider-attempt observation; never an execution grant. */
+export type DispatchAttemptObservation = {
+  state: "unstarted" | "open" | "applied" | "closedNotApplied" | "unknown";
+  attemptNumber: number | null; receiptRef: string | null; observedAt: string | null;
+};

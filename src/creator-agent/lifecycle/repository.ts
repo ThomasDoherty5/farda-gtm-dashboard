@@ -5,7 +5,7 @@ import type { OperationsScope } from "../operations.ts";
 import { draftRecordSchema, flowResourceSchema, lifecycleFilters, mandatoryPolicies, nativeActivationSchema, nativeConsentSchema,
   nativeEmailFlowSchema, nativeLifecycleSchema, requestedSaveSchema, saveDraftSchema, saveReceiptSchema,
   type DraftRecord, type FlowCatalog, type FlowDraft, type FlowKey, type LifecycleViewKey, type NativeLifecycleData, type SaveDraftInput, type SaveReceipt } from "./contract.ts";
-import { LifecycleError, lifecycleSnapshotSchema, type LifecycleSnapshot, type LifecycleSourceReader } from "./source.ts";
+import { LifecycleError, lifecycleObservationCurrent, lifecycleObservationDeadline, lifecycleSnapshotSchema, type LifecycleSnapshot, type LifecycleSourceReader } from "./source.ts";
 
 export { LifecycleError } from "./source.ts";
 type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: LifecycleSourceReader; now?: () => number };
@@ -72,13 +72,13 @@ export function createLifecycleService(options: Options) {
       db.prepare("INSERT INTO lifecycle_source_head VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,facts_hash=excluded.facts_hash,observed_at=excluded.observed_at")
         .run(s.version, factsHash, s.observedAt);
     });
-    const expired = Date.parse(s.validUntil) <= now();
+    const expired = !lifecycleObservationCurrent(s.observedAt, s.validUntil, now());
     return { snapshot: s, factsHash, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current",
       reason: expired ? "SOURCE_STALE" : s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null };
   }
   const publicCohort = (c: NonNullable<LifecycleSnapshot["consent"]>["cohort"]) =>
     ({ ...c, ref: alias("cohort", c.ref), receipt: alias("receipt", c.receipt) });
-  function publicCatalog(c: FlowCatalog, selected?: FlowDraft | null, sourceCurrent = true): FlowCatalog {
+  function publicCatalog(c: FlowCatalog, selected?: FlowDraft | null, sourceCurrent = true, sourceValidUntil?: string): FlowCatalog {
     const publicFlow: FlowCatalog = {
       ...c, flowRef: alias("flow", c.flowRef), catalogVersion: alias("catalog", c.catalogVersion), policyVersion: alias("policy", c.policyVersion),
       recoveryOwner: c.recoveryOwner ? alias("owner", c.recoveryOwner) : null,
@@ -94,8 +94,10 @@ export function createLifecycleService(options: Options) {
           c.entryEvents.some(x => x.ref === b.entryEventRef) && c.timingRules.some(x => x.ref === b.timingRuleRef && x.entryEventRef === b.entryEventRef) &&
           c.templates.some(x => x.ref === b.templateRef && x.version === b.templateVersion);
         const matches = !selected || !!basis && basis.entryEventRef === selected.entryEventRef && basis.timingRuleRef === selected.timingRuleRef && basis.templateRef === selected.templateRef && basis.templateVersion === selected.templateVersion;
-        const current = sourceCurrent && exact && matches && e.validUntil && Date.parse(e.validUntil) > now();
-        return { ...e, basis, receipt: e.receipt ? alias("receipt", e.receipt) : null,
+        const deadline = e.observedAt && e.validUntil ? lifecycleObservationDeadline(e.observedAt, e.validUntil) : null;
+        const validUntil = deadline && sourceValidUntil ? new Date(Math.min(Date.parse(deadline), Date.parse(sourceValidUntil))).toISOString() : deadline;
+        const current = sourceCurrent && exact && matches && e.observedAt && validUntil && lifecycleObservationCurrent(e.observedAt, validUntil, now());
+        return { ...e, validUntil, basis, receipt: e.receipt ? alias("receipt", e.receipt) : null,
           state: current ? e.state : "unknown", missingReason: current ? e.missingReason : "Evidence does not prove this current flow, timing, template and policy basis." };
       }),
     };
@@ -140,9 +142,12 @@ export function createLifecycleService(options: Options) {
     if (!filters.success) fail("INVALID_REQUEST", 400);
     const f = view === "emailFlow" ? lifecycleFilters.emailFlow.parse(filters.data) : null;
     if (f?.draftRequestKey && actorRef !== "agent-reviewer") fail("SOURCE_SCOPE_DENIED", 403);
-    const s = await observe(), observedAt = new Date(now()).toISOString();
+    const observed = await observe(), readTime = now();
+    const s: SourceRead = observed.snapshot && !lifecycleObservationCurrent(observed.snapshot.observedAt, observed.snapshot.validUntil, readTime)
+      ? { ...observed, state: "expired", reason: "SOURCE_STALE" } : observed;
+    const observedAt = new Date(readTime).toISOString();
     const head = { observedAt, actorRef, sourceAsOf: s.snapshot?.observedAt ?? null, sourceVersion: s.snapshot ? sourceVersion(s.snapshot) : null,
-      validUntil: s.snapshot?.validUntil ?? null, freshness: s.state === "expired" ? "stale" as const : s.snapshot ? "current" as const : "unknown" as const,
+      validUntil: s.snapshot ? lifecycleObservationDeadline(s.snapshot.observedAt, s.snapshot.validUntil) : null, freshness: s.state === "expired" ? "stale" as const : s.snapshot ? "current" as const : "unknown" as const,
       coverage: s.snapshot?.coverage ?? "unknown" as const, sourceState: s.state, missingReason: s.reason, sourceLink: null };
     const rawConsent = s.snapshot?.consent, rawActivation = s.snapshot?.activation;
     const consent = rawConsent ? { ...rawConsent, cohort: publicCohort(rawConsent.cohort), categoryDefinitionVersion: alias("consent-definition", rawConsent.categoryDefinitionVersion) } : null;
@@ -154,7 +159,7 @@ export function createLifecycleService(options: Options) {
     if (f) {
       const draft = latest(f.flow), config = s.snapshot?.flows.find(c => c.flow === f.flow);
       const saveHoldReasons = reasons(f.flow, s, actorRef);
-      const publicConfig = config ? publicCatalog(config, draft?.payload, s.state !== "expired") : null;
+      const publicConfig = config ? publicCatalog(config, draft?.payload, s.state !== "expired", head.validUntil ?? undefined) : null;
       v = version(f.flow, s, draft);
       data = nativeEmailFlowSchema.parse({ ...head, kind: "source-email-flow", flow: f.flow, sourceConfig: publicConfig, lockedPolicies: mandatoryPolicies,
         draft, draftVersion: v, currentSourceMatch: s.state === "current" && !!draft && !!publicConfig && draft.sourceVersion === head.sourceVersion && draft.catalogVersion === publicConfig.catalogVersion && draft.policyVersion === publicConfig.policyVersion,
@@ -162,7 +167,7 @@ export function createLifecycleService(options: Options) {
       capabilities = [{ actionKind: "saveFlowDraft", state: actorRef !== "agent-reviewer" ? "denied" : saveHoldReasons.length ? "held" : "available", reasonCodes: saveHoldReasons },
         { actionKind: "enableFlow", state: "held", reasonCodes: ["J17_PROVIDER_EXECUTION_NOT_CONNECTED"] }];
     } else {
-      if (view === "lifecycleOverview") data = nativeLifecycleSchema.parse({ ...head, kind: "source-lifecycle", flows: (s.snapshot?.flows ?? []).map(c => publicCatalog(c, null, s.state !== "expired")),
+      if (view === "lifecycleOverview") data = nativeLifecycleSchema.parse({ ...head, kind: "source-lifecycle", flows: (s.snapshot?.flows ?? []).map(c => publicCatalog(c, null, s.state !== "expired", head.validUntil ?? undefined)),
         consent, activation, returnsAwaitingInspection: s.snapshot?.returnsAwaitingInspection ?? unknown("No source inspection aggregate.") });
       else if (view === "consentEligibility") data = nativeConsentSchema.parse({ ...head, kind: "source-consent", consent });
       else data = nativeActivationSchema.parse({ ...head, kind: "source-activation", activation });
@@ -205,7 +210,7 @@ export function createLifecycleService(options: Options) {
       const snapshot = s.snapshot!;
       const head = db.prepare("SELECT version,facts_hash FROM lifecycle_source_head WHERE id=1").get();
       if (head?.version !== snapshot.version || head.facts_hash !== s.factsHash) return reject("SOURCE_VERSION_CHANGED");
-      if (Date.parse(snapshot.validUntil) <= now()) return reject("SOURCE_STALE");
+      if (!lifecycleObservationCurrent(snapshot.observedAt, snapshot.validUntil, now())) return reject("SOURCE_STALE");
       if (request.expectedVersion !== current) return reject("STALE_VERSION");
       const config = publicCatalog(snapshot.flows.find(c => c.flow === flow)!);
       if (!choice(config, request.payload)) return reject("FLOW_CATALOG_SELECTION_INVALID", 422);

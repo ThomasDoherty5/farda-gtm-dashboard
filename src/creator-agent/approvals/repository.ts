@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { digest } from "../config.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
 import { ApprovalError, approvalScopeSchema, approvalDraftSchema, proposeCommandSchema, approvalCommandSchema, principalSchema, slackDecisionLocatorSchema, dispatchApprovalBindingSchema,
   type ApprovalScope, type ApprovalSources, type ApprovalRegistry, type ApprovalPrincipal, type ProposeCommand, type ApprovalCommand, type ApprovalManifest, type ApprovalDraft,
   type ApprovalRead, type LinearRecordIntent, type RecordedLinearRecord, type VerifiedSlackDecision, type SlackDecisionLocator, type TrustedApprovalIngress,
@@ -76,7 +77,7 @@ export class ApprovalRepository {
     if (!this.sources.assertCurrent || !this.options.registry?.assertCurrentDraft) return error("APPROVAL_CURRENT_AUTHORITY_UNAVAILABLE");
     if (!sameApprovalScope(authority.scope, this.scope) || !fresh(authority.actor.observedAt, authority.actor.validUntil, now)) return error("AUTHORITY_REQUIRED");
     if (authority.slack && !fresh(authority.slack.observedAt, authority.slack.validUntil, now) || authority.linearRecords.some(record => !fresh(record.observedAt, record.validUntil, now))) return error("APPROVAL_PROOF_EXPIRED");
-    try { this.sources.assertCurrent(authority, now); this.options.registry.assertCurrentDraft(manifest, draft, now); }
+    try { assertSynchronousVoid(()=>this.sources.assertCurrent!(authority, now)); assertSynchronousVoid(()=>this.options.registry!.assertCurrentDraft!(manifest, draft, now)); }
     catch (cause) { if (cause instanceof ApprovalError) throw cause; return error("APPROVAL_CURRENT_SOURCE_UNVERIFIED"); }
   }
   /** Caller owns the transaction. Only an existing, scoped source intent/event may reach this path. */
@@ -289,6 +290,22 @@ export class ApprovalRepository {
   }
 
   readApproval(ref: string, manifestVersion?: number): ApprovalRead | null { return this.readVersion(ref, manifestVersion); }
+  /** Immutable version enumeration only. Current eligibility remains separate on each returned record. */
+  readHistory(ref: string, options: { beforeVersion?: number; limit?: number } = {}): {
+    records: ApprovalRead[]; total: number; latestVersion: number; nextBeforeVersion: number | null;
+  } | null {
+    const limit = options.limit ?? 25, before = options.beforeVersion;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 25 || (before !== undefined && (!Number.isSafeInteger(before) || before < 1)))
+      return error("INVALID_APPROVAL_HISTORY_WINDOW");
+    const head = this.head(ref); if (!head) return null;
+    const rows = before === undefined
+      ? this.db.prepare("SELECT version FROM approval_manifests WHERE ref=? ORDER BY version DESC LIMIT ?").all(ref, limit + 1)
+      : this.db.prepare("SELECT version FROM approval_manifests WHERE ref=? AND version<? ORDER BY version DESC LIMIT ?").all(ref, before, limit + 1);
+    const versions = rows.slice(0, limit).map(row => Number(row.version));
+    const records = versions.map(version => this.readVersion(ref, version)!);
+    const total = Number(this.db.prepare("SELECT COUNT(*) n FROM approval_manifests WHERE ref=?").get(ref)!.n);
+    return { records, total, latestVersion: head.version, nextBeforeVersion: rows.length > limit ? versions.at(-1)! : null };
+  }
   /** Internal certainty lookup only. Callers must not expose protected payloads after an authorization failure. */
   readCommand(kind: "propose" | "request" | "reconcile", raw: ProposeCommand | ApprovalCommand, actor: ApprovalPrincipal, idempotencyKey: string): ApprovalRead | null {
     if (!["propose", "request", "reconcile"].includes(kind)) return error("INVALID_APPROVAL_OPERATION");

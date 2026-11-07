@@ -2,6 +2,18 @@ import { z } from "zod";
 import type { OperationsScope } from "../operations.ts";
 import { activationAggregateSchema, consentAggregateSchema, flowCatalogSchema, instantSchema, observedCountSchema, refSchema } from "./contract.ts";
 
+/** D-13 order-source ceiling: lifecycle includes checkout/delivery/consent evidence.
+ * A provider lease may shorten this limit, but cannot extend server-owned freshness.
+ * This does not assert that a remote source remained unchanged after its read.
+ */
+export const lifecycleMaxObservationAgeMs = 15 * 60_000;
+export function lifecycleObservationDeadline(observedAt: string, validUntil: string): string {
+  return new Date(Math.min(Date.parse(validUntil), Date.parse(observedAt) + lifecycleMaxObservationAgeMs)).toISOString();
+}
+export function lifecycleObservationCurrent(observedAt: string, validUntil: string, now: number): boolean {
+  return Number.isFinite(now) && Date.parse(observedAt) <= now && Date.parse(lifecycleObservationDeadline(observedAt, validUntil)) > now;
+}
+
 /** Read-only J17/provider aggregate boundary. It is not an email executor or an enrollment ledger. */
 export const lifecycleSnapshotSchema = z.object({
   scope: z.object({ workspaceId: refSchema, accountId: refSchema, environment: z.literal("sandbox") }).strict(),

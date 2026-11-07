@@ -161,7 +161,7 @@ export function createOperationsControls(input:Input){
         ["History coverage",h.transitions.length+" of "+h.total],...h.transitions.map(e=>[String(e.kind),String(e.at)] as [string,string]),
         ...run.items.slice(0,20).map(i=>["Item "+alias(i.itemId),i.state+" · checkpoint "+i.checkpointVersion+" · "+(i.result
           ? i.result.schemaVersion === "job-local-result.v1" ? "Local receipt "+alias(i.result.artifactRef)
-            : (i.result.sourceEffect === "providerApplied" ? "Confirmed source receipt " : "Artifact receipt ")+alias(i.result.receiptRef)
+            : (i.result.sourceEffect === "providerApplied" ? "Confirmed source receipt " : i.result.sourceEffect === "internalReport" ? "Internal report receipt " : "Artifact receipt ")+alias(i.result.receiptRef)
           : "No result receipt")] as [string,string])
       ] as [string,string][]}];
     });

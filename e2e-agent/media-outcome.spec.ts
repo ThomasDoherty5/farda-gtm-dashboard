@@ -77,7 +77,7 @@ test("a rejected provider response remains terminal with its receipt and offers 
   await expect(page.getByText("Provider rejected · receipt confirmed",{exact:true})).toBeVisible();await expect(page.getByText(run.items[0]!.receiptRef!,{exact:true})).toBeVisible();
   await expect(page.getByText("Provider-rejected items",{exact:true}).locator("..")).toContainText("1");await expect(page.getByText("All item receipts confirmed",{exact:true})).toHaveCount(0);
   await capture(page,info,"media-provider-rejected");
-  await page.getByRole("link",{name:"Recovery",exact:true}).focus();await page.keyboard.press("Enter");await expect(page.getByRole("button",{name:"Request a fresh attempt",exact:true})).toHaveAttribute("aria-disabled","true");
+  await page.getByRole("link",{name:"Recovery",exact:true}).focus();await page.keyboard.press("Enter");await expect(page.getByRole("button",{name:"Continue guarded original work",exact:true})).toHaveAttribute("aria-disabled","true");
   expect(f.world.state.calls).toBe(2);expect(f.app.mediaDomain!.repository.read(campaign.campaignId)).toEqual(original);
   expect(await f.app.actionFoundation.service.readRun(result.queued.runRef!,{principalRef:"agent-reviewer"})).toMatchObject({executionCertainty:"applied",providerRejectedCount:1,items:[{receiptRef:run.items[0]!.receiptRef,providerOutcome:{state:"rejected"}}]});
 });
