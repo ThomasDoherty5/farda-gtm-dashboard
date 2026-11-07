@@ -440,12 +440,14 @@ export function createAnalyticsReader(options: Options) {
     const observation = await observe("adPlatforms", adPlatformsSnapshotSchema, window);
     // Rights expiry ("today") and freshness are judged after the await, so rights that lapse while the platform answers show expired.
     const now = projectionTime(requestedAt), adsObs = atProjection(observation, now);
-    const a = adFacts(adsObs, now), nowIso = new Date(now).toISOString(), today = localDay(now, window.timezone);
+    // Rights are judged on the calendar day of the configured reporting timezone, never the caller's period timezone.
+    const a = adFacts(adsObs, now), nowIso = new Date(now).toISOString(), today = localDay(now, timezone);
     const assets = a.platforms.filter(p => p.known && p.feed).flatMap(p => p.feed!.assets.map(asset => {
       const id = alias("asset", asset.assetRef);
       const days = asset.expiresOn ? Math.round((Date.parse(asset.expiresOn) - Date.parse(today)) / DAY_MS) : null;
-      // Rights that have lapsed are expired, never "expiring in 0 days".
-      const rights = asset.rights === "expired" || asset.rights === "expiring" && days !== null && days < 0 ? "expired" as const : asset.rights;
+      // A rights date before today has lapsed: whatever the source declared (cleared, expiring or unknown), the asset is expired, never
+      // "cleared" or "expiring in 0 days". Not granted stays not granted, since it never had rights to lapse.
+      const rights = asset.rights === "expired" || asset.rights !== "notGranted" && days !== null && days < 0 ? "expired" as const : asset.rights;
       return { id, platform: p.platform, label: `${asset.label ?? `Asset ${id.slice(-6)}`} · ${PLATFORM_LABEL[p.platform]}`, clicks: asset.clicks, impressions: asset.impressions,
         rights, expiresInDays: rights === "expiring" && days !== null ? days : null };
     }));

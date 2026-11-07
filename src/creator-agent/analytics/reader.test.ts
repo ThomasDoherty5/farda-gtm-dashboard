@@ -522,3 +522,57 @@ describe("time rules are judged at projection time, after the source awaits", ()
     expect((result.data as Data).orders.observedAt).toBe(new Date(T).toISOString());
   });
 });
+
+describe("asset rights expiry", () => {
+  type Asset = { label: string; rights: string; expiresInDays: number | null };
+  const withAssets = (assets: { label: string; rights: "cleared" | "expiring" | "expired" | "notGranted" | "unknown"; expiresOn: string | null }[]) =>
+    async (r: AnalyticsSourceRequest) => {
+      const s = adPlatformsFixture(r);
+      s.feeds[0]!.assets = assets.map((a, i) => ({ assetRef: `synthetic-rights-asset-${i}`, clicks: 1, impressions: 10, ...a }));
+      return s;
+    };
+
+  it("reads a lapsed rights date as expired whatever the source declared, except not granted", async () => {
+    const adPlatforms = withAssets([
+      { label: "AD-01", rights: "cleared", expiresOn: "2026-10-01" },
+      { label: "AD-02", rights: "unknown", expiresOn: "2026-11-05" },
+      { label: "AD-03", rights: "expiring", expiresOn: "2026-11-05" },
+      { label: "AD-04", rights: "notGranted", expiresOn: "2026-10-01" },
+      { label: "AD-05", rights: "cleared", expiresOn: "2026-11-06" },
+      { label: "AD-06", rights: "expired", expiresOn: "2026-12-01" },
+      { label: "AD-07", rights: "cleared", expiresOn: null },
+    ]);
+    const result = await reader({ ...syntheticAnalyticsSources(), adPlatforms }).read("paidMedia", {}, null);
+    const assets = (result.data as { assets: Asset[] }).assets.filter(a => a.label.endsWith("· Meta"));
+    expect(assets.map(a => [a.label.split(" ")[0], a.rights, a.expiresInDays])).toEqual([
+      ["AD-01", "expired", null], ["AD-02", "expired", null], ["AD-03", "expired", null], ["AD-04", "notGranted", null],
+      ["AD-05", "cleared", null], ["AD-06", "expired", null], ["AD-07", "cleared", null],
+    ]);
+    const expired = (await reader({ ...syntheticAnalyticsSources(), adPlatforms }).read("paidMedia", { rights: "expired" }, null)).data as { assets: Asset[] };
+    expect(expired.assets.filter(a => a.label.endsWith("· Meta")).map(a => a.label.split(" ")[0])).toEqual(["AD-01", "AD-02", "AD-03", "AD-06"]);
+    expect(analyticsViewSchemas.paidMedia!.safeParse(result.data).success).toBe(true);
+  });
+
+  it("judges rights on the configured reporting timezone's day, not the caller's period timezone", async () => {
+    const adPlatforms = withAssets([{ label: "AD-01", rights: "expiring", expiresOn: "2026-11-06" }]);
+    const r = reader({ ...syntheticAnalyticsSources(), adPlatforms });
+    const meta = (data: unknown) => (data as { assets: Asset[] }).assets.find(a => a.label.startsWith("AD-01 · Meta"));
+    // At 2026-11-06T20:00Z it is 6 November in Los Angeles (configured) but 7 November on Kiritimati.
+    const configured = await r.read("paidMedia", {}, null);
+    const kiritimati = await r.read("paidMedia", {}, { startAt: "2026-10-09", endAt: "2026-11-07", timezone: "Pacific/Kiritimati", basis: "eventTime" });
+    expect(meta(configured.data)).toMatchObject({ rights: "expiring", expiresInDays: 0 });
+    expect(meta(kiritimati.data)).toMatchObject({ rights: "expiring", expiresInDays: 0 });
+  });
+});
+
+describe("service clock at projection time", () => {
+  it("fails the read with a retryable SOURCE_TIME_UNVERIFIED when the clock is not finite after the source await", async () => {
+    for (const bad of [NaN, Infinity]) {
+      let t = T;
+      const orders = async (r: AnalyticsSourceRequest) => { const s = ordersFixture(r); t = bad; return s; };
+      const error = await reader({ ...syntheticAnalyticsSources(), orders }, () => t).read("overviewSummary", {}, null).catch(e => e);
+      expect(error).toBeInstanceOf(AnalyticsError);
+      expect({ code: error.code, status: error.status }).toEqual({ code: "SOURCE_TIME_UNVERIFIED", status: 503 });
+    }
+  });
+});

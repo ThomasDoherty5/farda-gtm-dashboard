@@ -173,6 +173,29 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
     expect(paid.body.data.sources).toEqual([{ source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]);
   });
 
+  it("refuses a requestedScope naming a foreign workspace, account and environment at once with 400 INVALID_INPUT and no source call", async () => {
+    const { calls, sources } = counted();
+    const { post, envelope } = await start({ analyticsSources: sources });
+    const foreign = { workspaceId: "foreign-workspace", accountIds: ["foreign-account"], environment: "production" };
+    for (const view of served) {
+      const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}, { requestedScope: foreign }));
+      expect(result.status).toBe(400);
+      expectCanonical(result.body, "INVALID_INPUT");
+      expect(result.body.requestId).toBe("synthetic-analytics-read");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it("answers 503 SOURCE_TIME_UNVERIFIED in the shared envelope when the service clock is not finite after the source await", async () => {
+    let t = analyticsTestTime;
+    const orders = async (request: AnalyticsSourceRequest) => { const s = ordersFixture(request); t = NaN; return s; };
+    const { post, envelope } = await start({ operations: { now: () => t }, analyticsSources: { ...syntheticAnalyticsSources(), orders } });
+    const result = await post(envelope("overviewSummary"));
+    expect(result.status).toBe(503);
+    expectCanonical(result.body, "SOURCE_TIME_UNVERIFIED");
+    expect(result.body.retryable).toBe(true);
+  });
+
   it("judges freshness over HTTP at projection time when the order limit passes during the source await", async () => {
     let t = analyticsTestTime;
     const orders = async (request: AnalyticsSourceRequest) => {

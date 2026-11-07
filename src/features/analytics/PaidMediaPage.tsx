@@ -14,6 +14,7 @@ const RIGHTS = [
   { value: "all", label: "all states" },
   { value: "cleared", label: "cleared" },
   { value: "expiring", label: "expiring" },
+  { value: "expired", label: "expired" },
   { value: "notGranted", label: "not granted" },
   { value: "unknown", label: "unknown" },
 ];
