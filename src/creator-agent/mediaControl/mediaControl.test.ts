@@ -40,7 +40,7 @@ function world() {
   const executor = {
     calls: { publish: 0, mutate: 0 }, fail: null as null | "before" | "after", mutateFail: null as null | "before" | "after",
     during: null as null | (() => Promise<void>), readHook: null as null | (() => Promise<void>), readBackDown: false,
-    mutateHook: null as null | (() => void),
+    mutateHook: null as null | (() => void), reads: 0, lagAt: 0,
     createDraft(key: string, payload: { manifest: Manifest; nativeCampaignId: string | null }) {
       if (writes.has(key)) return writes.get(key);
       const id = payload.nativeCampaignId ?? `native:campaign-${native.size + 1}`;
@@ -72,7 +72,9 @@ function world() {
     },
     read(key: string) { return writes.get(key) ?? null; },
     readBack(id: string): unknown {
-      const current = () => { const n = native.get(id); return n && !this.readBackDown ? { ...n, observedAt: clock.toISOString() } : null; };
+      // lagAt makes the nth read-back from now still report the campaign live, as a lagging provider read would.
+      const lag = this.lagAt > 0 && ++this.reads === this.lagAt;
+      const current = () => { const n = native.get(id); return n && !this.readBackDown ? { ...n, ...(lag ? { status: "ACTIVE" as const } : {}), observedAt: clock.toISOString() } : null; };
       if (this.readHook) { const f = this.readHook; this.readHook = null; return f().then(current); }
       return current();
     },
@@ -196,7 +198,7 @@ function world() {
     placedAt: ago(60 * 24), updatedAt: ago(60 * 24), units: 1, returnedUnits: 0, merchandiseMinor: 12_000, shippingCollectedMinor: 800, refundedMerchandiseMinor: 0,
     refundedShippingMinor: 0, returnWindowClosed: true, affiliateAttributed: false, commissionAccruedMinor: null,
     paidMediaMatch: { provider: "meta", providerAccountRef: META, nativeCampaignId }, ...over });
-  return { control, media, store, params, stageDecisions, spend, conversions, reportOver, rowOver, health, orders, feed, treasury, native, gates, executor,
+  return { control, media, store, params, stageDecisions, decisions, spend, conversions, reportOver, rowOver, health, orders, feed, treasury, native, gates, executor,
     terms, approveStage, approveMutation, campaign, released, order, calls };
 }
 type World = ReturnType<typeof world>;
@@ -370,14 +372,15 @@ describe("cumulative exposure: spend, pending authorizations, native caps and ap
     expect(w.control.observe("stage:initial", "o3").safetyTriggers).toEqual(expect.arrayContaining([expect.stringMatching(/^ADDITIONAL_DELIVERY_ENABLED/)]));
   });
 
-  it("uses an account spend limit as a native bound when the lifetime cap is missing", async () => {
+  it("never lets an account spend limit stand in for a missing native lifetime cap", async () => {
     const w = world();
     const { nativeId } = await launched(w);
     w.rowOver.set(nativeId, { lifetimeBudgetMinor: null });
     w.spend.set(nativeId, 10_000);
     w.reportOver.set(META, { accountSpendMinor: 10_000, accountSpendLimitMinor: 50_000 });
     const o = w.control.observe("stage:initial", "o1");
-    expect(o.exposure.allocations[0]).toMatchObject({ plannedMaxMinor: 40_000 + 10_000 + 4000, accountLimitMinor: 50_000 });
+    expect(o.exposure.allocations[0]).toMatchObject({ plannedMaxMinor: null, accountLimitMinor: 50_000 });
+    expect(o.holds).toContain("EXPOSURE_UNDEMONSTRATED");
   });
 
   it("fails closed on stale, future-dated or mismatched spend, and never moves cumulative spend backwards", async () => {
@@ -791,14 +794,14 @@ describe("review regressions (THO-347)", () => {
     const { nativeId } = await profitable(w);
     w.rowOver.set(nativeId, { includesOrganicAffiliate: true });
     const o = w.control.observe("stage:initial", "o1").economics;
-    expect(o.canonical.orders).toBe(0);
+    expect(o).toMatchObject({ canonical: { orders: 3 }, incrementalPaidOrders: 0 });
     expect(o.canonicalCpaMinor).toBeNull();
     expect(o.scale.state).toBe("unknown");
     expect(o.scale.reasons).toContain(`NOT_INCREMENTAL_PAID:${nativeId}`);
     expect(o.platform).toMatchObject({ includesOrganicAffiliate: true, incrementalPaidRoas: null });
     (w.params as Record<string, unknown>).incrementalEvidence = A([{ provider: "meta", providerAccountRef: META, environment: "sandbox", nativeCampaignId: nativeId,
       evidenceRef: "lift:synthetic-holdout" }]);
-    expect(w.control.observe("stage:initial", "o2").economics).toMatchObject({ canonical: { orders: 3 }, scale: { state: "met" } });
+    expect(w.control.observe("stage:initial", "o2").economics).toMatchObject({ canonical: { orders: 3 }, incrementalPaidOrders: 3, canonicalCpaMinor: 5000, scale: { state: "met" } });
   });
 
   it("R5 counts media spend accrued but not yet charged against the founder cash ceiling, once", async () => {
@@ -859,6 +862,100 @@ describe("review regressions (THO-347)", () => {
     const after = w.control.read("stage:initial")!;
     expect(after.incidents[0]!.resolvedAt).not.toBeNull();
     expect(after.reservations[0]!.gates.every((g) => g.state === "verified")).toBe(true);
+  });
+});
+
+
+describe("second review regressions (THO-347)", () => {
+  it("S1 a pause held by one lagging read-back never leaves the campaign un-pausable", async () => {
+    const w = world();
+    const { nativeId } = await launched(w);
+    w.health.stock = { state: "failed", code: "stock:short" };
+    w.executor.reads = 0; w.executor.lagAt = 2;
+    const first = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
+    expect(first.campaigns[0]).toMatchObject({ outcome: "failed", code: "PAUSE_HELD" });
+    w.executor.lagAt = 0;
+    w.native.get(nativeId)!.status = "ACTIVE";
+    const second = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-2");
+    expect(second.campaigns[0]!.outcome).toBe("paused");
+    expect(second.incidents.find((i) => i.code.startsWith("PAUSE_FAILED"))!.resolvedAt).not.toBeNull();
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+  });
+
+  it("S2 a safety trigger during an in-flight publish is held, and the launch pauses the campaign when it lands live", async () => {
+    const w = world();
+    w.released();
+    const c = await w.campaign();
+    let during: Awaited<ReturnType<typeof w.control.runSafety>> | null = null;
+    w.executor.readHook = async () => {
+      w.health.stock = { state: "failed", code: "stock:short" };
+      during = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
+    };
+    const landed = await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1");
+    expect(during!.campaigns).toEqual([expect.objectContaining({ campaignId: c.campaignId, outcome: "held-in-flight" })]);
+    expect(during!.executionCertainty).toBe("uncertain");
+    expect(landed.heldReasons).toEqual(["SAFETY_HOLD_PAUSED", "QUALIFIED_STOCK_SHORTAGE"]);
+    expect(w.native.get(w.media.read(c.campaignId)!.native.nativeCampaignId!)!.status).toBe("PAUSED");
+    expect(w.control.read("stage:initial")!.incidents.find((i) => i.code === `SAFETY_HOLD_DURING_LAUNCH:${c.campaignId}`)!.resolvedAt).not.toBeNull();
+  });
+
+  it("S3 native caps plus headroom must fit the allocation even when an account limit is lower", async () => {
+    const w = world();
+    const { nativeId } = await launched(w);
+    w.spend.set(nativeId, 0);
+    w.reportOver.set(META, { accountSpendMinor: 0, accountSpendLimitMinor: 10_000 });
+    const second = await w.campaign("meta", 55_000);
+    await expect(w.control.launch("stage:initial", { campaignId: second.campaignId }, "l2")).rejects.toThrow("ALLOCATION_AUTHORIZATION_EXHAUSTED");
+    expect(w.control.observe("stage:initial", "o1").exposure.allocations[0]!.plannedMaxMinor).toBe(66_000);
+  });
+
+  it("S4 releases a reservation whose publish the media module closed as never sent", async () => {
+    const w = world();
+    w.released();
+    const c = await w.campaign();
+    w.executor.fail = "before";
+    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1")).rejects.toBeInstanceOf(MediaControlUncertain);
+    const ref = w.media.read(c.campaignId)!.approval.decisionRef!;
+    w.decisions.set(ref, { ...(w.decisions.get(ref) as object), state: "revoked" });
+    const closed = await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l2");
+    expect(closed).toMatchObject({ reservation: "released", executionCertainty: "notApplied", campaignState: "draft" });
+    expect(w.control.observe("stage:initial", "o1").exposure.plannedMaxMinor).toBe(0);
+    expect(w.executor.calls.publish).toBe(1);
+  });
+
+  it("S5 a replayed safety key re-reads native status instead of trusting the stored pause", async () => {
+    const w = world();
+    const { nativeId } = await launched(w);
+    w.health.stock = { state: "failed", code: "stock:short" };
+    expect((await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1")).campaigns[0]!.outcome).toBe("paused");
+    w.native.get(nativeId)!.status = "ACTIVE";
+    const replay = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
+    expect(replay.campaigns[0]!.outcome).toBe("paused");
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+    expect(w.executor.calls.mutate).toBe(2);
+  });
+
+  it("S6 a stale media snapshot never overwrites a confirmed change", async () => {
+    const w = world();
+    const { c } = await profitable(w);
+    const red = w.control.proposeChange("stage:initial", { campaignId: c.campaignId, kind: "reduce-budget", dailyBudgetMinor: 1000, rationale: "Slow down." }, "ch1");
+    const decisionRef = w.approveMutation(w.media.read(c.campaignId)!, w.media.readMutation(c.campaignId, red.mutationId!)!);
+    const apply = w.media.applyMutation.bind(w.media);
+    w.media.applyMutation = async (...args: Parameters<typeof apply>) => ({ ...(await apply(...args)), state: "uncertain" as const });
+    expect(await w.control.applyChange(red.changeId, { decisionRef }, "ap1")).toMatchObject({ state: "confirmed" });
+  });
+
+  it("S7 compares a budget change with the fresh reported budget, and treats an unreported campaign's incrementality as unknown", async () => {
+    const w = world();
+    const { c, nativeId } = await profitable(w);
+    w.rowOver.set(nativeId, { dailyBudgetMinor: 900 });
+    expect(w.control.proposeChange("stage:initial", { campaignId: c.campaignId, kind: "reduce-budget", dailyBudgetMinor: 1000, rationale: "Slow down." }, "ch1").heldReasons)
+      .toContain("NOT_A_REDUCTION");
+    w.rowOver.delete(nativeId);
+    w.reportOver.set(META, { campaigns: [] });
+    const o = w.control.observe("stage:initial", "o1").economics;
+    expect(o.incrementalPaidOrders).toBe(0);
+    expect(o.scale.reasons).toContain(`INCREMENTALITY_UNKNOWN:${nativeId}`);
   });
 });
 

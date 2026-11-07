@@ -147,7 +147,7 @@ export type ExposureView = {
   remainingMinor: number | null;
   allocations: { provider: string; providerAccountRef: string; environment: string; capMinor: number; spendMinor: number | null; pendingMinor: number;
     plannedMaxMinor: number | null; accountLimitMinor: number | null; accountSpendMinor: number | null }[];
-  campaigns: { campaignId: string; key: string; reservation: ReservationState; status: string | null; spendMinor: number | null;
+  campaigns: { campaignId: string; key: string; reservation: ReservationState; status: string | null; dailyBudgetMinor: number | null; spendMinor: number | null;
     lifetimeBudgetMinor: number | null; boundMinor: number | null; endAt: string | null; sourceUpdatedAt: string | null; fresh: boolean }[];
 };
 export type EconomicsView = {
@@ -156,7 +156,7 @@ export type EconomicsView = {
     contributionMinor: number | null; contributionPerOrderMinor: number | null; commissionsAccruedMinor: number | null };
   platform: { comparable: boolean; purchases: number | null; valueMinor: number | null; duplicatesRemoved: number; includesOrganicAffiliate: boolean;
     incrementalPaidRoas: null; excluded: string[] };
-  spendMinor: number | null; canonicalCpaMinor: number | null; allowableAcquisitionCostMinor: number | null;
+  spendMinor: number | null; incrementalPaidOrders: number | null; canonicalCpaMinor: number | null; allowableAcquisitionCostMinor: number | null;
   diagnostic: { maxTestLossMinor: number | null; lossMinor: number | null; maxCpaMinor: number | null; state: "within" | "breached" | "unknown" };
   scale: { state: "met" | "not-met" | "unknown"; reasons: string[] };
 };
@@ -198,6 +198,6 @@ export type ChangeView = {
 };
 export type SafetyRunView = {
   kind: "media-release-safety-run"; stageRef: string; observationId: string; triggers: string[];
-  campaigns: { campaignId: string; outcome: "paused" | "already-paused" | "failed"; mutationId: string | null; code: string | null }[];
+  campaigns: { campaignId: string; outcome: "paused" | "already-paused" | "failed" | "held-in-flight"; mutationId: string | null; code: string | null }[];
   incidents: Incident[]; executionCertainty: "applied" | "uncertain" | "notApplied";
 };
