@@ -241,6 +241,18 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect((await read({}, "reviewer")).status).toBe(200);
   });
 
+  it("judges the lease over HTTP at response time, after the source read has completed", async () => {
+    // The clock advances 1ms per read once the source has answered; the lease ends exactly when the response is projected.
+    const clock = { now: sourcingTestTime, ticking: false };
+    const snapshot = sourcingSourceFixture();
+    snapshot.validUntil = new Date(sourcingTestTime + 2).toISOString();
+    const { read } = await start({ operations: { now: () => clock.ticking ? ++clock.now : clock.now },
+      sourcingPlanSource: async () => { clock.ticking = true; return structuredClone(snapshot); } });
+    const result = planEnvelope.parse((await read()).body);
+    expect(result).toMatchObject({ dataState: "stale", coverage: { complete: false }, sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_STALE" }] });
+    expect(sourcingPlanSchema.parse(result.data)).toMatchObject({ sourceState: "expired", freshness: "stale", plan: { schedule: { effectiveState: "draft" } } });
+  });
+
   it("leaves every other read view on the shared read union", async () => {
     const { read } = await start();
     expect((await read({ viewKey: "discoverySummary" })).body.data.kind).toBe("agent-sourcing");

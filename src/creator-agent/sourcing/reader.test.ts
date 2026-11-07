@@ -177,6 +177,48 @@ describe("the daily sourcing plan reader", () => {
     expect(result.data.plan!.capacity.find((r) => r.kind === "authorizedCost")).toMatchObject({ unit: "minorUnits", currency: "USD", state: "unknown" });
   });
 
+  it("keeps a known remaining grant but counts an unknown limit or usage as missing, so coverage is never complete", async () => {
+    const cases: [string, (row: SourcingSnapshot["capacity"][number]) => void][] = [
+      ["limit and used", (row) => { row.limit = { value: null, missingReason: "SOURCE_LIMIT_NOT_PUBLISHED" }; row.used = { value: null, missingReason: "SOURCE_DID_NOT_REPORT" }; }],
+      ["limit", (row) => { row.limit = { value: null, missingReason: "SOURCE_LIMIT_NOT_PUBLISHED" }; }],
+      ["used", (row) => { row.used = { value: null, missingReason: "SOURCE_DID_NOT_REPORT" }; }],
+    ];
+    for (const [name, mutate] of cases) {
+      const s = completeSourcingFixture(); mutate(s.capacity[0]!);
+      const result = await setup(async () => s).service.read({}, "reviewer");
+      const row = result.data.plan!.capacity[0]!;
+      // The remaining allowance is a valid grant, so the row itself is current and does not block dispatch...
+      expect(row, name).toMatchObject({ state: "current", dispatchBlocked: false, blockReason: null, remaining: { value: 30, missingReason: null } });
+      // ...but the unknown dimensions stay unknown with their reasons, and are never counted as observed or zero.
+      for (const dimension of [row.limit, row.used]) if (dimension.value === null) expect(dimension.missingReason, name).not.toBeNull();
+      expect(result.dataState, name).toBe("partial");
+      expect(result.coverage, name).toEqual({ expectedCount: 34, observedCount: 33, missingCount: 1, complete: false, reasonCodes: ["PLAN_VALUES_UNKNOWN_OR_STALE"] });
+    }
+  });
+
+  it("judges the lease when the response is projected, so a lease that ends during the source read is never current or active", async () => {
+    const leaseEnd = sourcingTestTime + 1, respondedAt = sourcingTestTime + 2;
+    const s = completeSourcingFixture(); s.validUntil = new Date(leaseEnd).toISOString();
+    // Control: read at the source's own time, the same snapshot is current, active, ready and complete.
+    const steady = await setup(async () => structuredClone(s)).service.read({}, "reviewer");
+    expect(steady).toMatchObject({ dataState: "ready", coverage: { complete: true }, data: { sourceState: "current", freshness: "current", plan: { schedule: { effectiveState: "active" } } } });
+
+    // The clock reads T while the source observation is checked, and T+2ms once it has completed: the lease ended at T+1ms.
+    const store = new AgentStore(":memory:", scope); stores.push(store);
+    const ticks = [sourcingTestTime, respondedAt];
+    const service = createSourcingPlanReader({ db: store.database, scope, secret, now: () => ticks.length > 1 ? ticks.shift()! : ticks[0]!,
+      source: async () => structuredClone(s) });
+    const result = await service.read({}, "reviewer");
+    expect(result.data).toMatchObject({ observedAt: new Date(respondedAt).toISOString(), validUntil: new Date(leaseEnd).toISOString(),
+      sourceState: "expired", freshness: "stale", missingReason: "SOURCE_STALE" });
+    expect(result.dataState).toBe("stale");
+    expect(result.coverage).toMatchObject({ complete: false, reasonCodes: expect.arrayContaining(["SOURCE_STALE"]) });
+    const plan = result.data.plan!;
+    expect(plan.schedule).toMatchObject({ declaredState: "active", effectiveState: "draft", holdReasons: expect.arrayContaining(["SOURCE_STALE"]) });
+    expect(plan.capacity.filter((r) => r.state === "current")).toEqual([]);
+    expect(plan.capacity.filter((r) => r.state !== "notApplicable").every((r) => r.dispatchBlocked && r.blockReason === "CAPACITY_LEASE_EXPIRED")).toBe(true);
+  });
+
   it("expects the run counts once a run has happened but none is reported", async () => {
     const result = await setup(withSource((s) => { s.latestRun = null; })).service.read({}, "reviewer");
     expect(result.coverage.expectedCount).toBe(5 + 10 + 7 + 12);

@@ -14,6 +14,8 @@ type Role = "reader" | "reviewer";
 type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: SourcingPlanSourceReader; now?: () => number; sourceTimeoutMs?: number };
 /** `validUntil` is the earlier of the source's lease and the server's maximum age. */
 type SourceRead = { snapshot: SourcingSnapshot | null; state: SourcingPlan["sourceState"]; reason: string | null; validUntil: string | null };
+/** A verified snapshot with its lease bounds. Whether the lease still holds is decided at projection time, never before. */
+type Observation = { snapshot: SourcingSnapshot; leaseEnd: number; ageLimit: number };
 type Capability = { actionKind: string; state: "available" | "held" | "denied"; reasonCodes: string[] };
 export type SourcingPlanReadResult = {
   data: SourcingPlan; version: string; dataState: "ready" | "partial" | "stale" | "unavailable";
@@ -44,7 +46,7 @@ export function createSourcingPlanReader(options: Options) {
     CREATE TABLE IF NOT EXISTS sourcing_plan_source_head(id INTEGER PRIMARY KEY CHECK(id=1),version TEXT NOT NULL,observed_at TEXT NOT NULL);`);
   function tx<T>(fn: () => T): T { db.exec("BEGIN IMMEDIATE"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }
 
-  async function observe(): Promise<SourceRead> {
+  async function observe(): Promise<SourceRead | Observation> {
     if (!source) return { snapshot: null, state: "unconfigured", reason: "SOURCING_SOURCE_UNCONFIGURED", validUntil: null };
     let raw: unknown, timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -75,9 +77,13 @@ export function createSourcingPlanReader(options: Options) {
     });
     // The server's maximum age applies whatever lease the source claims.
     const ageLimit = Date.parse(s.observedAt) + SOURCING_PLAN_MAX_AGE_MS;
-    const leaseEnd = Math.min(Date.parse(s.validUntil), ageLimit);
-    const expired = leaseEnd <= current;
-    const reason = !expired ? s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null : ageLimit <= current && ageLimit <= Date.parse(s.validUntil) ? "SOURCE_MAX_AGE_EXCEEDED" : "SOURCE_STALE";
+    return { snapshot: s, leaseEnd: Math.min(Date.parse(s.validUntil), ageLimit), ageLimit };
+  }
+
+  /** Lease, maximum age and coverage, judged at `at`: the time the response is projected, after every await has settled. */
+  function classify({ snapshot: s, leaseEnd, ageLimit }: Observation, at: number): SourceRead {
+    const expired = leaseEnd <= at;
+    const reason = !expired ? s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null : ageLimit <= at && ageLimit <= Date.parse(s.validUntil) ? "SOURCE_MAX_AGE_EXCEEDED" : "SOURCE_STALE";
     return { snapshot: s, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current", reason, validUntil: new Date(leaseEnd).toISOString() };
   }
 
@@ -131,7 +137,12 @@ export function createSourcingPlanReader(options: Options) {
   async function read(rawFilters: unknown, role: Role): Promise<SourcingPlanReadResult> {
     if (role !== "reader" && role !== "reviewer") fail("FORBIDDEN", 403);
     if (!sourcingPlanFilters.safeParse(rawFilters).success) fail("VALIDATION_FAILED", 422);
-    const s = await observe(), at = now(), observedAt = new Date(at).toISOString();
+    const observation = await observe();
+    // Re-read the clock once the source observation (and its head write) has completed. A lease that ends while the
+    // source is awaited is expired here, so it can never be projected as current, active or complete.
+    const at = now();
+    if (!Number.isFinite(at)) fail("SOURCE_RESPONSE_INVALID", 502);
+    const s = "leaseEnd" in observation ? classify(observation, at) : observation, observedAt = new Date(at).toISOString();
     const plan = s.snapshot ? project(s.snapshot, s, at) : null;
     const data = sourcingPlanSchema.parse({
       kind: "agent-sourcing-plan", observedAt, sourceAsOf: s.snapshot?.observedAt ?? null, sourceVersion: s.snapshot ? alias("source", s.snapshot.version) : null,
@@ -143,7 +154,10 @@ export function createSourcingPlanReader(options: Options) {
     const tally = (values: ObservedCount[]) => { expectedCount += values.length; observedCount += values.filter(resolved).length; };
     if (plan) {
       tally(plan.steps.map((x) => x.count));
-      expectedCount += plan.capacity.length; observedCount += plan.capacity.filter((r) => r.state === "current" || r.state === "notApplicable").length;
+      // A capacity row is observed only when it is current and every displayed dimension (limit, used, remaining) is known
+      // or not applicable. A valid remaining grant still stands, but an unknown limit or usage keeps coverage partial.
+      expectedCount += plan.capacity.length;
+      observedCount += plan.capacity.filter((r) => r.state === "notApplicable" || r.state === "current" && [r.limit, r.used, r.remaining].every(resolved)).length;
       const { evidenceRefs: _refs, ...identity } = plan.identity; void _refs;
       tally(Object.values(identity));
       const run = plan.latestRun;
