@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { assertNativeTableReadability, scrollNativeTableToEnd } from "./support/native-table-readability";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -140,6 +141,8 @@ async function capture(page: Page, info: TestInfo, state: string) {
       const evidence=page.getByRole("table",{name:"Selected invitation assessments"}).locator("tbody tr").first().locator("td").nth(1);
       expect(await evidence.evaluate(element=>element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(152);
     }
+    const readable = state.startsWith("approval-") ? await assertNativeTableReadability(page, "approval", width)
+      : state.startsWith("run-") ? await assertNativeTableReadability(page, "run", width) : null;
     const result = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(result.violations.map(v => ({ id: v.id, targets: v.nodes.map(n => n.target) }))).toEqual([]);
     const path = join(output, `${state}-${width}.png`);
@@ -147,6 +150,12 @@ async function capture(page: Page, info: TestInfo, state: string) {
     const png = readFileSync(path);
     captures.push({ file: basename(path), width: png.readUInt32BE(16), height: png.readUInt32BE(20),
       sha256: createHash("sha256").update(png).digest("hex"), state });
+    if (readable?.overflow) {
+      await scrollNativeTableToEnd(page, readable.caption);
+      const endPath = join(output, `${state}-table-end-${width}.png`); await page.screenshot({ path:endPath, fullPage:true });
+      const endPng = readFileSync(endPath); captures.push({file:basename(endPath),width:endPng.readUInt32BE(16),height:endPng.readUInt32BE(20),sha256:createHash("sha256").update(endPng).digest("hex"),state:state+"-table-end"});
+      await page.locator(`[role="region"][aria-label="${readable.caption}"]`).evaluate(element=>{element.scrollLeft=0;});
+    }
     if (width === 1440) await compareOriginal(page, state);
   }
   writeFileSync(join(output, `provenance-${info.testId.replace(/[^a-zA-Z0-9]/g, "").slice(-40)}.json`), JSON.stringify({

@@ -1,5 +1,6 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
+import { assertNativeTableReadability, scrollNativeTableToEnd } from "./support/native-table-readability";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -41,9 +42,15 @@ async function capture(page:Page,info:TestInfo,state:string) {
     await page.setViewportSize({width,height:width===1440?1000:844});await page.evaluate(()=>document.fonts.ready);await page.evaluate(()=>window.scrollTo(0,0));
     await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
     expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+    const readable=await assertNativeTableReadability(page,state==="media-stage-cap"?"approval":"run",width);
     const ax=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();expect(ax.violations.map(v=>({id:v.id,targets:v.nodes.map(n=>n.target)}))).toEqual([]);
     const file=join(out,`${state}-${width}.png`);await page.screenshot({path:file,fullPage:true});const png=readFileSync(file);
     captures.push({file:basename(file),width:png.readUInt32BE(16),height:png.readUInt32BE(20),sha256:createHash("sha256").update(png).digest("hex")});
+    if(readable.overflow){
+      await scrollNativeTableToEnd(page,readable.caption);const endFile=join(out,`${state}-table-end-${width}.png`);await page.screenshot({path:endFile,fullPage:true});const endPng=readFileSync(endFile);
+      captures.push({file:basename(endFile),width:endPng.readUInt32BE(16),height:endPng.readUInt32BE(20),sha256:createHash("sha256").update(endPng).digest("hex")});
+      await page.locator(`[role="region"][aria-label="${readable.caption}"]`).evaluate(element=>{element.scrollLeft=0;});
+    }
     if(width===1440)await compare(page,state);
   }
   writeFileSync(join(out,`${state}-provenance.json`),JSON.stringify({state,source:"Actual authenticated HTTP app with shared SQLite/J04/worker and fictional native media source bindings.",realProviderWrites:0,realSpend:0,companyPolicyAdopted:false,sourceMapping:state==="media-stage-cap"?"6:234":"5:13",visualClaim:"Source-state adaptation, not pixel parity; original private Figma media excluded.",captures},null,2));
