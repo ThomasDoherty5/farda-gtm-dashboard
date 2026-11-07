@@ -164,7 +164,7 @@ test("native run uncertainty stays source-reconciliation-only with immutable ori
   expect((await worker(run.runRef!)).status).toBe(502); expect(calls).toBe(3);
   await login(page); await page.goto(`/runs/${run.runRef}?tab=recovery`);
   await expect(page.getByRole("heading", { name: "Confirm before trying again." })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Request a fresh attempt" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Continue guarded original work" })).toBeDisabled();
   await capture(page, dir, "run-uncertain-recovery");
   expect((await worker(run.runRef!)).status).toBe(502); expect(calls).toBe(3);
   a.humans.get("agent-reviewer")!.active = false;

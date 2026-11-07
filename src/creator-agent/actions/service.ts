@@ -1,4 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { digest } from "../config.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
+import type { ActionReviewService, ApprovalHistoryRead } from "./reviewSource.ts";
 import { actionResponseSchema, SCHEMA_VERSION, type ActionResponse } from "../../adapter/contract.ts";
 import { approvalCommandSchema, trustedHumanSchema, type ApprovalCommand, type ApprovalPrincipal,
   type ApprovalRead, type ProposeCommand, type ApprovalDraft, type ApprovalManifest } from "../approvals/contract.ts";
@@ -16,6 +19,7 @@ export type ApprovalGateway = {
   requestDecision(command: ApprovalCommand, principal: ApprovalPrincipal, key: string): Promise<ApprovalRead>;
   reconcileDecision(command: ApprovalCommand, principal: ApprovalPrincipal, key: string): Promise<ApprovalRead>;
   readApproval(ref: string, manifestVersion?: number): ApprovalRead | null;
+  readHistory?(ref: string, options?: {beforeVersion?: number; limit?: number}): ApprovalHistoryRead | null;
   readCommand(kind: "propose" | "request" | "reconcile", command: ProposeCommand | ApprovalCommand, principal: ApprovalPrincipal, key: string): ApprovalRead | null;
 } & DispatchApprovalAuthority;
 
@@ -24,6 +28,9 @@ export type { FoundationAction, DomainAction } from "./wire.ts";
 export type { RegisteredAction } from "./registration.ts";
 export type ActionServiceOptions = { scope: ActionScope; secret: string; approvals: ApprovalGateway;
   dispatch: Pick<DispatchGuard, "handoffBatch" | "lookupHandoff" | "lookupControl" | "control" | "reconcile" | "read">; registry: ReadonlyMap<string, RegisteredAction>;
+  review?: ActionReviewService;
+  attemptOutcomes?: (runRef: string) => ReadonlyMap<string, import("./reviewViews.ts").RunAttemptOutcome>;
+  executionRuns?: (approvalRef:string,manifestVersion:number)=>{runs:DispatchRead[];total:number};
   commercialEligibility?: (manifest: ApprovalManifest) => ReadonlyMap<string, CommercialProjection>;
   authorize?: ActionPrincipalAuthority; assertAuthority?: ActionAuthorityFence; domains?: ReturnType<typeof createActionDomainServices>; now?: () => number };
 function fail(code: string, status = 409, certainty: "notApplied" | "applied" | "uncertain" = "notApplied"): never { throw new ActionServiceError(code, status, certainty); }
@@ -56,7 +63,7 @@ export function createActionService(options: ActionServiceOptions) {
     if (!p.active || p.principalRef !== principal.principalRef || p.scope.workspaceId !== scope.workspaceId || p.scope.accountId !== scope.accountId || p.scope.environment !== scope.environment ||
       Date.parse(p.observedAt) > now() || Date.parse(p.validUntil) <= now() || Date.parse(p.observedAt) >= Date.parse(p.validUntil) || !p.roles.some(r => ["founder", "operator", "reviewer", "finance"].includes(r))) fail("AUTHORITY_REQUIRED", 403);
     if (!options.assertAuthority) fail("ACTOR_AUTHORITY_FENCE_UNCONFIGURED", 403);
-    try { options.assertAuthority({ scope, actor: p, slack: null, linearRecords: [] }, now()); }
+    try { assertSynchronousVoid(()=>options.assertAuthority!({ scope, actor: p, slack: null, linearRecords: [] }, now())); }
     catch { fail("AUTHORITY_REQUIRED", 403); }
   }
   async function actor(principal: ApprovalPrincipal) {
@@ -217,16 +224,31 @@ export function createActionService(options: ActionServiceOptions) {
     : { state: "notApplicable" as const, policyVersion: alias("policy", requirement.policyVersion), reason: "Not applicable under the recorded policy" };
   const commercialApplicability = (manifest: ApprovalManifest) => manifest.draft.acquisitionTerms !== null ||
     ["invitation", "activation", "shipment"].includes(manifest.draft.phase) ? "required" as const : "notApplicable" as const;
-  async function readApproval(ref: string, principal: ApprovalPrincipal) {
-    const grant = await actor(principal); let a = approval(ref, principal);
-    if (a.decisionReceipt?.decision === "approved") { await approvals.resolveCurrentProof(toIntent(a, a.manifest.items[0]!.itemRef).approval); a = approval(ref, principal); }
+  async function readApproval(ref: string, principal: ApprovalPrincipal, selection: {manifestVersion?: number; history?: boolean; beforeVersion?: number} = {}) {
+    if (selection.manifestVersion !== undefined && (!Number.isSafeInteger(selection.manifestVersion) || selection.manifestVersion < 1)) fail("INVALID_HISTORY_VERSION",422);
+    if (selection.beforeVersion !== undefined && (!Number.isSafeInteger(selection.beforeVersion) || selection.beforeVersion < 1)) fail("INVALID_HISTORY_CURSOR",422);
+    const grant = await actor(principal); let a = approval(ref, principal, selection.manifestVersion);
+    const historical = Boolean(selection.history || selection.manifestVersion !== undefined);
+    if (!historical && a.decisionReceipt?.decision === "approved") { await approvals.resolveCurrentProof(toIntent(a, a.manifest.items[0]!.itemRef).approval); a = approval(ref, principal); }
     assertActor(grant, principal);
     const commercial = options.commercialEligibility?.(a.manifest);
     for (const [itemRef, projection] of commercial ?? []) {
       if (!a.manifest.items.some(item => item.itemRef === itemRef)) fail("COMMERCIAL_SELECTION_INVALID", 422);
       projection.assertCurrent();
     }
-    return nativeApprovalViewSchema.parse({ kind: "native-approval" as const, approvalRef: ref, manifestRef: manifestRef(a), version: token("approval", ref, a.manifest.manifestVersion),
+    const executions=options.executionRuns?.(ref,a.manifest.manifestVersion);
+    const execution=executions ? {runs:executions.runs.map(run=>{
+      const providerAcceptedItems=run.items.filter(item=>item.receipt?.sourceEffect==="providerApplied" && item.receipt.providerOutcome?.state==="accepted").length;
+      const providerRejectedItems=run.items.filter(item=>item.receipt?.providerOutcome?.state==="rejected").length;
+      const localArtifactItems=run.items.filter(item=>item.receipt?.sourceEffect==="localArtifact").length;
+      return {runRef:run.runRef,state:run.run.state,executionCertainty:run.executionCertainty,
+      confirmedItems:run.items.filter(item=>item.receipt!==null).length,
+      providerAcceptedItems,providerRejectedItems,localArtifactItems,
+      unknownOutcomeItems:run.items.filter(item=>item.receipt?.sourceEffect==="providerApplied" && !item.receipt.providerOutcome ||
+        !item.receipt && run.run.items.some(job=>job.itemKey===item.dispatchKey && ["leased","reconcile"].includes(job.state))).length,
+      totalItems:run.items.length};}),coverage:{returned:executions.runs.length,total:executions.total,complete:executions.runs.length===executions.total}} : undefined;
+    const base = nativeApprovalViewSchema.parse({ kind: "native-approval" as const, approvalRef: ref, manifestRef: manifestRef(a), version: token("approval", ref, a.manifest.manifestVersion),
+      ...(execution?{execution}:{}),
       actionKind: a.manifest.draft.actionKind, policyVersion: alias("policy", a.manifest.draft.policyVersion), phase: a.manifest.draft.phase, manifestVersion: a.manifest.manifestVersion, current: a.current,
       createdAt: a.manifest.createdAt, expiresAt: a.manifest.draft.expiresAt, bounds: a.manifest.draft.bounds, exposure: a.manifest.draft.exposure.state === "known" ? a.manifest.draft.exposure : { state: "unknown", reason: "Authoritative economic exposure unavailable" },
       ...(a.manifest.draft.mediaAuthorization ? { authorization: { kind: "mediaStageCap", accountKind: "internalGovernance",
@@ -238,21 +260,50 @@ export function createActionService(options: ActionServiceOptions) {
       requestState: a.request.state, sourceEffect: "none" as const,
       decision: a.decisionReceipt ? { receiptRef: alias("decision", a.decisionReceipt.receiptRef), decision: a.decisionReceipt.decision, decidedAt: a.decisionReceipt.decidedAt, actorRef: alias("person", a.decisionReceipt.personRef) } : null,
       appDecision: { allowed: false as const, reasonCode: "APPROVAL_CHANNEL_REQUIRED" }, approvedIsSent: false as const });
+    if (historical) base.current = {state: "held", reasonCodes: [...new Set([...base.current.reasonCodes,"HISTORICAL_VIEW_READ_ONLY"])]};
+    const history = approvals.readHistory?.(ref,{beforeVersion:selection.beforeVersion,limit:25});
+    const assertCurrent = () => {
+      assertActor(grant,principal);
+      if (digest(approval(ref,principal,selection.manifestVersion)) !== digest(a)) fail("REVIEW_RECORD_CHANGED");
+      if (history && digest(approvals.readHistory?.(ref,{beforeVersion:selection.beforeVersion,limit:25})) !== digest(history)) fail("REVIEW_HISTORY_CHANGED");
+      if(executions){
+        const material=(value:typeof executions)=>({...value,runs:value.runs.map(run=>({...run,run:{...run.run,observedAt:null}}))});
+        if(digest(material(options.executionRuns!(ref,a.manifest.manifestVersion)))!==digest(material(executions)))fail("REVIEW_EXECUTION_CHANGED");
+      }
+      for (const projection of commercial?.values() ?? []) projection.assertCurrent();
+    };
+    assertCurrent();
+    const data = options.review ? await options.review.decorateApproval({base,record:a,actor:grant,
+      ...(history ? {history:{...history,mode:historical ? "history" as const : "current" as const}} : {}),assertCurrent}) : base;
+    assertCurrent(); return nativeApprovalViewSchema.parse(data);
   }
   async function readRun(ref: string, principal: ApprovalPrincipal) {
-    await actor(principal); const run = dispatch.read(ref), a = approval(run.intent.approval.approvalRef, principal, run.intent.approval.manifestVersion);
+    const grant = await actor(principal); const run = dispatch.read(ref), a = approval(run.intent.approval.approvalRef, principal, run.intent.approval.manifestVersion);
     const commercial = options.commercialEligibility?.(a.manifest);
     for (const [itemRef, projection] of commercial ?? []) {
       if (!a.manifest.items.some(item => item.itemRef === itemRef)) fail("COMMERCIAL_SELECTION_INVALID", 422);
       projection.assertCurrent();
     }
-    return nativeRunViewSchema.parse({ kind: "native-run" as const, runRef: ref, version: token("run", ref, run.revision), approvalRef: a.manifest.approvalRef, manifestRef: manifestRef(a),
+    const base = nativeRunViewSchema.parse({ kind: "native-run" as const, runRef: ref, version: token("run", ref, run.revision), approvalRef: a.manifest.approvalRef, manifestRef: manifestRef(a),
       state: run.run.state, control: run.run.control, current: run.current, executionCertainty: run.executionCertainty, counts: run.run.counts,
       providerRejectedCount: run.items.filter(item=>item.receipt?.providerOutcome?.state==="rejected").length,
       usage: run.run.usage, items: run.items.map(item => ({ itemRef: alias("item", item.intent.approval.itemRef), receiptRef: item.receipt ? alias("effect", item.receipt.receiptRef) : null,
         sourceEffect: item.receipt?.sourceEffect ?? null, observedAt: item.receipt?.observedAt ?? null, commercialApplicability: commercialApplicability(a.manifest),
         ...(item.receipt?.providerOutcome ? {providerOutcome:item.receipt.providerOutcome} : {}),
         ...(commercial?.has(item.intent.approval.itemRef) ? { commercialEligibility: commercial.get(item.intent.approval.itemRef)!.data } : {}) })) });
+    const attemptOutcomes = options.attemptOutcomes?.(ref);
+    const assertCurrent = () => {
+      assertActor(grant,principal);
+      if (attemptOutcomes && digest([...options.attemptOutcomes!(ref)]) !== digest([...attemptOutcomes])) fail("REVIEW_ATTEMPT_CHANGED");
+      const currentRun=dispatch.read(ref,false);
+      const material=(value:DispatchRead)=>({...value,run:{...value.run,observedAt:null}});
+      if (digest(material(currentRun)) !== digest(material(run)) || digest(approval(a.manifest.approvalRef,principal,a.manifest.manifestVersion)) !== digest(a)) fail("REVIEW_RECORD_CHANGED");
+      for (const projection of commercial?.values() ?? []) projection.assertCurrent();
+    };
+    assertCurrent();
+    const data = options.review ? await options.review.decorateRun({base,record:a,dispatch:run,actor:grant,
+      attemptOutcomes,assertCurrent}) : base;
+    assertCurrent(); return nativeRunViewSchema.parse(data);
   }
   return { execute, executeDomain, readApproval, readRun, approvalVersion: (a: ApprovalRead) => token("approval", a.manifest.approvalRef, a.manifest.manifestVersion),
     manifestRef, runVersion: (run: DispatchRead) => token("run", run.runRef, run.revision), toIntent };

@@ -5,9 +5,23 @@ import { readinessPayloadSchema } from "./contract.ts";
 import { readinessEntityRefSchema } from "./wire.ts";
 import { commercialEligibilityViewSchema } from "../commercialPolicy/views.ts";
 import { providerOutcomeSchema } from "../jobs/dispatchSchema.ts";
+import { approvalReviewSchema, approvalHistorySchema, runItemExecutionSchema } from "./reviewViews.ts";
 
 const count = z.number().int().nonnegative().safe();
 const current = z.object({ state: z.enum(["pending", "held", "approved", "rejected", "editRequired", "canceled"]), reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)) }).strict();
+export const approvalExecutionSchema = z.object({
+  runs:z.array(z.object({runRef:ref,state:jobRunViewSchema.shape.state,executionCertainty:z.enum(["notApplied","applied","uncertain"]),
+    confirmedItems:count.max(100),providerAcceptedItems:count.max(100),providerRejectedItems:count.max(100),localArtifactItems:count.max(100),unknownOutcomeItems:count.max(100),totalItems:count.min(1).max(100)}).strict()).max(25),
+  coverage:z.object({returned:count.max(25),total:count,complete:z.boolean()}).strict(),
+}).strict().superRefine((value,ctx)=>{
+  if(value.coverage.returned!==value.runs.length || value.coverage.total<value.runs.length || value.coverage.complete!==(value.coverage.total===value.runs.length) || new Set(value.runs.map(run=>run.runRef)).size!==value.runs.length)
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:"Execution coverage must describe the exact returned unique runs."});
+  for(const [index,run] of value.runs.entries()){
+    const known=run.providerAcceptedItems+run.providerRejectedItems+run.localArtifactItems;
+    if(run.confirmedItems<known || run.confirmedItems>run.totalItems || run.unknownOutcomeItems<run.confirmedItems-known || run.unknownOutcomeItems>run.totalItems-known)
+      ctx.addIssue({code:z.ZodIssueCode.custom,path:["runs",index],message:"Receipt and known-outcome counts must reconcile without inferring provider success."});
+  }
+});
 /** Browser-safe projection, deliberately excluding source locators, raw payloads and provider identities. */
 export const nativeApprovalViewSchema = z.object({ kind: z.literal("native-approval"), approvalRef: ref, manifestRef: ref, version: ref,
   actionKind: ref, policyVersion: ref, phase: approvalPhaseSchema, manifestVersion: count.positive(), current, createdAt: instant, expiresAt: instant,
@@ -22,6 +36,7 @@ export const nativeApprovalViewSchema = z.object({ kind: z.literal("native-appro
   requestState: z.enum(["local", "recorded", "uncertain"]), sourceEffect: z.literal("none"),
   decision: z.object({ receiptRef: ref, decision: z.enum(["approved", "rejected", "editRequired", "canceled"]), decidedAt: instant, actorRef: ref }).strict().nullable(),
   appDecision: z.object({ allowed: z.literal(false), reasonCode: z.literal("APPROVAL_CHANNEL_REQUIRED") }).strict(), approvedIsSent: z.literal(false),
+  review: approvalReviewSchema.optional(), history: approvalHistorySchema.optional(), execution:approvalExecutionSchema.optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.phase === "mediaStageRelease") {
     if (!value.authorization || value.actionKind !== "media.stageRelease" || value.exposure.state !== "known" ||
@@ -37,8 +52,9 @@ export const nativeRunViewSchema = z.object({ kind: z.literal("native-run"), run
   current: z.object({ state: z.enum(["held", "ready", "running", "completed", "uncertain", "cancelled"]), reasonCodes: z.array(z.string()) }).strict(),
   executionCertainty: z.enum(["notApplied", "applied", "uncertain"]), counts: jobRunViewSchema.shape.counts, usage: jobRunViewSchema.shape.usage,
   providerRejectedCount: count.optional(),
+  review: approvalReviewSchema.optional(), approvalManifestVersion: count.positive().optional(),
   items: z.array(z.object({ itemRef: ref, receiptRef: ref.nullable(), sourceEffect: z.enum(["localArtifact", "providerApplied"]).nullable(), observedAt: instant.nullable(),
-    providerOutcome: providerOutcomeSchema.optional(), commercialApplicability: z.enum(["required", "notApplicable"]).optional(), commercialEligibility: commercialEligibilityViewSchema.optional() }).strict()).min(1).max(100),
+    providerOutcome: providerOutcomeSchema.optional(), commercialApplicability: z.enum(["required", "notApplicable"]).optional(), commercialEligibility: commercialEligibilityViewSchema.optional(), execution: runItemExecutionSchema.optional() }).strict()).min(1).max(100),
 }).strict().superRefine((value,ctx)=>{
   if(value.providerRejectedCount!==undefined && value.providerRejectedCount!==value.items.filter(item=>item.providerOutcome?.state==="rejected").length)
     ctx.addIssue({code:z.ZodIssueCode.custom,message:"Recorded rejection count must match the exact returned items."});

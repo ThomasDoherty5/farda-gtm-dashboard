@@ -80,6 +80,27 @@ describe("native exact approval and finite handoff",()=>{
   it("history is read-only and explicitly does not substitute the current version for an absent older one",async()=>{
     const w=fixture();renderRoute("/approvals/approval-opaque?version=99",w.adapter);await screen.findByRole("heading",{name:"Historical version unavailable"});expect(screen.getByText(/not a substitute/)).toBeInTheDocument();expect(screen.queryByRole("button",{name:"Queue selected approved items"})).not.toBeInTheDocument();expect(w.calls).toHaveLength(0);
   });
+  it("requests the exact stored historical version and keeps every write control absent",async()=>{
+    const w=fixture(),a=w.approval(),reads:unknown[]=[];const original=w.adapter.readView;
+    w.adapter.readView=async request=>{reads.push(request.filters);return original(request);};
+    w.setApproval({...a,history:{mode:"history",selectedVersion:1,latestVersion:2,totalVersions:2,hasMore:true,nextBeforeVersion:1,
+      records:[{manifestVersion:1,createdAt:a.createdAt,expiresAt:a.expiresAt,manifestRef:a.manifestRef,decision:a.decision,outcomeCount:0}],selectedDecisions:[a.decision!],confersAuthority:false}});
+    renderRoute("/approvals/approval-opaque?version=v1",w.adapter);await screen.findByText(/Selected immutable version 1 of 2/);
+    expect(reads).toContainEqual({approvalId:"approval-opaque",manifestVersion:1,history:true});
+    expect(screen.getByRole("link",{name:"View historical approval v1"})).toHaveAttribute("href","/approvals/approval-opaque?version=v1");
+    expect(screen.queryByRole("button",{name:"Request source approval"})).not.toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Queue selected approved items"})).not.toBeInTheDocument();
+    expect(w.calls).toHaveLength(0);
+  });
+  it("reopened approval uses canonical run receipts and failures without requiring session handoff history",async()=>{
+    const w=fixture(),a=w.approval();w.setApproval({...a,execution:{runs:[{runRef:"run-actual",state:"failed",executionCertainty:"applied",confirmedItems:2,providerAcceptedItems:0,providerRejectedItems:1,localArtifactItems:1,unknownOutcomeItems:0,totalItems:2}],coverage:{returned:1,total:1,complete:true}}});
+    renderRoute("/approvals/approval-opaque",w.adapter);await screen.findByRole("heading",{name:"Recorded execution outcomes"});
+    expect(screen.getByRole("heading",{name:"Provider rejection recorded"})).toBeInTheDocument();
+    expect(screen.getByTestId("native-approval-status")).toHaveTextContent("Approval recorded");expect(screen.queryByText("Approved, awaiting dispatch",{exact:true})).not.toBeInTheDocument();
+    expect(screen.getByRole("link",{name:"Open recorded execution"})).toHaveAttribute("href","/runs/run-actual?tab=approval");
+    expect(button("Queue selected approved items")).toHaveAccessibleDescription(/Canonical runs already exist/);
+    expect(screen.getByText("Local artifacts confirmed").nextElementSibling).toHaveTextContent("1");expect(w.calls).toHaveLength(0);
+  });
   it.each(["FORBIDDEN","RATE_LIMITED"])("keeps the lost-ACK intent held after generic %s/notApplied replay refusal",async code=>{
     const w=fixture(),u=userEvent.setup();w.answer(async()=>{throw new Error("lost ACK");});renderRoute("/approvals/approval-opaque",w.adapter);await screen.findByLabelText("Select item 1");await u.click(button("Queue selected approved items"));await screen.findByRole("heading",{name:"Keep the original request"});const first=w.calls[0]!;
     w.answer(async()=>{if(code==="FORBIDDEN")w.deny();throw new AdapterError({code,message:"Current transport refused",requestId:null,correlationId:null,retryable:false,retryAfterMs:null,executionCertainty:"notApplied"});});await u.click(button("Recover original request"));await waitFor(()=>expect(w.calls).toHaveLength(2));cleanup();w.allow();renderRoute("/approvals/approval-opaque",w.adapter);await screen.findByRole("heading",{name:"Keep the original request"});expect(button("Queue selected approved items")).toHaveAttribute("aria-disabled","true");
@@ -97,13 +118,23 @@ describe("native run receipt and recovery presentation",()=>{
     const w=fixture(),u=userEvent.setup();renderRoute("/runs/run-opaque?tab=approval",w.adapter);await screen.findByRole("heading",{name:"Exact approved work"});await u.click(button("Cancel unsent items"));expect(await screen.findByRole("dialog",{name:"Review cancellation of unsent work"})).toBeInTheDocument();expect(w.calls).toHaveLength(0);expect(screen.getByText(/Missing receipt does not mean unsent/)).toBeInTheDocument();await u.click(button("Request eligible cancellation"));await waitFor(()=>expect(w.calls).toHaveLength(1));expect(w.calls[0]).toMatchObject({operation:"controlRun",actionKind:"cancelUnsent",runRef:"run-opaque",expectedVersion:"av1-1.1-run",payload:{control:"cancel"}});
   });
   it("shows zero confirmed, unknown native usage and source-gated recovery rather than fabricated business steps",async()=>{
-    const w=fixture();w.setRun({...w.run(),executionCertainty:"uncertain",current:{state:"uncertain",reasonCodes:["SOURCE_OUTCOME_UNKNOWN"]},state:"reconcile"});renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findByRole("heading",{name:"The action may already have completed."});expect(screen.getByRole("progressbar")).toHaveAttribute("value","0");expect(button("Record confirmed sent")).toHaveAccessibleDescription(/browser assertion/);expect(button("Request a fresh attempt")).toHaveAccessibleDescription(/closed not-applied/);expect(screen.queryByText("Pay")).not.toBeInTheDocument();
+    const w=fixture(),u=userEvent.setup();w.setRun({...w.run(),executionCertainty:"uncertain",current:{state:"uncertain",reasonCodes:["SOURCE_OUTCOME_UNKNOWN"]},state:"reconcile"});renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findByRole("heading",{name:"The action may already have completed."});expect(screen.getByRole("progressbar")).toHaveAttribute("value","0");expect(button("Continue guarded original work")).toHaveAccessibleDescription(/closed-not-applied/);expect(screen.queryByText("Pay")).not.toBeInTheDocument();await u.click(button("Verify and record source result"));await waitFor(()=>expect(w.calls).toHaveLength(1));expect(w.calls[0]).toMatchObject({operation:"reconcileRun",actionKind:"lookup",payload:{request:"lookup"}});expect(screen.getByTestId("native-run-status")).toHaveTextContent("Outcome unknown");
   });
   it("retains exact run version and control through a lost pause ACK and reload",async()=>{
     const w=fixture(),u=userEvent.setup();w.answer(async()=>{throw new Error("lost pause ACK");});renderRoute("/runs/run-opaque?tab=approval",w.adapter);await screen.findByRole("heading",{name:"Exact approved work"});await u.click(button("Pause run"));await screen.findByRole("button",{name:"Recover original request"});const first=w.calls[0]!;cleanup();w.setRun({...w.run(),version:"av1-2.2-run",control:"paused"});w.answer(async request=>w.ack(request));renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findByRole("button",{name:"Recover original request"});await u.click(button("Recover original request"));await waitFor(()=>expect(w.calls).toHaveLength(2));expect(w.calls[1]).toMatchObject({idempotencyKey:first.idempotencyKey,expectedVersion:first.expectedVersion,payload:{control:"pause"}});
   });
   it("reconciles only by native lookup and distinguishes a confirmed local artifact from a provider action",async()=>{
     const w=fixture(),u=userEvent.setup();w.answer(async request=>{w.setRun({...w.run(),items:[{itemRef:"item-one",receiptRef:"effect-opaque",sourceEffect:"localArtifact",observedAt:"2026-11-06T12:10:00Z"},w.run().items[1]!]});return w.ack(request);});renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findByRole("heading",{name:"Exact approved work"});await u.click(button("Reconcile source result"));await screen.findByText("Local artifact confirmed");expect(w.calls[0]).toMatchObject({operation:"reconcileRun",actionKind:"lookup",payload:{request:"lookup"},runRef:"run-opaque"});expect(screen.queryByText("Provider action confirmed")).not.toBeInTheDocument();expect(screen.getByRole("progressbar")).toHaveAttribute("value","1");
+  });
+  it("offers only same-run unpause after exact closure and never changes provider attempt identity",async()=>{
+    const w=fixture(),r=w.run(),u=userEvent.setup();w.setRun({...r,control:"paused",state:"held",current:{state:"held",reasonCodes:[]},items:r.items.map(item=>({...item,
+      execution:{state:"retryWait",attempts:1,dueAt:"2026-11-06T12:00:00Z",updatedAt:"2026-11-06T12:00:00Z",checkpointVersion:1,reasonCode:null,
+        attemptOutcome:{state:"closedNotApplied",attemptNumber:1,receiptRef:"attempt-closure-opaque",observedAt:"2026-11-06T12:00:00Z"},
+        recovery:{kind:"unknown",owner:{state:"unavailable",value:null,reasonCode:"SOURCE_UNKNOWN"},nextAction:"sourceEvidenceRequired",deadline:null,resetAt:null,reasonCodes:[],observedAt:null,validUntil:null}}}))});
+    renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findAllByText("Exact original attempt closed as not applied");
+    await u.click(button("Continue guarded original work"));await waitFor(()=>expect(w.calls).toHaveLength(1));
+    expect(w.calls[0]).toMatchObject({operation:"controlRun",actionKind:"resumeRun",runRef:"run-opaque",expectedVersion:r.version,payload:{control:"resume"}});
+    expect(w.calls[0]!.payload).not.toHaveProperty("attemptRef");expect(w.calls[0]!.payload).not.toHaveProperty("sourceKey");
   });
 });
 it("the native controller rejects injected payload text, duplicate subset and foreign scope acknowledgment",()=>{
@@ -137,7 +168,7 @@ describe("provider receipt outcomes remain separate from business success",()=>{
     expect(screen.getByTestId("native-run-status")).toHaveTextContent("Provider rejected 1 item");
     expect(screen.getByText("Provider rejected · receipt confirmed")).toBeInTheDocument();expect(screen.getByText("receipt-rejected")).toBeInTheDocument();
     expect(screen.getByText("Provider-rejected items").nextElementSibling).toHaveTextContent("1");expect(screen.getByRole("progressbar")).toHaveAttribute("value","1");
-    expect(button("Request a fresh attempt")).toHaveAttribute("aria-disabled","true");expect(screen.queryByText("All item receipts confirmed")).not.toBeInTheDocument();expect(w.calls).toHaveLength(0);
+    expect(button("Continue guarded original work")).toHaveAttribute("aria-disabled","true");expect(screen.queryByText("All item receipts confirmed")).not.toBeInTheDocument();expect(w.calls).toHaveLength(0);
   });
   it("distinguishes explicit operation acknowledgment from a legacy receipt with unknown provider result",async()=>{
     const w=fixture(),r=w.run();w.setRun(nativeRunViewSchema.parse({...r,executionCertainty:"applied",items:r.items.map((item,index)=>({...item,receiptRef:`receipt-${index}`,sourceEffect:"providerApplied",observedAt:"2026-11-06T12:05:00Z",...(index===0?{providerOutcome:{state:"accepted",reasonCode:null}}:{})}))}));
