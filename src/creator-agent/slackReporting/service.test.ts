@@ -12,6 +12,22 @@ describe("source-authorized report delivery on the existing SQLite job queue", (
   let kit: ReturnType<typeof createReportingTestkit>;
   beforeEach(() => { kit = createReportingTestkit(); });
   afterEach(() => kit.close());
+  it("retains a read-only report source fence after later control-composition awaits",async()=>{
+    const queued=await kit.accept(),evidence=await kit.service.readEvidence(queued.reportRef,{assertCurrent:()=>kit.machine.assertCurrent()});
+    expect(evidence.data.executionCertainty).toBe("notApplied");expect(kit.state.calls).toHaveLength(0);
+    kit.state.readAllowed=false;expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"REPORT_PERMISSION_DENIED",status:403}));
+  });
+  it("invalidates a retained report projection when its original run changes",async()=>{
+    const queued=await kit.accept(),evidence=await kit.service.readEvidence(queued.reportRef,{assertCurrent:()=>kit.machine.assertCurrent()});
+    kit.jobs.controlRun(queued.runRef,"pause");
+    expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"REPORT_READ_CHANGED"}));expect(kit.state.calls).toHaveLength(0);
+  });
+  it("preserves applied certainty when a retained report read loses source authority",async()=>{
+    const queued=await kit.accept();await kit.service.work(queued.reportRef,kit.machine);
+    const evidence=await kit.service.readEvidence(queued.reportRef,{assertCurrent:()=>kit.machine.assertCurrent()});
+    kit.state.readAllowed=false;expect(evidence.assertCurrent).toThrowError(expect.objectContaining({status:403,executionCertainty:"applied"}));
+    expect(kit.state.calls).toHaveLength(1);
+  });
   it("delivers one finite policy report with native receipt and no business authority", async () => {
     const queued = await kit.accept(); expect(queued.executionCertainty).toBe("notApplied"); expect(queued.state).toBe("held");
     const sent = await kit.service.work(queued.reportRef, kit.machine);

@@ -13,7 +13,7 @@ function factText(fact: ReportFact): string {
 /** Finite labels and typed values only. It never accepts free-form message/error/customer text. */
 export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash: string } {
   const event = reportEventSchema.parse(snapshot.event);
-  const verdict = event.severity === "red" ? "🔴 Act now" : event.severity === "orange" ? "🟠 Act today" : "🟢 Info";
+  const verdict = (event.severity === "red" ? "🔴 Act now" : event.severity === "orange" ? "🟠 Act today" : "🟢 Info") + (snapshot.testProvenance?.kind === "controlledSandbox" ? " · Controlled sandbox test" : "");
   const subject = event.subject.kind === "order" ? `Order ${event.subject.orderRef}` : event.subject.kind === "creator" ? `Creator @${event.subject.handle}` : `${event.subject.category[0]!.toUpperCase()}${event.subject.category.slice(1)} aggregate`;
   const context = event.identity.kind === "window" ? `${subject} · ${event.identity.start}–${event.identity.end} (${event.identity.timezone})` : `${subject} · ${event.identity.transition === "clear" ? "Source-confirmed recovery" : "Source-confirmed incident"}`;
   const owner = snapshot.destination.owner.state === "active" ? `<@${snapshot.destination.owner.memberId}>` : snapshot.destination.owner.state === "deactivated" ? "unassigned (previous owner deactivated; no backup configured)" : "unassigned (no backup configured)";

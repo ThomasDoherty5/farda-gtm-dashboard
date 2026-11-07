@@ -188,5 +188,5 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     if (!bindings.readinessTargetRef) throw new DispatchError("READINESS_SOURCE_UNCONFIGURED", 503);
     return domains.readReadiness(bindings.readinessTargetRef, { principalRef });
   }
-  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting };
+  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting, reporting };
 }

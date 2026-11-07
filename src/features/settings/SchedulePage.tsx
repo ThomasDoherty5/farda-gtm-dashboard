@@ -34,7 +34,7 @@ export function SchedulePage() {
   const demoData = adapter.kind === "demo" && data && !("kind" in data) ? data : null;
   const demo = adapter.kind === "demo";
   const [dialog, setDialog] = useState<"zapier" | null>(null);
-  const enableBlocked = query.data ? blockedReason(query.data, "enableSchedule") : "Available once the schedule has loaded.";
+  const enableBlocked = !demo ? "Source-owned schedule activation is unavailable from this draft editor." : query.data ? blockedReason(query.data, "enableSchedule") : "Available once the schedule has loaded.";
 
   return (
     <Page labelledBy="schedule-title" source="14:911">
@@ -46,8 +46,8 @@ export function SchedulePage() {
       <CadenceNotice title="Separate cadences, separate approval boundaries" funnel>
         Daily sourcing and review plans use current permitted capacity; hourly monitoring checks enrolled profiles. Neither cadence bypasses human approval for outreach, and neither is represented as live without verified access.
       </CadenceNotice>
-      <Notice kind="plain" title="Proposed configuration · currently paused" descriptionId="enable-reason">
-        Source connections, sandbox proof and owner approval are required before enabling live delivery. Zapier is the planned runner.
+      <Notice kind="plain" title={demo?"Proposed configuration · currently paused":"Saved draft and source runtime are separate"} descriptionId="enable-reason">
+        {demo?"Source connections, sandbox proof and owner approval are required before enabling live delivery. Zapier is the planned runner.":"Saving changes only the versioned draft. Installed cadence, current source configuration and delivery require separate source evidence; missing evidence remains unknown."}
       </Notice>
       {/* A partial or stale read is said in words, not only by a badge. */}
       <ReadState res={query.data} subject="This schedule" only={["stale", "partial"]} />

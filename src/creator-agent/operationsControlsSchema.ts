@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { safeRuntimeRegistrationSchema, safeRuntimeRunSchema } from "./jobs/runtimeViews.ts";
+import { reportReadSchema } from "./slackReporting/contract.ts";
 
 const ref = z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(v => !/^https?:/i.test(v), "Use a reference.");
 const text = z.string().trim().min(1).max(300);
@@ -78,6 +80,8 @@ export const operationsControlAction = z.object({schemaVersion:z.string(),reques
   idempotencyKey:ref,payload:operationsReviewPayload}).strict();
 export const operationsHealthPayload=z.object({targetRef:opaque}).strict();
 export const operationsHealthAction=operationsControlAction.extend({operation:z.literal("refreshObservation"),actionKind:z.literal("refreshOperationsHealth"),payload:operationsHealthPayload});
+export const operationsCanonicalPayload=operationsReviewPayload.extend({itemRefs:z.array(ref).min(1).max(100).refine(v=>new Set(v).size===v.length).optional()}).strict();
+export const operationsCanonicalAction=operationsControlAction.extend({operation:z.literal("previewAction"),actionKind:z.literal("previewOperationsControl"),payload:operationsCanonicalPayload});
 export const operationsHealthResultSchema=z.object({actionRef:ref,state:z.enum(["succeeded","blocked","outcomeUncertain"]),payloadVersion:z.string().regex(/^[a-f0-9]{64}$/),policyVersion:z.literal(controlPolicy),runRef:opaque.nullable(),receiptRefs:z.array(ref),reasonCodes:z.array(ref),executionCertainty:z.enum(["notApplied","applied","uncertain"])}).strict();
 export const controlReceiptSchema=z.object({requestKey:ref,actorRef:ref,state:z.enum(["recorded","absent","rejected","unverified"]),
   baseVersion:version.nullable(),actionRef:ref.nullable(),manifestDigest:z.string().regex(/^[a-f0-9]{64}$/).nullable(),payloadDigest:z.string().regex(/^[a-f0-9]{64}$/).nullable(),
@@ -85,12 +89,26 @@ export const controlReceiptSchema=z.object({requestKey:ref,actorRef:ref,state:z.
 const action = z.object({kind:operationsReviewPayload.shape.kind,targetRef:opaque,title:text,details:z.array(z.tuple([text,z.string().max(1000)])).max(110),
   allowed:z.boolean(),reasonCodes:z.array(ref).max(20)}).strict();
 const row=z.object({id:opaque,title:text,details:z.array(z.tuple([text,z.string().max(1000)])).max(120)}).strict();
+export const operationsServiceEvidenceSchema=z.discriminatedUnion("kind",[
+  z.object({kind:z.literal("runtimeRegistration"),targetRef:opaque,data:safeRuntimeRegistrationSchema}).strict(),
+  z.object({kind:z.literal("runtimeRun"),targetRef:opaque,data:safeRuntimeRunSchema}).strict(),
+  z.object({kind:z.literal("report"),targetRef:opaque,data:reportReadSchema}).strict(),
+  z.object({kind:z.enum(["repairReceipt","permissionReceipt","takeoverReceipt"]),targetRef:opaque,receiptRef:ref,sourceVersion:ref,
+    state:z.enum(["requested","assigned","applied","resolved","uncertain","rejected"]),observedAt:instant,
+    sourceReadbackVersion:ref.nullable(),mirrorReadbackVersion:ref.nullable(),ownerRef:ref}).strict(),
+  z.object({kind:z.literal("unavailable"),targetRef:opaque,service:z.enum(["runtimeRegistration","runtimeRun","report"]),reasonCode:ref}).strict(),
+]);
+export type OperationsServiceEvidence=z.infer<typeof operationsServiceEvidenceSchema>;
 export const nativeOperationsControlSchema=z.object({kind:z.literal("native-operations-controls"),section:z.enum(controlSections),version,observedAt:instant,
   actorRef:ref,role:z.enum(["reader","reviewer"]),sourceState:z.enum(["current","stale","partial","notConnected"]),sourceObservedAt:instant.nullable(),
   actions:z.array(action).max(200),records:z.array(row).max(300),localRuns:z.array(row).max(100),
   healthTargets:z.array(z.object({targetRef:opaque,title:text,allowed:z.boolean(),reasonCodes:z.array(ref)}).strict()).max(100),
   localCoverage:z.object({returned:n,total:n,partial:z.boolean()}).strict(),
-  runFilterEvidence:z.object({matched:n,unknownPlatform:n,assignment:z.literal("named-principal-unverified")}).strict(),
+  runFilterEvidence:z.object({matched:n,unknownPlatform:n,assignment:z.enum(["named-principal-unverified","named-principal-verified"])}).strict(),
+  namedActor:z.object({state:z.enum(["verified","unavailable"]),personRef:ref.nullable(),roles:z.array(z.enum(["founder","operator","reviewer","finance","viewer"])),observedAt:instant.nullable(),validUntil:instant.nullable()}).strict().optional(),
+  canonicalActions:z.array(action.extend({items:z.array(z.object({itemRef:ref,targetRef:ref,units:n,spendMinor:n}).strict()).min(1).max(100),effect:z.literal("previewOnly")})).max(200).optional(),
+  canonicalReconciliation:z.object({requestKey:ref,state:z.enum(["recorded","pending","absent","rejected","unverified"]),approvalRef:ref.nullable(),manifestRef:ref.nullable(),version:ref.nullable(),executionCertainty:z.enum(["notApplied","applied","uncertain"])}).strict().nullable().optional(),
+  serviceEvidence:z.array(operationsServiceEvidenceSchema).max(200).optional(),
   handoffs:z.array(z.object({title:text,url:z.string().url(),targetRef:opaque}).strict()).max(100),
   proposalReconciliation:controlReceiptSchema.nullable(),
   history:z.array(controlReceiptSchema).max(20),historyCoverage:z.object({returned:n,total:n,partial:z.boolean()}).strict(),

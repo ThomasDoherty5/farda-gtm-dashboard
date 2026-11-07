@@ -57,7 +57,10 @@ import { createLifecycleService } from "./lifecycle/repository.ts";
 import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifecycle/contract.ts";
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
-import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
+import { operationsControlAction, operationsControlFilters, operationsHealthAction, operationsCanonicalAction } from "./operationsControlsSchema.ts";
+import { createOperationsControlAuthority, OperationsAuthorityError, type OperationsControlAuthoritySource } from "./operationsControlAuthority.ts";
+import { createOperationsControlBridge, type OperationsCanonicalSource, type OperationsCanonicalKind, type OperationsOwnerRegistration } from "./operationsControlBridge.ts";
+import { createOperationsControlServiceReaders } from "./operationsControlServices.ts";
 import { createActionFoundation, assertMachineTokens, type ActionFoundationBindings } from "./actionFoundation.ts";
 import { foundationActionSchema, domainActionSchema } from "./actions/wire.ts";
 import { ActionServiceError } from "./actions/contract.ts";
@@ -91,6 +94,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
+  operationsControlAuthority?: OperationsControlAuthoritySource;
+  operationsCanonical?: {source:OperationsCanonicalSource;owners:ReadonlyMap<OperationsCanonicalKind,OperationsOwnerRegistration>};
   /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
   commercialPolicy?: CommercialPolicySource;
   recruitmentSource?: RecruitmentSource;
@@ -135,6 +140,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
+  let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
   let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
   let mediaDomain: MediaComposition | undefined;
@@ -178,9 +184,20 @@ export function createAgentServer(options: AgentServerOptions) {
     lifecycle = createLifecycleService({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       source: options.lifecycleSource, now: options.operations?.now });
+    const controlAuthority=options.operationsControlAuthority?createOperationsControlAuthority({
+      scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},
+      sources:options.actionFoundation?.approvals?.sources??{},source:options.operationsControlAuthority,now:options.operations?.now}):undefined;
+    if(options.operationsCanonical&&!controlAuthority)throw new Error("Canonical operations require named source authority.");
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
-      ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
+      ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now,
+      authority:controlAuthority,canonical:()=>operationsBridge,
+      serviceReaders:controlAuthority?createOperationsControlServiceReaders({authority:controlAuthority,
+        runtime:()=>options.runtime?runtimeApi:undefined,reporting:()=>actionFoundation.reporting}):undefined });
+    if(options.operationsCanonical&&controlAuthority)operationsBridge=createOperationsControlBridge({
+      scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},authority:controlAuthority,
+      source:options.operationsCanonical.source,owners:options.operationsCanonical.owners,intents:controls.canonicalIntents,
+      actions:()=>actionFoundation.service,approvals:()=>actionFoundation.approvals,now:options.operations?.now});
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -191,7 +208,7 @@ export function createAgentServer(options: AgentServerOptions) {
       bindings: options.mediaDomain, now: options.operations?.now,
       stageApprovals: { resolveCurrentProof: binding => actionFoundation.approvals.resolveCurrentProof(binding),
         assertCurrentProof: (proof, timestamp) => actionFoundation.approvals.assertCurrentProof(proof, timestamp) } });
-    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : [])]);
+    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[])]);
     if (mediaDomain && actionBindings) actionBindings = { ...actionBindings, resources: createMediaResources(actionBindings.resources, mediaDomain) };
     if (actionBindings?.approvals?.registry) actionBindings = { ...actionBindings, approvals: { ...actionBindings.approvals,
       registry: withCommercialOffers(actionBindings.approvals.registry, offers, options.operations?.now) } };
@@ -322,6 +339,7 @@ export function createAgentServer(options: AgentServerOptions) {
     idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
   }).strict();
   const adapterActionSchema = z.discriminatedUnion("actionKind", [collaborationActionSchema,
+    operationsCanonicalAction.extend({schemaVersion:z.literal(ADAPTER_SCHEMA),requestedScope:readBase.shape.requestedScope}),
     operationsControlAction.extend({ schemaVersion: z.literal(ADAPTER_SCHEMA), requestedScope: readBase.shape.requestedScope }),
     operationsHealthAction.extend({ schemaVersion: z.literal(ADAPTER_SCHEMA), requestedScope: readBase.shape.requestedScope }),
     collaborationActionSchema.extend({ actionKind: z.literal("requestStockTransfer"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: transferIntent }),
@@ -587,6 +605,12 @@ export function createAgentServer(options: AgentServerOptions) {
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
         const raw = await bodyOf(req);
         const native = foundationActionSchema.safeParse(raw), domain = domainActionSchema.safeParse(raw);
+        // The controls command is an exact finite intent, not a caller-selected domain handler.
+        if(raw&&typeof raw==="object"&&"actionKind"in raw&&raw.actionKind==="previewOperationsControl"){
+          const input=adapterActionSchema.parse(raw);
+          if(input.actionKind!=="previewOperationsControl")throw new SyntaxError("Unexpected operations action");
+          return reply(res,200,await controls.previewCanonical(input,`agent-${auth.role}`,auth.role));
+        }
         if (native.success || domain.success) return reply(res, 200, await actionFoundation.execute(raw, `agent-${auth.role}`));
         const input = adapterActionSchema.parse(raw);
         if (input.actionKind === "refreshOperationsHealth") {
@@ -626,7 +650,7 @@ export function createAgentServer(options: AgentServerOptions) {
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
-        operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
+        operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
           dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
           ledgerExport: options.actionFoundation?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
@@ -1025,6 +1049,7 @@ export function createAgentServer(options: AgentServerOptions) {
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       if (error instanceof OperationsControlError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty ?? "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
+      if(error instanceof OperationsAuthorityError)return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });

@@ -40,7 +40,7 @@
 .details > div { display: grid; grid-template-columns: minmax(0, var(--detail-label, 168px)) minmax(0, 1fr); gap: var(--space-12); }
 .detailsWide > div { grid-template-columns: minmax(0, 247px) minmax(0, 1fr); }
 .details dt { font: var(--text-small); color: var(--color-muted); }
-.details dd { margin: 0; font: var(--text-label); min-width: 0; }
+.details dd { margin: 0; font: var(--text-label); min-width: 0; overflow-wrap: anywhere; }
 .divider { height: 1px; margin: 0; border: 0; background: var(--color-border); }
 
 /* Numbered steps (Figma "Step" rows) and gate rows. */
