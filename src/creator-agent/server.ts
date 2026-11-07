@@ -33,6 +33,8 @@ import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
 import { IntakeRepository, type IntakeAuthority } from "./intake/repository.ts";
 import { handleIntakeRoute } from "./intake/routes.ts";
+import { RewardRedemptionRepository, type RewardAuthority } from "./rewards/repository.ts";
+import { handleRewardRoute } from "./rewards/routes.ts";
 import { routeId as offerIdSchema } from "./offers/contract.ts";
 import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelStore.ts";
 import { funnelFilterSchema } from "./funnelContract.ts";
@@ -55,7 +57,7 @@ type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; providerHealth?: HealthOptions;
   scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
-  collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority;
+  collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -71,6 +73,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let funnel: FunnelRepository;
   let offers: OfferRepository;
   let intake: IntakeRepository;
+  let rewards: RewardRedemptionRepository;
   let schedules: ScheduleDraftRepository;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
@@ -87,6 +90,7 @@ export function createAgentServer(options: AgentServerOptions) {
       },
     });
     intake = new IntakeRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.intakeAuthority);
+    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.rewardAuthority);
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
@@ -302,6 +306,15 @@ export function createAgentServer(options: AgentServerOptions) {
         const key = req.headers["idempotency-key"];
         const result = await handleIntakeRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
           body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, intake);
+        if (result) return reply(res, result.status, result.body);
+      }
+      if (path.startsWith("/v1/rewards/")) {
+        if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handleRewardRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, rewards);
         if (result) return reply(res, result.status, result.body);
       }
       if (path.startsWith("/v1/offers/")) {
