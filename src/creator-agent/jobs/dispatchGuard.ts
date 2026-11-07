@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { digest } from "../config.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
 import type { CapabilityLedger } from "../connections/ledger.ts";
 import type { ApprovalScope, VerifiedApprovalProof } from "../approvals/contract.ts";
 import { approvalRefSchema } from "../approvals/contract.ts";
@@ -70,13 +71,74 @@ export class DispatchGuard {
         return handler;
     }
     private handlerHash(intent: DispatchIntent, handler = this.handler(intent)) { return digest({ policy: handler.policyVersion, idempotency: handler.idempotency, sourceEffect: handler.sourceEffect, provider: handler.provider, reconcileBinding: handler.reconcileBinding ?? null, resources: resourceRequirementsSchema.parse(handler.resources(intent)), budgets: handler.budgets }); }
-    private storedAll(runRef: string): Stored[] { const rows = this.db.prepare("SELECT d.* FROM job_dispatch_intents d JOIN job_items i ON i.item_key=d.dispatch_key JOIN job_run_items r ON r.item_id=i.item_id WHERE r.run_id=? ORDER BY i.item_key").all(runRef); if (!rows.length)
-        throw new DispatchError("DISPATCH_NOT_FOUND", 404); return rows.map(row => ({ intent: dispatchIntentSchema.parse(JSON.parse(String(row.intent))), dispatchKey: String(row.dispatch_key), handlerHash: String(row.handler_hash), runRef, receipt: row.receipt ? JSON.parse(String(row.receipt)) as DispatchReceipt : null })); }
+    private storedAll(runRef: string): Stored[] {
+        const rows=this.db.prepare("SELECT d.* FROM job_dispatch_intents d JOIN job_items i ON i.item_key=d.dispatch_key JOIN job_run_items r ON r.item_id=i.item_id JOIN job_runs j ON j.run_id=r.run_id AND j.job_id=i.job_id AND j.job_version=i.job_version WHERE r.run_id=? AND d.run_ref=r.run_id ORDER BY i.item_key").all(runRef);
+        if(!rows.length)throw new DispatchError("DISPATCH_NOT_FOUND",404);
+        const run=this.jobs.getRun(runRef), definition=run.definition;
+        if(definition.handler!=="dispatch-approved.v1" || definition.mode!=="executeApproved")throw new DispatchError("DISPATCH_NOT_FOUND",404);
+        return rows.map(row=>{
+          const intent=dispatchIntentSchema.parse(JSON.parse(String(row.intent)));
+          if(definition.ownerRef!==intent.approval.approvalRef || digest(intent.approval.scope)!==digest(this.options.scope))throw new DispatchError("DISPATCH_SCOPE_DENIED",403);
+          return {intent,dispatchKey:String(row.dispatch_key),handlerHash:String(row.handler_hash),runRef,receipt:row.receipt?JSON.parse(String(row.receipt)) as DispatchReceipt:null};
+        });
+    }
     private stored(runRef: string, key?: string): Stored { const rows = this.storedAll(runRef); const result = key ? rows.find(s => s.dispatchKey === key) : rows[0]; if (!result)
         throw new DispatchError("DISPATCH_NOT_FOUND", 404); return result; }
     private revision(runRef: string) { return Number(this.db.prepare("SELECT COUNT(*) AS n FROM job_transitions WHERE run_id=?").get(runRef)?.n ?? 0); }
     read(runRef: string, recoverExpired = true): DispatchRead { if (recoverExpired)
         this.jobs.recoverExpired(); const all = this.storedAll(runRef), s = all[0]!, run = this.jobs.getRun(runRef); const pending = run.items.some(item => item.state !== "completed" && Boolean(this.db.prepare("SELECT dispatch_started FROM job_items WHERE item_id=?").get(item.itemId)?.dispatch_started)); return { schemaVersion: "farda.dispatch.v1", runRef, revision: this.revision(runRef), intent: s.intent, dispatchKey: s.dispatchKey, run, items: all.map(({ intent, dispatchKey, receipt }) => ({ intent, dispatchKey, receipt })), receipt: all.length === 1 ? s.receipt : null, current: { state: run.state === "completed" ? "completed" : run.state === "reconcile" ? "uncertain" : run.state === "running" ? "running" : run.control === "cancelled" ? "cancelled" : run.state === "queued" ? "ready" : "held", reasonCodes: run.blockerCodes }, executionCertainty: pending ? "uncertain" : all.some(item => item.receipt) ? "applied" : "notApplied" }; }
+    /** Existing scoped records only: never substitute a newer approval version. */
+    readApprovalRuns(approvalRef:string,manifestVersion:number):{runs:DispatchRead[];total:number} {
+        approvalRefSchema.parse(approvalRef);
+        if(!Number.isSafeInteger(manifestVersion)||manifestVersion<1)throw new DispatchError("INVALID_APPROVAL_VERSION",422);
+        const association=`FROM job_dispatch_intents d JOIN job_items i ON i.item_key=d.dispatch_key
+          JOIN job_run_items r ON r.item_id=i.item_id AND r.run_id=d.run_ref
+          JOIN job_runs j ON j.run_id=r.run_id AND j.job_id=i.job_id AND j.job_version=i.job_version
+          JOIN job_definitions f ON f.job_id=j.job_id AND f.version=j.job_version
+          WHERE json_extract(f.body,'$.handler')='dispatch-approved.v1' AND json_extract(f.body,'$.mode')='executeApproved'
+          AND json_extract(f.body,'$.ownerRef')=json_extract(d.intent,'$.approval.approvalRef')
+          AND json_extract(d.intent,'$.approval.approvalRef')=? AND json_extract(d.intent,'$.approval.manifestVersion')=?`;
+        const total=Number(this.db.prepare(`SELECT COUNT(DISTINCT r.run_id) AS n ${association}`).get(approvalRef,manifestVersion)?.n??0);
+        const rows=this.db.prepare(`SELECT DISTINCT r.run_id ${association} ORDER BY r.run_id LIMIT 25`).all(approvalRef,manifestVersion);
+        const runs=rows.map(row=>this.read(String(row.run_id),false));
+        if(runs.some(run=>run.items.some(item=>item.intent.approval.approvalRef!==approvalRef || item.intent.approval.manifestVersion!==manifestVersion || digest(item.intent.approval.scope)!==digest(this.options.scope))))
+          throw new DispatchError("DISPATCH_SCOPE_DENIED",403);
+        return {runs,total};
+    }
+    /** Never infer provider attempt identity from a job retry counter or aggregate certainty. */
+    readAttemptOutcomes(runRef: string): ReadonlyMap<string, import("./dispatchSchema.ts").DispatchAttemptObservation> {
+        const view = this.read(runRef, false), result = new Map<string, import("./dispatchSchema.ts").DispatchAttemptObservation>();
+        for (const stored of this.storedAll(runRef)) {
+            const unknown = {state:"unknown" as const,attemptNumber:null,receiptRef:null,observedAt:null};
+            const item = view.run.items.find(i=>i.itemKey===stored.dispatchKey);
+            const row = this.db.prepare("SELECT attempt,started_at,body FROM job_dispatch_attempts WHERE dispatch_key=? ORDER BY attempt DESC LIMIT 1").get(stored.dispatchKey);
+            let observation: import("./dispatchSchema.ts").DispatchAttemptObservation = unknown;
+            if (!row) {
+                if (item?.attempts===0 && !stored.receipt && !["reconcile","leased","completed"].includes(item.state)) observation={state:"unstarted",attemptNumber:null,receiptRef:null,observedAt:null};
+            } else if (!stored.receipt) {
+                try {
+                    const attempt=this.attempt(stored), number=Number(row.attempt), started=Number(row.started_at), attemptBody=JSON.parse(String(row.body)) as Record<string,unknown>;
+                    if (attempt.attemptNumber!==number || !Number.isSafeInteger(started) || started>this.now()) throw new Error("Unverified attempt");
+                    const rows=this.db.prepare("SELECT body,body_hash FROM job_dispatch_readbacks WHERE dispatch_key=?").all(stored.dispatchKey);
+                    for (const closed of rows) {
+                        const raw:unknown=JSON.parse(String(closed.body));const parsed=dispatchReadbackSchema.safeParse(raw);
+                        if (!parsed.success || parsed.data.state!=="notApplied" || digest(parsed.data)!==closed.body_hash) continue;
+                        const proof=parsed.data;
+                        if (proof.attemptNumber!==number || proof.attemptRef!==attempt.attemptRef || proof.dispatchKey!==stored.dispatchKey ||
+                            proof.payloadHash!==stored.intent.approval.payloadHash || proof.handlerRef!==stored.intent.handlerRef || proof.providerBindingHash!==attemptBody.providerBindingHash ||
+                            Date.parse(proof.observedAt)<started || Date.parse(proof.observedAt)>this.now()) continue;
+                        observation={state:"closedNotApplied",attemptNumber:number,receiptRef:proof.receiptRef,observedAt:proof.observedAt};break;
+                    }
+                    const pending=Boolean(this.db.prepare("SELECT dispatch_started FROM job_items WHERE item_id=?").get(item!.itemId)?.dispatch_started);
+                    if (pending) observation={state:"open",attemptNumber:number,receiptRef:null,observedAt:null};
+                } catch { observation=unknown; }
+            }
+            // Legacy applied receipts do not store an exact attempt association. Their
+            // confirmed native receipt stays visible independently; this field remains Unknown.
+            result.set(stored.dispatchKey,observation);
+        }
+        return result;
+    }
     private capability(handler: DispatchHandler, reconcile = false) { if (handler.provider.state === "notApplicable")
         return; const binding = reconcile ? handler.reconcileBinding : handler.provider.binding; if (!binding)
         throw new DispatchError("SOURCE_RECONCILIATION_CAPABILITY_UNAVAILABLE"); if (reconcile && (binding.mode !== "reconcile" || binding.provider !== handler.provider.binding.provider || binding.providerAccountId !== handler.provider.binding.providerAccountId || binding.workspaceId !== this.options.scope.workspaceId || binding.accountId !== this.options.scope.accountId || binding.environment !== this.options.scope.environment))
@@ -108,10 +170,10 @@ export class DispatchGuard {
     }
     private assert(s: Stored, p: Preflight) { if (this.handlerHash(s.intent) !== s.handlerHash)
         throw new DispatchError("DISPATCH_HANDLER_CHANGED"); if (digest(p.proof.binding) !== digest(s.intent.approval))
-        throw new DispatchError("DISPATCH_APPROVAL_BINDING_MISMATCH"); this.options.approvals.assertCurrentProof(p.proof, this.now()); this.capability(p.handler); this.validateGrants(s, p.requirements, p.grants); const budget = p.requirements.budget, stock = p.requirements.stock; if(p.proof.item.spendMinor>0&&budget.state!=="required")throw new DispatchError("DISPATCH_BUDGET_REQUIRED");if(p.proof.item.units>0&&stock.state!=="required")throw new DispatchError("DISPATCH_STOCK_REQUIRED"); if (budget.state === "required" && (budget.quantity !== p.proof.item.spendMinor || budget.currency !== p.proof.decisionReceipt.bounds.currency))
+        throw new DispatchError("DISPATCH_APPROVAL_BINDING_MISMATCH"); assertSynchronousVoid(()=>this.options.approvals.assertCurrentProof(p.proof, this.now())); this.capability(p.handler); this.validateGrants(s, p.requirements, p.grants); const budget = p.requirements.budget, stock = p.requirements.stock; if(p.proof.item.spendMinor>0&&budget.state!=="required")throw new DispatchError("DISPATCH_BUDGET_REQUIRED");if(p.proof.item.units>0&&stock.state!=="required")throw new DispatchError("DISPATCH_STOCK_REQUIRED"); if (budget.state === "required" && (budget.quantity !== p.proof.item.spendMinor || budget.currency !== p.proof.decisionReceipt.bounds.currency))
         throw new DispatchError("DISPATCH_ITEM_SPEND_BOUND"); if (stock.state === "required" && stock.quantity !== p.proof.item.units)
         throw new DispatchError("DISPATCH_ITEM_UNIT_BOUND"); if (p.grants.length)
-        this.options.resourceAuthority!.assertCurrent(p.grants, { intent: s.intent, dispatchKey: s.dispatchKey, requirements: p.requirements }, this.now()); }
+        assertSynchronousVoid(()=>this.options.resourceAuthority!.assertCurrent(p.grants, { intent: s.intent, dispatchKey: s.dispatchKey, requirements: p.requirements }, this.now())); }
     private async preflight(s: Stored): Promise<Preflight> { try {
         return await this.preflightCurrent(s);
     }
@@ -210,12 +272,12 @@ export class DispatchGuard {
         leaseToken: string;
     }, worker?:DispatchWorker): DispatchContext {
         let retained = p;
-        const assertCurrent = () => {worker?.assertCurrent();this.jobs.assertApprovedLease(claim.item.itemId,claim.leaseToken);this.assert(s,retained);};
+        const assertCurrent = () => {assertSynchronousVoid(()=>worker?.assertCurrent());this.jobs.assertApprovedLease(claim.item.itemId,claim.leaseToken);this.assert(s,retained);};
         return { ...this.attempt(s),intent:structuredClone(s.intent),dispatchKey:s.dispatchKey,providerBindingHash:p.providerBindingHash,
             assertCurrent,
             resourceGrants:()=>{assertCurrent();return structuredClone(retained.grants);},
             approvalProof:()=>{assertCurrent();return structuredClone(retained.proof);},
-            heartbeat:async()=>{worker?.assertCurrent();const fresh=await this.preflight(s);const until=this.jobs.heartbeatApproved(claim.item.itemId,claim.leaseToken,Math.min(Date.parse(fresh.proof.validUntil),...fresh.grants.map(g=>Date.parse(g.validUntil))),()=>{worker?.assertCurrent();this.assert(s,fresh);});retained=fresh;return until;}
+            heartbeat:async()=>{assertSynchronousVoid(()=>worker?.assertCurrent());const fresh=await this.preflight(s);const until=this.jobs.heartbeatApproved(claim.item.itemId,claim.leaseToken,Math.min(Date.parse(fresh.proof.validUntil),...fresh.grants.map(g=>Date.parse(g.validUntil))),()=>{assertSynchronousVoid(()=>worker?.assertCurrent());this.assert(s,fresh);});retained=fresh;return until;}
         };
     }
     private checkReadback(s: Stored, handler: DispatchHandler, input: unknown): DispatchReadback { const result = dispatchReadbackSchema.parse(input); if (result.state === "unknown")
@@ -225,7 +287,7 @@ export class DispatchGuard {
         state: "applied";
     }>) { const receipt = result.receipt; this.jobs.finishApproved(s.runRef, s.dispatchKey, { schemaVersion: "job-dispatch-result.v1", kind: "dispatch-receipt", receiptRef: receipt.receiptRef, requestKey: s.dispatchKey, payloadHash: receipt.payloadHash, sourceEffect: receipt.sourceEffect, observedAt: receipt.observedAt }, () => { const current = this.stored(s.runRef, s.dispatchKey); if (current.receipt && digest(current.receipt) !== digest(receipt))
         throw new DispatchError("DISPATCH_RECEIPT_CONFLICT", 409, "applied"); this.db.prepare("UPDATE job_dispatch_intents SET receipt=? WHERE dispatch_key=?").run(JSON.stringify(receipt), s.dispatchKey); this.db.prepare("DELETE FROM job_dispatch_effect_fences WHERE dispatch_key=?").run(s.dispatchKey); }); }
-    async execute(runRef: string,worker?:DispatchWorker): Promise<DispatchRead> { if(worker)approvalRefSchema.parse(worker.workerRef);worker?.assertCurrent();for (const s of this.storedAll(runRef)) {
+    async execute(runRef: string,worker?:DispatchWorker): Promise<DispatchRead> { if(worker)approvalRefSchema.parse(worker.workerRef);assertSynchronousVoid(()=>worker?.assertCurrent());for (const s of this.storedAll(runRef)) {
         await this.executeItem(s,worker);
     } return this.read(runRef); }
     private async executeItem(s: Stored,worker?:DispatchWorker): Promise<void> {
@@ -233,11 +295,11 @@ export class DispatchGuard {
         if (s.receipt || view.run.control !== "active" || ["leased", "completed", "reconcile", "cancelled", "failed"].includes(item.state))
             return;
         const p = await this.preflight(s);
-        this.jobs.activateApproved(view.run.jobId, 1, p.proof.decisionReceipt.receiptRef, () => {worker?.assertCurrent();this.assert(s, p);});
-        const claim = this.jobs.claimApproved(runRef, worker?.workerRef??"worker:approved-dispatch", s.dispatchKey, () => {worker?.assertCurrent();this.consume(s, p);});
+        this.jobs.activateApproved(view.run.jobId, 1, p.proof.decisionReceipt.receiptRef, () => {assertSynchronousVoid(()=>worker?.assertCurrent());this.assert(s, p);});
+        const claim = this.jobs.claimApproved(runRef, worker?.workerRef??"worker:approved-dispatch", s.dispatchKey, () => {assertSynchronousVoid(()=>worker?.assertCurrent());this.consume(s, p);});
         if (!claim)
             return;
-        this.jobs.startApproved(claim.item.itemId, claim.leaseToken, () => { worker?.assertCurrent();this.assert(s, p); const fence = this.fenceKey(s, p); const prior = this.db.prepare("SELECT dispatch_key FROM job_dispatch_effect_fences WHERE fence_key=?").get(fence); if (prior && prior.dispatch_key !== s.dispatchKey)
+        this.jobs.startApproved(claim.item.itemId, claim.leaseToken, () => { assertSynchronousVoid(()=>worker?.assertCurrent());this.assert(s, p); const fence = this.fenceKey(s, p); const prior = this.db.prepare("SELECT dispatch_key FROM job_dispatch_effect_fences WHERE fence_key=?").get(fence); if (prior && prior.dispatch_key !== s.dispatchKey)
             throw new DispatchError("DISPATCH_PRIOR_OUTCOME_UNCERTAIN"); this.db.prepare("INSERT OR IGNORE INTO job_dispatch_effect_fences VALUES(?,?,?)").run(fence, s.dispatchKey, JSON.stringify({ targetRef: p.proof.item.targetRef, providerBindingHash: p.providerBindingHash })); this.db.prepare("INSERT INTO job_dispatch_attempts VALUES(?,?,?,?)").run(s.dispatchKey, claim.item.attempts, this.now(), JSON.stringify({attemptRef:`dispatch-attempt:${digest({dispatchKey:s.dispatchKey,attemptNumber:claim.item.attempts})}`,attemptNumber:claim.item.attempts, approval: p.proof.verificationRef, grants: p.grants.map(g => g.grantRef), providerBindingHash: p.providerBindingHash })); });
         try {
             const result = this.checkReadback(s, p.handler, await p.handler.execute(this.context(s, p, claim,worker)));
@@ -245,7 +307,7 @@ export class DispatchGuard {
                 this.record(s, result);
             else
                 this.jobs.finishApproved(runRef, s.dispatchKey, null, () => { }, result.state === "unknown" ? result.reasonCode : "DISPATCH_NOT_APPLIED_RECONCILE");
-            this.capability(p.handler);worker?.assertCurrent();
+            this.capability(p.handler);assertSynchronousVoid(()=>worker?.assertCurrent());
         }
         catch (error) {
             if (this.jobs.getRun(runRef).items.find(i => i.itemKey === s.dispatchKey)?.state !== "completed")

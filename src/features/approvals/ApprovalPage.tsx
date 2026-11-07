@@ -35,8 +35,17 @@ type Res = ReadResponse<ApprovalDetail>;
 export function ApprovalPage() {
   const { approvalId = "" } = useParams();
   const [search] = useSearchParams();
-  const filters = useMemo(() => ({ approvalId }), [approvalId]);
-  const query = useView<{ approvalId: string }, ApprovalDetail | NativeApprovalView>("approvalDetail", filters);
+  const { adapter } = useScope();
+  const versionQuery = search.get("version"), beforeQuery = search.get("beforeVersion"), historyQuery = search.get("view") === "history";
+  const filters = useMemo(() => {
+    const version = (value: string) => /^v?[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value.replace(/^v/, ""))) ? Number(value.replace(/^v/, "")) : 0;
+    return { approvalId, ...(adapter.kind !== "demo" ? {
+      ...(versionQuery !== null ? {manifestVersion:version(versionQuery)} : {}),
+      ...(historyQuery || versionQuery !== null ? {history:true} : {}),
+      ...(beforeQuery !== null ? {beforeVersion:version(beforeQuery)} : {}),
+    } : {}) };
+  }, [approvalId, adapter.kind, versionQuery, historyQuery, beforeQuery]);
+  const query = useView<typeof filters, ApprovalDetail | NativeApprovalView>("approvalDetail", filters);
   const requestedVersion = search.get("version");
   const showHistory = search.get("view") === "history";
   const data = query.data?.data ?? null;
