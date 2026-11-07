@@ -17,7 +17,7 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
   beforeEach(async () => {
     clock = Date.now();
     source = collaborationSnapshotSchema.parse({ scope, id: "synthetic-collaboration", sourceRevision: "synthetic-source-v1", sourceRef: "source:synthetic-collaboration",
-      observedAt: new Date().toISOString(), coverage: "complete", title: "Synthetic collaboration", platform: "Social Cat", creatorRef: null, campaignRef: null,
+      observedAt: new Date(clock).toISOString(), coverage: "complete", title: "Synthetic collaboration", platform: "Social Cat", creatorRef: null, campaignRef: null,
       stage: "Content pending", nextAction: "Review content",
       terms: { kind: "Commission only", agreementRef: null, acceptedAt: null, version: null, brief: null, usage: null, posting: "unknown", due: null,
         graceDays: null, observationUntil: null, retainedSampleCost: null, historicalFee: null },
@@ -58,6 +58,7 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
   });
   it("saves only a local proposal and rejects reader, forged actor, dispatch and changed-payload attempts", async () => {
     const read = await post("/v1/read", readRequest("collaborationDetail", "synthetic-collaboration"));
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
     const request = proposal(read.body.dataVersion);
     const initialSource = structuredClone(source);
     expect((await post("/v1/action", request, SYNTHETIC_READ_TOKEN)).status).toBe(403);
