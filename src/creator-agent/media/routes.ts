@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AgentConflict } from "../store.ts";
 import { mutationAuthorizationSchema, ref } from "./contract.ts";
-import { MediaSourceUnavailable, PaidMediaRepository } from "./repository.ts";
+import { MediaSourceUnavailable, MediaWriteUncertain, PaidMediaRepository } from "./repository.ts";
 
 type Input = { method: string; path: string; role: "reviewer" | "reader"; body?: unknown; idempotencyKey?: string };
 const decisionBody = z.object({ decisionRef: ref }).strict();
@@ -9,7 +9,7 @@ const emptyBody = z.object({}).strict();
 
 /**
  * Paid-media routes. Reads: GET /v1/media/campaigns/:id, /v1/media/campaigns/:id/mutations/:mutationId and
- * /v1/media/inventories/:provider/:accountRef. Writes (reviewer): POST /v1/media/inventories, /v1/media/campaigns, and
+ * /v1/media/inventories/:provider/:environment/:accountRef. An attempted provider write with an unknown outcome answers uncertain. Writes (reviewer): POST /v1/media/inventories, /v1/media/campaigns, and
  * /campaigns/:id/native-draft, /:id/decisions, /:id/publish, /:id/mutations, /:id/mutations/:mutationId/apply ({decisionRef} or, for a pause, {policyRef}).
  */
 export async function handleMediaRoute(input: Input, repo: PaidMediaRepository) {
@@ -22,7 +22,7 @@ export async function handleMediaRoute(input: Input, repo: PaidMediaRepository) 
     if (input.method === "GET") {
       const record = parts[0] === "campaigns" && parts.length === 2 ? repo.read(parts[1]!)
         : parts[0] === "campaigns" && parts.length === 4 && parts[2] === "mutations" ? repo.readMutation(parts[1]!, parts[3]!)
-        : parts[0] === "inventories" && parts.length === 3 ? repo.latestInventory(parts[1]!, parts[2]!) : undefined;
+        : parts[0] === "inventories" && parts.length === 4 ? repo.latestInventory(parts[1]!, parts[2]!, parts[3]!) : undefined;
       if (record === undefined) return fail(404, "UNSUPPORTED_OPERATION");
       return record ? { status: 200, body: record } : fail(404, "MEDIA_RECORD_UNAVAILABLE");
     }
@@ -44,6 +44,7 @@ export async function handleMediaRoute(input: Input, repo: PaidMediaRepository) 
     return fail(404, "UNSUPPORTED_OPERATION");
   } catch (error) {
     if (error instanceof z.ZodError) return fail(422, "INVALID_MEDIA_REQUEST");
+    if (error instanceof MediaWriteUncertain) return { status: 409, body: { code: error.message, executionCertainty: "uncertain" } };
     if (error instanceof AgentConflict) return fail(409, error.message);
     if (error instanceof MediaSourceUnavailable) return fail(503, error.message);
     throw error;

@@ -4,17 +4,19 @@ import { AgentStore } from "../store";
 import { createAgentServer } from "../server";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures";
 import type { CampaignView, ExecRoute, Manifest, MutationView, NativeSettings, PrepareInput } from "./contract";
-import { PaidMediaRepository, type MediaAuthority } from "./repository";
+import { MediaSourceUnavailable, MediaWriteUncertain, PaidMediaRepository, type MediaAuthority } from "./repository";
 import { handleMediaRoute } from "./routes";
 
 // Synthetic accounts, checkouts, assets, decisions and provider receipts only. Nothing here is a real advertiser, shop or campaign.
 const scope = { workspaceId: "fictional-workspace", accountId: "fictional-account" };
 const H = (c: string) => c.repeat(64);
 let clock = new Date("2026-11-06T12:00:00Z");
+/** An attempted provider write whose outcome is unknown is reported as uncertain, never as a result. */
+const settle = (p: Promise<unknown>) => expect(p).rejects.toBeInstanceOf(MediaWriteUncertain);
 const at = (iso: string) => { clock = new Date(iso); };
 
 function settingsFrom(m: Manifest, nativeCampaignId: string): NativeSettings {
-  return { nativeCampaignId, providerAccountRef: m.account.providerAccountRef, identityRef: m.account.identityRef,
+  return { nativeCampaignId, provider: m.provider, providerAccountRef: m.account.providerAccountRef, environment: m.environment, identityRef: m.account.identityRef,
     nativeAdIds: [`native:ad-${nativeCampaignId.slice(-1)}`], previewRef: `preview:${nativeCampaignId}`, status: "PAUSED", objective: m.objective, optimizationEvent: m.optimizationEvent,
     currency: m.currency, dailyBudgetMinor: m.caps.dailyBudgetMinor, lifetimeBudgetMinor: m.caps.lifetimeBudgetMinor, startAt: m.schedule.startAt,
     endAt: m.schedule.endAt, attributionSetting: m.attributionSetting, destinationRef: m.destinationRef, creativeHashes: m.creatives.map((c) => c.contentHash),
@@ -35,7 +37,7 @@ function world() {
   const native = new Map<string, NativeSettings>();
   const writes = new Map<string, unknown>();
   const policies = new Map<string, unknown>([["policy:auto-pause", { scope, policyRef: "policy:auto-pause", state: "current", allows: ["pause"],
-    providerAccountRefs: ["adaccount:synthetic-1"], validUntil: "2026-12-31T00:00:00Z" }]]);
+    accounts: [{ provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "sandbox" }], validUntil: "2026-12-31T00:00:00Z" }]]);
   const executor = {
     calls: { createDraft: 0, publish: 0, mutate: 0 }, routes: [] as ExecRoute[], preset: {} as Partial<NativeSettings>, origin: "synthetic" as "synthetic" | "account",
     fail: null as null | "before" | "after", outcome: "ACTIVE" as "ACTIVE" | "REJECTED", handoff: null as null | "mfa" | "captcha" | "ui-drift",
@@ -169,7 +171,7 @@ describe("account and per-operation capability inventory (acceptance 1 and 2)", 
     expect(inv.capabilities.find((c) => c.operation === "publish" && c.route === "api")?.state).toBe("Denied");
     expect(inv.capabilities.find((c) => c.operation === "pause" && c.route === "browser")?.state).toBe("Unsupported");
     expect(inv.evidenceLabel).toBe("synthetic");
-    expect(w.repo.latestInventory("meta", "adaccount:synthetic-1")?.inventoryId).toBe(inv.inventoryId);
+    expect(w.repo.latestInventory("meta", "sandbox", "adaccount:synthetic-1")?.inventoryId).toBe(inv.inventoryId);
   });
   it("treats MCP discovery, documentation, a missing receipt and an expired test as Unverified, never Ready", () => {
     const w = world();
@@ -285,7 +287,7 @@ describe("immutable manifest, native draft and read-back (acceptance 4)", () => 
     await expect(w.repo.publish(d.campaignId, "publish")).rejects.toThrow("RIGHTS_EXPIRED");
     expect(w.executor.calls.publish).toBe(0);
   });
-  it("holds a wrong account, and reads back a draft created under another account as a mismatch", async () => {
+  it("holds a wrong account, and treats a read-back for another account as unreadable", async () => {
     const w = world();
     w.seed();
     w.account({ providerAccountRef: "adaccount:synthetic-1", environment: "production" });
@@ -294,7 +296,7 @@ describe("immutable manifest, native draft and read-back (acceptance 4)", () => 
     w.executor.preset = { providerAccountRef: "adaccount:synthetic-other" };
     const v = w.repo.prepare(w.request(), "k2");
     const held = await w.repo.createDraft(v.campaignId, "draft");
-    expect(held.heldReasons).toEqual(["READBACK_MISMATCH:ACCOUNT"]);
+    expect(held).toMatchObject({ state: "held", heldReasons: ["READBACK_UNAVAILABLE"], releaseRequested: false });
   });
 });
 
@@ -397,8 +399,8 @@ describe("idempotent writes, mutations and reconciliation (acceptance 6)", () =>
     const w = world();
     const a = await approved(w);
     w.executor.fail = "after";
-    const uncertain = await w.repo.publish(a.campaignId, "publish-1");
-    expect(uncertain).toMatchObject({ state: "uncertain", sourceEffects: "publish-attempted", execution: { pending: true } });
+    await settle(w.repo.publish(a.campaignId, "publish-1"));
+    expect(w.repo.read(a.campaignId)).toMatchObject({ state: "uncertain", sourceEffects: "publish-attempted", execution: { pending: true } });
     expect(() => w.repo.prepare(w.request({ caps: { dailyBudgetMinor: 3000, lifetimeBudgetMinor: 50000 } }), "p2")).toThrow("RECONCILE_FIRST");
     const resolved = await w.repo.publish(a.campaignId, "publish-again");
     expect(resolved).toMatchObject({ state: "confirmed", execution: { reconciledBy: "receipt" } });
@@ -408,7 +410,7 @@ describe("idempotent writes, mutations and reconciliation (acceptance 6)", () =>
     const w = world();
     const a = await approved(w);
     w.executor.fail = "after";
-    await w.repo.publish(a.campaignId, "publish-1");
+    await settle(w.repo.publish(a.campaignId, "publish-1"));
     w.writes.delete(`publish:${a.campaignId}:r1`);
     expect(await w.repo.publish(a.campaignId, "publish-2")).toMatchObject({ state: "confirmed", execution: { reconciledBy: "native-readback" } });
     expect(w.executor.calls.publish).toBe(1);
@@ -416,7 +418,8 @@ describe("idempotent writes, mutations and reconciliation (acceptance 6)", () =>
     const v = world();
     const b = await approved(v);
     v.executor.fail = "before";
-    expect((await v.repo.publish(b.campaignId, "publish-1")).state).toBe("uncertain");
+    await settle(v.repo.publish(b.campaignId, "publish-1"));
+    expect(v.repo.read(b.campaignId)!.state).toBe("uncertain");
     expect((await v.repo.publish(b.campaignId, "publish-2")).state).toBe("confirmed");
     expect(v.executor.calls.publish).toBe(2);
     expect([...v.writes.keys()].filter((k) => k.startsWith("publish:"))).toEqual([`publish:${b.campaignId}:r1`]);
@@ -451,7 +454,8 @@ describe("idempotent writes, mutations and reconciliation (acceptance 6)", () =>
     const m = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
     const ref = w.approveMutation(c, m);
     w.executor.fail = "after";
-    expect(await w.repo.applyMutation(c.campaignId, m.mutationId, { decisionRef: ref }, "a1")).toMatchObject({ state: "uncertain", sourceEffects: "mutation-attempted" });
+    await settle(w.repo.applyMutation(c.campaignId, m.mutationId, { decisionRef: ref }, "a1"));
+    expect(w.repo.readMutation(c.campaignId, m.mutationId)).toMatchObject({ state: "uncertain", sourceEffects: "mutation-attempted" });
     await expect(w.repo.applyMutation(c.campaignId, m.mutationId, { decisionRef: w.approveMutation(c, m) }, "a2")).rejects.toThrow("MUTATION_BOUND_TO_ANOTHER_AUTHORIZATION");
     const done = await w.repo.applyMutation(c.campaignId, m.mutationId, { decisionRef: ref }, "a3");
     expect(done).toMatchObject({ state: "confirmed", reconciledBy: "receipt", before: { status: "ACTIVE" }, after: { status: "PAUSED" } });
@@ -528,7 +532,7 @@ describe("review regressions", () => {
     const w = world();
     const a = await approved(w);
     w.executor.fail = "before";
-    expect((await w.repo.publish(a.campaignId, "x1")).state).toBe("uncertain");
+    await settle(w.repo.publish(a.campaignId, "x1"));
     const n = w.native.get(a.native.nativeCampaignId!)!;
     n.dailyBudgetMinor = 90000; n.maxDelivery = true; n.autoRecharge = true;
     const held = await w.repo.publish(a.campaignId, "x2");
@@ -552,7 +556,7 @@ describe("review regressions", () => {
     const w = world();
     const a = await approved(w);
     w.executor.fail = "before";
-    await w.repo.publish(a.campaignId, "x1");
+    await settle(w.repo.publish(a.campaignId, "x1"));
     at("2026-11-09T00:00:01Z");
     const back = await w.repo.publish(a.campaignId, "x2");
     expect(back).toMatchObject({ state: "draft", releaseRequested: true, approval: { decision: "none" }, execution: { pending: false } });
@@ -567,7 +571,7 @@ describe("review regressions", () => {
     const edit = w.repo.proposeMutation(c.campaignId, { kind: "edit-budget", dailyBudgetMinor: 4000 }, "m1");
     const editRef = w.approveMutation(c, edit);
     w.executor.fail = "before";
-    expect((await w.repo.applyMutation(c.campaignId, edit.mutationId, { decisionRef: editRef }, "a1")).state).toBe("uncertain");
+    await settle(w.repo.applyMutation(c.campaignId, edit.mutationId, { decisionRef: editRef }, "a1"));
     at("2026-11-09T00:00:01Z");
     const pause = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m2");
     const paused = await w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a2");
@@ -583,7 +587,7 @@ describe("review regressions", () => {
     expect(d.heldReasons).toContain("DRAFT_ACTIVE_ON_PROVIDER");
     const pause = w.repo.proposeMutation(d.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
     w.policies.set("policy:revoked", { ...(w.policies.get("policy:auto-pause") as object), policyRef: "policy:revoked", state: "revoked" });
-    w.policies.set("policy:other", { ...(w.policies.get("policy:auto-pause") as object), policyRef: "policy:other", providerAccountRefs: ["adaccount:synthetic-other"] });
+    w.policies.set("policy:other", { ...(w.policies.get("policy:auto-pause") as object), policyRef: "policy:other", accounts: [{ provider: "meta", providerAccountRef: "adaccount:synthetic-other", environment: "sandbox" }] });
     await expect(w.repo.applyMutation(d.campaignId, pause.mutationId, { policyRef: "policy:revoked" }, "a1")).rejects.toThrow("SAFETY_POLICY_NOT_CURRENT");
     await expect(w.repo.applyMutation(d.campaignId, pause.mutationId, { policyRef: "policy:other" }, "a2")).rejects.toThrow("SAFETY_POLICY_SCOPE_MISMATCH");
     await expect(w.repo.applyMutation(d.campaignId, pause.mutationId, { policyRef: "policy:unknown" }, "a3")).rejects.toThrow("SAFETY_POLICY_UNVERIFIED");
@@ -602,7 +606,8 @@ describe("review regressions", () => {
     w.seed();
     const v = w.repo.prepare(w.request(), "p1");
     w.executor.draftFail = true;
-    expect((await w.repo.createDraft(v.campaignId, "d1")).state).toBe("uncertain");
+    await settle(w.repo.createDraft(v.campaignId, "d1"));
+    expect(w.repo.read(v.campaignId)!.state).toBe("uncertain");
     const recovered = await w.repo.createDraft(v.campaignId, "d2");
     expect(recovered).toMatchObject({ state: "draft", releaseRequested: true, execution: { pending: false } });
     expect(w.repo.decide(v.campaignId, w.approve(recovered), "dec").state).toBe("approved");
@@ -657,7 +662,7 @@ describe("review regressions", () => {
     const edit = w.repo.proposeMutation(c.campaignId, { kind: "edit-budget", dailyBudgetMinor: 4000 }, "m1");
     const ref = w.approveMutation(c, edit);
     w.executor.fail = "before";
-    await w.repo.applyMutation(c.campaignId, edit.mutationId, { decisionRef: ref }, "a1");
+    await settle(w.repo.applyMutation(c.campaignId, edit.mutationId, { decisionRef: ref }, "a1"));
     const d = w.decisions.get(ref) as { financialScope: object };
     w.decisions.set(ref, { ...d, financialScope: { ...d.financialScope, maxDailyBudgetMinor: 3000 } });
     expect(await w.repo.applyMutation(c.campaignId, edit.mutationId, { decisionRef: ref }, "a2")).toMatchObject({ state: "not-applied",
@@ -666,6 +671,148 @@ describe("review regressions", () => {
     const pause = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m2");
     const pref = w.approveMutation(c, pause, { financialScope: { ...d.financialScope, maxDailyBudgetMinor: 0 } });
     expect(await w.repo.applyMutation(c.campaignId, pause.mutationId, { decisionRef: pref }, "a3")).toMatchObject({ state: "confirmed", authorizedBy: "j04" });
+  });
+});
+
+describe("second review regressions", () => {
+  it("S1 never accepts an impossible timestamp offset, so decisions, policies, gates and capabilities still expire", async () => {
+    const w = world();
+    const d = await drafted(w);
+    expect(() => w.repo.decide(d.campaignId, w.approve(d, { validUntil: "2026-11-07T00:00:00+99:99" }), "d1")).toThrow("J04_DECISION_UNVERIFIED");
+    const a = w.repo.decide(d.campaignId, w.approve(d), "d2");
+    w.gates.set("fulfillment-support-cash", { expiresAt: "2026-11-06T12:00:01+99:00" });
+    await expect(w.repo.publish(a.campaignId, "p1")).rejects.toThrow("MEDIA_GATES_NOT_VERIFIED");
+    expect(w.repo.read(a.campaignId)!.gates.find((g) => g.gate === "fulfillment-support-cash")!.state).toBe("missing");
+    w.capabilities.set("pause/api", { expiresAt: "2026-11-06T12:10:00+24:00" });
+    const inv = w.repo.recordInventory({ provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "sandbox" }, "inv");
+    expect(inv.capabilities.find((c) => c.operation === "pause" && c.route === "api")?.state).toBe("Unverified");
+    const v = world();
+    const c = await released(v);
+    v.policies.set("policy:odd", { ...(v.policies.get("policy:auto-pause") as object), policyRef: "policy:odd", validUntil: "2026-11-06T12:00:01+24:00" });
+    const pause = v.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    await expect(v.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:odd" }, "a1")).rejects.toThrow("SAFETY_POLICY_UNVERIFIED");
+    expect(v.executor.calls.mutate).toBe(0);
+  });
+  it("S2 never lets a publish retry undo a confirmed pause, and needs a fresh decision to re-release", async () => {
+    const w = world();
+    const a = await approved(w);
+    w.executor.fail = "before";
+    await settle(w.repo.publish(a.campaignId, "publish-1"));
+    const n = w.native.get(a.native.nativeCampaignId!)!;
+    n.status = "ACTIVE";
+    const pause = w.repo.proposeMutation(a.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    expect((await w.repo.applyMutation(a.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a1")).state).toBe("confirmed");
+    const after = await w.repo.publish(a.campaignId, "publish-2");
+    expect(after).toMatchObject({ state: "draft", releaseRequested: true, approval: { decision: "none" }, execution: { pending: false } });
+    expect(after.heldReasons).toEqual(["NEW_DECISION_REQUIRED", "SUPERSEDED_BY_PAUSE"]);
+    expect(w.executor.calls.publish).toBe(1);
+    expect(n.status).toBe("PAUSED");
+
+    const v = world();
+    const b = await approved(v);
+    v.native.get(b.native.nativeCampaignId!)!.status = "ACTIVE";
+    const p2 = v.repo.proposeMutation(b.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    await v.repo.applyMutation(b.campaignId, p2.mutationId, { policyRef: "policy:auto-pause" }, "a1");
+    expect(v.repo.read(b.campaignId)).toMatchObject({ state: "draft", approval: { decision: "none" } });
+    await expect(v.repo.publish(b.campaignId, "publish-1")).rejects.toThrow("J04_APPROVAL_REQUIRED");
+    expect(v.executor.calls.publish).toBe(0);
+  });
+  it("S3 treats a read-back for another campaign or account, or one observed out of time, as unreadable", async () => {
+    const w = world();
+    const c = await released(w);
+    const id = c.native.nativeCampaignId!, real = w.native.get(id)!;
+    const pause = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    w.executor.fail = "before";
+    await settle(w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a1"));
+    const readBack = w.executor.readBack;
+    w.executor.readBack = () => ({ ...real, nativeCampaignId: "native:other", providerAccountRef: "adaccount:someone-else", status: "PAUSED", observedAt: "2026-11-01T00:00:00Z" });
+    await settle(w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a2"));
+    w.executor.readBack = () => ({ ...real, status: "PAUSED", observedAt: "2026-11-01T00:00:00Z" });
+    await settle(w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a3"));
+    expect(w.repo.readMutation(c.campaignId, pause.mutationId)!.state).toBe("uncertain");
+    expect(real.status).toBe("ACTIVE");
+    w.executor.readBack = readBack;
+    expect(await w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:auto-pause" }, "a4")).toMatchObject({ state: "confirmed", after: { status: "PAUSED" } });
+
+    const v = world();
+    const b = await approved(v);
+    v.executor.readBack = (nid: string) => ({ ...v.native.get(nid)!, observedAt: "2026-11-06T13:00:00Z" });
+    await expect(v.repo.publish(b.campaignId, "p1")).rejects.toThrow("NATIVE_READBACK_UNAVAILABLE");
+    expect(v.executor.calls.publish).toBe(0);
+  });
+  it("S4 namespaces receipts and records a receipt conflict after the send as uncertain, never stuck applying", async () => {
+    const w = world();
+    const a = await approved(w);
+    w.store.database.prepare("INSERT INTO media_receipts VALUES(?,?,?)").run(`receipt:publish:${a.campaignId}:r1`, "media-tiktok-campaign", "publish:r1");
+    expect((await w.repo.publish(a.campaignId, "p1")).state).toBe("confirmed");
+
+    const publish = w.executor.publish;
+    w.executor.publish = async function (this: typeof w.executor, key: string, payload: { nativeCampaignId: string }, route: ExecRoute) {
+      const r = { ...(await publish.call(this, key, payload, route)), receiptRef: "receipt:shared" };
+      w.writes.set(key, r);
+      return r;
+    };
+    const first = w.repo.prepare(w.request({ campaignRef: "plan:first" }), "prep-first");
+    const d1 = await w.repo.createDraft(first.campaignId, "draft-first");
+    w.repo.decide(d1.campaignId, w.approve(d1), "decide-first");
+    expect((await w.repo.publish(d1.campaignId, "publish-first")).state).toBe("confirmed");
+    const second = w.repo.prepare(w.request({ campaignRef: "plan:second" }), "prep-second");
+    const d2 = await w.repo.createDraft(second.campaignId, "draft-second");
+    w.repo.decide(d2.campaignId, w.approve(d2), "decide-second");
+    await expect(w.repo.publish(d2.campaignId, "publish-second")).rejects.toThrow("RECEIPT_CONFLICT_AFTER_SEND");
+    expect(w.repo.read(d2.campaignId)).toMatchObject({ state: "uncertain", heldReasons: ["RECEIPT_CONFLICT_AFTER_SEND"], execution: { pending: true } });
+  });
+  it("S5 answers uncertain when the executor fails after the write, and leaves the record uncertain, not applying", async () => {
+    const w = world();
+    const a = await approved(w);
+    const publish = w.executor.publish;
+    w.executor.publish = async function (this: typeof w.executor, key: string, payload: { nativeCampaignId: string }, route: ExecRoute) {
+      await publish.call(this, key, payload, route);
+      throw new MediaSourceUnavailable("PROVIDER_TIMEOUT");
+    };
+    const res = await handleMediaRoute({ method: "POST", path: `/v1/media/campaigns/${a.campaignId}/publish`, role: "reviewer", body: {}, idempotencyKey: "pk1" }, w.repo);
+    expect(res).toEqual({ status: 409, body: { code: "PUBLISH_OUTCOME_UNKNOWN", executionCertainty: "uncertain" } });
+    expect(w.repo.read(a.campaignId)).toMatchObject({ state: "uncertain", execution: { pending: true } });
+    w.executor.publish = publish;
+    expect((await w.repo.publish(a.campaignId, "pk2")).state).toBe("confirmed");
+    expect(w.executor.calls.publish).toBe(1);
+  });
+  it("S6 re-checks sources, rights and capabilities before re-sending a draft write", async () => {
+    const w = world();
+    w.seed();
+    const v = w.repo.prepare(w.request(), "prepare-1");
+    const createDraft = w.executor.createDraft;
+    let first = true;
+    w.executor.createDraft = function (this: typeof w.executor, key: string, payload: { manifest: Manifest; nativeCampaignId: string | null; status: string }, route: ExecRoute) {
+      if (first) { first = false; throw new Error("reset before send"); }
+      return createDraft.call(this, key, payload, route);
+    };
+    await settle(w.repo.createDraft(v.campaignId, "d1"));
+    w.asset({}, { expiresAt: "2026-11-06T12:00:30Z", paidUsage: false });
+    w.capabilities.set("create-draft/api", { state: "Denied" });
+    at("2026-11-06T12:03:00Z");
+    expect(await w.repo.createDraft(v.campaignId, "d2")).toMatchObject({ state: "held", heldReasons: ["MANIFEST_SOURCES_CHANGED"], execution: { pending: false } });
+    expect(w.executor.calls.createDraft).toBe(0);
+  });
+  it("S7 matches a safety policy to the provider and environment, not just the account reference", async () => {
+    const w = world();
+    const c = await released(w);
+    const base = w.policies.get("policy:auto-pause") as object;
+    w.policies.set("policy:tiktok", { ...base, policyRef: "policy:tiktok", accounts: [{ provider: "tiktok", providerAccountRef: "adaccount:synthetic-1", environment: "sandbox" }] });
+    w.policies.set("policy:prod", { ...base, policyRef: "policy:prod", accounts: [{ provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "production" }] });
+    const pause = w.repo.proposeMutation(c.campaignId, { kind: "pause", dailyBudgetMinor: null }, "m1");
+    await expect(w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:tiktok" }, "a1")).rejects.toThrow("SAFETY_POLICY_SCOPE_MISMATCH");
+    await expect(w.repo.applyMutation(c.campaignId, pause.mutationId, { policyRef: "policy:prod" }, "a2")).rejects.toThrow("SAFETY_POLICY_SCOPE_MISMATCH");
+    expect(w.executor.calls.mutate).toBe(0);
+  });
+  it("S8 keeps inventories apart by environment", () => {
+    const w = world();
+    w.seed();
+    const sandbox = w.repo.recordInventory({ provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "sandbox" }, "i1");
+    at("2026-11-06T12:01:00Z");
+    const production = w.repo.recordInventory({ provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "production" }, "i2");
+    expect(w.repo.latestInventory("meta", "sandbox", "adaccount:synthetic-1")?.inventoryId).toBe(sandbox.inventoryId);
+    expect(w.repo.latestInventory("meta", "production", "adaccount:synthetic-1")?.inventoryId).toBe(production.inventoryId);
   });
 });
 
@@ -689,7 +836,7 @@ describe("media routes and the authenticated service", () => {
     expect(await call(`/v1/media/campaigns/${id}`)).toMatchObject({ status: 200 });
     expect(await call("/v1/media/inventories", { provider: "meta", providerAccountRef: "adaccount:synthetic-1", environment: "sandbox" }, "reviewer", "i"))
       .toMatchObject({ status: 200 });
-    expect(await call("/v1/media/inventories/meta/adaccount:synthetic-1")).toMatchObject({ status: 200, body: { kind: "paid-media-inventory" } });
+    expect(await call("/v1/media/inventories/meta/sandbox/adaccount:synthetic-1")).toMatchObject({ status: 200, body: { kind: "paid-media-inventory" } });
     expect(await call("/v1/media/campaigns/media-unknown")).toMatchObject({ status: 404 });
     expect(await handleMediaRoute({ method: "GET", path: "/v1/offers/x", role: "reader" }, w.repo)).toBeNull();
   });

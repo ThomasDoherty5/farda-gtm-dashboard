@@ -8,7 +8,8 @@ import { capabilityStateSchema } from "../connections/schema.ts";
  */
 export const ref = z.string().trim().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]*$/, "Use an opaque reference.")
   .refine((value) => !/^https?:/i.test(value), "Use an opaque reference, not an endpoint.");
-const time = z.string().datetime({ offset: true });
+/** An instant that actually parses. zod alone accepts impossible offsets such as +99:99, which would never expire. */
+const time = z.string().datetime({ offset: true }).refine((s) => Number.isFinite(Date.parse(s)), "Invalid timestamp.");
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const minor = z.number().int().nonnegative().max(100_000_000);
 export const scopeSchema = z.object({ workspaceId: ref, accountId: ref }).strict();
@@ -110,7 +111,7 @@ export type Manifest = z.infer<typeof manifestSchema>;
 
 /** What the provider reports for a native campaign. Compared field by field with the manifest. */
 export const nativeSettingsSchema = z.object({
-  nativeCampaignId: ref, providerAccountRef: ref, identityRef: ref.nullable(), nativeAdIds: z.array(ref).max(10), previewRef: ref.nullable(),
+  nativeCampaignId: ref, provider: z.enum(PROVIDERS), providerAccountRef: ref, environment: z.enum(ENVIRONMENTS), identityRef: ref.nullable(), nativeAdIds: z.array(ref).max(10), previewRef: ref.nullable(),
   status: z.enum(["DRAFT", "PAUSED", "ACTIVE", "IN_REVIEW", "REJECTED"]),
   objective: z.string(), optimizationEvent: z.string(), currency: z.string(), dailyBudgetMinor: minor.nullable(), lifetimeBudgetMinor: minor.nullable(),
   startAt: time.nullable(), endAt: time.nullable(), attributionSetting: ref.nullable(), destinationRef: ref.nullable(), creativeHashes: z.array(hash).max(10),
@@ -163,7 +164,8 @@ export type MediaDecision = z.infer<typeof decisionSchema>;
  */
 export const safetyPolicySchema = z.object({
   scope: scopeSchema, policyRef: ref, state: z.enum(["current", "revoked"]), allows: z.array(z.literal("pause")).min(1).max(1),
-  providerAccountRefs: z.array(ref).min(1).max(50), validUntil: time,
+  accounts: z.array(z.object({ provider: z.enum(PROVIDERS), providerAccountRef: ref, environment: z.enum(ENVIRONMENTS) }).strict()).min(1).max(50),
+  validUntil: time,
 }).strict();
 /** A mutation is applied with its own J04 decision, or, for a pause only, under a current safety policy. */
 export const mutationAuthorizationSchema = z.union([z.object({ decisionRef: ref }).strict(), z.object({ policyRef: ref }).strict()]);
