@@ -31,8 +31,13 @@ export async function handleRewardRoute(input: Input, repo: RewardRedemptionRepo
     if (parts.length === 1) return { status: 200, body: repo.prepare(input.body, key) };
     const [, id, action] = parts;
     if (parts.length !== 3 || !id) return fail(404, "UNSUPPORTED_OPERATION");
-    if (action === "decisions") return { status: 200, body: repo.decide(id, sourceBody("decisionRef").parse(input.body).decisionRef as string, key) };
-    if (action === "purchase") { z.object({}).strict().parse(input.body ?? {}); return { status: 200, body: await repo.purchase(id, key) }; }
+    if (action === "decisions" || action === "purchase") {
+      // A generic reviewer + Linear-shaped DTO is not the canonical named-person J04/worker boundary.
+      // Preserve uncertainty of older attempts; do not turn a removed execution route into retry permission.
+      const record = repo.read(id);
+      return { status: 409, body: { code: "CANONICAL_REWARD_ACTION_REQUIRED",
+        executionCertainty: record?.sourceEffects === "purchase-attempted" ? "uncertain" : "notApplied" } };
+    }
     if (action === "outcomes") return { status: 200, body: repo.recordOutcome(id, sourceBody("sourceRef").parse(input.body).sourceRef as string, key) };
     if (action === "reconciliations") return { status: 200, body: repo.reconcile(id, sourceBody("cashRef").parse(input.body).cashRef as string, key) };
     return fail(404, "UNSUPPORTED_OPERATION");

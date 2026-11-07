@@ -1,0 +1,29 @@
+# Native offers and commission-only eligibility
+
+The existing offer repository stores immutable scoped versions, proposal receipts, source-confirmed decisions and reward observations in the shared SQLite database. It does not send an invitation, reserve a sample, activate a relationship, fund a provider or purchase a reward. Source observations named `owner-approved` remain observations; J04 is the only execution-approval authority.
+
+## Current policy and projections
+
+`OfferAuthority.commercialPolicy` consumes the one source/cache contract from `commercialPolicy/contract.ts`. `assertCurrent`, `suppression`, `reply` and `assertReplyCurrent` are trusted server bindings. The mandatory final source fence must inspect backing state, not a caller's Ready value. `new OfferRepository(db, scope, authority, {now})` keeps the existing synchronous APIs and allows a shared server clock.
+
+Every offer retains its exact commercial snapshot and source price basis. `commercial.state` describes policy readiness, not dispatch or creator acceptance. `pricingBasis: candidate` is a labeled illustration; `source` identifies the frozen sourced catalogue, whose policy may still be proposed or held. The public projection carries current reason codes and reply revision separately from immutable approval/acceptance history. Accepted historical terms are never rewritten when current new-acquisition policy changes.
+
+`resolvePolicyProof(offerId, phase)` returns `held` or a current eligibility proof. The proof binds workspace/account/environment, actual provider account, offer version/hash, current commercial hash/version, immutable model configuration hash, reward version and applicable reply revision. `modelVersion` is that immutable configuration hash, not a display-name claim. `assertPolicyProof(proof, now)` rechecks local and source state at the owner's final fence. **This proof is not J04 authority.** Invitation can precede acceptance; activation/shipment requires fresh exact source acceptance and its exact owner decision. Renewed read leases change current permission only; immutable original decision receipts retain their original timestamps. Applicable sample/stock/shipping capacity still requires its separate J04/J07/J15 resource preflight.
+
+Social Cat eligibility requires actual Affiliate campaign provenance, permitted provider account and matching attribution/payout owners. Recruitment source, publishing network and checkout provider remain distinct. Unsupported new native paid/fixed-fee acquisition cannot be introduced by a historical record or an extra payload field.
+
+## Local imports and source replies
+
+- `importBatch(input, key, actorRef)` accepts 1–100 distinct exact offer rows in one transaction. Failed rows roll the entire import back. Keys bind the actor, full strict body and expected versions; replay returns original row receipts alongside current eligibility.
+- `observeReply(offerId, expectedVersion, sourceRef, key, actorRef)` accepts only a locator. A qualified source independently supplies exact account/creator/offer/event/version/content provenance and a current fence. A fee request is an immutable held observation, with no automatic counteroffer. Its hold follows the same creator/programme/provider account across offer relabels and new IDs. Source event time determines ordering; equal instants conservatively retain the fee hold. An ordinary reply or unknown classification cannot clear it. An explicit later source acceptance must identify the prior fee references and the exact current manifest; it does not remove independent suppression or dispense with J04. Each resolution must still match its current independently read source material/account and fresh lease, and its exact evidence is checked again at the final source fence. An edited, reclassified, expired or unavailable resolving source restores the hold while preserving original observations.
+- Original reply receipts survive a later offer version and SQLite reopen. Event/version identity is independent of a caller request key, so duplicate observations cannot multiply holds/history. Old records without an account binding stay conservative.
+
+The native route helper exposes `POST /v1/offers/import`, `POST /v1/offers/:id/replies`, and `GET /v1/offers/:id/eligibility?phase=invitation|activation|shipment`. Central server auth, scope, origin/CSRF, body limits and actor derivation remain required. No body can supply a verified source, actor or approval flag.
+
+`parseOfferTerms` keeps strict input validation. Known prohibited compensation returns `OfferPolicyError` with `code: POLICY_VIOLATION`, status 422, shared reason codes and an optional safe import row index. Malformed or unknown fields remain validation errors; they are never stripped to make an offer eligible. Current policy/receipt holds are distinct from unconditional fee violations.
+
+## Earned history
+
+New reward observations report exact source-earned amount, programme, reward version and source version. Candidate tier amounts cannot create a payable. Legacy tier-only observations remain immutable and explicitly unverified; unknown is not zero or a cancellation. The existing reward-redemption/J11 entitlement source owns actual earning and settlement. Known earned amounts survive programme pause and later source snapshots that omit an old award. Changed amounts or reused conflicting award/redemption identities are rejected; new observations are preserved in append-only source history.
+
+Focused tests use actual SQLite and fictional source bindings, including atomic import, restart, current policy changes, receipt replay, separate acceptance, fee holds, scope/account mismatch, source withdrawal and historical earned obligations. These tests do not establish live provider permission or commercial adoption.

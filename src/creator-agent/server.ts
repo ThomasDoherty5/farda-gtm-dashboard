@@ -31,10 +31,15 @@ import { protectCommentAuthors } from "./evidencePrivacy.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
+import { OfferPolicyError } from "./offers/policy.ts";
+import type { CommercialPolicySource } from "./commercialPolicy/contract.ts";
+import { withCommercialOffers } from "./commercialPolicy/approvalGuard.ts";
 import { IntakeRepository, type IntakeAuthority } from "./intake/repository.ts";
 import { handleIntakeRoute } from "./intake/routes.ts";
 import { RewardRedemptionRepository, type RewardAuthority } from "./rewards/repository.ts";
 import { handleRewardRoute } from "./rewards/routes.ts";
+import { createRewardDomainBridge, type RewardRegistration } from "./rewards/approvalBridge.ts";
+import type { RewardDomainSource } from "./rewards/canonicalContract.ts";
 import { routeId as offerIdSchema } from "./offers/contract.ts";
 import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelStore.ts";
 import { funnelFilterSchema } from "./funnelContract.ts";
@@ -55,6 +60,10 @@ import { ApprovalError } from "./approvals/contract.ts";
 import { DispatchError } from "./jobs/dispatchSchema.ts";
 import { apiRequestKind } from "./apiRequestLimits.ts";
 import { apiErrorEnvelope } from "./apiErrorEnvelope.ts";
+import { composeActionDomains } from "./actionDomains.ts";
+import { JobRuntime } from "./jobs/runtime.ts";
+import { RuntimeError, type RuntimeAuthority, type RuntimeRegistry } from "./jobs/runtimeSchema.ts";
+import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type RuntimeMachineBinding } from "./jobs/runtimeApi.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -77,7 +86,11 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
+  /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
+  commercialPolicy?: CommercialPolicySource;
+  rewardDomain?: { source: RewardDomainSource; registration: RewardRegistration };
   actionFoundation?: ActionFoundationBindings;
+  runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -86,6 +99,18 @@ export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
   assertMachineTokens(options.actionFoundation, options.readToken, options.reviewToken);
+  if (options.runtime?.machine) {
+    const token = options.runtime.machine.token;
+    if (token.length < 32 || [options.readToken, options.reviewToken, options.actionFoundation?.worker?.token,
+      options.actionFoundation?.decisionRelay?.token].some(other => other !== undefined && safeEqual(token, other)))
+      throw new Error("Runtime machine authority requires its own distinct server-only credential.");
+  }
+  if (options.commercialPolicy && options.offerAuthority?.commercialPolicy && options.commercialPolicy !== options.offerAuthority.commercialPolicy)
+    throw new Error("One shared commercial policy source is required");
+  const commercialPolicy = options.commercialPolicy ?? options.offerAuthority?.commercialPolicy;
+  if (commercialPolicy && options.rewardAuthority?.commercialPolicy && commercialPolicy !== options.rewardAuthority.commercialPolicy)
+    throw new Error("Reward consumers require one shared commercial policy source");
+  if (options.rewardDomain && !commercialPolicy) throw new Error("Reward domain requires the shared commercial policy source");
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
   let operations: ReturnType<typeof createOperations>;
   let providerHealth: ReturnType<typeof createProviderHealth>;
@@ -104,9 +129,13 @@ export function createAgentServer(options: AgentServerOptions) {
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
+  let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
+  let runtime: JobRuntime;
+  let runtimeApi: ReturnType<typeof createRuntimeApi>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
+      commercialPolicy,
       assessment: creatorId => {
         const record = store.latest(creatorId);
         if (!record) return null;
@@ -114,9 +143,11 @@ export function createAgentServer(options: AgentServerOptions) {
         return { runId: record.runId, creatorId, route: record.packet.checkoutRoute, modelId: assessment.modelId, configHash: assessment.config.hash,
           policyVersion: assessment.policyVersion, state: assessment.state, termsRevision: record.packet.termsRevision, stale };
       },
-    });
+    }, { now: options.operations?.now });
     intake = new IntakeRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.intakeAuthority);
-    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.rewardAuthority);
+    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId },
+      { ...options.rewardAuthority, commercialPolicy: commercialPolicy ?? options.rewardAuthority?.commercialPolicy },
+      () => new Date((options.operations?.now ?? Date.now)()));
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
@@ -136,10 +167,37 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
+    if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
+      registration: options.rewardDomain.registration, now: options.operations?.now,
+    });
+    let actionBindings = composeActionDomains(options.actionFoundation, rewardDomain ? [rewardDomain] : []);
+    if (actionBindings?.approvals?.registry) actionBindings = { ...actionBindings, approvals: { ...actionBindings.approvals,
+      registry: withCommercialOffers(actionBindings.approvals.registry, offers, options.operations?.now) } };
+    if (actionBindings?.worker) {
+      const worker = actionBindings.worker;
+      actionBindings = { ...actionBindings, worker: { ...worker, assertCurrent: (proof, timestamp) => {
+        // Ownership can change while machine/source proof is awaited. Recheck inside the
+        // existing dispatch transaction and immediately before each effect as well.
+        if (runtime?.ownsRun(proof.runRef)) throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
+        worker.assertCurrent(proof, timestamp);
+        if (runtime?.ownsRun(proof.runRef)) throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
+      } } };
+    }
     actionFoundation = createActionFoundation({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, jobs: operations.jobs, ledger: operations.ledger,
-      bindings: options.actionFoundation, now: options.operations?.now });
+      bindings: actionBindings, now: options.operations?.now });
+    runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
+      registry: options.runtime?.registry ?? { registrations: new Map(), executors: new Map() },
+      authority: options.runtime?.authority, now: options.operations?.now });
+    runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
+      // Public reads already consume the shared transport admission below. Standalone
+      // runtime gateways retain their default own admission; machine writes always do.
+      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -230,7 +288,7 @@ export function createAgentServer(options: AgentServerOptions) {
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(1400) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
     readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
       period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -284,6 +342,18 @@ export function createAgentServer(options: AgentServerOptions) {
     try {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
       if (path === "/health" && req.method === "GET") return reply(res, 200, { service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION });
+      if (path === "/v1/runtime/machine") {
+        const machine = options.runtime?.machine;
+        if (!machine) throw new RuntimeApiError("RUNTIME_MACHINE_NOT_CONFIGURED", 503, "uncertain");
+        if (!req.headers.authorization?.startsWith("Bearer ") || !safeEqual(req.headers.authorization.slice(7), machine.token))
+          throw new RuntimeApiError("UNAUTHENTICATED", 401, "uncertain");
+        if (req.method !== "POST" || new URL(req.url!, "http://localhost").search)
+          return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "uncertain" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "uncertain" });
+        const parsed = runtimeApiCommandSchema.safeParse(await bodyOf(req));
+        if (!parsed.success) throw new RuntimeApiError("INVALID_INPUT", 422, "uncertain");
+        return reply(res, 200, await runtimeApi.execute(parsed.data.operation, parsed.data.input, req.headers.authorization));
+      }
       if (path === "/v1/worker/dispatch" || path === "/v1/approvals/observe") {
         // These are distinct machine-only authorities. Browser sessions and the shared reviewer/reader cannot execute them.
         const kind = path === "/v1/worker/dispatch" ? "worker" : "decisionRelay";
@@ -291,6 +361,8 @@ export function createAgentServer(options: AgentServerOptions) {
         if (req.method !== "POST" || new URL(req.url!, "http://localhost").search) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         const raw = await bodyOf(req);
+        if (kind === "worker" && raw && typeof raw === "object" && "runRef" in raw && typeof raw.runRef === "string" && runtime.ownsRun(raw.runRef))
+          throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
         return reply(res, 200, await (kind === "worker" ? actionFoundation.executeWorker(raw, req.headers.authorization)
           : actionFoundation.observeDecision(raw, req.headers.authorization)));
       }
@@ -415,7 +487,8 @@ export function createAgentServer(options: AgentServerOptions) {
           return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         const key = req.headers["idempotency-key"];
         const result = handleOfferRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
-          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, offers);
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined,
+          actorRef: `agent-${auth.role}` }, offers);
         if (result) return reply(res, result.status, result.body);
       }
       if (path === "/v1/save" && req.method === "POST") {
@@ -550,6 +623,17 @@ export function createAgentServer(options: AgentServerOptions) {
         }
         if (input.viewKey === "approvalDetail" || input.viewKey === "runDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.viewKey === "runDetail" && input.filters.runId.startsWith("rt-run-")) {
+            const data = await runtimeApi.readRun(input.filters.runId, `agent-${auth.role}`);
+            data.runRef = input.filters.runId;
+            return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+              scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: versionOfData(data),
+              dataState: data.sourceCoverage === "partial" ? "partial" : "ready", data, sourceFreshness: [],
+              coverage: { expectedCount: data.sourceCoverage === "partial" ? null : data.counts.total, observedCount: data.counts.total,
+                missingCount: data.sourceCoverage === "partial" ? null : 0, complete: data.sourceCoverage === "complete",
+                reasonCodes: data.sourceCoverage === "partial" ? ["RUNTIME_WINDOW_PARTIAL"] : [] }, capabilities: [],
+              page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+          }
           const principal = { principalRef: `agent-${auth.role}` };
           const data = input.viewKey === "approvalDetail" ? await actionFoundation.service.readApproval(input.filters.approvalId, principal)
             : await actionFoundation.service.readRun(input.filters.runId, principal);
@@ -812,6 +896,8 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof RuntimeError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
+        ...(error instanceof RuntimeApiError && error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}) });
       if (error instanceof ActionServiceError || error instanceof DispatchError) return reply(res,
         error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? 502 : error.status,
         { code: error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? "OUTCOME_UNCERTAIN" : error.code,
@@ -819,9 +905,11 @@ export function createAgentServer(options: AgentServerOptions) {
           ...(error instanceof ActionServiceError && error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}),
           ...(error instanceof DispatchError && error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}) });
       if (error instanceof ApprovalError) {
-        const denied = ["AUTHORITY_REQUIRED", "SLACK_ACTOR_MISMATCH", "APPROVAL_INGRESS_UNVERIFIED"].includes(error.code);
+        const denied = ["AUTHORITY_REQUIRED", "SLACK_ACTOR_MISMATCH", "APPROVAL_INGRESS_UNVERIFIED", "FOUNDER_REQUIRED", "SECOND_PERSON_REQUIRED"].includes(error.code);
         return reply(res, denied ? 403 : 502, { code: denied ? "FORBIDDEN" : "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
       }
+      if (error instanceof OfferPolicyError) return reply(res, error.status, { code: error.code, reasonCodes: error.reasonCodes,
+        rowIndex: error.rowIndex, executionCertainty: error.executionCertainty });
       if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
@@ -852,7 +940,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, actionFoundation, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }

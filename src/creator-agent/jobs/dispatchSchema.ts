@@ -30,15 +30,23 @@ export type DispatchHandler = {
     budgets: z.infer<typeof jobDefinitionSchema>["budgets"];
     /** Registered trusted implementation. No endpoint, code or policy comes from the browser. */
     execute: (context: DispatchContext) => Promise<DispatchReadback>;
-    reconcile: (context: DispatchContext) => Promise<DispatchReadback>;
+    reconcile: (context: DispatchReconcileContext) => Promise<DispatchReadback>;
 };
-export type DispatchContext = {
+/** Readback gets identity only. It cannot obtain an execution lease, grant or release proof. */
+export type DispatchReconcileContext = {
     attemptRef:string;
     attemptNumber:number;
     intent: DispatchIntent;
     dispatchKey: string;
     providerBindingHash: string;
+};
+export type DispatchContext = DispatchReconcileContext & {
     heartbeat: () => Promise<string>;
+    /** Invoke synchronously immediately before the native effect, after the handler's last await. */
+    assertCurrent: () => void;
+    /** Defensive copies of the latest successfully fenced heartbeat preflight; not new allocations. */
+    resourceGrants: () => readonly ResourceGrant[];
+    approvalProof: () => VerifiedApprovalProof;
 };
 export type DispatchApprovalAuthority = {
     resolveCurrentProof: (binding: DispatchApprovalBinding) => Promise<CurrentApprovalResult>;

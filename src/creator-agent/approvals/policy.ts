@@ -9,10 +9,16 @@ export function draftPolicyReasons(draft: ApprovalDraft, policy: ApprovalPolicy 
   if (Date.parse(draft.expiresAt) <= now || !Number.isFinite(Date.parse(draft.expiresAt))) reasons.add("APPROVAL_EXPIRED");
   if (Date.parse(draft.sourceValidUntil) <= now || !Number.isFinite(Date.parse(draft.sourceValidUntil))) reasons.add("APPROVAL_SOURCE_STALE");
   if (draft.exposure.state === "unknown") reasons.add("ECONOMIC_EXPOSURE_UNKNOWN");
-  const needsSamples = draft.phase === "shipment" || draft.items.some(item => item.units > 0) || (draft.acquisitionTerms?.sampleCostMinor ?? 0) > 0;
+  const reward = draft.phase === "rewardRedemption";
+  if (draft.actionKind === "reward.redeem" && !reward) reasons.add("REWARD_APPROVAL_PHASE_REQUIRED");
+  if (reward && draft.acquisitionTerms) reasons.add("REWARD_ACQUISITION_TERMS_NOT_APPLICABLE");
+  const rewardNeedsStock = reward && draft.items.some(item => item.units > 0);
+  const needsSamples = !reward && (draft.phase === "shipment" || draft.items.some(item => item.units > 0) || (draft.acquisitionTerms?.sampleCostMinor ?? 0) > 0);
   const required = { acceptedTerms: ["activation", "shipment"].includes(draft.phase), sampleAuthority: needsSamples,
-    providerTerms: ["invitation", "activation"].includes(draft.phase), launchReadiness: draft.phase === "launch", sourcePermission: true };
+    providerTerms: ["invitation", "activation"].includes(draft.phase), launchReadiness: draft.phase === "launch", sourcePermission: true, rewardStockAuthority: rewardNeedsStock };
+  if (rewardNeedsStock && !draft.gates.rewardStockAuthority) reasons.add("GATE_REWARDSTOCKAUTHORITY_REQUIRED");
   for (const [name, gate] of Object.entries(draft.gates)) {
+    if (!gate) continue;
     if (gate.state === "unknown") reasons.add(`GATE_${name.toUpperCase()}_UNKNOWN`);
     else if (gate.state === "notApplicable") {
       if (gate.policyVersion !== policy.version || required[name as keyof typeof required]) reasons.add(`GATE_${name.toUpperCase()}_REQUIRED`);
@@ -40,6 +46,6 @@ export function decisionAuthorityReasons(manifest: ApprovalManifest, human: Trus
   const draft = manifest.draft;
   if (!actorCanPropose(human, now)) reasons.push("AUTHORITY_REQUIRED");
   if ((draft.effects.spendsMoney || draft.effects.sendsCreator || draft.effects.changesPolicy) && human.personRef === manifest.proposer.personRef) reasons.push("SECOND_PERSON_REQUIRED");
-  if ((draft.bounds.maxSpendMinor > policy.founderThresholdMinor || ["policyChange", "settlement", "launch", "productionEnable"].includes(draft.phase)) && !human.roles.includes("founder")) reasons.push("FOUNDER_REQUIRED");
+  if ((draft.bounds.maxSpendMinor > policy.founderThresholdMinor || ["policyChange", "settlement", "rewardRedemption", "launch", "productionEnable"].includes(draft.phase)) && !human.roles.includes("founder")) reasons.push("FOUNDER_REQUIRED");
   return reasons;
 }

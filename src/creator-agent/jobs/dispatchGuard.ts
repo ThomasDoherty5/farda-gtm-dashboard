@@ -199,13 +199,21 @@ export class DispatchGuard {
     private fenceKey(s: Stored, p: Preflight) { return digest({ scope: this.options.scope, provider: p.handler.provider.state === "required" ? p.handler.provider.binding.provider : "localArtifact", account: s.intent.approval.providerAccountRef, action: s.intent.approval.actionKind, target: p.proof.item.targetRef }); }
     private attempt(s:Stored):{attemptRef:string;attemptNumber:number}{const row=this.db.prepare("SELECT attempt,body FROM job_dispatch_attempts WHERE dispatch_key=? ORDER BY attempt DESC LIMIT 1").get(s.dispatchKey);if(!row)throw new DispatchError("DISPATCH_ATTEMPT_UNVERIFIED",409,"uncertain");const body=JSON.parse(String(row.body)) as Record<string,unknown>;if(typeof body.attemptRef!=="string"||body.attemptNumber!==row.attempt||!Number.isSafeInteger(body.attemptNumber))throw new DispatchError("DISPATCH_ATTEMPT_UNVERIFIED",409,"uncertain");return{attemptRef:body.attemptRef,attemptNumber:Number(body.attemptNumber)};}
     private assertReadbackAttempt(s:Stored,result:Extract<DispatchReadback,{state:"notApplied"}>){const current=this.attempt(s);if(result.attemptRef!==current.attemptRef||result.attemptNumber!==current.attemptNumber)throw new DispatchError("DISPATCH_CLOSURE_ATTEMPT_MISMATCH",409,"uncertain");}
-    private context(s: Stored, p: Preflight, claim?: {
+    private context(s: Stored, p: Preflight, claim: {
         item: {
             itemId: string;
         };
         leaseToken: string;
-    }, worker?:DispatchWorker): DispatchContext { return { ...this.attempt(s),intent: s.intent, dispatchKey: s.dispatchKey, providerBindingHash: p.providerBindingHash, heartbeat: async () => { if (!claim)
-            throw new DispatchError("DISPATCH_NO_ACTIVE_LEASE"); worker?.assertCurrent(); const fresh = await this.preflight(s); return this.jobs.heartbeatApproved(claim.item.itemId, claim.leaseToken, Math.min(Date.parse(fresh.proof.validUntil), ...fresh.grants.map(g => Date.parse(g.validUntil))), () => {worker?.assertCurrent();this.assert(s, fresh);}); } }; }
+    }, worker?:DispatchWorker): DispatchContext {
+        let retained = p;
+        const assertCurrent = () => {worker?.assertCurrent();this.jobs.assertApprovedLease(claim.item.itemId,claim.leaseToken);this.assert(s,retained);};
+        return { ...this.attempt(s),intent:structuredClone(s.intent),dispatchKey:s.dispatchKey,providerBindingHash:p.providerBindingHash,
+            assertCurrent,
+            resourceGrants:()=>{assertCurrent();return structuredClone(retained.grants);},
+            approvalProof:()=>{assertCurrent();return structuredClone(retained.proof);},
+            heartbeat:async()=>{worker?.assertCurrent();const fresh=await this.preflight(s);const until=this.jobs.heartbeatApproved(claim.item.itemId,claim.leaseToken,Math.min(Date.parse(fresh.proof.validUntil),...fresh.grants.map(g=>Date.parse(g.validUntil))),()=>{worker?.assertCurrent();this.assert(s,fresh);});retained=fresh;return until;}
+        };
+    }
     private checkReadback(s: Stored, handler: DispatchHandler, input: unknown): DispatchReadback { const result = dispatchReadbackSchema.parse(input); if (result.state === "unknown")
         return result; if(result.state==="notApplied")this.assertReadbackAttempt(s,result);const started = Number(this.db.prepare("SELECT MAX(started_at) AS at FROM job_dispatch_attempts WHERE dispatch_key=?").get(s.dispatchKey)?.at); const receipt = result.state === "applied" ? result.receipt : result; if (receipt.dispatchKey !== s.dispatchKey || receipt.payloadHash !== s.intent.approval.payloadHash || receipt.handlerRef !== s.intent.handlerRef || receipt.providerBindingHash !== digest(handler.provider) || (Date.parse(receipt.observedAt) > this.now() || Date.parse(receipt.observedAt) < started) || (result.state === "applied" && result.receipt.sourceEffect !== handler.sourceEffect))
         throw new DispatchError("DISPATCH_RECEIPT_BINDING_MISMATCH", 409, "uncertain"); return result; }
@@ -262,7 +270,7 @@ export class DispatchGuard {
         const handler = this.handler(s.intent);
         this.capability(handler, true);
         const dummy = { handler, providerBindingHash: digest(handler.provider) };
-        const result = this.checkReadback(s, handler, await handler.reconcile({ ...this.attempt(s),intent: s.intent, dispatchKey: s.dispatchKey, providerBindingHash: dummy.providerBindingHash, heartbeat: async () => { throw new DispatchError("DISPATCH_NO_ACTIVE_LEASE"); } }));
+        const result = this.checkReadback(s, handler, await handler.reconcile({ ...this.attempt(s),intent: structuredClone(s.intent), dispatchKey: s.dispatchKey, providerBindingHash: dummy.providerBindingHash }));
         if (result.state === "applied")
             this.record(s, result);
         else if (result.state === "notApplied") {

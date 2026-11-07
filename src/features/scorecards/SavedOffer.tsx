@@ -9,7 +9,7 @@ import { Badge } from "@/components/Badge";
 import { useView } from "@/adapter/useView";
 import { useSave } from "@/adapter/useSave";
 import { AdapterError } from "@/adapter/errors";
-import { BUNDLES, TIERS, costKeys, newOfferTerms, offerTermsSchema, type OfferTerms, type OfferRecord, type RewardRecord } from "@/creator-agent/offers/contract";
+import { BUNDLES, CANDIDATE_VERSION, TIERS, costKeys, newOfferTerms, offerTermsSchema, type OfferTerms, type OfferRecord, type RewardRecord } from "@/creator-agent/offers/contract";
 import { Card, KpiCard, KpiGrid } from "@/features/analytics/parts";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
@@ -82,6 +82,9 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
   };
   const reload=()=>{baseTerms.current=record.terms;setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
   const provider=record.provider, saved=record.terms;
+  const sourcePricing=record.commercial?.pricingBasis==="source";
+  const candidatePricing=!sourcePricing && saved.pricingVersion===CANDIDATE_VERSION;
+  const buyerPrices=sourcePricing?record.commercial?.bundles:candidatePricing?BUNDLES:null;
   return <>
     <LeaveGuard dirty={JSON.stringify(draft)!==JSON.stringify(baseTerms.current)} subject="offer draft" />
     <div className={a.titleRow}><div className={a.heading}><h1 id="offer-title">Terms that make sense.</h1><p>{saved.creatorId} · {saved.recruitmentSource} · {saved.publishingNetwork} · {saved.checkoutRoute}</p></div>
@@ -136,8 +139,8 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
         ["Deliverables",saved.manifest.deliverables.length?saved.manifest.deliverables.map(x=>`${x.id} · ${x.quantity} × ${x.format} · ${x.network} · ${x.dueAt??"No date agreed"}`).join("; "):"No agreed posting obligation"],
       ]}/></details>
     </Card>
-    <Card labelledBy="projection" className={a.card20}><h2 id="projection">Offer economics</h2><p className={a.small}>Candidate CEO-v1 buyer prices · USD · shipping before tax.</p>
-      <DataTable caption="Buyer prices" columns={[{label:"Bundle"},{label:"Merchandise"},{label:"Shipping"},{label:"Delivered before tax"}]} rows={BUNDLES.map(b=>[b.id,money(b.merchandiseMinor),money(b.shippingMinor),money(b.merchandiseMinor+b.shippingMinor)])}/>
+    <Card labelledBy="projection" className={a.card20}><h2 id="projection">Offer economics</h2><p className={a.small}>{sourcePricing?`Saved source buyer prices · ${record.commercial?.pricingVersion??"Version unknown"}`:candidatePricing?"Candidate CEO-v1 buyer prices · owner approval pending":`Buyer price catalogue unverified · ${saved.pricingVersion}`} · USD · shipping before tax.</p>
+      {buyerPrices?.length?<DataTable caption="Buyer prices" columns={[{label:"Bundle"},{label:"Merchandise"},{label:"Shipping"},{label:"Delivered before tax"}]} rows={buyerPrices.map(b=>[b.id,money(b.merchandiseMinor),money(b.shippingMinor),money(b.merchandiseMinor+b.shippingMinor)])}/>:<p role="status">The saved source price catalogue is unavailable. Refresh source evidence before reviewing a commitment.</p>}
       <KpiGrid>{record.scenarios.map(x=><KpiCard key={x.label} label={`${x.label} cohort contribution`} context={`${x.orders} orders · ${x.seededCreators} seeded creators`}>{money(x.contributionMinor)}</KpiCard>)}</KpiGrid>
       <DataTable caption="Saved cohort scenarios" columns={[{label:"Scenario"},{label:"Commission accrued"},{label:"Sample and postage"},{label:"Planning reserve"},{label:"Break-even orders"},{label:"Missing inputs"}]} rows={record.scenarios.map(v=>[v.label,money(v.commissionMinor),money(v.sampleMinor),money(v.reserveMinor),v.breakEvenOrders??"Unknown or unprofitable",v.missing.join(", ")||"None"])}/>
       <p className={a.small}>Provider rate {provider?rate(provider.actualCommission.standardRateBps):"Unknown"} · eligible retained merchandise · refund rule {provider?.refundRule??"Unknown"} · attribution {provider?.attributionWindowDays==null?"Unknown":`${provider.attributionWindowDays} days`} · payout {provider?.payoutSchedule??"Unknown"}.</p>

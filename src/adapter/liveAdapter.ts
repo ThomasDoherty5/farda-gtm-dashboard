@@ -256,8 +256,10 @@ function fromFailure(error: unknown, req: TransportRequest): AdapterError {
       correlationId: extra.correlationId ?? null,
       retryable,
       retryAfterMs: extra.retryAfterMs ?? failure.retryAfterMs,
-      ...(extra.fieldErrors ? { fieldErrors: extra.fieldErrors } : {}),
-      ...(extra.currentVersion !== undefined ? { currentVersion: extra.currentVersion } : {}),
+      ...(!NEUTRAL.includes(category) && extra.fieldErrors ? { fieldErrors: extra.fieldErrors } : {}),
+      ...(!NEUTRAL.includes(category) && extra.currentVersion !== undefined ? { currentVersion: extra.currentVersion } : {}),
+      ...(!NEUTRAL.includes(category) && extra.reasonCodes ? { reasonCodes: extra.reasonCodes } : {}),
+      ...(!NEUTRAL.includes(category) && extra.rowIndex !== undefined ? { rowIndex: extra.rowIndex } : {}),
       ...(write ? { executionCertainty: extra.executionCertainty ?? certainty(undefined) } : {}),
     });
   };
@@ -282,6 +284,8 @@ function fromFailure(error: unknown, req: TransportRequest): AdapterError {
         retryAfterMs: known.retryAfterMs ?? failure.retryAfterMs,
         fieldErrors: known.fieldErrors ? Object.fromEntries(Object.entries(known.fieldErrors).map(([k, v]) => [k, redact(v)])) : undefined,
         currentVersion: known.currentVersion,
+        reasonCodes: known.reasonCodes,
+        rowIndex: known.rowIndex,
         executionCertainty: known.executionCertainty,
       }
     // A new server code does not erase a validated durable outcome. Keep its certainty while the HTTP status still

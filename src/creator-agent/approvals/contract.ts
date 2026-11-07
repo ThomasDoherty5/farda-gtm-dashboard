@@ -13,7 +13,7 @@ export const versionRequirementSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("required"), version: approvalRefSchema }).strict(),
   z.object({ state: z.literal("notApplicable"), policyVersion: approvalRefSchema, reason: z.string().min(1).max(500) }).strict(),
 ]);
-export const approvalPhaseSchema = z.enum(["invitation", "activation", "shipment", "settlement", "policyChange", "launch", "productionEnable", "other"]);
+export const approvalPhaseSchema = z.enum(["invitation", "activation", "shipment", "settlement", "rewardRedemption", "policyChange", "launch", "productionEnable", "other"]);
 export type ApprovalPhase = z.infer<typeof approvalPhaseSchema>;
 export const approvalGateSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("satisfied"), sourceRef: approvalRefSchema, sourceVersion: approvalRefSchema, validUntil: approvalInstantSchema }).strict(),
@@ -34,7 +34,12 @@ export const approvalDraftSchema = z.object({
   bounds: z.object({ maxItems: z.number().int().min(1).max(100), maxUnits: count, maxSpendMinor: count, currency: z.literal("USD") }).strict(),
   exposure: z.discriminatedUnion("state", [z.object({ state: z.literal("known"), minor: count, currency: z.literal("USD") }).strict(), z.object({ state: z.literal("unknown"), reason: z.string().min(1).max(500) }).strict()]),
   acquisitionTerms: approvalTermsSchema.nullable(), historicalLiability: z.object({ sourceRef: approvalRefSchema, sourceVersion: approvalRefSchema, acceptedMinor: count, currency: z.literal("USD"), validUntil: approvalInstantSchema }).strict().nullable(),
-  gates: z.object({ acceptedTerms: approvalGateSchema, sampleAuthority: approvalGateSchema, providerTerms: approvalGateSchema, launchReadiness: approvalGateSchema, sourcePermission: approvalGateSchema }).strict(),
+  // Source registry selects exact saved offers. Eligibility hashes never replace J04 approval or source grants.
+  commercialOffers: z.array(z.object({ itemRef: approvalRefSchema, offerRef: approvalRefSchema,
+    basisHash: approvalHashSchema.optional() }).strict()).min(1).max(100).optional(),
+  // Optional preserves the hashes of existing five-gate manifests. Physical reward phases require it in policy.
+  gates: z.object({ acceptedTerms: approvalGateSchema, sampleAuthority: approvalGateSchema, providerTerms: approvalGateSchema, launchReadiness: approvalGateSchema, sourcePermission: approvalGateSchema,
+    rewardStockAuthority: approvalGateSchema.optional() }).strict(),
   sourceBasisRef: approvalRefSchema, sourceBasisVersion: approvalRefSchema, sourceValidUntil: approvalInstantSchema,
   linearIssueRef: approvalRefSchema, expiresAt: approvalInstantSchema,
 }).strict().superRefine((draft, ctx) => {

@@ -7,10 +7,11 @@ import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures";
 import type { Entitlement, PrepareInput, Quote, RewardPolicy } from "./contract";
 import { RewardRedemptionRepository, type RewardAuthority, type RewardProviderIdentity } from "./repository";
 import { handleRewardRoute } from "./routes";
+import { regressionRewardKernel } from "./regressionKernel.testkit.ts";
 
 // Synthetic creators, providers and receipts only. No purchase, programme or provider account is real.
 const defaultProvider = {providerRef:"provider:retail",providerBindingRef:"binding:1"};
-const scope = { workspaceId: "fictional-workspace", accountId: "fictional-account" };
+const scope = { workspaceId: "synthetic-workspace", accountId: "synthetic-account" };
 let clock = new Date("2026-11-06T12:00:00Z");
 const at = (iso: string) => { clock = new Date(iso); };
 
@@ -48,13 +49,13 @@ function world(over: { policyState?: "adopted" | "proposed" } = {}) {
     },
     read(key: string, provider: RewardProviderIdentity = defaultProvider) {
       const receipt=purchases.get(key);
-      return receipt ? {state:"found",receipt} : {state:"notFound",purchaseKey:key,...provider,sourceRef:"verified-lookup",checkedAt:clock.toISOString()};
+      return receipt ? {state:"found",receipt} : {state:"notFound",purchaseKey:key,...provider,sourceRef:"verified-lookup",checkedAt:clock.toISOString(),originalAttemptClosed:true};
     } };
   const authority: RewardAuthority = {
     entitlement: (r) => entitlements.get(r) ?? null, rewardPolicy: (v) => (v === policy.version ? policy : null), quote: (r) => quotes.get(r) ?? null,
     provider: (providerRef,deliveryRoute) => providers.has(providerRef) ? {scope,providerRef,deliveryRoute,action:"purchase-reward",bindingRef:"binding:1",fundingRef:"fund:1",
       validUntil:"2027-01-01T00:00:00Z",...providers.get(providerRef) as object} : null,
-    allocation:r=>allocations.get(r), decision: (r) => decisions.get(r) ?? null, outcome: (r) => outcomes.get(r) ?? null,
+    allocation:r=>allocations.get(r), outcome: (r) => outcomes.get(r) ?? null,
     cashMovement: (r) => cash.get(r) ?? null, executor,
   };
   const store = new AgentStore(":memory:", scope);
@@ -87,17 +88,18 @@ function world(over: { policyState?: "adopted" | "proposed" } = {}) {
     return sourceRef;
   };
   const hold = () => { let release!: () => void; executor.gate = new Promise<void>((resolve) => { release = resolve; }); return () => release(); };
-  return { repo, store, entitle, quote, request, approve, outcome, decisions, cash, providers, executor, purchases, quotes, hold, authority, policy, outcomes, allocations };
+  const kernel = regressionRewardKernel({ db: store.database, repository: repo, authority, policy, decisions, now: () => clock });
+  return { kernel, repo, store, entitle, quote, request, approve, outcome, decisions, cash, providers, executor, purchases, quotes, hold, authority, policy, outcomes, allocations };
 }
 type World = ReturnType<typeof world>;
-function approved(w: World) {
+async function approved(w: World) {
   w.entitle(); w.quote();
   const prepared = w.repo.prepare(w.request(), "prepare-1");
-  w.repo.decide(prepared.redemptionId, w.approve(prepared.redemptionId, prepared.revision, prepared.requestHash), "decide-1");
+  await w.kernel.decide(prepared.redemptionId, w.approve(prepared.redemptionId, prepared.revision, prepared.requestHash), "decide-1");
   return prepared.redemptionId;
 }
 async function purchased(w: World) {
-  return w.repo.purchase(approved(w), "purchase-1");
+  return w.kernel.purchase(await approved(w), "purchase-1");
 }
 const afterPurchasing = (view: { history: { state: string }[] }) => view.history.map((h) => h.state).slice(view.history.findIndex((h) => h.state === "purchasing"));
 
@@ -108,7 +110,7 @@ describe("consuming a mature J11 entitlement (acceptance 1)", () => {
     expect(view).toMatchObject({ state: "purchased", entitlementRef: "entitlement:tech-1", milestone: "tech", rewardVersion: "CEO-v1",
       money: { capMinor: 30000, earnedLiabilityMinor: 30000, chargedMinor: 26900 } });
   });
-  it("refuses an unverified, pending or reversed entitlement", () => {
+  it("refuses an unverified, pending or reversed entitlement", async () => {
     const w = world();
     w.quote();
     expect(() => w.repo.prepare(w.request(), "k0")).toThrow("ENTITLEMENT_UNVERIFIED");
@@ -119,7 +121,7 @@ describe("consuming a mature J11 entitlement (acceptance 1)", () => {
     w.entitle({ scope: { ...scope, accountId: "other" } });
     expect(() => w.repo.prepare(w.request(), "k3")).toThrow("ENTITLEMENT_UNVERIFIED");
   });
-  it("keeps a paused programme's earned entitlement redeemable", () => {
+  it("keeps a paused programme's earned entitlement redeemable", async () => {
     const w = world();
     w.entitle({ programPaused: true }); w.quote();
     expect(w.repo.prepare(w.request(), "k").state).toBe("awaiting-approval");
@@ -134,11 +136,11 @@ describe("bounded request, provider capability and owner (acceptance 2)", () => 
     expect(view).toMatchObject({ state: "held", availability: "proposed" });
     expect(view.heldReasons).toContain("REWARD_TERMS_NOT_ADOPTED");
     expect(view.promise).toMatch(/^Proposed, not yet adopted: /);
-    expect(() => w.repo.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash), "d")).toThrow("NOT_AWAITING_APPROVAL");
-    await expect(w.repo.purchase(view.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
+    await expect(w.kernel.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash), "d")).rejects.toThrow("REWARD_TERMS_NOT_EFFECTIVE");
+    await expect(w.kernel.purchase(view.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
     expect(w.executor.calls).toBe(0);
   });
-  it("holds an unverified provider route or funding method with its owner", () => {
+  it("holds an unverified provider route or funding method with its owner", async () => {
     const w = world();
     w.entitle(); w.quote();
     w.providers.set("provider:retail", { state: "Unverified", fundingVerified: false, ownerRef: "owner:ops" });
@@ -146,7 +148,7 @@ describe("bounded request, provider capability and owner (acceptance 2)", () => 
     expect(view).toMatchObject({ state: "held", availability: "unavailable", ownerRef: "owner:ops" });
     expect(view.heldReasons).toEqual(expect.arrayContaining(["PROVIDER_ROUTE_UNVERIFIED", "FUNDING_METHOD_UNVERIFIED"]));
   });
-  it("refuses an option outside the approved version, a mismatched quote and an expired request", () => {
+  it("refuses an option outside the approved version, a mismatched quote and an expired request", async () => {
     const w = world();
     w.entitle(); w.quote({ optionId: "tech-allowance" });
     expect(w.repo.prepare(w.request({ optionId: "trip" }), "k1").heldReasons).toContain("REWARD_OPTION_NOT_ALLOWED");
@@ -160,30 +162,31 @@ describe("exact J04 decision before purchase (acceptance 3)", () => {
     const w = world();
     w.entitle({ reserveMinor: 30000 }); w.quote();
     const view = w.repo.prepare(w.request(), "k");
-    await expect(w.repo.purchase(view.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
+    await expect(w.kernel.purchase(view.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
     expect(w.executor.calls).toBe(0);
   });
-  it("rejects a decision for another revision or request, a revoked one and one made before the request", () => {
+  it("rejects a decision for another revision or request, a revoked one and one made before the request", async () => {
     const w = world();
     w.entitle(); w.quote();
     const v1 = w.repo.prepare(w.request(), "k1");
-    expect(() => w.repo.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, "0".repeat(64)), "d1")).toThrow("J04_DECISION_FOR_ANOTHER_REQUEST");
-    expect(() => w.repo.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, v1.requestHash, { state: "revoked" }), "d2")).toThrow("J04_DECISION_NOT_CURRENT");
-    expect(() => w.repo.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, v1.requestHash, { decidedAt: "2026-11-01T00:00:00Z" }), "d3")).toThrow("J04_DECISION_PREDATES_REQUEST");
-    expect(() => w.repo.decide(v1.redemptionId, "j04:unknown", "d4")).toThrow("J04_DECISION_UNVERIFIED");
+    await expect(w.kernel.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, "0".repeat(64)), "d1")).rejects.toThrow("APPROVAL_VERSION_CHANGED");
+    await expect(w.kernel.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, v1.requestHash, { state: "revoked" }), "d2")).rejects.toThrow("SLACK_DECISION_UNVERIFIED");
+    await expect(w.kernel.decide(v1.redemptionId, w.approve(v1.redemptionId, 1, v1.requestHash, { decidedAt: "2026-11-01T00:00:00Z" }), "d3")).rejects.toThrow("DECISION_TIME_INVALID");
+    await expect(w.kernel.decide(v1.redemptionId, "j04:unknown", "d4")).rejects.toThrow("J04_DECISION_UNVERIFIED");
   });
   it("clears an approval when the request changes, and refuses purchase after the decision is revoked", async () => {
     const w = world();
     w.entitle(); w.quote(); w.quote({ quoteRef: "quote:2", taxMinor: 2500 });
     const v1 = w.repo.prepare(w.request(), "k1");
     const decisionRef = w.approve(v1.redemptionId, 1, v1.requestHash);
-    expect(w.repo.decide(v1.redemptionId, decisionRef, "d1").state).toBe("approved");
+    expect((await w.kernel.decide(v1.redemptionId, decisionRef, "d1")).state).toBe("awaiting-approval");
+    expect(w.kernel.approvalById.get(v1.redemptionId)!.current.state).toBe("approved");
     const v2 = w.repo.prepare(w.request({ quoteRef: "quote:2" }), "k2");
     expect(v2).toMatchObject({ revision: 2, state: "awaiting-approval", receipts: { decisionRef: null } });
     const ref2 = w.approve(v2.redemptionId, 2, v2.requestHash);
-    w.repo.decide(v2.redemptionId, ref2, "d2");
+    await w.kernel.decide(v2.redemptionId, ref2, "d2");
     w.decisions.set(ref2, { ...(w.decisions.get(ref2) as object), state: "revoked" });
-    await expect(w.repo.purchase(v2.redemptionId, "p")).rejects.toThrow("J04_DECISION_NOT_CURRENT");
+    await expect(w.kernel.purchase(v2.redemptionId, "p")).rejects.toThrow("SLACK_DECISION_UNVERIFIED");
     expect(w.executor.calls).toBe(0);
   });
 });
@@ -194,7 +197,7 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
     const view = await purchased(w);
     expect(w.repo.prepare(w.request(), "prepare-1").redemptionId).toBe(view.redemptionId);
     expect(() => w.repo.prepare(w.request(), "prepare-2")).toThrow("REDEMPTION_ALREADY_IN_PROGRESS");
-    await expect(w.repo.purchase(view.redemptionId, "purchase-2")).rejects.toThrow("ALREADY_PURCHASED");
+    expect((await w.kernel.purchase(view.redemptionId, "purchase-2")).receipts).toEqual(view.receipts);
     expect(w.executor.calls).toBe(1);
   });
   it("reads an uncertain purchase back before retrying, so an accepted purchase is not repeated", async () => {
@@ -202,7 +205,7 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
     w.executor.fail = "after";
     const uncertain = await purchased(w);
     expect(uncertain).toMatchObject({ state: "uncertain", sourceEffects: "purchase-attempted", receipts: { transactionRef: null } });
-    const resolved = await w.repo.purchase(uncertain.redemptionId, "purchase-again");
+    const resolved = await w.kernel.purchase(uncertain.redemptionId, "purchase-again");
     expect(resolved.state).toBe("purchased");
     expect(w.executor.calls).toBe(1);
   });
@@ -211,7 +214,7 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
     w.executor.fail = "before";
     const uncertain = await purchased(w);
     expect(uncertain.state).toBe("uncertain");
-    const retried = await w.repo.purchase(uncertain.redemptionId, "purchase-again");
+    const retried = await w.kernel.purchase(uncertain.redemptionId, "purchase-again");
     expect(retried.state).toBe("purchased");
     expect(w.executor.calls).toBe(2);
     expect(w.purchases.size).toBe(1);
@@ -228,10 +231,11 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
   });
   it("refuses a concurrent purchase while one is in flight, so the provider is called once and the state never rolls back", async () => {
     const w = world();
-    const id = approved(w);
+    const id = await approved(w);
     const release = w.hold();
-    const first = w.repo.purchase(id, "purchase-1");
-    await expect(w.repo.purchase(id, "purchase-2")).rejects.toThrow("PURCHASE_IN_FLIGHT");
+    const first = w.kernel.purchase(id, "purchase-1");
+    await vi.waitFor(() => expect(w.executor.calls).toBe(1));
+    expect((await w.kernel.purchase(id, "purchase-2")).state).toBe("purchased");
     release();
     const view = await first;
     expect(view.state).toBe("purchased");
@@ -240,11 +244,12 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
   });
   it("reads a stopped worker's purchase back by its key once the lease expires, and completes without buying again", async () => {
     const w = world();
-    const id = approved(w);
+    const id = await approved(w);
     const release = w.hold();
-    const stalled = w.repo.purchase(id, "purchase-1");
+    const stalled = w.kernel.purchase(id, "purchase-1");
+    await vi.waitFor(() => expect(w.executor.calls).toBe(1));
     at("2026-11-06T12:06:00Z");
-    const resumed = await w.repo.purchase(id, "purchase-2");
+    const resumed = await w.kernel.purchase(id, "purchase-2");
     expect(resumed.state).toBe("purchased");
     expect(w.executor.calls).toBe(1);
     release();
@@ -253,12 +258,13 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
   });
   it("never lets a late failing call move a purchased or delivered record back", async () => {
     const w = world();
-    const id = approved(w);
+    const id = await approved(w);
     w.executor.fail = "after";
     const release = w.hold();
-    const late = w.repo.purchase(id, "purchase-1");
+    const late = w.kernel.purchase(id, "purchase-1");
+    await vi.waitFor(() => expect(w.executor.calls).toBe(1));
     at("2026-11-06T12:06:00Z");
-    const p = await w.repo.purchase(id, "purchase-2");
+    const p = await w.kernel.purchase(id, "purchase-2");
     w.repo.recordOutcome(id, w.outcome(id, p.receipts.providerOrderRef!, "delivered"), "o1");
     release();
     expect((await late).state).toBe("delivered");
@@ -269,47 +275,48 @@ describe("one redemption per entitlement and uncertain purchases (acceptance 4)"
   it("binds a purchase idempotency key to its redemption", async () => {
     const w = world();
     await purchased(w);
-    await expect(w.repo.purchase("redemption-other", "purchase-1")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
-    await expect(w.repo.purchase("redemption-other", "prepare-1")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
+    await expect(w.kernel.purchase("redemption-other", "purchase-1")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
+    await expect(w.kernel.purchase("redemption-other", "prepare-1")).rejects.toThrow("REDEMPTION_UNKNOWN");
   });
   it("re-reads the quote at purchase time and refuses a changed, expired or unavailable one", async () => {
     const w = world();
-    const id = approved(w);
+    const id = await approved(w);
     w.quote({ taxMinor: 2500 });
-    await expect(w.repo.purchase(id, "p1")).rejects.toThrow("QUOTE_CHANGED");
+    await expect(w.kernel.purchase(id, "p1")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     w.quote({ available: false });
-    await expect(w.repo.purchase(id, "p2")).rejects.toThrow("QUOTE_CHANGED");
+    await expect(w.kernel.purchase(id, "p2")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     w.quotes.delete("quote:1");
-    await expect(w.repo.purchase(id, "p3")).rejects.toThrow("QUOTE_CHANGED");
+    await expect(w.kernel.purchase(id, "p3")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     w.quote();
     at("2026-11-21T00:00:00Z");
-    await expect(w.repo.purchase(id, "p4")).rejects.toThrow("QUOTE_CHANGED");
+    await expect(w.kernel.purchase(id, "p4")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.executor.calls).toBe(0);
-    expect(w.repo.read(id)!.state).toBe("approved");
+    expect(w.repo.read(id)!.state).toBe("awaiting-approval");
   });
   it("re-reads the provider route at purchase time and refuses one that is no longer Ready or funded", async () => {
     const w = world();
-    const id = approved(w);
+    const id = await approved(w);
     w.providers.set("provider:retail", { state: "Denied", fundingVerified: true, ownerRef: "owner:ops" });
-    await expect(w.repo.purchase(id, "p1")).rejects.toThrow("PROVIDER_ROUTE_NOT_READY");
+    await expect(w.kernel.purchase(id, "p1")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     w.providers.set("provider:retail", { state: "Ready", fundingVerified: false, ownerRef: "owner:ops" });
-    await expect(w.repo.purchase(id, "p2")).rejects.toThrow("PROVIDER_ROUTE_NOT_READY");
+    await expect(w.kernel.purchase(id, "p2")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.executor.calls).toBe(0);
     w.providers.set("provider:retail", { state: "Ready", fundingVerified: true, ownerRef: "owner:ops" });
-    expect((await w.repo.purchase(id, "p3")).state).toBe("purchased");
+    expect((await w.kernel.purchase(id, "p3")).state).toBe("purchased");
   });
 });
 
 describe("physical fulfillment and recovery handoffs (acceptance 5)", () => {
-  it("needs an explicitly approved J15 allocation for a Farda-shipped item", () => {
+  it("needs an explicitly approved J15 allocation for a Farda-shipped item", async () => {
     const w = world();
     w.entitle(); w.quote({ optionId: "tech-kit", providerRef: "provider:warehouse" });
     const view = w.repo.prepare(w.request({ optionId: "tech-kit" }), "k");
-    expect(() => w.repo.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash), "d1")).toThrow("PHYSICAL_ALLOCATION_REQUIRED");
+    await expect(w.kernel.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash), "d1")).rejects.toThrow("PHYSICAL_ALLOCATION_UNVERIFIED");
     w.allocations.set("j15:allocation-4",{scope,sourceRef:"j15:allocation-4",redemptionId:view.redemptionId,requestHash:view.requestHash,revision:1,
       purpose:"creator-reward",optionId:"tech-kit",recipientRef:"recipient:creator-synthetic",state:"reserved",validUntil:"2026-12-01T00:00:00Z"});
-    const ok = w.repo.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash, { physicalAllocationRef: "j15:allocation-4" }), "d2");
-    expect(ok.state).toBe("approved");
+    const ok = await w.kernel.decide(view.redemptionId, w.approve(view.redemptionId, 1, view.requestHash, { physicalAllocationRef: "j15:allocation-4" }), "d2");
+    expect(ok.state).toBe("awaiting-approval");
+    expect(w.kernel.approvalById.get(ok.redemptionId)!.current.state).toBe("approved");
   });
   it("frees a failed, fully refunded redemption for a new request while the earned obligation stays outstanding", async () => {
     const w = world();
@@ -395,7 +402,7 @@ describe("cash reconciliation once against the receipts (acceptance 6)", () => {
 });
 
 describe("Notion knowledge: RW-K01 to RW-K04", () => {
-  it("RW-K01 counts tax, shipping, booking and fees inside the cap, allows an equivalent, and keeps a creator upgrade off Farda's books", () => {
+  it("RW-K01 counts tax, shipping, booking and fees inside the cap, allows an equivalent, and keeps a creator upgrade off Farda's books", async () => {
     const w = world();
     w.entitle();
     w.quote({ taxMinor: 4000, shippingMinor: 2000 });
@@ -406,7 +413,7 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
     const upgrade = w.repo.prepare(w.request({ quoteRef: "quote:3" }), "k3");
     expect(upgrade).toMatchObject({ state: "awaiting-approval", money: { creatorFundedMinor: 12000, fardaQuotedMinor: 29900, capMinor: 30000 } });
   });
-  it("RW-K02 binds copy to the approved allowance or trip, never to a retail value or an unlimited promise", () => {
+  it("RW-K02 binds copy to the approved allowance or trip, never to a retail value or an unlimited promise", async () => {
     const w = world();
     w.entitle(); w.quote({ optionId: "tech-allowance", itemMinor: 30000, taxMinor: 0 });
     const allowance = w.repo.prepare(w.request({ optionId: "tech-allowance" }), "k1");
@@ -417,7 +424,7 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
     expect(trip.promise).toBe("$5,000 toward a trip for two, with destination and dates chosen by the creator; flights, accommodation and experiences stay within that total");
     for (const text of [allowance.promise, trip.promise]) expect(text).not.toMatch(/worth|retail|unlimited|luxury|guarantee/i);
   });
-  it("RW-K03 keeps the qualified and details-complete clocks apart and never forfeits a late redemption", () => {
+  it("RW-K03 keeps the qualified and details-complete clocks apart and never forfeits a late redemption", async () => {
     const w = world();
     w.entitle(); w.quote();
     const waiting = w.repo.prepare(w.request({ detailsCompleteAt: null }), "k1");
@@ -432,7 +439,7 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
     expect(late.heldReasons).toContain("INITIATION_OVERDUE");
     expect(late.state).toBe("awaiting-approval");
   });
-  it("shows an unknown creator-funded amount as null, not zero, when there is no quote", () => {
+  it("shows an unknown creator-funded amount as null, not zero, when there is no quote", async () => {
     const w = world();
     w.entitle();
     expect(w.repo.prepare(w.request(), "k").money).toMatchObject({ fardaQuotedMinor: null, creatorFundedMinor: null });
@@ -443,7 +450,7 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
     const unavailable = w.repo.prepare(w.request(), "k1");
     expect(unavailable).toMatchObject({ state: "held", availability: "unavailable" });
     expect(unavailable.heldReasons).toContain("REWARD_UNAVAILABLE");
-    await expect(w.repo.purchase(unavailable.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
+    await expect(w.kernel.purchase(unavailable.redemptionId, "p")).rejects.toThrow("J04_APPROVAL_REQUIRED");
     expect(w.executor.calls).toBe(0);
     expect(unavailable.sourceEffects).toBe("none");
   });
@@ -451,44 +458,44 @@ describe("Notion knowledge: RW-K01 to RW-K04", () => {
 
 describe("authority across redemption and recovery", () => {
   it("requires a positive current J04 approval on the actual purchase, even after a recorded approval", async () => {
-    const w = world(), id = approved(w);
-    const decision = w.repo.read(id)!.receipts.decisionRef!;
+    const w = world(), id = await approved(w);
+    const decision = w.kernel.approvalById.get(id)!.decisionReceipt!.slack.eventRef;
     w.decisions.set(decision, { ...w.decisions.get(decision) as object, decision: "rejected" });
     expect(w.repo.read(id)!.availability).toBe("unavailable");
-    await expect(w.repo.purchase(id, "buy")).rejects.toThrow("J04_APPROVAL_REQUIRED");
+    await expect(w.kernel.purchase(id, "buy")).rejects.toThrow("SLACK_DECISION_UNVERIFIED");
     expect(w.executor.calls).toBe(0);
   });
   it("refuses an expired request even while its quote and decision remain current", async () => {
     const w = world(); w.entitle(); w.quote();
     const p = w.repo.prepare(w.request({expiresAt:"2026-11-06T13:00:00Z"}), "prepare");
-    w.repo.decide(p.redemptionId, w.approve(p.redemptionId, 1, p.requestHash), "approve");
+    await w.kernel.decide(p.redemptionId, w.approve(p.redemptionId, 1, p.requestHash), "approve");
     at("2026-11-06T13:00:00Z");
-    await expect(w.repo.purchase(p.redemptionId, "buy")).rejects.toThrow("REQUEST_EXPIRED");
+    await expect(w.kernel.purchase(p.redemptionId, "buy")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.executor.calls).toBe(0);
   });
   it.each(["creatorId","programRef","rewardVersion","sourceRef"] as const)("holds a changed J11 %s before purchase", async field => {
-    const w = world(), id = approved(w);
+    const w = world(), id = await approved(w);
     w.entitle({[field]:"different-source"});
-    await expect(w.repo.purchase(id,"buy")).rejects.toThrow("ENTITLEMENT_CHANGED");
+    await expect(w.kernel.purchase(id,"buy")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.executor.calls).toBe(0);
   });
   it("keeps pending approval and changed policy unavailable", async () => {
     const w = world(); w.entitle(); w.quote();
     const p = w.repo.prepare(w.request(),"prepare");
     expect(p.availability).toBe("unavailable");
-    w.repo.decide(p.redemptionId,w.approve(p.redemptionId,1,p.requestHash),"decide");
+    await w.kernel.decide(p.redemptionId,w.approve(p.redemptionId,1,p.requestHash),"decide");
     w.policy.adoptionRef="other-adoption";
-    await expect(w.repo.purchase(p.redemptionId,"buy")).rejects.toThrow("REWARD_TERMS_CHANGED");
+    await expect(w.kernel.purchase(p.redemptionId,"buy")).rejects.toThrow("APPROVAL_SOURCE_CHANGED");
     expect(w.executor.calls).toBe(0);
   });
   it("never retries on unreadable provider history or a J11 reversal", async () => {
-    const w = world(), id=approved(w); w.executor.fail="after";
-    expect((await w.repo.purchase(id,"buy")).state).toBe("uncertain");
+    const w = world(), id=await approved(w); w.executor.fail="after";
+    expect((await w.kernel.purchase(id,"buy")).state).toBe("uncertain");
     w.authority.executor = { purchase:w.executor.purchase.bind(w.executor),read:()=>({state:"forbidden"}) };
-    expect((await w.repo.purchase(id,"recover")).state).toBe("uncertain");
+    expect((await w.kernel.purchase(id,"recover")).state).toBe("uncertain");
     expect(w.executor.calls).toBe(1);
     w.purchases.clear(); w.entitle({state:"reversed"}); w.authority.executor=w.executor;
-    await expect(w.repo.purchase(id,"recover-again")).rejects.toThrow("ENTITLEMENT_CHANGED");
+    await expect(w.kernel.purchase(id,"recover-again")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.executor.calls).toBe(1);
   });
   it("rejects malformed times, a delivery older than purchase and a postdated cash receipt", async () => {
@@ -515,29 +522,29 @@ describe("redemption receipt fencing", () => {
       purpose:"creator-reward",optionId:"tech-kit",recipientRef:"recipient:creator-synthetic",state:"reserved",validUntil:"2026-12-01T00:00:00Z"};
     w.allocations.set("alloc:1",allocation);
     const decision=w.approve(r.redemptionId,r.revision,r.requestHash,{physicalAllocationRef:"alloc:1"});
-    w.repo.decide(r.redemptionId,decision,"approve");
+    await w.kernel.decide(r.redemptionId,decision,"approve");
     w.allocations.set("alloc:1",{...allocation,state:"released"});
-    await expect(w.repo.purchase(r.redemptionId,"buy")).rejects.toThrow("PHYSICAL_ALLOCATION_UNVERIFIED");
+    await expect(w.kernel.purchase(r.redemptionId,"buy")).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     w.allocations.set("alloc:1",allocation);
     w.decisions.set(decision,{...w.decisions.get(decision) as object,physicalAllocationRef:null});
-    await expect(w.repo.purchase(r.redemptionId,"buy-again")).rejects.toThrow("PHYSICAL_ALLOCATION_CHANGED");
+    await expect(w.kernel.purchase(r.redemptionId,"buy-again")).rejects.toThrow("SLACK_DECISION_UNVERIFIED");
     expect(w.executor.calls).toBe(0);
   });
   it("requires the same entitlement and decision even when the source changes during an awaited negative lookup",async()=>{
-    const w=world(),id=approved(w);
-    w.executor.fail="before";await w.repo.purchase(id,"first");
+    const w=world(),id=await approved(w);
+    w.executor.fail="before";await w.kernel.purchase(id,"first");
     let release!:()=>void;
     const wait=new Promise<void>(resolve=>{release=resolve;});
     w.authority.executor={purchase:w.executor.purchase.bind(w.executor),read:async key=>{await wait;return w.executor.read(key);}};
-    const recovery=w.repo.purchase(id,"recover");
+    const recovery=w.kernel.purchase(id,"recover");
     w.entitle({state:"reversed"});release();
-    await expect(recovery).rejects.toThrow("ENTITLEMENT_CHANGED");
+    await expect(recovery).rejects.toThrow("APPROVAL_SOURCE_UNAVAILABLE");
     expect(w.repo.read(id)!.state).toBe("uncertain");
     expect(w.executor.calls).toBe(1);
   });
   it("fences a stopped lookup from dispatch after a newer worker recovers its lease",async()=>{
-    const w=world(),id=approved(w);
-    w.executor.fail="before";await w.repo.purchase(id,"first");
+    const w=world(),id=await approved(w);
+    w.executor.fail="before";await w.kernel.purchase(id,"first");
     let release!:()=>void;let reads=0;
     const wait=new Promise<void>(resolve=>{release=resolve;});
     w.authority.executor={purchase:w.executor.purchase.bind(w.executor),read:async key=>{
@@ -545,21 +552,21 @@ describe("redemption receipt fencing", () => {
       if (++reads===1) await wait;
       return absence;
     }};
-    const late=w.repo.purchase(id,"stopped");
+    const late=w.kernel.purchase(id,"stopped");
     at("2026-11-06T12:06:00Z");
-    expect((await w.repo.purchase(id,"recovered")).state).toBe("purchased");
+    expect((await w.kernel.purchase(id,"recovered")).state).toBe("purchased");
     release();
-    await expect(late).rejects.toThrow("PURCHASE_LEASE_CHANGED");
+    await expect(late).rejects.toThrow("DISPATCH_CLOSURE_ATTEMPT_MISMATCH");
     expect(w.executor.calls).toBe(2);
     expect(w.purchases.size).toBe(1);
   });
   it("recovers positive provider proof after entitlement reversal without attempting another purchase",async()=>{
-    const w=world(),id=approved(w);
-    w.executor.fail="after";await w.repo.purchase(id,"first");
+    const w=world(),id=await approved(w);
+    w.executor.fail="after";await w.kernel.purchase(id,"first");
     w.entitle({state:"reversed"});
-    const recovered=await w.repo.purchase(id,"reconcile");
+    const recovered=await w.kernel.purchase(id,"reconcile");
     expect(recovered.state).toBe("purchased");
-    expect((await w.repo.purchase(id,"first")).receipts).toEqual(recovered.receipts);
+    expect((await w.kernel.purchase(id,"first")).receipts).toEqual(recovered.receipts);
     expect(w.executor.calls).toBe(1);
   });
   it("keeps an in-transit reward reserved after a full refund until the provider confirms a failed or returned delivery",async()=>{
@@ -590,12 +597,12 @@ describe("redemption receipt fencing", () => {
     expect(()=>w.repo.recordOutcome(id,ref,"changed")).toThrow("RECEIPT_BASIS_CHANGED");
     expect(w.repo.read(id)!.money.refundedMinor).toBe(100);
   });
-  it("does not reserve a mature milestone twice under a second entitlement alias",()=>{
-    const w=world(); approved(w);
+  it("does not reserve a mature milestone twice under a second entitlement alias",async()=>{
+    const w=world(); await approved(w);
     w.entitle({entitlementRef:"entitlement:alias"});
     expect(()=>w.repo.prepare(w.request({entitlementRef:"entitlement:alias"}),"alias")).toThrow("MILESTONE_ALREADY_RESERVED");
   });
-  it("does not accept fulfilled or future-qualified J11 facts",()=>{
+  it("does not accept fulfilled or future-qualified J11 facts",async()=>{
     const w=world();w.quote();w.entitle({fulfilled:true});
     expect(()=>w.repo.prepare(w.request(),"fulfilled")).toThrow("ENTITLEMENT_NOT_REDEEMABLE");
     w.entitle({qualifiedAt:"2099-01-01T00:00:00Z"});
@@ -616,13 +623,13 @@ describe("reward routes and the authenticated service", () => {
     const created = await call("/v1/rewards/redemptions", w.request());
     expect(created).toMatchObject({ status: 200, body: { state: "awaiting-approval" } });
     const id = (created!.body as { redemptionId: string }).redemptionId;
-    expect(await call(`/v1/rewards/redemptions/${id}/purchase`, {}, "reviewer", "p")).toMatchObject({ status: 409, body: { code: "J04_APPROVAL_REQUIRED" } });
-    expect(await call(`/v1/rewards/redemptions/${id}/decisions`, { decisionRef: "j04:missing" }, "reviewer", "d")).toMatchObject({ status: 503 });
+    expect(await call(`/v1/rewards/redemptions/${id}/purchase`, {}, "reviewer", "p")).toMatchObject({ status: 409, body: { code: "CANONICAL_REWARD_ACTION_REQUIRED" } });
+    expect(await call(`/v1/rewards/redemptions/${id}/decisions`, { decisionRef: "j04:missing" }, "reviewer", "d")).toMatchObject({ status: 409, body: { code: "CANONICAL_REWARD_ACTION_REQUIRED" } });
     expect(await call(`/v1/rewards/redemptions/${id}`)).toMatchObject({ status: 200 });
     expect(await call("/v1/rewards/entitlements/entitlement:tech-1/redemption")).toMatchObject({ status: 200, body: { redemptionId: id } });
     expect(await handleRewardRoute({ method: "GET", path: "/v1/offers/x", role: "reader" }, w.repo)).toBeNull();
   });
-  it("keeps an ambiguous HTTP purchase uncertain across recovery and records the one confirmed provider order",async()=>{
+  it("holds retired HTTP write paths during canonical recovery and preserves the one native order plus HTTP outcomes",async()=>{
     vi.useFakeTimers({toFake:["Date"]});
     const w=world();vi.setSystemTime(clock);w.entitle();w.quote();
     try {
@@ -639,20 +646,28 @@ describe("reward routes and the authenticated service", () => {
       const p=(await post("",w.request(),"prepare")).data;
       expect(p).toMatchObject({state:"awaiting-approval",availability:"unavailable"});
       const decision=w.approve(p.redemptionId,p.revision,p.requestHash),prefix="/"+p.redemptionId;
-      expect((await post(prefix+"/decisions",{decisionRef:decision},"approve")).data.availability).toBe("executable");
+      expect(await post(prefix+"/decisions",{decisionRef:decision},"approve")).toMatchObject({status:409,
+        data:{code:"CANONICAL_REWARD_ACTION_REQUIRED",executionCertainty:"notApplied"}});
+      const nativeRepo=new RewardRedemptionRepository(app.store.database,scope,w.authority,()=>clock);
+      const canonical=regressionRewardKernel({db:app.store.database,repository:nativeRepo,authority:w.authority,policy:w.policy,decisions:w.decisions,now:()=>clock});
+      // Source-side fixture ingress uses the actual J04/SQLite/runner; the retired HTTP route never grants authority.
+      await canonical.decide(p.redemptionId,decision,"native-decision");
       w.executor.fail="after";
-      expect((await post(prefix+"/purchase",{},"attempt")).data).toMatchObject({state:"uncertain",availability:"unavailable"});
+      expect(await canonical.purchase(p.redemptionId,"native-attempt")).toMatchObject({state:"uncertain",availability:"unavailable"});
       w.authority.executor=undefined;
       expect(await post(prefix+"/purchase",{},"missing-executor")).toMatchObject({status:409,
-        data:{code:"PURCHASE_EXECUTOR_UNAVAILABLE",executionCertainty:"uncertain"}});
+        data:{code:"CANONICAL_REWARD_ACTION_REQUIRED",executionCertainty:"uncertain"}});
+      await expect(canonical.purchase(p.redemptionId,"missing-read-source")).rejects.toThrow("PURCHASE_EXECUTOR_UNAVAILABLE");
       expect(w.executor.calls).toBe(1);
       w.authority.executor={purchase:w.executor.purchase.bind(w.executor),read:()=>({state:"denied"})};
-      expect((await post(prefix+"/purchase",{},"reconcile")).data).toMatchObject({state:"uncertain"});
+      expect(await canonical.purchase(p.redemptionId,"denied-readback")).toMatchObject({state:"uncertain"});
       expect(w.executor.calls).toBe(1);
       w.authority.executor=w.executor;
-      const recovered=(await post(prefix+"/purchase",{},"reconcile-found")).data;
+      const recovered=await canonical.purchase(p.redemptionId,"native-reconcile-found");
       expect(recovered).toMatchObject({state:"purchased",availability:"unavailable",money:{chargedMinor:26900},receipts:{...defaultProvider,transactionRef:expect.any(String)}});
-      expect((await post(prefix+"/purchase",{},"attempt")).data.receipts).toEqual(recovered.receipts);
+      expect(await post(prefix+"/purchase",{},"attempt")).toMatchObject({status:409,data:{code:"CANONICAL_REWARD_ACTION_REQUIRED",executionCertainty:"uncertain"}});
+      const get=await fetch(`http://127.0.0.1:${address.port}/v1/rewards/redemptions${prefix}`,{headers:{authorization:"Bearer "+SYNTHETIC_READ_TOKEN}});
+      expect(get.status).toBe(200);expect((await get.json()).receipts).toEqual(recovered.receipts);
       expect(w.executor.calls).toBe(1);
       at("2026-11-06T12:03:00Z");vi.setSystemTime(clock);
       const refund={scope,...defaultProvider,sourceRef:"http-refund",redemptionId:p.redemptionId,providerOrderRef:recovered.receipts.providerOrderRef,
@@ -774,8 +789,8 @@ describe("provider and bound-account receipt namespaces",()=>{
     w.entitle({entitlementRef:"entitlement:second",sourceRef:"j11:second",creatorId:"creator-second",milestone:differentProvider?"vacation":"tech"});
     w.quote({quoteRef:"quote:second",providerRef,optionId});
     const prepared=w.repo.prepare(w.request({entitlementRef:"entitlement:second",quoteRef:"quote:second",optionId,recipientRef:"recipient:second"}),"prepare-second");
-    w.repo.decide(prepared.redemptionId,w.approve(prepared.redemptionId,prepared.revision,prepared.requestHash),"approve-second");
-    const second=await w.repo.purchase(prepared.redemptionId,"purchase-second");
+    await w.kernel.decide(prepared.redemptionId,w.approve(prepared.redemptionId,prepared.revision,prepared.requestHash),"approve-second");
+    const second=await w.kernel.purchase(prepared.redemptionId,"purchase-second");
     return {w,first,second};
   }
   it.each(["different-provider","different-account"] as const)("accepts identical native IDs across %s through purchase, outcome and cash",async kind=>{
@@ -826,12 +841,12 @@ describe("provider and bound-account receipt namespaces",()=>{
     expect(w.repo.read(id)!.money.settledCostMinor).toBe(26900);
   });
   it.each(["providerRef","providerBindingRef"] as const)("requires the same %s in purchase receipts and negative recovery proof",async field=>{
-    const w=world(),id=approved(w),purchase=w.executor.purchase.bind(w.executor);
+    const w=world(),id=await approved(w),purchase=w.executor.purchase.bind(w.executor);
     w.authority.executor={read:w.executor.read.bind(w.executor),purchase:async(key,manifest)=>({...await purchase(key,manifest as Parameters<typeof purchase>[1]),[field]:"wrong-provider-or-account"})};
-    expect((await w.repo.purchase(id,"wrong-purchase")).state).toBe("uncertain");
+    expect((await w.kernel.purchase(id,"wrong-purchase")).state).toBe("uncertain");
     w.purchases.clear();
     w.authority.executor={purchase,read:(key,identity)=>({state:"notFound",purchaseKey:key,...identity,[field]:"wrong-provider-or-account",sourceRef:"absence",checkedAt:clock.toISOString()})};
-    expect((await w.repo.purchase(id,"wrong-absence")).heldReasons).toContain("PURCHASE_READBACK_UNVERIFIED");
+    expect((await w.kernel.purchase(id,"wrong-absence")).heldReasons).toContain("PURCHASE_READBACK_UNVERIFIED");
     expect(w.executor.calls).toBe(1);
     expect(w.store.database.prepare("SELECT COUNT(*) AS n FROM reward_receipts WHERE kind='purchase'").get()!.n).toBe(0);
   });

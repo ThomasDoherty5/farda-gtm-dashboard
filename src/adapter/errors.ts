@@ -181,6 +181,8 @@ export type AdapterErrorBody = {
   retryAfterMs: number | null;
   fieldErrors?: Record<string, string>;
   currentVersion?: string | null;
+  reasonCodes?: string[];
+  rowIndex?: number | null;
   executionCertainty?: "notApplied" | "uncertain" | "applied";
 };
 
