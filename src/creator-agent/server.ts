@@ -37,6 +37,8 @@ import { RewardRedemptionRepository, type RewardAuthority } from "./rewards/repo
 import { handleRewardRoute } from "./rewards/routes.ts";
 import { PaidMediaRepository, type MediaAuthority } from "./media/repository.ts";
 import { handleMediaRoute } from "./media/routes.ts";
+import { MediaReleaseController, type MediaControlAuthority } from "./mediaControl/repository.ts";
+import { handleMediaControlRoute } from "./mediaControl/routes.ts";
 import { routeId as offerIdSchema } from "./offers/contract.ts";
 import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelStore.ts";
 import { funnelFilterSchema } from "./funnelContract.ts";
@@ -62,7 +64,7 @@ type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; providerHealth?: HealthOptions;
   scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
-  collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority; mediaAuthority?: MediaAuthority;
+  collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority; mediaAuthority?: MediaAuthority; mediaControlAuthority?: MediaControlAuthority;
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
@@ -82,6 +84,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let intake: IntakeRepository;
   let rewards: RewardRedemptionRepository;
   let media: PaidMediaRepository;
+  let mediaControl: MediaReleaseController;
   let schedules: ScheduleDraftRepository;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
@@ -102,6 +105,7 @@ export function createAgentServer(options: AgentServerOptions) {
     intake = new IntakeRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.intakeAuthority);
     rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.rewardAuthority);
     media = new PaidMediaRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.mediaAuthority);
+    mediaControl = new MediaReleaseController(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.mediaControlAuthority, media);
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
@@ -339,6 +343,15 @@ export function createAgentServer(options: AgentServerOptions) {
         const key = req.headers["idempotency-key"];
         const result = await handleMediaRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
           body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, media);
+        if (result) return reply(res, result.status, result.body);
+      }
+      if (path.startsWith("/v1/media-control/")) {
+        if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handleMediaControlRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, mediaControl);
         if (result) return reply(res, result.status, result.body);
       }
       if (path.startsWith("/v1/rewards/")) {
