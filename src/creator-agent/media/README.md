@@ -6,7 +6,7 @@ It uses the scoped agent SQLite handle and creates only `media_*` tables. Constr
 
 ## Flow
 
-1. **Inventory** (`POST /v1/media/inventories`, read with `GET /v1/media/inventories/:provider/:accountRef`). This records the account's kind, market, currency, timezone and approved identity. It also records every operation (read reports, upload creative, preview creative, create draft, publish, edit budget, pause, retrieve outcome) on every route (`api`, `mcp`, `browser`).
+1. **Inventory** (`POST /v1/media/inventories`, read with `GET /v1/media/inventories/:provider/:environment/:accountRef`; sandbox and production are kept apart). This records the account's kind, market, currency, timezone and approved identity. It also records every operation (read reports, upload creative, preview creative, create draft, publish, edit budget, pause, retrieve outcome) on every route (`api`, `mcp`, `browser`).
    - Each entry is Ready, Unverified, Unsupported or Denied. It keeps its source, tool version, test receipt, receipt origin and expiry.
    - Ready needs an in-date `account-test` observation with a receipt. MCP discovery or documentation stays Unverified, so tool discovery is never account authorization.
    - An unknown market, timezone or currency stays null and holds the campaign. A wrong account is never shown.
@@ -30,14 +30,14 @@ It uses the scoped agent SQLite handle and creates only `media_*` tables. Constr
 
    Before every publish write, first attempt or retry, the native draft is read again and compared in full with the manifest and the approved read-back: caps, extras, placements, identity, ads and preview. Any difference holds the campaign and nothing is sent.
 
-   The state is then committed as `applying` under a two-minute lease, with the key `publish:<id>:r<revision>` and a lease token. A concurrent call gets `EXECUTION_IN_PROGRESS`. An error or unreadable receipt leaves the campaign `uncertain`. A repeated publish of a confirmed campaign returns the same result.
+   The state is then committed as `applying` under a two-minute lease, with the key `publish:<id>:r<revision>` and a lease token. A concurrent call gets `EXECUTION_IN_PROGRESS`. Any error or unreadable receipt after that point leaves the campaign `uncertain`, and the call answers `409` with `executionCertainty: "uncertain"`, never `notApplied`. A receipt or native ID that conflicts with another record after the send is recorded the same way (`RECEIPT_CONFLICT_AFTER_SEND`), so the campaign can still be reconciled. A repeated publish of a confirmed campaign returns the same result.
 
-   Reconciliation never needs a current decision. The next call reads the provider by the original key, then by the native campaign. If the provider shows it live or rejected, that is recorded. If nothing happened, the write is re-sent with the same key only when the draft is unchanged and every release check, including a current decision, still holds. Otherwise the pending write is closed: a lapsed or changed decision returns the campaign to `draft` with release still requested and `NEW_DECISION_REQUIRED`; a changed draft holds it.
+   Reconciliation never needs a current decision. The next call reads the provider by the original key, then by the native campaign. If the provider shows it live or rejected, that is recorded. If nothing happened, the write is re-sent with the same key only when the draft is unchanged and every release check, including a current decision, still holds. Otherwise the pending write is closed: a lapsed or changed decision returns the campaign to `draft` with release still requested and `NEW_DECISION_REQUIRED`; a changed draft holds it. A pause confirmed after the publish write started supersedes it: the write is closed without a send (`SUPERSEDED_BY_PAUSE`) and re-release needs a fresh decision. A pause of an approved campaign clears its approval the same way.
 
    Only the worker holding the current lease token may finish or release a write. A late result from a worker whose lease expired leaves the record unchanged. A second worker that takes over an expired lease reads back by key and native campaign before re-sending. It relies on the provider treating the key idempotently, so a write the first worker sends late is not applied twice.
 6. **Mutations** (`/:id/mutations`, then `/:id/mutations/:mutationId/apply` with `{decisionRef}` or, for a pause, `{policyRef}`). A repeated event returns the same open mutation. The native state is recorded before and after with the provider receipt.
    - A budget edit needs a released campaign and its own J04 decision for that exact edit, within the approved financial scope. A retry rechecks the decision and scope.
-   - **Safety pause.** A pause is applied whenever the native campaign reads active, including a draft the provider activated on its own. It needs either its own J04 decision or a current, in-date safety policy (THO-347) from the trusted `safetyPolicy` resolver that allows pausing that account. A policy can only pause; it never raises or changes spend. A pause never needs a budget and is never blocked by another mutation's pending write.
+   - **Safety pause.** A pause is applied whenever the native campaign reads active, including a draft the provider activated on its own. It needs either its own J04 decision or a current, in-date safety policy (THO-347) from the trusted `safetyPolicy` resolver that allows pausing that exact provider, account and environment. A policy can only pause; it never raises or changes spend. A pause never needs a budget and is never blocked by another mutation's pending write.
    - An uncertain mutation is reconciled by its key, then by the native campaign. If nothing happened and it cannot be re-sent now, it is closed as `not-applied` with the reason and its lock is released.
 
 Reads: `GET /v1/media/campaigns/:id` and `GET /v1/media/campaigns/:id/mutations/:mutationId`.
@@ -54,6 +54,11 @@ A Denied API or MCP capability is never bypassed in a browser. A browser route i
 - `sourceEffects`: `none`, `draft-created` or `publish-attempted`. Mutations report `mutation-attempted`. Mutation states add `not-applied` for a write that reconciliation found was never applied.
 - `receipts` and `evidenceLabel`: each provider receipt carries `receiptOrigin` (`synthetic` or `account`). The label is `synthetic`, `account-backed` or `mixed`, so account-backed read and draft receipts are never confused with fixtures.
 - Money is integer USD minor units. Unknown values stay null.
+- Every timestamp must parse. An impossible offset such as `+99:99` is rejected, and an expiry that cannot be read counts as expired.
+
+## Read-backs and receipts
+
+Every executor call names the provider, account and environment. A read-back counts only when its native campaign, provider, account and environment match the record and it was observed no later than now and no earlier than the write it confirms. Anything else is unreadable: it never confirms a write and never proves one did not happen. Provider receipts are unique per provider, account and environment, and decision receipts have their own namespace.
 
 ## Not done here
 

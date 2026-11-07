@@ -14,13 +14,16 @@ import {
 } from "./contract.ts";
 
 type Binding = { provider: MediaProvider; providerAccountRef: string; environment: "sandbox" | "production" };
+/** The provider account a write or read is for. Every executor call names it, and every read-back must match it. */
+export type MediaIdentity = Binding;
 /** The provider writer. Every write is keyed and idempotent at the provider; read() finds an earlier write by its key. */
 export interface MediaExecutor {
-  createDraft(key: string, payload: { manifest: Manifest; manifestHash: string; nativeCampaignId: string | null; status: "PAUSED" }, route: ExecRoute): unknown;
-  publish(key: string, payload: { nativeCampaignId: string; manifestHash: string; releaseHash: string }, route: ExecRoute): unknown;
-  mutate(key: string, payload: { nativeCampaignId: string; action: MutationKind; dailyBudgetMinor: number | null }, route: ExecRoute): unknown;
-  read(key: string, route: ExecRoute): unknown;
-  readBack(nativeCampaignId: string, route: ExecRoute): unknown;
+  createDraft(key: string, payload: { manifest: Manifest; manifestHash: string; nativeCampaignId: string | null; status: "PAUSED" }, route: ExecRoute,
+    identity: MediaIdentity): unknown;
+  publish(key: string, payload: { nativeCampaignId: string; manifestHash: string; releaseHash: string }, route: ExecRoute, identity: MediaIdentity): unknown;
+  mutate(key: string, payload: { nativeCampaignId: string; action: MutationKind; dailyBudgetMinor: number | null }, route: ExecRoute, identity: MediaIdentity): unknown;
+  read(key: string, route: ExecRoute, identity: MediaIdentity): unknown;
+  readBack(nativeCampaignId: string, route: ExecRoute, identity: MediaIdentity): unknown;
 }
 /** Trusted, server-configured sources. A caller never supplies these objects. */
 export interface MediaAuthority {
@@ -36,9 +39,12 @@ export interface MediaAuthority {
   executor?: MediaExecutor;
 }
 export class MediaSourceUnavailable extends Error {}
+/** A provider write was attempted and its outcome is not known. The record is uncertain and is reconciled before any retry. */
+export class MediaWriteUncertain extends Error {}
 
 /** A pending provider write. The token identifies the worker holding the lease; only that worker may finish or release it. */
-type Pending = { key: string; token: string; route: ExecRoute; leaseUntil: string; handoff: string | null };
+type Pending = { key: string; token: string; route: ExecRoute; leaseUntil: string; handoff: string | null; startedAt: string; sentAt: string;
+  pausesAtStart: number };
 type Receipt = { kind: string; ref: string; origin: ReceiptOrigin; at: string };
 type GateStatus = CampaignView["gates"][number];
 type Stored = {
@@ -46,7 +52,7 @@ type Stored = {
   heldReasons: string[]; nativeCampaignId: string | null; nativeAdIds: string[]; previewRef: string | null; readback: NativeSettings | null;
   releaseHash: string | null; releaseRequestedAt: string | null; decisionRef: string | null; decision: "none" | "approved" | "rejected";
   decisionValidUntil: string | null; approvedScope: MediaDecision["financialScope"] | null; effectiveDailyBudgetMinor: number | null;
-  providerReview: CampaignView["providerReview"]; gates: GateStatus[]; pendingKind: "draft" | "publish" | null; pending: Pending | null;
+  providerReview: CampaignView["providerReview"]; gates: GateStatus[]; pendingKind: "draft" | "publish" | null; pending: Pending | null; pauses: number;
   route: ExecRoute | null; reconciledBy: "receipt" | "native-readback" | null; receipts: Receipt[]; draftCreated: boolean; publishAttempted: boolean;
   history: { state: CampaignState; at: string; ref: string | null }[];
 };
@@ -72,6 +78,17 @@ const owns = (p: Pending | null, mine: Pending): p is Pending => !!p && p.key ==
 const refOf = (auth: MutationAuthorization) => ("policyRef" in auth ? auth.policyRef : auth.decisionRef);
 /** Released: confirmed, or read live on the provider. A released campaign changes only through mutations. */
 const released = (s: { state: CampaignState; readback: NativeSettings | null }) => s.state === "confirmed" || (!!s.readback && LIVE.includes(s.readback.status));
+/** Milliseconds for an instant, or NaN when it cannot be read. */
+const ms = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
+/** True when the instant has passed or cannot be read: an unreadable expiry fails closed. */
+const lapsed = (iso: string | null | undefined, now: number) => { const t = ms(iso); return !Number.isFinite(t) || t <= now; };
+/** True when the instant is in the future or cannot be read. */
+const notYet = (iso: string | null | undefined, now: number) => { const t = ms(iso); return !Number.isFinite(t) || t > now; };
+const identityOf = (s: { input: PrepareInput }): MediaIdentity =>
+  ({ provider: s.input.provider, providerAccountRef: s.input.providerAccountRef, environment: s.input.environment });
+/** Provider receipts are unique per provider, account and environment; decision receipts have their own namespace. */
+const namespaceOf = (s: { input: PrepareInput }) => `${s.input.provider}/${s.input.providerAccountRef}/${s.input.environment}`;
+const nativeKey = (s: { input: PrepareInput }) => s.input.provider;
 const passthrough = (error: unknown) => error instanceof AgentConflict || error instanceof MediaSourceUnavailable;
 function label(origins: (ReceiptOrigin | null | undefined)[]): "none" | "synthetic" | "account-backed" | "mixed" {
   const known = new Set(origins.filter((o): o is ReceiptOrigin => !!o));
@@ -124,7 +141,7 @@ export class PaidMediaRepository {
       CREATE TABLE IF NOT EXISTS media_mutations (mutation_id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, request_hash TEXT NOT NULL, active INTEGER NOT NULL,
         body TEXT NOT NULL);
       CREATE UNIQUE INDEX IF NOT EXISTS media_one_open_mutation ON media_mutations(campaign_id,request_hash) WHERE active=1;
-      CREATE TABLE IF NOT EXISTS media_inventories (inventory_id TEXT PRIMARY KEY, provider TEXT NOT NULL, account_ref TEXT NOT NULL, recorded_at TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS media_inventories (inventory_id TEXT PRIMARY KEY, provider TEXT NOT NULL, account_ref TEXT NOT NULL, environment TEXT NOT NULL, recorded_at TEXT NOT NULL,
         body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS media_commands (key TEXT PRIMARY KEY, hash TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS media_receipts (source_ref TEXT PRIMARY KEY, subject_id TEXT NOT NULL, kind TEXT NOT NULL);`);
@@ -168,10 +185,14 @@ export class PaidMediaRepository {
   }
   private move(s: Stored, state: CampaignState, sourceRef: string | null) { s.state = state; s.history.push({ state, at: this.iso(), ref: sourceRef }); }
   private moveMutation(m: StoredMutation, state: MutationState, sourceRef: string | null) { m.state = state; m.history.push({ state, at: this.iso(), ref: sourceRef }); }
-  private claimReceipt(sourceRef: string, subjectId: string, kind: string) {
-    const used = this.db.prepare("SELECT subject_id,kind FROM media_receipts WHERE source_ref=?").get(sourceRef);
-    if (used && (used.subject_id !== subjectId || used.kind !== kind)) throw new AgentConflict("RECEIPT_REUSED");
-    if (!used) this.db.prepare("INSERT INTO media_receipts VALUES(?,?,?)").run(sourceRef, subjectId, kind);
+  private claimable(receiptKey: string, subjectId: string, kind: string) {
+    const used = this.db.prepare("SELECT subject_id,kind FROM media_receipts WHERE source_ref=?").get(receiptKey);
+    return !used || (used.subject_id === subjectId && used.kind === kind);
+  }
+  /** Claims a namespaced receipt key for one subject. Before any external write this may refuse; after one, callers check claimable first. */
+  private claimReceipt(receiptKey: string, subjectId: string, kind: string) {
+    if (!this.claimable(receiptKey, subjectId, kind)) throw new AgentConflict("RECEIPT_REUSED");
+    this.db.prepare("INSERT OR IGNORE INTO media_receipts VALUES(?,?,?)").run(receiptKey, subjectId, kind);
   }
   private executor(): MediaExecutor {
     if (!this.authority.executor) throw new MediaSourceUnavailable("MEDIA_EXECUTOR_UNAVAILABLE");
@@ -199,8 +220,8 @@ export class PaidMediaRepository {
     const now = this.now().getTime(), reasons: string[] = [];
     if (o.evidence !== "account-test") reasons.push(o.evidence === "mcp-discovery" ? "MCP_DISCOVERY_IS_NOT_AUTHORIZATION" : "DOCUMENTATION_IS_NOT_AUTHORIZATION");
     if (!o.receiptRef) reasons.push("TEST_RECEIPT_MISSING");
-    if (!o.checkedAt || Date.parse(o.checkedAt) > now) reasons.push("CAPABILITY_CHECK_UNDATED");
-    if (!o.expiresAt || Date.parse(o.expiresAt) <= now) reasons.push("CAPABILITY_EXPIRED");
+    if (notYet(o.checkedAt, now)) reasons.push("CAPABILITY_CHECK_UNDATED");
+    if (lapsed(o.expiresAt, now)) reasons.push("CAPABILITY_EXPIRED");
     return reasons.length ? { ...entry, state: "Unverified", reasons } : entry;
   }
   /**
@@ -248,7 +269,7 @@ export class PaidMediaRepository {
     const checkoutOk = !!checkout && sameScope(checkout.scope, this.scope) && checkout.checkoutRef === input.checkoutRef;
     if (!checkoutOk) reasons.push("CHECKOUT_UNVERIFIED");
     else {
-      if (Date.parse(checkout.validUntil) <= now) reasons.push("CHECKOUT_STALE");
+      if (lapsed(checkout.validUntil, now)) reasons.push("CHECKOUT_STALE");
       const chosen = routeForCheckout(input.provider, checkout);
       if ("reason" in chosen) reasons.push(chosen.reason); else if (chosen.route !== input.campaignRoute) reasons.push("ROUTE_DOES_NOT_MATCH_CHECKOUT");
       if (checkout.destinationRef !== input.destinationRef) reasons.push("DESTINATION_MISMATCH");
@@ -258,7 +279,7 @@ export class PaidMediaRepository {
     if (!offerOk) reasons.push("OFFER_UNVERIFIED");
     else {
       if (offer.state !== "approved") reasons.push("OFFER_NOT_APPROVED");
-      if (Date.parse(offer.validUntil) <= now) reasons.push("OFFER_EXPIRED");
+      if (lapsed(offer.validUntil, now)) reasons.push("OFFER_EXPIRED");
       if (checkoutOk && offer.skuRef !== checkout.skuRef) reasons.push("OFFER_CHECKOUT_MISMATCH");
     }
     const creatives: Manifest["creatives"] = [];
@@ -269,8 +290,8 @@ export class PaidMediaRepository {
       if (offerOk && a.claimsVersion !== offer.claimsVersion) reasons.push(`CLAIMS_VERSION_MISMATCH:${assetRef}`);
       if (!a.rights.paidUsage) reasons.push(`PAID_RIGHTS_MISSING:${assetRef}`);
       if (!a.rights.nativePermission) reasons.push(`NATIVE_PERMISSION_MISSING:${assetRef}`);
-      if (Date.parse(a.rights.expiresAt) <= now) reasons.push(`RIGHTS_EXPIRED:${assetRef}`);
-      else if (Date.parse(a.rights.expiresAt) < Date.parse(input.schedule.endAt)) reasons.push(`RIGHTS_EXPIRE_BEFORE_SCHEDULE_END:${assetRef}`);
+      if (lapsed(a.rights.expiresAt, now)) reasons.push(`RIGHTS_EXPIRED:${assetRef}`);
+      else if (!(ms(a.rights.expiresAt) >= ms(input.schedule.endAt))) reasons.push(`RIGHTS_EXPIRE_BEFORE_SCHEDULE_END:${assetRef}`);
       creatives.push({ assetRef, contentHash: a.contentHash, rightsRef: a.rights.rightsRef, rightsHash: a.rights.rightsHash, rightsExpiresAt: a.rights.expiresAt });
     }
     const unique = [...new Set(reasons)];
@@ -302,7 +323,7 @@ export class PaidMediaRepository {
       const base = { gate, sourceRef: g.sourceRef, receiptOrigin: g.receiptOrigin };
       if (!sameScope(g.scope, this.scope) || g.gate !== gate || g.campaignId !== s.campaignId || g.manifestHash !== s.manifestHash) return { ...base, state: "mismatch" };
       if (g.state !== "verified") return { ...base, state: g.state };
-      if (Date.parse(g.verifiedAt) > now || Date.parse(g.expiresAt) <= now) return { ...base, state: "expired" };
+      if (notYet(g.verifiedAt, now) || lapsed(g.expiresAt, now)) return { ...base, state: "expired" };
       return { ...base, state: "verified" };
     });
   }
@@ -313,8 +334,8 @@ export class PaidMediaRepository {
     if (d.system !== "linear") throw new AgentConflict("J04_LINEAR_DECISION_REQUIRED");
     if (d.action !== action || d.revision !== s.revision || d.manifestHash !== s.manifestHash || d.subjectHash !== subjectHash)
       throw new AgentConflict("J04_DECISION_FOR_ANOTHER_REQUEST");
-    if (d.state !== "current" || Date.parse(d.validUntil) <= now) throw new AgentConflict("J04_DECISION_NOT_CURRENT");
-    if (Date.parse(d.decidedAt) > now || Date.parse(d.decidedAt) < Date.parse(requestedAt)) throw new AgentConflict("J04_DECISION_PREDATES_REQUEST");
+    if (d.state !== "current" || lapsed(d.validUntil, now)) throw new AgentConflict("J04_DECISION_NOT_CURRENT");
+    if (notYet(d.decidedAt, now) || !(ms(d.decidedAt) >= ms(requestedAt))) throw new AgentConflict("J04_DECISION_PREDATES_REQUEST");
     return d;
   }
   private scopeIssue(d: MediaDecision, m: Manifest, dailyBudgetMinor: number): string | null {
@@ -326,12 +347,14 @@ export class PaidMediaRepository {
   }
   /** Claims the execution lease for a pending write. A live lease means another worker is applying it. */
   private claimLease(p: Pending) {
-    if (Date.parse(p.leaseUntil) > this.now().getTime()) throw new AgentConflict("EXECUTION_IN_PROGRESS");
+    if (!lapsed(p.leaseUntil, this.now().getTime())) throw new AgentConflict("EXECUTION_IN_PROGRESS");
     p.leaseUntil = new Date(this.now().getTime() + LEASE_MS).toISOString();
     p.token = randomUUID();
+    p.sentAt = this.iso();
   }
-  private newPending(key: string, route: ExecRoute): Pending {
-    return { key, token: randomUUID(), route, leaseUntil: new Date(this.now().getTime() + LEASE_MS).toISOString(), handoff: null };
+  private newPending(key: string, route: ExecRoute, pauses: number): Pending {
+    return { key, token: randomUUID(), route, leaseUntil: new Date(this.now().getTime() + LEASE_MS).toISOString(), handoff: null, startedAt: this.iso(),
+      sentAt: this.iso(), pausesAtStart: pauses ?? 0 };
   }
   /** Binds the caller's key to exactly one command, so reusing it for anything else is refused. */
   private bindKey(key: string, command: unknown) {
@@ -343,8 +366,19 @@ export class PaidMediaRepository {
       if (!prior) this.db.prepare("INSERT INTO media_commands VALUES(?,?,?)").run(key, hash, JSON.stringify(command));
     });
   }
-  private async readNative(nativeCampaignId: string, route: ExecRoute): Promise<NativeSettings | null> {
-    try { return parse(nativeSettingsSchema, await this.executor().readBack(nativeCampaignId, route)); } catch (error) { if (passthrough(error)) throw error; return null; }
+  /**
+   * Reads the native campaign back. A read-back for another campaign, provider, account or environment, or one observed in the future or
+   * before the write it confirms, is unreadable: it never confirms anything and never proves absence.
+   */
+  private async readNative(nativeCampaignId: string, route: ExecRoute, identity: MediaIdentity, since: number): Promise<NativeSettings | null> {
+    const executor = this.executor();
+    try {
+      const n = parse(nativeSettingsSchema, await executor.readBack(nativeCampaignId, route, identity));
+      if (!n || n.nativeCampaignId !== nativeCampaignId || n.provider !== identity.provider || n.providerAccountRef !== identity.providerAccountRef
+        || n.environment !== identity.environment) return null;
+      const observed = ms(n.observedAt);
+      return Number.isFinite(observed) && Number.isFinite(since) && observed <= this.now().getTime() && observed >= since ? n : null;
+    } catch { return null; }
   }
 
   /** Records the account and every per-operation capability on every route, with source, tool version and receipt. */
@@ -360,13 +394,14 @@ export class PaidMediaRepository {
         kind: "paid-media-inventory", inventoryId: `inventory-${digest({ input, recordedAt, key }).slice(0, 32)}`, ...input, account: visible, accountReasons,
         capabilities, recordedAt, evidenceLabel: label([visible?.receiptOrigin, ...capabilities.map((c) => c.receiptOrigin)]),
       });
-      this.db.prepare("INSERT INTO media_inventories VALUES(?,?,?,?,?)").run(view.inventoryId, input.provider, input.providerAccountRef, recordedAt, JSON.stringify(view));
+      this.db.prepare("INSERT INTO media_inventories VALUES(?,?,?,?,?,?)").run(view.inventoryId, input.provider, input.providerAccountRef, input.environment, recordedAt,
+        JSON.stringify(view));
       return view;
     });
   }
-  latestInventory(provider: string, providerAccountRef: string): InventoryView | null {
-    const row = this.db.prepare("SELECT body FROM media_inventories WHERE provider=? AND account_ref=? ORDER BY recorded_at DESC, rowid DESC LIMIT 1")
-      .get(provider, ref.parse(providerAccountRef));
+  latestInventory(provider: string, environment: string, providerAccountRef: string): InventoryView | null {
+    const row = this.db.prepare("SELECT body FROM media_inventories WHERE provider=? AND environment=? AND account_ref=? ORDER BY recorded_at DESC, rowid DESC LIMIT 1")
+      .get(provider, environment, ref.parse(providerAccountRef));
     return row ? JSON.parse(String(row.body)) as InventoryView : null;
   }
 
@@ -383,15 +418,15 @@ export class PaidMediaRepository {
       if (prior?.nativeCampaignId && (prior.input.provider !== input.provider || prior.input.providerAccountRef !== input.providerAccountRef
         || prior.input.environment !== input.environment)) throw new AgentConflict("NATIVE_DRAFT_BOUND_TO_ANOTHER_ACCOUNT");
       const { manifest, reasons } = this.compile(input);
-      if (Date.parse(input.schedule.startAt) <= now.getTime()) reasons.push("SCHEDULE_START_PASSED");
-      if (Date.parse(input.expiresAt) <= now.getTime()) reasons.push("REQUEST_EXPIRED");
+      if (lapsed(input.schedule.startAt, now.getTime())) reasons.push("SCHEDULE_START_PASSED");
+      if (lapsed(input.expiresAt, now.getTime())) reasons.push("REQUEST_EXPIRED");
       const manifestHash = manifest ? digest(manifest) : null;
       if (prior && prior.manifestHash === manifestHash && digest(prior.input) === digest(input) && digest(prior.heldReasons) === digest(reasons)) return this.view(prior);
       const s: Stored = prior ? { ...prior, revision: prior.revision + 1 } : {
         campaignId, campaignRef: input.campaignRef, revision: 1, state: "held", revisedAt: now.toISOString(), input, manifestHash, heldReasons: [],
         nativeCampaignId: null, nativeAdIds: [], previewRef: null, readback: null, releaseHash: null, releaseRequestedAt: null, decisionRef: null, decision: "none",
         decisionValidUntil: null, approvedScope: null, effectiveDailyBudgetMinor: null, providerReview: { state: "not-submitted", rejectionCode: null },
-        gates: MEDIA_GATES.map((gate) => ({ gate, state: "not-checked", sourceRef: null, receiptOrigin: null })), pendingKind: null, pending: null, route: null,
+        gates: MEDIA_GATES.map((gate) => ({ gate, state: "not-checked", sourceRef: null, receiptOrigin: null })), pendingKind: null, pending: null, pauses: 0, route: null,
         reconciledBy: null, receipts: [], draftCreated: false, publishAttempted: false, history: [],
       };
       Object.assign(s, { revisedAt: now.toISOString(), input, manifestHash, heldReasons: reasons, readback: null, releaseHash: null, releaseRequestedAt: null,
@@ -422,64 +457,92 @@ export class PaidMediaRepository {
       }
       if (s.state === "draft" && s.releaseHash) return { s, mine: null, resumed: false };
       if (s.state !== "draft") throw new AgentConflict(s.state === "held" ? "CAMPAIGN_HELD" : "DRAFT_STAGE_PASSED");
-      this.assertSourcesUnchanged(s);
-      const route = this.requireRoute(s.input, "create-draft");
-      this.requireRoute(s.input, "upload-creative"); this.requireRoute(s.input, "preview-creative"); this.requireRoute(s.input, "retrieve-outcome");
+      const route = this.draftRoute(s);
       s.pendingKind = "draft";
-      s.pending = this.newPending(`draft:${s.campaignId}:r${s.revision}`, route);
+      s.pending = this.newPending(`draft:${s.campaignId}:r${s.revision}`, route, s.pauses);
       s.route = route; s.draftCreated = true;
       this.save(s);
       return { s, mine: { ...s.pending }, resumed: false };
     });
     if (!step.mine) return this.view(step.s);
-    const mine = step.mine, manifest = this.manifestOf(step.s);
+    const mine = step.mine, manifest = this.manifestOf(step.s), identity = identityOf(step.s);
     let receipt: z.infer<typeof draftReceiptSchema> | null = null, handoff: string | null = null, readback: NativeSettings | null = null;
+    let notApplied: string[] | null = null;
+    const readDraft = (raw: unknown) => { const r = parse(draftReceiptSchema, raw); return r && r.key === mine.key ? r : null; };
     try {
-      let raw: unknown = step.resumed ? await executor.read(mine.key, mine.route) : undefined;
-      if (!parse(draftReceiptSchema, raw)) {
-        // A draft never spends, so nothing found under the key is retried with the same key.
-        raw = await executor.createDraft(mine.key, { manifest, manifestHash: step.s.manifestHash ?? "", nativeCampaignId: step.s.nativeCampaignId,
-          status: "PAUSED" }, mine.route);
+      if (step.resumed) receipt = readDraft(await executor.read(mine.key, mine.route, identity));
+      if (step.resumed && !receipt) {
+        // Nothing found under the key. A re-send needs the same current sources, rights and capabilities as a first write.
+        const reasons = this.tx(() => this.blockers(() => { const route = this.draftRoute(this.require(campaignId)); return route === mine.route ? [] : ["ROUTE_CHANGED"]; }));
+        if (reasons.length) notApplied = reasons;
       }
-      handoff = parse(handoffSchema, raw)?.handoff ?? null;
-      receipt = parse(draftReceiptSchema, raw);
-      if (receipt && receipt.key !== mine.key) receipt = null;
-      if (receipt) readback = await this.readNative(receipt.nativeCampaignId, this.requireRoute(step.s.input, "retrieve-outcome"));
-    } catch (error) {
-      if (passthrough(error)) { this.releaseLease(campaignId, mine); throw error; }
-      receipt = null;
+      if (!receipt && !notApplied) {
+        const raw = await executor.createDraft(mine.key, { manifest, manifestHash: step.s.manifestHash ?? "", nativeCampaignId: step.s.nativeCampaignId,
+          status: "PAUSED" }, mine.route, identity);
+        handoff = parse(handoffSchema, raw)?.handoff ?? null;
+        receipt = readDraft(raw);
+      }
+      if (receipt) readback = await this.readNative(receipt.nativeCampaignId, this.requireRoute(step.s.input, "retrieve-outcome"), identity, Date.parse(mine.sentAt));
+    } catch {
+      receipt = null; readback = null;
     }
-    return this.tx(() => {
+    const done = this.tx(() => {
       const s = this.require(campaignId);
       // A late result from a worker whose lease was taken over never moves the record.
-      if (!owns(s.pending, mine)) return this.view(s);
+      if (!owns(s.pending, mine)) return { view: this.view(s), unknown: null };
       const pending = s.pending;
       pending.leaseUntil = this.iso();
-      if (handoff && pending.route === "browser" && !receipt) return this.handoff(s, pending, handoff);
-      if (!receipt) { if (s.state !== "uncertain") this.move(s, "uncertain", null); this.save(s); return this.view(s); }
-      if (s.nativeCampaignId && s.nativeCampaignId !== receipt.nativeCampaignId) throw new AgentConflict("NATIVE_ID_CHANGED");
+      if (notApplied) {
+        Object.assign(s, { pending: null, pendingKind: null, heldReasons: notApplied });
+        this.move(s, "held", null); this.save(s);
+        return { view: this.view(s), unknown: null };
+      }
+      if (handoff && pending.route === "browser" && !receipt) return { view: this.handoff(s, pending, handoff), unknown: null };
+      if (!receipt) return this.unknown(s, "DRAFT_OUTCOME_UNKNOWN");
+      const ns = namespaceOf(s);
+      if ((s.nativeCampaignId && s.nativeCampaignId !== receipt.nativeCampaignId) || !this.nativeClaimable(s, receipt.nativeCampaignId)
+        || !this.claimable(`${ns}|draft|${receipt.receiptRef}`, s.campaignId, `draft:r${s.revision}`)) return this.unknown(s, "RECEIPT_CONFLICT_AFTER_SEND");
       this.claimNative(s, receipt.nativeCampaignId);
-      this.claimReceipt(receipt.receiptRef, s.campaignId, `draft:r${s.revision}`);
+      this.claimReceipt(`${ns}|draft|${receipt.receiptRef}`, s.campaignId, `draft:r${s.revision}`);
       Object.assign(s, { nativeCampaignId: receipt.nativeCampaignId, nativeAdIds: receipt.nativeAdIds, previewRef: receipt.previewRef, pending: null, pendingKind: null });
       s.receipts.push({ kind: "draft", ref: receipt.receiptRef, origin: receipt.receiptOrigin, at: this.iso() });
-      if (!readback) { s.heldReasons = ["READBACK_UNAVAILABLE"]; this.move(s, "held", receipt.receiptRef); this.save(s); return this.view(s); }
+      if (!readback) { s.heldReasons = ["READBACK_UNAVAILABLE"]; this.move(s, "held", receipt.receiptRef); this.save(s); return { view: this.view(s), unknown: null }; }
       this.recordReadback(s, readback);
       const mismatches = readbackMismatches(manifest, readback, ["DRAFT", "PAUSED"]);
       if (readback.previewRef !== s.previewRef || setOf(readback.nativeAdIds) !== setOf(s.nativeAdIds)) mismatches.push("READBACK_MISMATCH:NATIVE_ADS");
       if (LIVE.includes(readback.status)) mismatches.unshift("DRAFT_ACTIVE_ON_PROVIDER");
-      if (mismatches.length) { s.heldReasons = mismatches; this.move(s, "held", receipt.receiptRef); this.save(s); return this.view(s); }
+      if (mismatches.length) { s.heldReasons = mismatches; this.move(s, "held", receipt.receiptRef); this.save(s); return { view: this.view(s), unknown: null }; }
       s.heldReasons = [];
       s.releaseHash = this.releaseHashOf(s, readback);
       s.releaseRequestedAt = this.iso();
       this.move(s, "draft", receipt.receiptRef);
       this.save(s);
-      return this.view(s);
+      return { view: this.view(s), unknown: null };
     });
+    if (done.unknown) throw new MediaWriteUncertain(done.unknown);
+    return done.view;
+  }
+  /** The draft route, after re-checking every source, right and capability a draft write needs. */
+  private draftRoute(s: Stored): ExecRoute {
+    this.assertSourcesUnchanged(s);
+    const route = this.requireRoute(s.input, "create-draft");
+    this.requireRoute(s.input, "upload-creative"); this.requireRoute(s.input, "preview-creative"); this.requireRoute(s.input, "retrieve-outcome");
+    return route;
+  }
+  /** Records an attempted write whose outcome is unknown. The pending write stays for reconciliation and the caller is told it is uncertain. */
+  private unknown(s: Stored, reason: string): { view: CampaignView; unknown: string } {
+    s.heldReasons = [reason];
+    if (s.state !== "uncertain") this.move(s, "uncertain", null);
+    this.save(s);
+    return { view: this.view(s), unknown: reason };
+  }
+  private nativeClaimable(s: Stored, nativeId: string) {
+    const used = this.db.prepare("SELECT campaign_id FROM media_native WHERE provider=? AND native_id=?").get(nativeKey(s), nativeId);
+    return !used || used.campaign_id === s.campaignId;
   }
   private claimNative(s: Stored, nativeId: string) {
-    const used = this.db.prepare("SELECT campaign_id FROM media_native WHERE provider=? AND native_id=?").get(s.input.provider, nativeId);
-    if (used && used.campaign_id !== s.campaignId) throw new AgentConflict("NATIVE_ID_REUSED");
-    if (!used) this.db.prepare("INSERT INTO media_native VALUES(?,?,?)").run(s.input.provider, nativeId, s.campaignId);
+    if (!this.nativeClaimable(s, nativeId)) throw new AgentConflict("NATIVE_ID_REUSED");
+    this.db.prepare("INSERT OR IGNORE INTO media_native VALUES(?,?,?)").run(nativeKey(s), nativeId, s.campaignId);
   }
   private recordReadback(s: Stored, n: NativeSettings) {
     s.readback = n;
@@ -502,10 +565,6 @@ export class PaidMediaRepository {
     this.save(s);
     return this.view(s);
   }
-  /** Ends this worker's lease early after a refusal. A lease another worker has taken over is never touched. */
-  private releaseLease(campaignId: string, mine: Pending) {
-    this.tx(() => { const s = this.load(campaignId); if (s && owns(s.pending, mine)) { s.pending.leaseUntil = this.iso(); this.save(s); } });
-  }
 
   /** Records the exact J04 Linear decision for this revision, manifest and read-back release request. */
   decide(campaignId: string, decisionRef: string, key: string): CampaignView {
@@ -518,7 +577,7 @@ export class PaidMediaRepository {
         const issue = this.scopeIssue(d, manifest, manifest.caps.dailyBudgetMinor);
         if (issue) throw new AgentConflict(issue);
       }
-      this.claimReceipt(decisionRef, s.campaignId, `decision:publish:r${s.revision}`);
+      this.claimReceipt(`decision|${decisionRef}`, s.campaignId, `decision:publish:r${s.revision}`);
       Object.assign(s, { decisionRef, decision: d.decision, decisionValidUntil: d.validUntil, approvedScope: d.decision === "approved" ? d.financialScope : null,
         heldReasons: [] });
       this.move(s, d.decision === "approved" ? "approved" : "rejected", decisionRef);
@@ -532,8 +591,8 @@ export class PaidMediaRepository {
     const m = this.manifestOf(s), now = this.now().getTime();
     if (s.input.environment === "production") throw new AgentConflict("PRODUCTION_HELD");
     this.assertSourcesUnchanged(s);
-    if (Date.parse(s.input.expiresAt) <= now) throw new AgentConflict("REQUEST_EXPIRED");
-    if (Date.parse(s.input.schedule.startAt) <= now) throw new AgentConflict("SCHEDULE_START_PASSED");
+    if (lapsed(s.input.expiresAt, now)) throw new AgentConflict("REQUEST_EXPIRED");
+    if (lapsed(s.input.schedule.startAt, now)) throw new AgentConflict("SCHEDULE_START_PASSED");
     if (!s.decisionRef || !s.releaseHash || !s.releaseRequestedAt) throw new AgentConflict("J04_APPROVAL_REQUIRED");
     const d = this.currentDecision(s, s.decisionRef, "publish", s.releaseHash, s.releaseRequestedAt);
     if (d.decision !== "approved") throw new AgentConflict("J04_APPROVAL_REQUIRED");
@@ -552,8 +611,9 @@ export class PaidMediaRepository {
 
   /**
    * Publishes one revision once. The native draft is re-read and compared in full before every publish write, first or retry. The state
-   * is committed as applying under a lease before the executor runs. An error or unreadable receipt leaves it uncertain. The next call
-   * reconciles by the original key, then by the native campaign, without needing a current decision; only re-sending the write does.
+   * is committed as applying under a lease before the executor runs. Any failure after that point leaves it uncertain and is reported as
+   * uncertain. The next call reconciles by the original key, then by the native campaign, without needing a current decision; only
+   * re-sending the write does. A pause confirmed after the write started supersedes it: it is closed without a send and needs a new decision.
    */
   async publish(campaignId: string, key: string): Promise<CampaignView> {
     this.bindKey(key, { op: "publish", campaignId });
@@ -561,10 +621,11 @@ export class PaidMediaRepository {
     const first = this.require(campaignId);
     if (first.state === "confirmed") return this.view(first);
     if (!first.nativeCampaignId) throw new AgentConflict(first.state === "approved" ? "NATIVE_DRAFT_MISSING" : "J04_APPROVAL_REQUIRED");
-    const nativeId = first.nativeCampaignId, readRoute = this.requireRoute(first.input, "retrieve-outcome");
+    const nativeId = first.nativeCampaignId, readRoute = this.requireRoute(first.input, "retrieve-outcome"), identity = identityOf(first);
+    const callStarted = this.now().getTime();
     let fresh: NativeSettings | null = null;
     if (first.state === "approved" && !first.pending) {
-      fresh = await this.readNative(nativeId, readRoute);
+      fresh = await this.readNative(nativeId, readRoute, identity, callStarted);
       if (!fresh) throw new MediaSourceUnavailable("NATIVE_READBACK_UNAVAILABLE");
     }
     const step = this.tx(() => {
@@ -585,7 +646,7 @@ export class PaidMediaRepository {
       const checked = this.releaseChecks(s);
       if ("refusal" in checked) { this.save(s); return { ...none, refusal: checked.refusal }; }
       s.pendingKind = "publish";
-      s.pending = this.newPending(`publish:${s.campaignId}:r${s.revision}`, checked.route);
+      s.pending = this.newPending(`publish:${s.campaignId}:r${s.revision}`, checked.route, s.pauses);
       s.route = checked.route; s.publishAttempted = true;
       this.move(s, "applying", s.decisionRef);
       this.save(s);
@@ -593,24 +654,26 @@ export class PaidMediaRepository {
     });
     if (step.refusal) throw new AgentConflict(step.refusal);
     if (!step.mine) return this.view(step.s);
-    const mine = step.mine;
+    const mine = step.mine, sent = Date.parse(mine.sentAt);
     const payload = { nativeCampaignId: nativeId, manifestHash: step.s.manifestHash ?? "", releaseHash: step.s.releaseHash ?? "" };
     const readPublish = (raw: unknown) => { const r = parse(publishReceiptSchema, raw); return r && r.key === mine.key && r.nativeCampaignId === nativeId ? r : null; };
     let receipt: z.infer<typeof publishReceiptSchema> | null = null, handoff: string | null = null, readback: NativeSettings | null = null;
-    let reconciledBy: "receipt" | "native-readback" | null = null, notApplied: { native: NativeSettings; reasons: string[] } | null = null;
+    let reconciledBy: "receipt" | "native-readback" | null = null, notApplied: { native: NativeSettings | null; reasons: string[] } | null = null;
     const send = async () => {
-      const raw = await executor.publish(mine.key, payload, mine.route);
+      const raw = await executor.publish(mine.key, payload, mine.route, identity);
       handoff = parse(handoffSchema, raw)?.handoff ?? null;
       receipt = readPublish(raw);
       if (receipt) reconciledBy = "receipt";
     };
     try {
       if (step.resumed) {
-        receipt = readPublish(await executor.read(mine.key, mine.route));
+        receipt = readPublish(await executor.read(mine.key, mine.route, identity));
         if (receipt) reconciledBy = "receipt";
         else {
-          const native = await this.readNative(nativeId, readRoute);
-          if (native && !["DRAFT", "PAUSED"].includes(native.status)) { readback = native; reconciledBy = "native-readback"; }
+          const native = await this.readNative(nativeId, readRoute, identity, sent);
+          const pausedSince = this.tx(() => this.pausedSince(this.require(campaignId), mine));
+          if (pausedSince) notApplied = { native, reasons: ["SUPERSEDED_BY_PAUSE"] };
+          else if (native && !["DRAFT", "PAUSED"].includes(native.status)) { readback = native; reconciledBy = "native-readback"; }
           else if (native) {
             // Nothing happened under the original identity. Re-sending needs the unchanged draft and every release check, decision included.
             const reasons = this.tx(() => {
@@ -620,45 +683,43 @@ export class PaidMediaRepository {
             });
             if (reasons.length) notApplied = { native, reasons };
             else {
-              const again = await this.readNative(nativeId, readRoute);
+              const again = await this.readNative(nativeId, readRoute, identity, sent);
               if (!again || this.tx(() => this.draftDrift(this.require(campaignId), again)).length) notApplied = { native: again ?? native, reasons: ["NATIVE_DRAFT_CHANGED"] };
               else await send();
             }
           }
         }
       } else await send();
-      if (receipt && !readback) readback = await this.readNative(nativeId, readRoute);
-    } catch (error) {
-      if (passthrough(error)) { this.releaseLease(campaignId, mine); throw error; }
-      receipt = null; reconciledBy = null;
+      if (receipt && !readback) readback = await this.readNative(nativeId, readRoute, identity, sent);
+    } catch {
+      receipt = null; reconciledBy = null; readback = null;
     }
     const result = { receipt, handoff, readback, reconciledBy, notApplied } as {
       receipt: z.infer<typeof publishReceiptSchema> | null; handoff: string | null; readback: NativeSettings | null;
-      reconciledBy: "receipt" | "native-readback" | null; notApplied: { native: NativeSettings; reasons: string[] } | null };
-    return this.tx(() => {
+      reconciledBy: "receipt" | "native-readback" | null; notApplied: { native: NativeSettings | null; reasons: string[] } | null };
+    const done = this.tx(() => {
       const s = this.require(campaignId);
-      if (!owns(s.pending, mine)) return this.view(s);
+      if (!owns(s.pending, mine)) return { view: this.view(s), unknown: null as string | null };
       const pending = s.pending;
       pending.leaseUntil = this.iso();
       if (result.notApplied) {
         // Closed as not applied: the lock is released and the campaign can be decided or revised again.
         const { native, reasons } = result.notApplied;
-        this.recordReadback(s, native);
+        if (native) this.recordReadback(s, native);
         Object.assign(s, { pending: null, pendingKind: null });
         if (reasons.some((r) => r.startsWith("READBACK_MISMATCH") || r === "NATIVE_DRAFT_CHANGED")) { s.heldReasons = reasons; this.move(s, "held", null); }
-        else if (reasons.some((r) => /^J04_|SCOPE/.test(r))) {
-          Object.assign(s, { decisionRef: null, decision: "none", decisionValidUntil: null, approvedScope: null, releaseRequestedAt: this.iso(),
-            heldReasons: ["NEW_DECISION_REQUIRED", ...reasons] });
-          this.move(s, "draft", null);
-        } else { s.heldReasons = reasons; this.move(s, "approved", null); }
+        else if (reasons.some((r) => /^J04_|SCOPE|SUPERSEDED/.test(r))) { this.requireNewDecision(s, reasons); }
+        else { s.heldReasons = reasons; this.move(s, "approved", null); }
         this.save(s);
-        return this.view(s);
+        return { view: this.view(s), unknown: null };
       }
-      if (result.handoff && pending.route === "browser" && !result.receipt) return this.handoff(s, pending, result.handoff);
-      if (!result.reconciledBy) { if (s.state !== "uncertain") this.move(s, "uncertain", null); this.save(s); return this.view(s); }
+      if (result.handoff && pending.route === "browser" && !result.receipt) return { view: this.handoff(s, pending, result.handoff), unknown: null };
+      if (!result.reconciledBy) return this.unknown(s, "PUBLISH_OUTCOME_UNKNOWN");
       const r = result.receipt, n = result.readback;
       if (r) {
-        this.claimReceipt(r.receiptRef, s.campaignId, `publish:r${s.revision}`);
+        const receiptKey = `${namespaceOf(s)}|publish|${r.receiptRef}`;
+        if (!this.claimable(receiptKey, s.campaignId, `publish:r${s.revision}`)) return this.unknown(s, "RECEIPT_CONFLICT_AFTER_SEND");
+        this.claimReceipt(receiptKey, s.campaignId, `publish:r${s.revision}`);
         if (!s.receipts.some((x) => x.ref === r.receiptRef)) s.receipts.push({ kind: "publish", ref: r.receiptRef, origin: r.receiptOrigin, at: this.iso() });
       }
       if (r?.providerStatus === "REJECTED" || n?.status === "REJECTED") {
@@ -667,18 +728,32 @@ export class PaidMediaRepository {
           providerReview: { state: "rejected", rejectionCode: r?.rejectionCode ?? null } });
         this.move(s, "provider-rejected", r?.receiptRef ?? null);
         this.save(s);
-        return this.view(s);
+        return { view: this.view(s), unknown: null };
       }
-      if (!n) { s.heldReasons = ["READBACK_UNAVAILABLE"]; if (s.state !== "uncertain") this.move(s, "uncertain", r?.receiptRef ?? null); this.save(s); return this.view(s); }
+      if (!n) return this.unknown(s, "READBACK_UNAVAILABLE");
       this.recordReadback(s, n);
+      // A publish that landed before a confirmed pause is released and then paused.
+      const paused = this.pausedSince(s, pending);
       Object.assign(s, { pending: null, pendingKind: null, reconciledBy: result.reconciledBy,
-        providerReview: { state: n.status === "ACTIVE" ? "active" : "in-review", rejectionCode: null } });
-      const mismatches = readbackMismatches(this.manifestOf(s), n, LIVE);
+        providerReview: { state: n.status === "IN_REVIEW" ? "in-review" : "active", rejectionCode: null } });
+      const mismatches = readbackMismatches(this.manifestOf(s), n, paused ? [...LIVE, "PAUSED"] : LIVE);
       s.heldReasons = mismatches;
       this.move(s, mismatches.length ? "held" : "confirmed", r?.receiptRef ?? null);
       this.save(s);
-      return this.view(s);
+      return { view: this.view(s), unknown: null };
     });
+    if (done.unknown) throw new MediaWriteUncertain(done.unknown);
+    return done.view;
+  }
+  /** True when a pause was confirmed for this campaign after the pending write first started. */
+  private pausedSince(s: Stored, p: Pending) {
+    return (s.pauses ?? 0) > (p.pausesAtStart ?? 0);
+  }
+  /** Clears an approval that no longer authorizes release. Release stays requested, so a fresh decision can be recorded. */
+  private requireNewDecision(s: Stored, reasons: string[]) {
+    Object.assign(s, { decisionRef: null, decision: "none", decisionValidUntil: null, approvedScope: null, releaseRequestedAt: this.iso(),
+      heldReasons: ["NEW_DECISION_REQUIRED", ...reasons] });
+    this.move(s, "draft", null);
   }
 
   /**
@@ -716,19 +791,21 @@ export class PaidMediaRepository {
 
   /**
    * Checks the authority for one mutation. A budget edit needs its own J04 decision within the approved financial scope. A pause may use
-   * its own J04 decision or a current, in-date safety policy that allows pausing this account. A pause never needs a budget.
+   * its own J04 decision or a current, in-date safety policy that allows pausing this exact provider account and environment. A pause
+   * never needs a budget.
    */
   private authorize(s: Stored, m: StoredMutation, auth: MutationAuthorization, claim: boolean): "j04" | "safety-policy" | "rejected" {
     if ("policyRef" in auth) {
       if (m.action !== "pause") throw new AgentConflict("SAFETY_POLICY_ONLY_PAUSES");
       const p = parse(safetyPolicySchema, this.authority.safetyPolicy?.(auth.policyRef, this.scope));
       if (!p || !sameScope(p.scope, this.scope) || p.policyRef !== auth.policyRef) throw new MediaSourceUnavailable("SAFETY_POLICY_UNVERIFIED");
-      if (p.state !== "current" || Date.parse(p.validUntil) <= this.now().getTime()) throw new AgentConflict("SAFETY_POLICY_NOT_CURRENT");
-      if (!p.allows.includes("pause") || !p.providerAccountRefs.includes(s.input.providerAccountRef)) throw new AgentConflict("SAFETY_POLICY_SCOPE_MISMATCH");
+      if (p.state !== "current" || lapsed(p.validUntil, this.now().getTime())) throw new AgentConflict("SAFETY_POLICY_NOT_CURRENT");
+      const covered = p.accounts.some((a) => a.provider === s.input.provider && a.providerAccountRef === s.input.providerAccountRef && a.environment === s.input.environment);
+      if (!p.allows.includes("pause") || !covered) throw new AgentConflict("SAFETY_POLICY_SCOPE_MISMATCH");
       return "safety-policy";
     }
     const d = this.currentDecision(s, auth.decisionRef, m.action, m.requestHash, m.createdAt);
-    if (claim) this.claimReceipt(auth.decisionRef, m.mutationId, `decision:${m.action}`);
+    if (claim) this.claimReceipt(`decision|${auth.decisionRef}`, m.mutationId, `decision:${m.action}`);
     if (d.decision === "rejected") return "rejected";
     if (m.action === "edit-budget") {
       if (m.dailyBudgetMinor === null) throw new AgentConflict("BUDGET_UNKNOWN");
@@ -752,10 +829,10 @@ export class PaidMediaRepository {
     if (first.state === "confirmed") return this.mutationView(first);
     const campaign = this.require(campaignId);
     if (!campaign.nativeCampaignId) throw new AgentConflict("CAMPAIGN_NOT_LIVE");
-    const nativeId = campaign.nativeCampaignId, readRoute = this.requireRoute(campaign.input, "retrieve-outcome");
+    const nativeId = campaign.nativeCampaignId, readRoute = this.requireRoute(campaign.input, "retrieve-outcome"), identity = identityOf(campaign);
     let before: NativeSettings | null = null;
     if (!first.pending) {
-      before = await this.readNative(nativeId, readRoute);
+      before = await this.readNative(nativeId, readRoute, identity, this.now().getTime());
       if (!before) throw new MediaSourceUnavailable("NATIVE_READBACK_UNAVAILABLE");
       if (first.action === "pause" && !LIVE.includes(before.status)) throw new AgentConflict("NATIVE_CAMPAIGN_NOT_ACTIVE");
     }
@@ -765,7 +842,7 @@ export class PaidMediaRepository {
       if (m.pending) {
         if (refOf(auth) !== (m.decisionRef ?? m.policyRef)) throw new AgentConflict("MUTATION_BOUND_TO_ANOTHER_AUTHORIZATION");
         this.claimLease(m.pending); this.saveMutation(m);
-        return { m, s, mine: { ...m.pending }, resumed: true };
+        return { m, s, mine: { ...m.pending } as Pending | null, resumed: true };
       }
       if (m.state === "confirmed") return { m, s, mine: null, resumed: false };
       if (m.state !== "draft") throw new AgentConflict(m.state === "held" ? "MUTATION_HELD" : "MUTATION_NOT_AWAITING_APPROVAL");
@@ -781,14 +858,14 @@ export class PaidMediaRepository {
       if (by === "rejected") { this.moveMutation(m, "rejected", refOf(auth)); this.saveMutation(m); return { m, s, mine: null, resumed: false }; }
       const route = this.requireRoute(s.input, m.action);
       this.moveMutation(m, "approved", refOf(auth));
-      const pending = this.newPending(`${m.action}:${m.mutationId}`, route);
+      const pending = this.newPending(`${m.action}:${m.mutationId}`, route, 0);
       Object.assign(m, { before, route, attempted: true, authorizedBy: by, pending });
       this.moveMutation(m, "applying", refOf(auth));
       this.saveMutation(m);
       return { m, s, mine: { ...pending } as Pending | null, resumed: false };
     });
     if (!step.mine) return this.mutationView(step.m);
-    const mine = step.mine, m0 = step.m;
+    const mine = step.mine, m0 = step.m, sent = Date.parse(mine.sentAt);
     const base = this.manifestOf(step.s);
     const expected: Manifest = { ...base, caps: { ...base.caps, dailyBudgetMinor: m0.dailyBudgetMinor ?? base.caps.dailyBudgetMinor } };
     const applied = (n: NativeSettings) => (m0.action === "pause" ? n.status === "PAUSED" : n.dailyBudgetMinor === m0.dailyBudgetMinor);
@@ -796,11 +873,16 @@ export class PaidMediaRepository {
     const readMutation = (raw: unknown) => { const r = parse(mutationReceiptSchema, raw); return r && r.key === mine.key && r.nativeCampaignId === nativeId ? r : null; };
     let receipt: z.infer<typeof mutationReceiptSchema> | null = null, handoff: string | null = null, after: NativeSettings | null = null;
     let reconciledBy: "receipt" | "native-readback" | null = null, notApplied: { native: NativeSettings; reasons: string[] } | null = null;
+    const send = async () => {
+      const raw = await executor.mutate(mine.key, payload, mine.route, identity);
+      handoff = parse(handoffSchema, raw)?.handoff ?? null;
+      receipt = readMutation(raw);
+    };
     try {
       if (step.resumed) {
-        receipt = readMutation(await executor.read(mine.key, mine.route));
+        receipt = readMutation(await executor.read(mine.key, mine.route, identity));
         if (!receipt) {
-          const native = await this.readNative(nativeId, readRoute);
+          const native = await this.readNative(nativeId, readRoute, identity, sent);
           if (native && applied(native)) { after = native; reconciledBy = "native-readback"; }
           else if (native) {
             // Re-sending needs the same authority, scope and route as a first write.
@@ -814,54 +896,48 @@ export class PaidMediaRepository {
               });
             });
             if (reasons.length) notApplied = { native, reasons };
-            else {
-              const raw = await executor.mutate(mine.key, payload, mine.route);
-              handoff = parse(handoffSchema, raw)?.handoff ?? null;
-              receipt = readMutation(raw);
-            }
+            else await send();
           }
         }
-      } else {
-        const raw = await executor.mutate(mine.key, payload, mine.route);
-        handoff = parse(handoffSchema, raw)?.handoff ?? null;
-        receipt = readMutation(raw);
-      }
-      if (receipt) { reconciledBy = "receipt"; after = await this.readNative(nativeId, readRoute); }
-    } catch (error) {
-      if (passthrough(error)) {
-        this.tx(() => { const m = this.loadMutation(mutationId); if (m && owns(m.pending, mine)) { m.pending.leaseUntil = this.iso(); this.saveMutation(m); } });
-        throw error;
-      }
-      receipt = null; reconciledBy = null;
+      } else await send();
+      if (receipt) { reconciledBy = "receipt"; after = await this.readNative(nativeId, readRoute, identity, sent); }
+    } catch {
+      receipt = null; reconciledBy = null; after = null;
     }
     const result = { receipt, handoff, after, reconciledBy, notApplied } as {
       receipt: z.infer<typeof mutationReceiptSchema> | null; handoff: string | null; after: NativeSettings | null;
       reconciledBy: "receipt" | "native-readback" | null; notApplied: { native: NativeSettings; reasons: string[] } | null };
-    return this.tx(() => {
+    const done = this.tx(() => {
       const m = this.loadMutation(mutationId), s = this.require(campaignId);
       if (!m) throw new AgentConflict("MUTATION_UNKNOWN");
-      if (!owns(m.pending, mine)) return this.mutationView(m);
+      if (!owns(m.pending, mine)) return { view: this.mutationView(m), unknown: null as string | null };
       const pending = m.pending;
       pending.leaseUntil = this.iso();
+      const uncertain = (reason: string) => {
+        m.heldReasons = [reason];
+        if (m.state !== "uncertain") this.moveMutation(m, "uncertain", null);
+        this.saveMutation(m);
+        return { view: this.mutationView(m), unknown: reason };
+      };
       if (result.notApplied) {
         Object.assign(m, { pending: null, heldReasons: result.notApplied.reasons });
         this.recordReadback(s, result.notApplied.native);
         this.moveMutation(m, "not-applied", null);
         this.saveMutation(m); this.save(s);
-        return this.mutationView(m);
+        return { view: this.mutationView(m), unknown: null };
       }
       if (result.handoff && pending.route === "browser" && !result.receipt) {
         pending.handoff = result.handoff; m.heldReasons = [`BROWSER_HANDOFF_${code(result.handoff)}`];
-        this.moveMutation(m, "held", null); this.saveMutation(m); return this.mutationView(m);
+        this.moveMutation(m, "held", null); this.saveMutation(m);
+        return { view: this.mutationView(m), unknown: null };
       }
       const r = result.receipt, n = result.after;
-      if (!result.reconciledBy || !n) {
-        if (r) m.heldReasons = ["READBACK_UNAVAILABLE"];
-        if (m.state !== "uncertain") this.moveMutation(m, "uncertain", null);
-        this.saveMutation(m); return this.mutationView(m);
-      }
+      if (!result.reconciledBy) return uncertain("MUTATION_OUTCOME_UNKNOWN");
+      if (!n) return uncertain("READBACK_UNAVAILABLE");
       if (r) {
-        this.claimReceipt(r.receiptRef, m.mutationId, "mutation");
+        const receiptKey = `${namespaceOf(s)}|mutation|${r.receiptRef}`;
+        if (!this.claimable(receiptKey, m.mutationId, "mutation")) return uncertain("RECEIPT_CONFLICT_AFTER_SEND");
+        this.claimReceipt(receiptKey, m.mutationId, "mutation");
         Object.assign(m, { receiptRef: r.receiptRef, receiptOrigin: r.receiptOrigin });
       }
       Object.assign(m, { after: n, reconciledBy: result.reconciledBy, pending: null });
@@ -875,10 +951,17 @@ export class PaidMediaRepository {
         m.heldReasons = mismatches;
         this.moveMutation(m, mismatches.length ? "held" : "confirmed", r?.receiptRef ?? null);
         if (!mismatches.length && m.action === "edit-budget") s.effectiveDailyBudgetMinor = m.dailyBudgetMinor;
+        if (!mismatches.length && m.action === "pause") {
+          // A confirmed pause supersedes any approval or pending publish: re-release needs a fresh decision.
+          s.pauses = (s.pauses ?? 0) + 1;
+          if (s.state === "approved" && !s.pending) this.requireNewDecision(s, ["SUPERSEDED_BY_PAUSE"]);
+        }
       }
       this.saveMutation(m); this.save(s);
-      return this.mutationView(m);
+      return { view: this.mutationView(m), unknown: null };
     });
+    if (done.unknown) throw new MediaWriteUncertain(done.unknown);
+    return done.view;
   }
 
   read(campaignId: string): CampaignView | null { const s = this.load(campaignId); return s ? this.view(s) : null; }
