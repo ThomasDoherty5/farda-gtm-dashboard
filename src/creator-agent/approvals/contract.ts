@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { commercialEligibilityReasonSchema, type CommercialEligibilityReason } from "../commercialPolicy/views.ts";
 
 export const approvalRefSchema = z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value), "Use an opaque reference.");
 export const approvalHashSchema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -13,7 +14,7 @@ export const versionRequirementSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("required"), version: approvalRefSchema }).strict(),
   z.object({ state: z.literal("notApplicable"), policyVersion: approvalRefSchema, reason: z.string().min(1).max(500) }).strict(),
 ]);
-export const approvalPhaseSchema = z.enum(["invitation", "activation", "shipment", "settlement", "rewardRedemption", "policyChange", "launch", "productionEnable", "other"]);
+export const approvalPhaseSchema = z.enum(["invitation", "activation", "shipment", "settlement", "rewardRedemption", "mediaStageRelease", "mediaSafetyPause", "policyChange", "launch", "productionEnable", "other"]);
 export type ApprovalPhase = z.infer<typeof approvalPhaseSchema>;
 export const approvalGateSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("satisfied"), sourceRef: approvalRefSchema, sourceVersion: approvalRefSchema, validUntil: approvalInstantSchema }).strict(),
@@ -36,7 +37,11 @@ export const approvalDraftSchema = z.object({
   acquisitionTerms: approvalTermsSchema.nullable(), historicalLiability: z.object({ sourceRef: approvalRefSchema, sourceVersion: approvalRefSchema, acceptedMinor: count, currency: z.literal("USD"), validUntil: approvalInstantSchema }).strict().nullable(),
   // Source registry selects exact saved offers. Eligibility hashes never replace J04 approval or source grants.
   commercialOffers: z.array(z.object({ itemRef: approvalRefSchema, offerRef: approvalRefSchema,
-    basisHash: approvalHashSchema.optional() }).strict()).min(1).max(100).optional(),
+    offerVersion: z.string().regex(/^v[1-9]\d*$/).optional(), basisHash: approvalHashSchema.optional() }).strict()).min(1).max(100).optional(),
+  // A stage grants an exposure ceiling, while its local governance write spends nothing.
+  mediaAuthorization: z.object({ kind: z.literal("stageCap"), accountKind: z.literal("internalGovernance"),
+    poolRef: approvalRefSchema, poolVersion: approvalRefSchema, allocationHash: approvalHashSchema,
+    capMinor: count.positive(), currency: z.literal("USD") }).strict().optional(),
   // Optional preserves the hashes of existing five-gate manifests. Physical reward phases require it in policy.
   gates: z.object({ acceptedTerms: approvalGateSchema, sampleAuthority: approvalGateSchema, providerTerms: approvalGateSchema, launchReadiness: approvalGateSchema, sourcePermission: approvalGateSchema,
     rewardStockAuthority: approvalGateSchema.optional() }).strict(),
@@ -129,5 +134,9 @@ export type VerifiedExistingJobOutcome = { approvalRef: string; manifestVersion:
 
 export class ApprovalError extends Error {
   readonly code: string;
-  constructor(code: string) { super(code); this.name = "ApprovalError"; this.code = code; }
+  readonly reasonCodes: readonly CommercialEligibilityReason[];
+  constructor(code: string, reasonCodes: readonly CommercialEligibilityReason[] = []) {
+    super(code); this.name = "ApprovalError"; this.code = code;
+    this.reasonCodes = Object.freeze([...new Set(z.array(commercialEligibilityReasonSchema).parse(reasonCodes))]);
+  }
 }

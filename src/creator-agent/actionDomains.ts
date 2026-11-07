@@ -1,6 +1,7 @@
 import type { ActionFoundationBindings } from "./actionFoundation.ts";
 import { ApprovalError, type ApprovalRegistry } from "./approvals/contract.ts";
 import type { RegisteredAction } from "./actions/service.ts";
+import { copyRegisteredAction, registeredHandlerRefs } from "./actions/registration.ts";
 import type { DispatchHandler } from "./jobs/dispatchSchema.ts";
 
 export type ActionDomain = {
@@ -17,8 +18,8 @@ export function composeActionDomains(base: ActionFoundationBindings | undefined,
   for (const domain of domains) {
     for (const [action, value] of domain.actions) {
       if (registry.has(action)) throw new Error("Duplicate native action registration");
-      if (!domain.handlers.has(value.handlerRef)) throw new Error("Domain action requires its registered handler");
-      registry.set(action, value); owners.set(action, domain.registry);
+      if (registeredHandlerRefs(value).some(handler => !domain.handlers.has(handler))) throw new Error("Domain action requires every exact account's registered handler");
+      registry.set(action, copyRegisteredAction(value)); owners.set(action, domain.registry);
     }
     for (const [handler, value] of domain.handlers) {
       if (handlers.has(handler)) throw new Error("Duplicate native handler registration");

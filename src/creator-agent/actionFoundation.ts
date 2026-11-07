@@ -1,6 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import type { ApprovalManifest } from "./approvals/contract.ts";
+import type { CommercialProjection } from "./commercialPolicy/projection.ts";
 import { ApprovalRepository, type ApprovalRepositoryOptions } from "./approvals/repository.ts";
 import { approvalScopeSchema, approvalRefSchema, approvalInstantSchema, slackDecisionLocatorSchema } from "./approvals/contract.ts";
 import { DispatchGuard, type DispatchGuardOptions } from "./jobs/dispatchGuard.ts";
@@ -51,7 +53,8 @@ export function assertMachineTokens(bindings: ActionFoundationBindings | undefin
 
 /** One composition of J04, existing jobs, action contracts and domain owners, on the same scoped database. */
 export function createActionFoundation(options: { db: DatabaseSync; scope: ActionScope; secret: string;
-  jobs: JobRepository; ledger: CapabilityLedger; bindings?: ActionFoundationBindings; now?: () => number }) {
+  jobs: JobRepository; ledger: CapabilityLedger; bindings?: ActionFoundationBindings;
+  commercialEligibility?: (manifest: ApprovalManifest) => ReadonlyMap<string, CommercialProjection>; now?: () => number }) {
   const { db, scope, secret, jobs, ledger } = options, bindings = options.bindings ?? {}, now = options.now ?? Date.now;
   const approvals: ApprovalRepository = new ApprovalRepository(db, { ...bindings.approvals, scope, now,
     verifyOutcome: outcome => dispatch.verifyOutcome(outcome) });
@@ -61,7 +64,7 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     assertAuthority: bindings.approvals?.sources?.assertCurrent,
     ledger: bindings.ledger, readiness: bindings.readiness });
   const service = createActionService({ scope, secret, approvals, dispatch, domains, registry: bindings.registry ?? new Map(),
-    authorize: bindings.approvals?.sources?.resolveActor, assertAuthority: bindings.approvals?.sources?.assertCurrent, now });
+    authorize: bindings.approvals?.sources?.resolveActor, assertAuthority: bindings.approvals?.sources?.assertCurrent, commercialEligibility: options.commercialEligibility, now });
   const limits = new ApiRequestLimits(db, scope, now);
 
   function machineBearer(authorization: string | undefined, token: string) {
@@ -107,9 +110,17 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
         if (linked.outbox.some(box => box.kind === "outcome" && box.state !== "recorded")) linksVerified = false; }
       catch { linksVerified = false; }
     }
+    // Outcome synchronization awaits independent source reads. A later loss of machine
+    // authority clears the response without erasing or reclassifying the native effect.
+    try { assertCurrent(); }
+    catch (error) {
+      if (error instanceof DispatchError) throw new DispatchError(error.code, error.status, result.executionCertainty, error.retryAfterMs);
+      throw new DispatchError("DISPATCH_WORKER_AUTHORITY_INVALID",403,result.executionCertainty);
+    }
     // Machine acknowledgment contains no source locators or private payloads. Provider receipts remain in the native job store.
     return { schemaVersion: "farda.dispatch-worker.v1", runRef: result.runRef, state: result.current.state,
       executionCertainty: result.executionCertainty, receiptCount: result.items.filter(item => item.receipt !== null).length,
+      providerRejectedCount: result.items.filter(item=>item.receipt?.providerOutcome?.state==="rejected").length,
       outcomeLinksVerified: linksVerified };
   }
   async function observeDecision(raw: unknown, authorization: string | undefined) {

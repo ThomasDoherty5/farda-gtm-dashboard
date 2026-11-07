@@ -3,6 +3,8 @@ import { approvalPhaseSchema, approvalInstantSchema as instant, approvalRefSchem
 import { jobRunViewSchema } from "../jobs/schema.ts";
 import { readinessPayloadSchema } from "./contract.ts";
 import { readinessEntityRefSchema } from "./wire.ts";
+import { commercialEligibilityViewSchema } from "../commercialPolicy/views.ts";
+import { providerOutcomeSchema } from "../jobs/dispatchSchema.ts";
 
 const count = z.number().int().nonnegative().safe();
 const current = z.object({ state: z.enum(["pending", "held", "approved", "rejected", "editRequired", "canceled"]), reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)) }).strict();
@@ -11,19 +13,38 @@ export const nativeApprovalViewSchema = z.object({ kind: z.literal("native-appro
   actionKind: ref, policyVersion: ref, phase: approvalPhaseSchema, manifestVersion: count.positive(), current, createdAt: instant, expiresAt: instant,
   bounds: z.object({ maxItems: count.max(100), maxUnits: count, maxSpendMinor: count, currency: z.literal("USD") }).strict(),
   exposure: z.discriminatedUnion("state", [z.object({ state: z.literal("known"), minor: count, currency: z.literal("USD") }).strict(), z.object({ state: z.literal("unknown"), reason: z.literal("Authoritative economic exposure unavailable") }).strict()]),
-  items: z.array(z.object({ itemRef: ref, targetRef: ref, itemVersion: ref, units: count, spendMinor: count }).strict()).min(1).max(100),
+  authorization: z.object({ kind: z.literal("mediaStageCap"), accountKind: z.literal("internalGovernance"),
+    capMinor: count.positive(), currency: z.literal("USD"), allocationHash: z.string().regex(/^[a-f0-9]{64}$/),
+    immediateProviderSpendMinor: z.literal(0) }).strict().optional(),
+  items: z.array(z.object({ itemRef: ref, targetRef: ref, itemVersion: ref, units: count, spendMinor: count,
+    commercialApplicability: z.enum(["required", "notApplicable"]).optional(), commercialEligibility: commercialEligibilityViewSchema.optional() }).strict()).min(1).max(100),
   versions: z.object({ product: versionRequirementSchema, terms: versionRequirementSchema, rights: versionRequirementSchema }).strict(),
   requestState: z.enum(["local", "recorded", "uncertain"]), sourceEffect: z.literal("none"),
   decision: z.object({ receiptRef: ref, decision: z.enum(["approved", "rejected", "editRequired", "canceled"]), decidedAt: instant, actorRef: ref }).strict().nullable(),
   appDecision: z.object({ allowed: z.literal(false), reasonCode: z.literal("APPROVAL_CHANNEL_REQUIRED") }).strict(), approvedIsSent: z.literal(false),
-}).strict();
+}).strict().superRefine((value, ctx) => {
+  if (value.phase === "mediaStageRelease") {
+    if (!value.authorization || value.actionKind !== "media.stageRelease" || value.exposure.state !== "known" ||
+      value.authorization.capMinor !== value.exposure.minor || value.authorization.capMinor !== value.bounds.maxSpendMinor ||
+      value.items.length !== 1 || value.bounds.maxItems !== 1 || value.bounds.maxUnits !== 0 ||
+      value.items.some(item => item.units !== 0 || item.spendMinor !== 0))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Stage authorization must expose its full cap and zero immediate provider spend." });
+  } else if (value.authorization) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Stage cap metadata requires its exact phase." });
+});
 export type NativeApprovalView = z.infer<typeof nativeApprovalViewSchema>;
 export const nativeRunViewSchema = z.object({ kind: z.literal("native-run"), runRef: ref, version: ref, approvalRef: ref, manifestRef: ref,
   state: jobRunViewSchema.shape.state, control: jobRunViewSchema.shape.control,
   current: z.object({ state: z.enum(["held", "ready", "running", "completed", "uncertain", "cancelled"]), reasonCodes: z.array(z.string()) }).strict(),
   executionCertainty: z.enum(["notApplied", "applied", "uncertain"]), counts: jobRunViewSchema.shape.counts, usage: jobRunViewSchema.shape.usage,
-  items: z.array(z.object({ itemRef: ref, receiptRef: ref.nullable(), sourceEffect: z.enum(["localArtifact", "providerApplied"]).nullable(), observedAt: instant.nullable() }).strict()).min(1).max(100),
-}).strict();
+  providerRejectedCount: count.optional(),
+  items: z.array(z.object({ itemRef: ref, receiptRef: ref.nullable(), sourceEffect: z.enum(["localArtifact", "providerApplied"]).nullable(), observedAt: instant.nullable(),
+    providerOutcome: providerOutcomeSchema.optional(), commercialApplicability: z.enum(["required", "notApplicable"]).optional(), commercialEligibility: commercialEligibilityViewSchema.optional() }).strict()).min(1).max(100),
+}).strict().superRefine((value,ctx)=>{
+  if(value.providerRejectedCount!==undefined && value.providerRejectedCount!==value.items.filter(item=>item.providerOutcome?.state==="rejected").length)
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:"Recorded rejection count must match the exact returned items."});
+  if(value.items.some(item=>item.providerOutcome && (!item.receiptRef || item.sourceEffect!=="providerApplied" || !item.observedAt)))
+    ctx.addIssue({code:z.ZodIssueCode.custom,message:"Provider outcomes require an actual observed native receipt."});
+});
 export type NativeRunView = z.infer<typeof nativeRunViewSchema>;
 export const readinessRecoveryIntentSchema = z.object({ operation: z.literal("recordSourceDecision"), actionKind: z.literal("recordLaunchReadiness"),
   requestKey: ref, actorRef: ref, targetRef: ref, expectedVersion: ref, entityRefs: z.tuple([readinessEntityRefSchema]),

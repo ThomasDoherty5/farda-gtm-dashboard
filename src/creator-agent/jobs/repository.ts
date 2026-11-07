@@ -260,7 +260,26 @@ export class JobRepository {
     if(row.state==="completed") {if(digest(parse(row.result))!==digest(receipt)) throw new JobConflict("DISPATCH_RECEIPT_CONFLICT"); return run;}
     record(); this.release(row); this.db.prepare("UPDATE job_items SET state=?,result=?,reason_code=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?").run(receipt?"completed":"reconcile",receipt?JSON.stringify(receipt):null,receipt?null:reasonCode,this.now(),String(row.item_id)); this.log(runId,String(row.item_id),receipt?"dispatch-receipt":"dispatch-uncertain"); return this.getRun(runId);
   }); }
-  retryApproved(runId:string,itemKey:string,assertNotApplied:()=>void) { return this.tx(()=>{ const run=this.getRun(runId); const item=run.items.find(i=>i.itemKey===itemKey); if(!item||run.definition.handler!=="dispatch-approved.v1"||item.state!=="reconcile"||run.control!=="active") throw new JobConflict("DISPATCH_RETRY_HELD"); assertNotApplied(); this.db.prepare("UPDATE job_items SET state='queued',dispatch_started=0,reason_code=NULL,due_at=?,updated_at=? WHERE item_id=?").run(this.now(),this.now(),item.itemId); this.log(runId,item.itemId,"dispatch-not-applied"); return this.getRun(runId); }); }
+  /** Records a positively closed original attempt under read authority. It never re-arms a retry. */
+  closeApprovedAttempt(runId: string, itemKey: string, attemptNumber: number, assertAndRecord: () => void) {
+    if (!Number.isSafeInteger(attemptNumber) || attemptNumber < 1) throw new JobConflict("DISPATCH_ATTEMPT_UNVERIFIED");
+    return this.tx(() => {
+      const run = this.getRun(runId), item = run.items.find(value => value.itemKey === itemKey);
+      if (!item || run.definition.handler !== "dispatch-approved.v1") throw new JobConflict("DISPATCH_HANDLER_REQUIRED");
+      const row = this.itemRow(item.itemId);
+      // A live native attempt or a confirmed effect always wins over an asynchronous negative lookup.
+      if (row.state === "leased" || row.state === "completed" || row.result !== null) return run;
+      assertAndRecord();
+      if (Number(row.attempts) !== attemptNumber) throw new JobConflict("DISPATCH_CLOSURE_ATTEMPT_MISMATCH");
+      if (!row.dispatch_started) return this.getRun(runId);
+      this.release(row);
+      const state = run.control === "cancelled" || row.state === "cancelled" ? "cancelled" : "held";
+      this.db.prepare("UPDATE job_items SET state=?,dispatch_started=0,reason_code='DISPATCH_NOT_APPLIED_CLOSED',lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?")
+        .run(state, this.now(), item.itemId);
+      this.log(runId, item.itemId, "dispatch-not-applied", { attemptNumber, retryArmed: false });
+      return this.getRun(runId);
+    });
+  }
   controlRun(runId: string, command: "pause" | "resume" | "cancel", assertCurrent?:()=>boolean|void,persistControl?:()=>void) { if (!["pause", "resume", "cancel"].includes(command)) throw new JobConflict("INVALID_RUN_CONTROL");
     return this.tx(() => { if(assertCurrent?.()===false)return this.getRun(runId); const run = this.db.prepare("SELECT * FROM job_runs WHERE run_id=?").get(runId); if (!run) throw new JobConflict("JOB_RUN_NOT_FOUND"); if (run.control === "cancelled" && command !== "cancel") throw new JobConflict("RUN_CANCELLED");
       this.db.prepare("UPDATE job_runs SET control=? WHERE run_id=?").run(command === "pause" ? "paused" : command === "cancel" ? "cancelled" : "active", runId);

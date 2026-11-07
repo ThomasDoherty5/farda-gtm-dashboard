@@ -10,7 +10,14 @@ export const resourceRequirementsSchema = z.object({ budget: resourceRequirement
 export type ResourceRequirements = z.infer<typeof resourceRequirementsSchema>;
 export const grantSchema = z.object({ grantRef: ref, issuerRef: ref, allocationVersion: ref, scope: dispatchApprovalBindingSchema.shape.scope, dispatchKey: ref, dimension: z.enum(["budget", "stock", "quota"]), resourceRef: ref, quantity: z.number().int().positive().safe(), unit: ref, currency: z.string().regex(/^[A-Z]{3}$/).nullable(), observedAt: instant, validUntil: instant, exclusive: z.literal(true), quotaBasis: z.object({ publishedLimit: z.number().int().positive().safe(), operatingLimit: z.number().int().positive().safe(), allocatedTotal: z.number().int().positive().safe(), windowRef: ref, windowStart: instant, windowEnd: instant, sharedAcrossRoutes: z.literal(true) }).strict().optional() }).strict();
 export type ResourceGrant = z.infer<typeof grantSchema>;
-export const receiptSchema = z.object({ receiptRef: ref, dispatchKey: ref, payloadHash: hash, handlerRef: ref, providerBindingHash: hash, sourceEffect: z.enum(["localArtifact", "providerApplied"]), observedAt: instant }).strict();
+export const providerOutcomeSchema = z.discriminatedUnion("state", [
+    z.object({ state: z.literal("accepted"), reasonCode: z.null() }).strict(),
+    z.object({ state: z.literal("rejected"), reasonCode: z.literal("PROVIDER_REJECTED") }).strict(),
+]);
+export const receiptSchema = z.object({ receiptRef: ref, dispatchKey: ref, payloadHash: hash, handlerRef: ref, providerBindingHash: hash, sourceEffect: z.enum(["localArtifact", "providerApplied"]), observedAt: instant,
+    providerOutcome: providerOutcomeSchema.optional() }).strict().superRefine((value,ctx)=>{
+    if(value.providerOutcome && value.sourceEffect!=="providerApplied")ctx.addIssue({code:z.ZodIssueCode.custom,message:"Only a native provider receipt can carry a provider outcome."});
+});
 export type DispatchReceipt = z.infer<typeof receiptSchema>;
 export const dispatchReadbackSchema = z.discriminatedUnion("state", [
     z.object({ state: z.literal("applied"), receipt: receiptSchema }).strict(),
