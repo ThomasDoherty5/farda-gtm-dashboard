@@ -37,9 +37,17 @@ The existing draft/mark-watched controls are held for projected records. Review 
 
 All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
+### Creator intake (J01)
+
+`POST /v1/intake` records one signup or discovery candidate and resolves it to a canonical creator, without scoring, inviting, messaging, reserving or paying. Reads are under `/v1/intake/events`, `/v1/intake/creators` and `/v1/intake/sources`. The source route permission, suppression list, reviewed crosswalk and Notion/Sheets sinks are injected through `intakeAuthority`; none is connected yet. See [`src/creator-agent/intake/README.md`](../src/creator-agent/intake/README.md).
+
+### Reward redemption (THO-348)
+
+`/v1/rewards/redemptions` prepares, decides, purchases, records outcomes for and reconciles one redemption per mature J11 entitlement. It needs an exact J04 decision before any purchase, holds proposed terms as proposed, and reads an uncertain purchase back before retrying. Every source and the purchase executor are injected through `rewardAuthority`; none is connected. See [`src/creator-agent/rewards/README.md`](../src/creator-agent/rewards/README.md).
+
 ### Paid-media drafts (THO-346)
 
-`/v1/media/` inventories advertiser accounts and per-operation capabilities, compiles an immutable, hashed campaign manifest from the actual checkout, creates a paused native draft and reads its settings back before release is requested. Publishing needs an exact J04 Linear decision for that revision, manifest and read-back, all five media gates and a Ready publish capability; a denied API capability never falls back to a browser route, and an uncertain write is reconciled by its key and native campaign before any retry. Every source and the provider executor are injected through `mediaAuthority`; none is connected, and production stays held. See [`src/creator-agent/media/README.md`](../src/creator-agent/media/README.md).
+`/v1/media/` inventories advertiser accounts and per-operation capabilities, compiles an immutable, hashed campaign manifest from the actual checkout, creates a paused native draft and reads its settings back before release is requested. Publishing needs an exact J04 Linear decision for that revision, manifest and read-back, all five media gates and a Ready publish capability; a denied API capability never falls back to a browser route, and an uncertain write is reconciled by its key and native campaign before any retry. A pre-authorized safety pause can always stop live spend. Every source and the provider executor are injected through `mediaAuthority`; none is connected, and production stays held. See [`src/creator-agent/media/README.md`](../src/creator-agent/media/README.md).
 
 ## Weight binding
 

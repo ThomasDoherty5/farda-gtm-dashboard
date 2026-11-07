@@ -31,6 +31,10 @@ import { protectCommentAuthors } from "./evidencePrivacy.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
+import { IntakeRepository, type IntakeAuthority } from "./intake/repository.ts";
+import { handleIntakeRoute } from "./intake/routes.ts";
+import { RewardRedemptionRepository, type RewardAuthority } from "./rewards/repository.ts";
+import { handleRewardRoute } from "./rewards/routes.ts";
 import { PaidMediaRepository, type MediaAuthority } from "./media/repository.ts";
 import { handleMediaRoute } from "./media/routes.ts";
 import { routeId as offerIdSchema } from "./offers/contract.ts";
@@ -38,6 +42,9 @@ import { FunnelRepository, FunnelError, type FunnelAuthority } from "./funnelSto
 import { funnelFilterSchema } from "./funnelContract.ts";
 import { readScorecardPreview, scorecardPreviewFilters } from "./scorecardPreview.ts";
 import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
+import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
+import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
+import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, type MonitorSourceReader } from "./monitor/reader.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -55,7 +62,9 @@ type Role = "reader" | "reviewer";
 type Session = { role: Role; csrf: string; expiresAt: number };
 export type AgentServerOptions = { databasePath: string; readToken: string; reviewToken: string; workspaceId: string; accountId: string; bindings?: ConfigBinding[]; secureCookies?: boolean; publicOrigin?: string; assetAuthority?: AssetAuthority; portfolioAuthority?: PortfolioDecisionAuthority; operations?: OperationsOptions; providerHealth?: HealthOptions;
   scorecardAuthority?: ScorecardAuthority; funnelAuthority?: FunnelAuthority; offerAuthority?: Omit<OfferAuthority, "assessment">;
-  collaborationSourceReader?: CollaborationSourceReader; mediaAuthority?: MediaAuthority;
+  collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority; mediaAuthority?: MediaAuthority;
+  stockSupportSource?: StockSupportSource;
+  monitorSource?: MonitorSourceReader;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -70,11 +79,15 @@ export function createAgentServer(options: AgentServerOptions) {
   let assets: AssetRepository;
   let funnel: FunnelRepository;
   let offers: OfferRepository;
+  let intake: IntakeRepository;
+  let rewards: RewardRedemptionRepository;
   let media: PaidMediaRepository;
   let schedules: ScheduleDraftRepository;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
+  let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
+  let monitor: ReturnType<typeof createMonitorReader>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -86,6 +99,8 @@ export function createAgentServer(options: AgentServerOptions) {
           policyVersion: assessment.policyVersion, state: assessment.state, termsRevision: record.packet.termsRevision, stale };
       },
     });
+    intake = new IntakeRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.intakeAuthority);
+    rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.rewardAuthority);
     media = new PaidMediaRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.mediaAuthority);
     funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
@@ -93,6 +108,11 @@ export function createAgentServer(options: AgentServerOptions) {
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
+    stockSupport = createStockSupportWorkflow(store.database,
+      { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
+    monitor = createMonitorReader({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      funnel, intake, source: options.monitorSource, now: options.operations?.now });
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
@@ -176,8 +196,14 @@ export function createAgentServer(options: AgentServerOptions) {
     expectedVersion: z.string().regex(/^cw1-[a-f0-9]{64}$/), approvalRef: z.null(), manifestRef: z.null(), runRef: z.null().optional(),
     idempotencyKey: z.string().trim().min(1).max(240), payload: z.unknown(),
   }).strict();
+  const localActionSchema = z.discriminatedUnion("actionKind", [collaborationActionSchema,
+    collaborationActionSchema.extend({ actionKind: z.literal("requestStockTransfer"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: transferIntent }),
+    collaborationActionSchema.extend({ actionKind: z.literal("requestSupportHandoff"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: handoffIntent }),
+  ]);
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
+    ...monitorViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: monitorFilters[viewKey],
+      period: z.null(), sort: z.array(z.never()).max(0) })),
     ...creatorPlatformKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: creatorPlatformFilterSchema,
       period: z.null(), sort: z.array(z.never()).max(0) })),
     readBase.extend({ viewKey: z.literal("offerDraft"), filters: z.object({ offerId: offerIdSchema }).strict() }),
@@ -191,6 +217,8 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1) }).strict() }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(500),
       proposalRequestKey: z.string().trim().min(1).max(240).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -295,6 +323,15 @@ export function createAgentServer(options: AgentServerOptions) {
           idempotencyKey: typeof key === "string" ? key : undefined }, assets);
         if (result) return reply(res, result.status, result.body);
       }
+      if (path === "/v1/intake" || path.startsWith("/v1/intake/")) {
+        if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handleIntakeRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, intake);
+        if (result) return reply(res, result.status, result.body);
+      }
       if (path.startsWith("/v1/media/")) {
         if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
@@ -302,6 +339,15 @@ export function createAgentServer(options: AgentServerOptions) {
         const key = req.headers["idempotency-key"];
         const result = await handleMediaRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
           body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, media);
+        if (result) return reply(res, result.status, result.body);
+      }
+      if (path.startsWith("/v1/rewards/")) {
+        if (req.method === "POST" && auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+        if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json"))
+          return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const key = req.headers["idempotency-key"];
+        const result = await handleRewardRoute({ method: req.method ?? "GET", path: req.url ?? path, role: auth.role,
+          body: req.method === "POST" ? await bodyOf(req) : undefined, idempotencyKey: typeof key === "string" ? key : undefined }, rewards);
         if (result) return reply(res, result.status, result.body);
       }
       if (path.startsWith("/v1/offers/")) {
@@ -344,8 +390,9 @@ export function createAgentServer(options: AgentServerOptions) {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
-        const input = collaborationActionSchema.parse(await bodyOf(req));
-        const result = await collaborationWorkflow.propose(input, "agent-reviewer");
+        const input = localActionSchema.parse(await bodyOf(req));
+        const result = input.actionKind === "proposeCollaborationReview"
+          ? await collaborationWorkflow.propose(input, "agent-reviewer") : await stockSupport.propose(input, "agent-reviewer");
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
           runRef: null, approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
@@ -369,6 +416,8 @@ export function createAgentServer(options: AgentServerOptions) {
         savedOperations: { pagination: "scoped-cursor-v1", scheduleDrafts: "durable-versioned", scheduleActivation: "notConnected" },
         reviewerEvidence: { annotations: "immutable-versioned", completionAuthority: "source-j20" },
         collaborationReview: { sourceAuthority: options.collaborationSourceReader ? "injected" : "notConnected", proposals: "durable", dispatch: "notConnected" },
+        stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
+        contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -397,6 +446,37 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "contentMonitor" || input.viewKey === "watchlist" || input.viewKey === "hourlyRun" || input.viewKey === "postPerformance") {
+          const result = await monitor.read(input.viewKey, input.filters,
+            { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role });
+          if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
+            dataState: result.stale ? "stale" : result.partial ? "partial" : result.total ? "ready" : "empty", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: result.total, observedCount: result.returned,
+              missingCount: result.total - result.returned, complete: !result.partial && !result.stale,
+              reasonCodes: result.partial || result.stale ? ["MONITOR_SOURCE_COVERAGE_UNVERIFIED"] : [] },
+            capabilities: result.capabilities.map(capability => ({ ...capability,
+              state: auth.role === "reviewer" ? capability.state : "denied",
+              reasonCodes: auth.role === "reviewer" ? capability.reasonCodes : ["REVIEWER_REQUIRED"] })),
+            page: { nextCursor: result.nextCursor, hasMore: result.nextCursor !== null }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "inventoryOverview" || input.viewKey === "supportWorkspace") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
+            return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
+          const result = await stockSupport.read(input.viewKey, input.filters, `agent-${auth.role}`);
+          const held = result.stale || result.partial || result.empty;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.stale ? "stale" : result.partial ? "partial" : result.empty ? "empty" : "ready", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: 1, observedCount: result.empty ? 0 : 1, missingCount: result.empty ? 1 : 0,
+              complete: !held, reasonCodes: held ? ["SOURCE_STOCK_SUPPORT_REVIEW_REQUIRED"] : [] },
+            capabilities: [{ actionKind: input.viewKey === "inventoryOverview" ? "requestStockTransfer" : "requestSupportHandoff",
+              state: auth.role !== "reviewer" ? "denied" : held ? "held" : "available",
+              reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : held ? ["SOURCE_STOCK_SUPPORT_REVIEW_REQUIRED"] : ["LOCAL_PROPOSAL_ONLY"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "socialCatBoard" || input.viewKey === "tiktokBoard" || input.viewKey === "socialCatDashboard" || input.viewKey === "tiktokDashboard") {
           const result = readCreatorPlatformView({ viewKey: input.viewKey, filters: input.filters, db: store.database, funnel,
             scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
@@ -573,6 +653,9 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
+      if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof EvidenceReviewError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",

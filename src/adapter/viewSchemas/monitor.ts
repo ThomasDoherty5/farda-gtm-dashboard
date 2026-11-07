@@ -16,6 +16,7 @@
  */
 import { z } from "zod";
 import { moneySchema } from "../contract";
+import { nativeContentSchema,nativeWatchlistSchema,nativeRunSchema,nativePostSchema } from "@/creator-agent/monitor/contract";
 
 const count = z.number().int().nonnegative();
 const nonNegativeMoney = moneySchema.extend({ minorUnits: z.number().int().nonnegative() });
@@ -144,8 +145,8 @@ export const postPerformanceSchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const monitorViewSchemas: Record<string, z.ZodTypeAny> = {
-  contentMonitor: contentMonitorSchema,
-  watchlist: watchlistSchema,
-  hourlyRun: hourlyRunSchema,
-  postPerformance: postPerformanceSchema,
+  contentMonitor: z.union([nativeContentSchema,contentMonitorSchema]),
+  watchlist: z.union([nativeWatchlistSchema,watchlistSchema]),
+  hourlyRun: z.union([nativeRunSchema,hourlyRunSchema]),
+  postPerformance: z.union([nativePostSchema,postPerformanceSchema]),
 };

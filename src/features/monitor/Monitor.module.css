@@ -1,5 +1,7 @@
 /* Content monitor, watchlist, hourly run and post performance (Figma 23:73, 25:166, 25:307, 25:481). Below 1180 the columns stack. */
 .tabsRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }
+.nativeSections { display: flex; min-width: 0; flex-direction: column; gap: var(--space-24); overflow-wrap: anywhere; }
+.native th, .native td { overflow-wrap: anywhere; }
 .tabsRow nav { gap: var(--space-12); }
 .tabsRow nav a { padding-inline: 0; }
 .filtersRow { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-12); }

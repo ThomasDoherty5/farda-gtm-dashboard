@@ -29,7 +29,7 @@ const sourcePlatform = (source: string) => {
 };
 const acquisitionPlatform = (view: CreatorPlatformKey) => view.startsWith("socialCat") ? "Social Cat" : "TikTok";
 const purpose = "creator-platform-list.v1";
-function nativePost(event: FunnelEvent) {
+export function nativePost(event: FunnelEvent) {
   const source = event.sourceAccount.source.toLowerCase().replace(/[ _]/g, "-");
   return event.evidenceRef.access === "verified" &&
     ((event.network === "instagram" && ["instagram", "instagram-insights", "meta"].includes(source)) ||
