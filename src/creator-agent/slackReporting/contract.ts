@@ -39,6 +39,7 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
 export type ReportEvent = z.infer<typeof reportEventSchema>;
 
 export const reportSnapshotSchema = z.object({ scope: reportScopeSchema, event: reportEventSchema,
+  testProvenance: z.object({ kind: z.literal("controlledSandbox"), evidenceRef: reportReference }).strict().optional(),
   programme: z.object({ programmeRef: reportReference, version: reportReference, adoptionRef: reportReference, authority: z.literal("report-policy"), state: z.enum(["adopted", "unverified", "revoked"]), permittedProducers: z.array(reportReference).min(1).max(30), policy: z.literal("immediate-red-digest-orange-source-scheduled-info"), grantsBusinessAuthority: z.literal(false) }).strict(),
   destination: z.object({ targetRef: reportReference, version: reportReference, workspaceId: nativeId, channelId: nativeId, botId: nativeId, member: z.enum(["verified", "unknown", "denied"]), owner: z.discriminatedUnion("state", [z.object({ state: z.literal("active"), memberId: nativeId, mappingVersion: reportReference }).strict(), z.object({ state: z.enum(["missing", "deactivated"]), memberId: z.null(), mappingVersion: reportReference }).strict()]), backup: z.literal("none-approved") }).strict(),
   authority: z.object({ read: z.enum(["allowed", "unknown", "denied"]), send: z.enum(["allowed", "unknown", "denied"]), sourceRef: reportReference, sourceVersion: reportReference, permissionRef: reportReference.nullable(), observedAt: reportInstant, validUntil: reportInstant }).strict(),
@@ -76,6 +77,7 @@ export interface ReportingSource {
   lookup(command: ReportCommand, context: { assertCurrent(): void }): Promise<unknown>;
 }
 export type ReportMachine = { workerRef: string; assertCurrent(): void };
+export type ReportReadAuthority = { readerRef: string; assertCurrent(): void };
 export type ReportJobResult = { schemaVersion: "job-report-result.v1"; kind: "report-receipt"; receiptRef: string; requestKey: string; payloadHash: string; sourceEffect: "internalReport"; observedAt: string };
 /** Structural port of the existing JobRepository, never a second queue. Callbacks run in its SQLite transaction. */
 export interface ReportJobPort extends Pick<JobRepository, "register" | "ingest" | "getRun" | "fail" | "recoverExpired"> {

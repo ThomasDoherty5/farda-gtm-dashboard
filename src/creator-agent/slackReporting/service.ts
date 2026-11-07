@@ -26,7 +26,7 @@ export function createSlackReporting(options: ReportingOptions) {
     const expected = record.snapshot.destination, actual = snapshot.destination;
     for (const key of ["targetRef", "version", "workspaceId", "channelId", "botId"] as const) if (expected[key] !== actual[key]) throw new ReportError("REPORT_TARGET_READ_DENIED", 403);
   }
-  async function read(reportRef: string, machine: ReportMachine): Promise<ReportRead> {
+  async function readEvidence(reportRef: string, machine: Pick<ReportMachine,"assertCurrent">): Promise<{data:ReportRead;assertCurrent():void}> {
     try {
       const record = requireRecord(reportRef), snapshot = await loadSnapshot(source, locate(record), scope, "read", now, machine);
       assertReadTarget(record, snapshot);
@@ -38,9 +38,18 @@ export function createSlackReporting(options: ReportingOptions) {
       else if (run.items.some(value => Date.parse(value.dueAt) > now())) reasonCodes.push("REPORT_RETRY_NOT_DUE");
       assertSnapshot(source!, snapshot, scope, "read", now(), machine);
       const certainty = metadata.certainty(reportRef);
-      return reportReadSchema.parse({ schemaVersion: "farda.report.v1", reportRef, runRef: record.runRef, state: run.state, executionCertainty: certainty, sourceEffect: certainty === "applied" ? "internalReport" : certainty === "uncertain" ? "unknown" : "none", observedAt: new Date(now()).toISOString(), current: { sendEligible: reasonCodes.length === 0 ? null : false, reasonCodes: reasonCodes.length ? reasonCodes : ["REPORT_ATTEMPT_GRANT_NOT_EVALUATED"] }, receipt: applied ? { receiptRef: metadata.alias("report-receipt", applied.receipt.receiptRef), threadRef: metadata.alias("report-thread", [applied.receipt.workspaceId, applied.receipt.channelId, applied.receipt.threadTs ?? applied.receipt.messageTs]), bodyHash: applied.receipt.bodyHash, observedAt: applied.receipt.observedAt } : null, usage: { zapierTasks: "unknown", cost: "unknown" }, grantsBusinessAuthority: false });
+      const localBasis=()=>digest({record:requireRecord(reportRef),applied:metadata.applied(reportRef),run:jobs.getRun(record.runRef)}),basis=localBasis();
+      const assertCurrent=()=>{
+        try{
+          assertReadTarget(record,snapshot);assertSnapshot(source!,snapshot,scope,"read",now(),machine);
+          if(localBasis()!==basis)throw new ReportError("REPORT_READ_CHANGED");
+        }catch(error){throw normalize(error,reportRef);}
+      };
+      const data=reportReadSchema.parse({ schemaVersion: "farda.report.v1", reportRef, runRef: record.runRef, state: run.state, executionCertainty: certainty, sourceEffect: certainty === "applied" ? "internalReport" : certainty === "uncertain" ? "unknown" : "none", observedAt: new Date(now()).toISOString(), current: { sendEligible: reasonCodes.length === 0 ? null : false, reasonCodes: reasonCodes.length ? reasonCodes : ["REPORT_ATTEMPT_GRANT_NOT_EVALUATED"] }, receipt: applied ? { receiptRef: metadata.alias("report-receipt", applied.receipt.receiptRef), threadRef: metadata.alias("report-thread", [applied.receipt.workspaceId, applied.receipt.channelId, applied.receipt.threadTs ?? applied.receipt.messageTs]), bodyHash: applied.receipt.bodyHash, observedAt: applied.receipt.observedAt } : null, usage: { zapierTasks: "unknown", cost: "unknown" }, grantsBusinessAuthority: false });
+      assertCurrent();return {data,assertCurrent};
     } catch (error) { throw normalize(error, reportRef); }
   }
+  async function read(reportRef:string,machine:ReportMachine):Promise<ReportRead>{const evidence=await readEvidence(reportRef,machine);evidence.assertCurrent();return evidence.data;}
   async function accept(input: ReportLocator, requestKey: string, machine: ReportMachine): Promise<ReportRead> {
     const locator = reportLocatorSchema.parse(input); reportReference.parse(requestKey); reportReference.parse(machine.workerRef);
     let reportRef: string | undefined;
@@ -139,6 +148,6 @@ export function createSlackReporting(options: ReportingOptions) {
       assertCurrent(); settle(record, attempt, validateOutcome(attempt, raw)); return await read(reportRef, machine);
     } catch (error) { throw normalize(error, reportRef); }
   }
-  return { accept, work, reconcile, read };
+  return { accept, work, reconcile, read, readEvidence };
 }
 export type SlackReportingService = ReturnType<typeof createSlackReporting>;

@@ -7,8 +7,12 @@ import type { CapabilityLedger } from "./connections/ledger.ts";
 import type { JobRepository } from "./jobs/repository.ts";
 import type { createProviderHealth } from "./providerHealth.ts";
 import { openOperationsToken, sealOperationsToken } from "./operationsTokens.ts";
+import {assertSynchronousVoid} from "./sourceFence.ts";
+import {type OperationsControlAuthority,type OperationsControlProof,OperationsAuthorityError,type OperationsServiceReference,operationsTargetMaterialHash} from "./operationsControlAuthority.ts";
+import {operationsCanonicalIntentSchema,operationsIntentDigest,type OperationsCanonicalIntent,type OperationsControlBridge} from "./operationsControlBridge.ts";
+import type {ApprovalPrincipal} from "./approvals/contract.ts";
 import { controlPolicy, controlReceiptSchema, nativeOperationsControlSchema, operationsControlAction, operationsControlFilters, operationsControlSourceSchema,operationsHealthAction,operationsHealthResultSchema,
-  type NativeOperationsControl, type OperationsControlSnapshot, type OperationsReviewPayload } from "./operationsControlsSchema.ts";
+  operationsCanonicalAction,operationsServiceEvidenceSchema,type OperationsServiceEvidence,type NativeOperationsControl, type OperationsControlSnapshot, type OperationsReviewPayload } from "./operationsControlsSchema.ts";
 
 export type OperationsControlSource={read:(scope:OperationsScope)=>Promise<OperationsControlSnapshot>;allowedHandoffOrigins?:readonly string[];allowedHandoffUrls?:readonly string[]};
 export class OperationsControlError extends Error{
@@ -16,7 +20,13 @@ export class OperationsControlError extends Error{
   constructor(code:string,status:number,currentVersion?:string,executionCertainty:"notApplied"|"applied"|"uncertain"="notApplied"){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;this.executionCertainty=executionCertainty;}
 }
 type Role="reader"|"reviewer";
-type Input={db:DatabaseSync;scope:OperationsScope;secret:string;ledger:CapabilityLedger;jobs:JobRepository;health:ReturnType<typeof createProviderHealth>;source?:OperationsControlSource;now?:()=>number};
+export type OperationsControlServiceReaders={
+  read(reference:Extract<OperationsServiceReference,{kind:"runtimeRegistration"|"runtimeRun"|"report"}>,principal:ApprovalPrincipal):Promise<{
+    reference:OperationsServiceReference;data:Extract<OperationsServiceEvidence,{kind:"runtimeRegistration"|"runtimeRun"|"report"}>["data"];assertCurrent():void;
+  }|{reference:OperationsServiceReference;unavailableReason:string;assertCurrent():void}>;
+};
+type Input={db:DatabaseSync;scope:OperationsScope;secret:string;ledger:CapabilityLedger;jobs:JobRepository;health:ReturnType<typeof createProviderHealth>;source?:OperationsControlSource;now?:()=>number;
+  authority?:OperationsControlAuthority;canonical?:()=>OperationsControlBridge|undefined;serviceReaders?:OperationsControlServiceReaders};
 type Section=NativeOperationsControl["section"];
 const sectionFor={task:"runs",takeover:"runs",repair:"reconciliation",permissionEvidence:"capabilities"} as const;
 const targetSchema=z.object({kind:z.enum(["task","takeover","repair","permissionEvidence","run","binding"]),id:z.string().min(1).max(240)}).strict();
@@ -54,7 +64,7 @@ export function createOperationsControls(input:Input){
       capabilitySequence:db.prepare("SELECT COALESCE(MAX(rowid),0) n FROM capability_events").get()?.n,
       runSequence:db.prepare("SELECT COUNT(*) n,MAX(at) latest FROM job_transitions").get()};
   }
-  const version=(s:OperationsControlSnapshot|null)=>"oc1-"+digest([scope,controlPolicy,facts(s),localBasis()]);
+  const version=(s:OperationsControlSnapshot|null,proof?:OperationsControlProof)=>"oc1-"+digest(proof?[scope,controlPolicy,facts(s),localBasis(),proof.materialHash]:[scope,controlPolicy,facts(s),localBasis()]);
   function target(s:OperationsControlSnapshot,kind:OperationsReviewPayload["kind"],id:string){
     return (kind==="task"?s.tasks:kind==="takeover"?s.takeovers:kind==="repair"?s.conflicts:s.permissions).find(r=>r.id===id)??null;
   }
@@ -107,11 +117,29 @@ export function createOperationsControls(input:Input){
   const categoryTitle={"daily-acquisition":"Daily acquisition","daily-review":"Daily evidence review","hourly-monitor":"Hourly monitoring",report:"Reporting"};
   const providers=new Set(["notion","zapier","linear","shopify","google-sheets","quickbooks","shippo","tiktok","meta","intercom"]);
   const display=(v:string|null|undefined)=>v??"Unknown";
+  function canonicalIntent(ref:string):OperationsCanonicalIntent|null{
+    const row=db.prepare("SELECT manifest FROM operations_control_requests WHERE json_extract(receipt,'$.actionRef')=?").get(ref);
+    if(!row?.manifest)return null;const parsed=operationsCanonicalIntentSchema.safeParse(JSON.parse(String(row.manifest)));return parsed.success?parsed.data:null;
+  }
+  function assertCanonicalIntent(intent:OperationsCanonicalIntent,proof:OperationsControlProof){
+    proof.assertCurrent();
+    if(digest(canonicalIntent(intent.intentRef))!==digest(intent)||operationsTargetMaterialHash(proof,intent.kind,intent.targetId)!==intent.sourceMaterialHash)
+      throw new OperationsAuthorityError("OPERATIONS_INTENT_CHANGED");
+    const reason=hold(proof.snapshot,intent.kind,intent.targetId);if(reason)throw new OperationsAuthorityError(reason,reason==="SOURCE_SCOPE_DENIED"?403:409);
+    const t=proof.authority.targets.find(t=>t.id===intent.targetId&&t.kind===intent.kind);
+    if(!t||digest(t)!==digest(intent.target))throw new OperationsAuthorityError("OPERATIONS_TARGET_CHANGED");
+    if(intent.kind==="task"){
+      const task=proof.snapshot.tasks.find(t=>t.id===intent.targetId)!;
+      if(t.items.length!==task.items.length||t.items.some(item=>!task.items.some(row=>row.itemKey===item.itemRef&&row.subjectRef===item.targetRef)))throw new OperationsAuthorityError("OPERATIONS_TASK_MEMBERSHIP_CHANGED");
+    }
+    proof.assertCurrent();
+  }
   async function read(raw:unknown,actorRef:string,role:Role){
     auth(actorRef,role);
     const parsed=operationsControlFilters.safeParse(raw);if(!parsed.success)fail("INVALID_REQUEST",400);const f=parsed.data;
     if(f.proposalRequestKey&&role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
-    const s=await snapshot(),v=version(s),sourceState=!s?"notConnected":!fresh(s.observedAt)?"stale":s.coverage==="partial"?"partial":"current";
+    const proof=input.authority?await input.authority.resolve({principalRef:actorRef}):undefined;
+    const s=proof?.snapshot??await snapshot(),v=version(s,proof),sourceState=!s?"notConnected":!fresh(s.observedAt)?"stale":s.coverage==="partial"?"partial":"current";
     let reportJob:string|null=null;
     if(f.jobRef){
       if(f.section!=="reports")fail("INVALID_REQUEST",400);
@@ -166,8 +194,8 @@ export function createOperationsControls(input:Input){
       ] as [string,string][]}];
     });
     if(f.q)localRuns=localRuns.filter(r=>JSON.stringify(r).toLowerCase().includes(f.q!.toLowerCase()));
-    // A role-scoped principal is not a named source owner. Do not invent assigned-to-me membership.
-    if(f.mine)localRuns=[];
+    // Only a current named directory proof can resolve assigned-to-me membership.
+    if(f.mine)localRuns=proof?localRuns.filter(row=>s?.runMembership.some(member=>member.runId===open(row.id).id&&fresh(member.observedAt)&&member.assignedActorRef===proof.actor.personRef)):[];
 
     let reconciliation=f.proposalRequestKey?getReceipt(f.proposalRequestKey,actorRef,f.section,f.targetRef):null;
     if(f.proposalRequestKey&&!reconciliation)reconciliation=controlReceiptSchema.parse({requestKey:f.proposalRequestKey,actorRef,state:sourceState==="current"?"absent":"unverified",baseVersion:null,actionRef:null,manifestDigest:null,payloadDigest:null,createdAt:null,reason:null});
@@ -186,14 +214,110 @@ export function createOperationsControls(input:Input){
       else if(t.kind==="binding"&&!ledger.get(t.id))fail("RECORD_NOT_FOUND",404);
       else if(!["run","binding"].includes(t.kind)&&(!s||!target(s,t.kind as OperationsReviewPayload["kind"],t.id)))fail("RECORD_NOT_FOUND",404);
     }
+    const canonical=input.canonical?.(),canonicalActions:NonNullable<NativeOperationsControl["canonicalActions"]>=[];
+    if(proof&&s)for(const a of actions){
+      const identified=open(a.targetRef),t=proof.authority.targets.find(t=>t.kind===a.kind&&t.id===identified.id);if(!t)continue;
+      const allowed=role==="reviewer"&&a.allowed&&t.permission==="allowed"&&proof.actor.roles.some(r=>["founder","operator","reviewer","finance"].includes(r))&&!!canonical?.supports(a.kind);
+      canonicalActions.push({...a,allowed,reasonCodes:allowed?[]:[...new Set([...a.reasonCodes,...(t.permission!=="allowed"?["SOURCE_PERMISSION_UNVERIFIED"]:[]),...(!canonical?.supports(a.kind)?["OPERATIONS_OWNER_UNCONFIGURED"]:[])])],
+        items:t.items.map(item=>({itemRef:alias(item.itemRef),targetRef:alias(item.targetRef),units:item.units,spendMinor:item.spendMinor})),effect:"previewOnly"});
+    }
+    const serviceEvidence:OperationsServiceEvidence[]=[],serviceFences:(()=>void)[]=[];
+    if(proof)for(const reference of proof.authority.serviceRefs){
+      const section=reference.kind==="runtimeRegistration"||reference.kind==="report"?"reports":reference.kind==="repairReceipt"?"reconciliation":reference.kind==="permissionReceipt"?"capabilities":"runs";
+      if(section!==f.section)continue;
+      if(reportJob&&(reference.kind==="runtimeRegistration"&&reference.jobId!==reportJob||reference.kind==="report"&&!s?.reports.some(report=>report.id===reference.targetId&&report.jobId===reportJob)))continue;
+      const targetRef=seal(reference.kind==="repairReceipt"?"repair":reference.kind==="permissionReceipt"?"permissionEvidence":reference.kind==="takeoverReceipt"?"takeover":"run",reference.targetId);
+      if(reference.kind==="runtimeRegistration"||reference.kind==="runtimeRun"||reference.kind==="report"){
+        if(!input.serviceReaders){serviceEvidence.push({kind:"unavailable",targetRef,service:reference.kind,reasonCode:"OPERATIONS_SERVICE_UNCONFIGURED"});continue;}
+        const observed=await input.serviceReaders.read(structuredClone(reference),{principalRef:actorRef});
+        if(digest(observed.reference)!==digest(reference))throw new OperationsAuthorityError("OPERATIONS_SERVICE_BINDING_CHANGED");
+        if("unavailableReason"in observed){serviceEvidence.push({kind:"unavailable",targetRef,service:reference.kind,reasonCode:observed.unavailableReason});serviceFences.push(()=>assertSynchronousVoid(observed.assertCurrent));continue;}
+        const projected=operationsServiceEvidenceSchema.safeParse({kind:reference.kind,targetRef,data:observed.data});if(!projected.success)throw new OperationsAuthorityError("OPERATIONS_SERVICE_RESPONSE_INVALID",502);
+        if(reference.kind==="runtimeRegistration"&&("version"in observed.data&&observed.data.version!==reference.registrationVersion)||reference.kind==="runtimeRun"&&("registrationVersion"in observed.data&&observed.data.registrationVersion!==reference.registrationVersion))throw new OperationsAuthorityError("OPERATIONS_SERVICE_BINDING_CHANGED");
+        serviceEvidence.push(projected.data);serviceFences.push(()=>assertSynchronousVoid(observed.assertCurrent));
+      }else serviceEvidence.push({kind:reference.kind,targetRef,receiptRef:alias(reference.receiptRef),sourceVersion:alias(reference.sourceVersion),state:reference.state,observedAt:reference.observedAt,
+        sourceReadbackVersion:reference.sourceReadbackVersion?alias(reference.sourceReadbackVersion):null,mirrorReadbackVersion:reference.mirrorReadbackVersion?alias(reference.mirrorReadbackVersion):null,ownerRef:alias(reference.ownerPersonRef)});
+    }
+    let canonicalReconciliation:NativeOperationsControl["canonicalReconciliation"]=null;
+    if(f.proposalRequestKey&&reconciliation){
+      const intent=reconciliation.actionRef?canonicalIntent(reconciliation.actionRef):null;
+      if(intent){
+        const existing=canonical?.lookup(intent.intentRef,{principalRef:actorRef},f.proposalRequestKey);
+        canonicalReconciliation={requestKey:f.proposalRequestKey,state:existing?"recorded":"pending",approvalRef:existing?.manifest.approvalRef??null,
+          manifestRef:existing?"manifest-"+existing.manifest.manifestHash:null,version:null,executionCertainty:existing?"applied":"uncertain"};
+      }else canonicalReconciliation={requestKey:f.proposalRequestKey,state:reconciliation.state==="recorded"?"unverified":reconciliation.state,
+        approvalRef:null,manifestRef:null,version:null,executionCertainty:reconciliation.state==="rejected"?"notApplied":"uncertain"};
+    }
     const data=nativeOperationsControlSchema.parse({kind:"native-operations-controls",section:f.section,version:v,observedAt:new Date(now()).toISOString(),actorRef,role,sourceState,sourceObservedAt:s?.observedAt??null,
       records,actions,healthTargets,localRuns,localCoverage:{returned:runRows.length,total:f.section==="runs"?runTotal:0,partial:f.section==="runs"&&runRows.length<runTotal},
-      runFilterEvidence:{matched:localRuns.length,unknownPlatform,assignment:"named-principal-unverified"},
+      runFilterEvidence:{matched:localRuns.length,unknownPlatform,assignment:proof?"named-principal-verified":"named-principal-unverified"},
+      namedActor:proof?{state:"verified",personRef:alias(proof.actor.personRef),roles:proof.actor.roles,observedAt:proof.observedAt,validUntil:proof.validUntil}:{state:"unavailable",personRef:null,roles:[],observedAt:null,validUntil:null},
+      canonicalActions,canonicalReconciliation,serviceEvidence,
       handoffs,proposalReconciliation:reconciliation,history:hs.records,historyCoverage:hs.coverage});
+    proof?.assertCurrent();for(const fence of serviceFences)fence();proof?.assertCurrent();
+    if(proof&&version(s,proof)!==v)throw new OperationsAuthorityError("OPERATIONS_LOCAL_RECORD_CHANGED");
     return {data,version:v,observedAt:data.observedAt,partial:sourceState==="partial"||data.localCoverage.partial||((f.section==="connections"||f.section==="capabilities")&&ledger.list(100).partial),stale:sourceState==="stale",empty:!records.length&&!actions.length&&!localRuns.length,
-      capabilities:[{actionKind:"proposeOperationsReview",state:role==="reader"?"denied" as const:actions.some(a=>a.allowed)?"available" as const:"held" as const,reasonCodes:role==="reader"?["REVIEWER_REQUIRED"]:actions.some(a=>a.allowed)?[]:["SOURCE_AUTHORITY_UNAVAILABLE"]}]};
+      capabilities:[{actionKind:"proposeOperationsReview",state:role==="reader"?"denied" as const:actions.some(a=>a.allowed)?"available" as const:"held" as const,reasonCodes:role==="reader"?["REVIEWER_REQUIRED"]:actions.some(a=>a.allowed)?[]:["SOURCE_AUTHORITY_UNAVAILABLE"]},
+        {actionKind:"previewOperationsControl",state:role==="reader"?"denied" as const:canonicalActions.some(a=>a.allowed)?"available" as const:"held" as const,reasonCodes:role==="reader"?["REVIEWER_REQUIRED"]:canonicalActions.some(a=>a.allowed)?[]:["OPERATIONS_OWNER_UNCONFIGURED"]}]};
   }
   function ack(r:z.infer<typeof controlReceiptSchema>){return {actionRef:r.actionRef!,state:"approvalPending" as const,payloadVersion:r.manifestDigest!,policyVersion:controlPolicy,receiptRefs:["proposal:"+r.actionRef]};}
+  async function previewCanonical(raw:unknown,actorRef:string,role:Role){
+    auth(actorRef,role);if(role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
+    const parsed=operationsCanonicalAction.safeParse(raw);if(!parsed.success)fail("VALIDATION_FAILED",422);const a=parsed.data;
+    if(a.requestedScope.workspaceId!==scope.workspaceId||a.requestedScope.accountIds[0]!==scope.accountId)fail("SOURCE_SCOPE_DENIED",403);
+    const identified=open(a.payload.targetRef);if(identified.kind!==a.payload.kind)fail("INVALID_CONTROL_REFERENCE",400);
+    const canonical=input.canonical?.();if(!input.authority||!canonical?.supports(a.payload.kind))throw new OperationsAuthorityError("OPERATIONS_OWNER_UNCONFIGURED",503);
+    const requestHash=digest({operation:"canonical-v2",scope,actorRef,base:a.expectedVersion,payload:a.payload});
+    let prior=db.prepare("SELECT * FROM operations_control_requests WHERE request_key=?").get(a.idempotencyKey);
+    if(prior&&prior.request_hash!==requestHash)fail("IDEMPOTENCY_CONFLICT",409);
+    const certainty=()=>prior?"applied" as const:"notApplied" as const;
+    let proof:OperationsControlProof;
+    try{proof=await input.authority.resolve({principalRef:actorRef});}
+    catch(error){if(error instanceof OperationsAuthorityError)throw new OperationsAuthorityError(error.code,error.status,certainty());throw error;}
+    if(!proof.actor.roles.some(r=>["founder","operator","reviewer","finance"].includes(r)))throw new OperationsAuthorityError("OPERATIONS_NAMED_ACTOR_DENIED",403,certainty());
+    const s=proof.snapshot,current=version(s,proof);
+    let saved:OperationsCanonicalIntent;
+    db.exec("BEGIN IMMEDIATE");let committed=false;
+    try{
+      proof.assertCurrent();prior=db.prepare("SELECT * FROM operations_control_requests WHERE request_key=?").get(a.idempotencyKey);
+      if(prior){
+        if(prior.request_hash!==requestHash)fail("IDEMPOTENCY_CONFLICT",409);
+        const receipt=controlReceiptSchema.parse(JSON.parse(String(prior.receipt)));
+        if(receipt.state==="rejected")fail("STALE_VERSION",409,current);
+        const intent=receipt.actionRef?canonicalIntent(receipt.actionRef):null;if(!intent)throw new OperationsAuthorityError("OPERATIONS_CANONICAL_INTENT_REQUIRED");
+        saved=intent;
+      }else{
+        const t=proof.authority.targets.find(t=>t.kind===a.payload.kind&&t.id===identified.id),reason=hold(s,a.payload.kind,identified.id);
+        if(current!==a.expectedVersion||!t){
+          if(s.coverage!=="complete")fail("SOURCE_COVERAGE_PARTIAL",409);
+          const receipt=controlReceiptSchema.parse({requestKey:a.idempotencyKey,actorRef,state:"rejected",baseVersion:a.expectedVersion,actionRef:null,manifestDigest:null,payloadDigest:digest(a.payload),createdAt:new Date(now()).toISOString(),reason:a.payload.reason});
+          proof.assertCurrent();db.prepare("INSERT INTO operations_control_requests VALUES(?,?,?,?,?,?,?,?)").run(a.idempotencyKey,actorRef,sectionFor[a.payload.kind],JSON.stringify(identified),requestHash,JSON.stringify(receipt),null,
+            Number(db.prepare("SELECT COALESCE(MAX(sequence),0)+1 n FROM operations_control_requests").get()?.n));db.exec("COMMIT");committed=true;fail("STALE_VERSION",409,current);
+        }
+        if(reason)throw new OperationsAuthorityError(reason,reason==="SOURCE_SCOPE_DENIED"?403:409);
+        if(t.permission!=="allowed")throw new OperationsAuthorityError(t.permission==="denied"?"OPERATIONS_SOURCE_SCOPE_DENIED":"OPERATIONS_SOURCE_PERMISSION_UNKNOWN",t.permission==="denied"?403:409);
+        const selected=a.payload.itemRefs?a.payload.itemRefs.map(ref=>t.items.find(item=>alias(item.itemRef)===ref)?.itemRef??null):t.items.map(item=>item.itemRef);
+        if(selected.some(ref=>ref===null)||new Set(selected).size!==selected.length)fail("OPERATIONS_SELECTION_CHANGED",409);
+        const material={mode:"canonical-v2" as const,scope,principalRef:actorRef,personRef:proof.actor.personRef,directoryVersion:proof.actor.directoryVersion,
+          kind:a.payload.kind,targetId:identified.id,reason:a.payload.reason,baseVersion:a.expectedVersion,sourceRevision:s.revision,sourceMaterialHash:operationsTargetMaterialHash(proof,a.payload.kind,identified.id),target:t,selectedItemRefs:selected.filter((item):item is string=>item!==null)};
+        saved=operationsCanonicalIntentSchema.parse({...material,intentRef:"control-intent-"+randomUUID(),digest:operationsIntentDigest(material),createdAt:new Date(now()).toISOString()});
+        // Validate exact current membership before persisting. It remains an app draft, never approval.
+        if(saved.kind==="task"){
+          const task=s.tasks.find(task=>task.id===saved.targetId)!;
+          if(t.items.length!==task.items.length||t.items.some(item=>!task.items.some(row=>row.itemKey===item.itemRef&&row.subjectRef===item.targetRef)))throw new OperationsAuthorityError("OPERATIONS_TASK_MEMBERSHIP_CHANGED");
+        }
+        const receipt=controlReceiptSchema.parse({requestKey:a.idempotencyKey,actorRef,state:"recorded",baseVersion:a.expectedVersion,actionRef:saved.intentRef,manifestDigest:saved.digest,payloadDigest:digest(a.payload),createdAt:saved.createdAt,reason:a.payload.reason});
+        proof.assertCurrent();if(version(s,proof)!==a.expectedVersion)throw new OperationsAuthorityError("OPERATIONS_LOCAL_RECORD_CHANGED");
+        db.prepare("INSERT INTO operations_control_requests VALUES(?,?,?,?,?,?,?,?)").run(a.idempotencyKey,actorRef,sectionFor[a.payload.kind],JSON.stringify(identified),requestHash,JSON.stringify(receipt),JSON.stringify(saved),
+          Number(db.prepare("SELECT COALESCE(MAX(sequence),0)+1 n FROM operations_control_requests").get()?.n));
+      }
+      db.exec("COMMIT");committed=true;
+    }catch(error){if(!committed)db.exec("ROLLBACK");throw error;}
+    try{return await canonical.preview(saved.intentRef,{principalRef:actorRef},a.idempotencyKey,a.requestId);}
+    catch(error){if(error instanceof OperationsAuthorityError)throw new OperationsAuthorityError(error.code,error.status,"applied");
+      if(error&&typeof error==="object"&&"code"in error&&typeof error.code==="string"&&"status"in error&&typeof error.status==="number")throw new OperationsAuthorityError(error.code,error.status,"applied");
+      throw new OperationsAuthorityError("OPERATIONS_PREVIEW_UNVERIFIED",502,"uncertain");}
+  }
   async function propose(raw:unknown,actorRef:string,role:Role){
     auth(actorRef,role);if(role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
     const parsed=operationsControlAction.safeParse(raw);if(!parsed.success)fail("VALIDATION_FAILED",422);const a=parsed.data;
@@ -276,5 +400,5 @@ export function createOperationsControls(input:Input){
       return recorded;
     }catch(error){if(error instanceof OperationsControlError)throw error;return {...base,state:"outcomeUncertain" as const,runRef:null,receiptRefs:[],reasonCodes:["HEALTH_CHECK_UNVERIFIED"],executionCertainty:"uncertain" as const};}
   }
-  return {read,propose,refreshHealth};
+  return {read,propose,refreshHealth,previewCanonical,canonicalIntents:{read:canonicalIntent,assertCurrent:assertCanonicalIntent}};
 }

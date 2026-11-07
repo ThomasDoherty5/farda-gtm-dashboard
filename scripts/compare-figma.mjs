@@ -3,6 +3,7 @@
 // Usage: node scripts/compare-figma.mjs <url-path> <capture.png> [threshold] [max-percent]
 // Optional FIGMA_COMPARE_BROWSER_CHANNEL selects an installed browser; FIGMA_COMPARE_STORAGE_STATE accepts an
 // explicit private authenticated test session. Keep that state and FIGMA_COMPARE_OUTPUT_DIR outside public artifacts.
+// FIGMA_COMPARE_RENDERED_IMAGE compares an already verified full-page capture without starting another browser.
 // An optional crop-height compares only the top of the page, for a screen that is taller on purpose.
 // With max-percent, exits 1 if the page size differs or more pixels than that differ.
 // A page that is taller on purpose can be judged in aligned parts: SEGMENTS="0-840;1008-1200@-58" compares render rows
@@ -19,14 +20,20 @@ const out = process.env.FIGMA_COMPARE_OUTPUT_DIR ?? ".handoff/figma/compare";
 mkdirSync(out, { recursive: true });
 
 const figma = PNG.sync.read(readFileSync(capture));
+let shot, fonts = null;
+if (process.env.FIGMA_COMPARE_RENDERED_IMAGE) {
+  shot = PNG.sync.read(readFileSync(process.env.FIGMA_COMPARE_RENDERED_IMAGE));
+} else {
 const browser = await chromium.launch({ channel: process.env.FIGMA_COMPARE_BROWSER_CHANNEL });
+try {
 const page = await browser.newPage({ viewport: { width: figma.width, height: figma.height }, deviceScaleFactor: 1, reducedMotion: "reduce", locale: "en-US", timezoneId: "America/Los_Angeles",
   ...(process.env.FIGMA_COMPARE_STORAGE_STATE ? { storageState: process.env.FIGMA_COMPARE_STORAGE_STATE } : {}) });
 await page.goto(base + path, { waitUntil: "networkidle" });
 await page.evaluate(() => document.fonts.ready);
-const fonts = await page.evaluate(() => [...document.fonts].filter((f) => f.status === "loaded").map((f) => `${f.family} ${f.weight}`));
-const shot = PNG.sync.read(await page.screenshot({ fullPage: true }));
-await browser.close();
+fonts = await page.evaluate(() => [...document.fonts].filter((f) => f.status === "loaded").map((f) => `${f.family} ${f.weight}`));
+shot = PNG.sync.read(await page.screenshot({ fullPage: true }));
+} finally { await browser.close(); }
+}
 
 const width = Math.min(figma.width, shot.width);
 const height = Math.min(figma.height, shot.height, cropHeight ? Number(cropHeight) : Infinity);
@@ -54,7 +61,12 @@ if (process.env.SEGMENTS) {
   }
   segments = { mismatched: bad, rows: area / width, pct: +((100 * bad) / area).toFixed(3) };
 }
-console.log(JSON.stringify({ path, figma: [figma.width, figma.height], render: [shot.width, shot.height], mismatched, pct, ...(segments ? { segments } : {}), fonts }, null, 1));
+const unionArea = Math.max(figma.width, shot.width) * Math.max(figma.height, shot.height);
+const nonOverlappingPixels = unionArea - Math.min(figma.width, shot.width) * Math.min(figma.height, shot.height);
+const fullFrame = !segments && !cropHeight ? { area: unionArea, nonOverlappingPixels, mismatchedIncludingSize: mismatched + nonOverlappingPixels,
+  pctIncludingSize: +(100 * (mismatched + nonOverlappingPixels) / unionArea).toFixed(3) } : null;
+console.log(JSON.stringify({ path, figma: [figma.width, figma.height], render: [shot.width, shot.height], mismatched, pct, fullFrame,
+  renderMode: process.env.FIGMA_COMPARE_RENDERED_IMAGE ? "existing-full-page-capture" : "browser", ...(segments ? { segments } : {}), fonts }, null, 1));
 const judged = segments ? segments.pct : pct;
 const sizeDiffers = !segments && (figma.width !== shot.width || figma.height !== shot.height);
 if (maxPercent !== undefined && maxPercent !== "" && (judged > Number(maxPercent) || sizeDiffers)) process.exitCode = 1;

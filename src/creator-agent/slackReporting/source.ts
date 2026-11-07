@@ -2,7 +2,7 @@ import { digest } from "../config.ts";
 import { ReportError, reportGrantSchema, reportSnapshotSchema, type ReportCommand, type ReportGrant, type ReportLocator, type ReportMachine, type ReportScope, type ReportSnapshot, type ReportingSource } from "./contract.ts";
 
 export function reportMaterial(snapshot: ReportSnapshot) {
-  return { scope: snapshot.scope, event: snapshot.event, programme: { ...snapshot.programme, state: undefined }, destination: snapshot.destination, delivery: snapshot.delivery };
+  return { scope: snapshot.scope, event: snapshot.event, programme: { ...snapshot.programme, state: undefined }, destination: snapshot.destination, delivery: snapshot.delivery, ...(snapshot.testProvenance ? { testProvenance: snapshot.testProvenance } : {}) };
 }
 export function assertLease(observedAt: string, validUntil: string, now: number) {
   if (!Number.isFinite(now) || Date.parse(observedAt) > now || Date.parse(validUntil) <= now || Date.parse(validUntil) <= Date.parse(observedAt)) throw new ReportError("REPORT_SOURCE_EXPIRED");
@@ -14,7 +14,7 @@ export function assertSyncFence(callback: () => unknown) {
     throw new ReportError("REPORT_SYNCHRONOUS_FENCE_REQUIRED", 503);
   }
 }
-export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot, scope: ReportScope, purpose: "admit" | "send" | "read", now: number, machine: ReportMachine) {
+export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot, scope: ReportScope, purpose: "admit" | "send" | "read", now: number, machine: Pick<ReportMachine, "assertCurrent">) {
   assertSyncFence(() => machine.assertCurrent());
   if (digest(snapshot.scope) !== digest(scope)) throw new ReportError("REPORT_SCOPE_MISMATCH", 403);
   if (snapshot.authority.read === "denied" || (purpose !== "read" && snapshot.authority.send === "denied")) throw new ReportError("REPORT_PERMISSION_DENIED", 403);
@@ -41,7 +41,7 @@ export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot
   assertSyncFence(() => source.assertCurrent(snapshot, purpose, now));
   assertSyncFence(() => machine.assertCurrent());
 }
-export async function loadSnapshot(source: ReportingSource | undefined, locator: ReportLocator, scope: ReportScope, purpose: "admit" | "send" | "read", now: () => number, machine: ReportMachine): Promise<ReportSnapshot> {
+export async function loadSnapshot(source: ReportingSource | undefined, locator: ReportLocator, scope: ReportScope, purpose: "admit" | "send" | "read", now: () => number, machine: Pick<ReportMachine, "assertCurrent">): Promise<ReportSnapshot> {
   assertSyncFence(() => machine.assertCurrent()); if (!source) throw new ReportError("REPORT_SOURCE_UNBOUND", 503);
   const raw = await source.readEvent(locator), parsed = reportSnapshotSchema.safeParse(raw);
   if (!parsed.success) throw new ReportError("REPORT_SOURCE_UNVERIFIED", 503);

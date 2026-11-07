@@ -66,7 +66,7 @@ function RunsPage() {
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedRunsPanel data={data} tab={tab} /> : data && demo ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>No account-scoped run data is available.</p></EmptyState>)}
       {query.paging}
-      {!demo && <NativeOperationsControls section={tab === "reporting" ? "reports" : "runs"} onReady={setControlsReady} taskOpen={taskOpen} onTaskClose={()=>setTaskOpen(false)}/>}
+      {!demo && <NativeOperationsControls section={tab === "runs" ? "runs" : "reports"} onReady={setControlsReady} taskOpen={taskOpen} onTaskClose={()=>setTaskOpen(false)}/>}
       {data && !("kind" in data) && demo && <TaskDialog open={taskOpen} data={data} demo={demo} onClose={() => setTaskOpen(false)} />}
     </Page>
   );

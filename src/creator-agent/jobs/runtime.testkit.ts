@@ -9,6 +9,7 @@ import { sealOperationsToken } from "../operationsTokens.ts";
 import { RuntimeError,runtimeRegistrationSchema,type RuntimeAuthority,type RuntimeExecutor,type RuntimeMachine,type RuntimeOptions,type RuntimeRegistration,type RuntimeWindowPlan,type RuntimePreflight } from "./runtimeSchema.ts";
 
 export const runtimeSyntheticScope={workspaceId:"synthetic-runtime-workspace",accountId:"synthetic-runtime-account",environment:"sandbox" as const};
+const defaultRuntimeScope=runtimeSyntheticScope;
 export function syntheticRuntimeRegistration(overrides:Partial<RuntimeRegistration>={}):RuntimeRegistration{return runtimeRegistrationSchema.parse({registrationRef:"synthetic-j19",version:1,family:"J19",ownerRef:"owner:synthetic-runtime",sourceRef:"source:synthetic-discovery",sourceSchemaVersion:"synthetic-partitions.v1",outputSchemaVersion:"synthetic-observation.v1",membership:"source-partitions",executorRef:"synthetic-read.v1",browserExecutorRef:"synthetic-browser.v1",apiChannel:"directApi",
   cadence:{kind:"calendar",draft:{cadence:"daily",localTime:"10:00",timezone:"UTC",activeCohortOverride:false},draftVersion:"j1-d1",startsAt:"2026-11-06T10:00:00Z"},
   definition:{jobId:"synthetic-j19",version:1,ownerRef:"owner:synthetic-runtime",mode:"observe",handler:"registered-source.v1",eventType:"synthetic-source-window",inputSchemaVersion:"job-reference-batch.v1",outputSchemaVersion:"job-local-result.v1",policyVersion:"synthetic-policy-v1",modelVersion:null,offerVersion:null,capabilityBinding:null,budgets:{maxItems:10,maxSteps:20,maxAttempts:3,maxRunMs:60000,leaseMs:5000,maxConcurrency:2,retryBaseMs:10}},
@@ -16,7 +17,8 @@ export function syntheticRuntimeRegistration(overrides:Partial<RuntimeRegistrati
   browserBinding:{...runtimeSyntheticScope,provider:"synthetic",providerAccountId:"synthetic-provider-account",action:"read-partition",mode:"observe",route:"browser",routeRef:"route:synthetic-browser",authorizationScopeVersion:"synthetic-auth-v1",toolVersion:"synthetic-browser-v1",requiredScopes:["synthetic-read"],connectionRef:null,secretRef:null},...overrides});}
 
 /** Explicit fictional authority with real current-state fences and a shared source-owned quota reservation. Never imported by production composition. */
-export function createRuntimeTestkit(db:DatabaseSync,options:{now?:()=>number;registration?:RuntimeRegistration;executor?:RuntimeExecutor;browserExecutor?:RuntimeExecutor}={}){
+export function createRuntimeTestkit(db:DatabaseSync,options:{scope?:RuntimeOptions["scope"];now?:()=>number;registration?:RuntimeRegistration;executor?:RuntimeExecutor;browserExecutor?:RuntimeExecutor}={}){
+  const runtimeSyntheticScope=options.scope??defaultRuntimeScope;
   let time=Date.parse("2026-11-07T12:00:00Z");const now=options.now??(()=>time);const registration=options.registration??syntheticRuntimeRegistration();
   const state={active:true,denied:false,workerActive:true,enrolled:true,policyVersion:registration.definition.policyVersion,sourceVersion:"synthetic-source-v1",quotaLimit:80,evidenceCapacity:10,items:1,partial:false,migration:false,oldDisabled:true,sourceCalls:0};
   const issued=new Map<string,string>();const snapshot=<T extends {receiptRef:string}>(proof:T):T=>{issued.set(proof.receiptRef,digest(proof));return structuredClone(proof);};

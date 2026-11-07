@@ -1,6 +1,7 @@
 import {createHmac,timingSafeEqual} from "node:crypto";
 import {z} from "zod";
 import {digest} from "../config.ts";
+import {assertSynchronousVoid} from "../sourceFence.ts";
 import {openOperationsToken,sealOperationsToken} from "../operationsTokens.ts";
 import type {ApiRequestLimits} from "../apiRequestLimits.ts";
 import {approvalScopeSchema,trustedHumanSchema,type ApprovalSources,type TrustedHuman} from "../approvals/contract.ts";
@@ -35,7 +36,7 @@ export function createRuntimeApi(options:RuntimeApiOptions){
   const unseal=(kind:"run"|"registration"|"item",value:string,requireOpaque=false)=>{if(!value.startsWith(`rt-${kind}-`)){if(requireOpaque)throw new RuntimeApiError("RUNTIME_REFERENCE_INVALID",403);return runtimeRef.parse(value);}try{const decoded=openOperationsToken(scope,options.secret,`job-runtime-${kind}`,value.slice(`rt-${kind}-`.length));return runtimeRef.parse(decoded);}catch{throw new RuntimeApiError("RUNTIME_REFERENCE_INVALID",403);}};
   const display=(kind:"owner"|"evidence"|"usage"|"trigger"|"trigger-version",value:string)=>`${kind}-${createHmac("sha256",options.secret).update(JSON.stringify([scope,kind,value])).digest("hex")}`;
   const admit=(principal:string,kind:"read"|"write",certainty:"notApplied"|"uncertain"="notApplied")=>{const result=options.limits.admit(principal,kind);if(!result.admitted)throw new RuntimeApiError("RATE_LIMITED",429,certainty,result.retryAfterMs);};
-  const assertActor=(actor:TrustedHuman,principalRef:string)=>{if(!actor.active||actor.principalRef!==principalRef||digest(actor.scope)!==digest(scope)||Date.parse(actor.observedAt)>now()||Date.parse(actor.validUntil)<=now()||Date.parse(actor.validUntil)<=Date.parse(actor.observedAt)||!options.actorSources?.assertCurrent)throw new RuntimeApiError("AUTHORITY_REQUIRED");try{options.actorSources.assertCurrent({scope,actor,slack:null,linearRecords:[]},now());}catch{throw new RuntimeApiError("AUTHORITY_REQUIRED");}};
+  const assertActor=(actor:TrustedHuman,principalRef:string)=>{if(!actor.active||actor.principalRef!==principalRef||digest(actor.scope)!==digest(scope)||Date.parse(actor.observedAt)>now()||Date.parse(actor.validUntil)<=now()||Date.parse(actor.validUntil)<=Date.parse(actor.observedAt)||!options.actorSources?.assertCurrent)throw new RuntimeApiError("AUTHORITY_REQUIRED");try{assertSynchronousVoid(()=>options.actorSources!.assertCurrent!({scope,actor,slack:null,linearRecords:[]},now()));}catch{throw new RuntimeApiError("AUTHORITY_REQUIRED");}};
   const actor=async(principalRef:string)=>{runtimeRef.parse(principalRef);if(!options.actorSources?.resolveActor)throw new RuntimeApiError("NAMED_ACTOR_UNCONFIGURED");let raw:unknown;try{raw=await options.actorSources.resolveActor(principalRef,scope);}catch{throw new RuntimeApiError("AUTHORITY_REQUIRED");}const parsed=trustedHumanSchema.safeParse(raw);if(!parsed.success)throw new RuntimeApiError("AUTHORITY_REQUIRED");assertActor(parsed.data,principalRef);if(options.readAdmission!=="upstream")admit(principalRef,"read");return parsed.data;};
   function normalized(command:Command):Command{
     let input:unknown;
@@ -59,7 +60,7 @@ export function createRuntimeApi(options:RuntimeApiOptions){
     const parsed=runtimeMachineProofSchema.safeParse(raw);if(!parsed.success)throw new RuntimeApiError("RUNTIME_MACHINE_PROOF_INVALID",403,"uncertain");const proof=parsed.data;
     const assertCurrent=()=>{const start=Date.parse(proof.observedAt),end=Date.parse(proof.validUntil);
       if(digest(proof.scope)!==digest(scope)||proof.workerRef!==binding.workerRef||proof.operation!==command.operation||proof.inputHash!==inputHash||start>now()||end<=now()||end<=start||end-start>300000)throw new RuntimeApiError("RUNTIME_MACHINE_PROOF_INVALID",403,"uncertain");
-      try{binding.assertCurrent(structuredClone(proof),now());}catch{throw new RuntimeApiError("RUNTIME_MACHINE_DENIED",403,"uncertain");}
+      try{assertSynchronousVoid(()=>binding.assertCurrent(structuredClone(proof),now()));}catch{throw new RuntimeApiError("RUNTIME_MACHINE_DENIED",403,"uncertain");}
     };
     assertCurrent();admit(binding.workerRef,"write","uncertain");return{workerRef:binding.workerRef,assertCurrent};
   }
@@ -84,16 +85,22 @@ export function createRuntimeApi(options:RuntimeApiOptions){
   function scheduling(v:RegistrationRead){const c=v.cadenceStatus;return safeRuntimeSchedulingSchema.parse({observedAt:v.observedAt,validUntil:v.validUntil,
     trigger:{alias:display("trigger",v.trigger.triggerRef),versionAlias:display("trigger-version",v.trigger.triggerVersion)},cadence:cadenceOf(v),
     backlog:c.kind==="event"?{state:"notApplicable",reasonCode:"EVENT_DRIVEN_NO_DUE_SLOTS"}:{state:"observed",nextPlannedAt:c.nextPlannedAt,oldestUnadmittedAt:c.oldestUnadmittedAt,unadmittedInScannedRange:c.unadmittedInScannedRange,scannedSlots:c.scannedSlots,scanComplete:c.scanComplete,scanCursor:c.scanCursor,...v.cadenceScan,total:null}});}
-  async function readRun(runRef:string,principalRef:string){
+  async function readRunEvidence(runRef:string,principalRef:string){
     const who=await actor(principalRef),ref=unseal("run",publicRef.parse(runRef),true),snapshot=await options.runtime.readRunWithFence(ref);
     const registration=await options.runtime.readRegistrationWithFence(snapshot.value.registrationRef);
     if(registration.value.registration.version!==snapshot.value.registrationVersion)throw new RuntimeApiError("RUNTIME_REGISTRATION_STALE",409);
     const result=safeRuntimeRunSchema.parse({...projectRun(snapshot.value,options.runtime.measurements.read(ref)),scheduling:scheduling(registration.value)});
     // Both observations were issued before the last await. Neither an actor check nor
     // the later registration proof is a substitute for the retained run source fence.
-    assertActor(who,principalRef);snapshot.assertCurrent();registration.assertCurrent();assertActor(who,principalRef);return result;
+    const assertCurrent=()=>{assertActor(who,principalRef);assertSynchronousVoid(snapshot.assertCurrent);assertSynchronousVoid(registration.assertCurrent);assertActor(who,principalRef);};
+    assertCurrent();return {data:result,assertCurrent,binding:{runId:ref,registrationRef:snapshot.value.registrationRef,registrationVersion:snapshot.value.registrationVersion}};
   }
-  async function readRegistration(registrationRef:string,principalRef:string){const who=await actor(principalRef),ref=unseal("registration",publicRef.parse(registrationRef),true);const snapshot=await options.runtime.readRegistrationWithFence(ref),v=snapshot.value,r=v.registration;
-    const result=safeRuntimeRegistrationSchema.parse({kind:"registered-runtime",source:"native-runtime",environment:"sandbox",registrationRef:seal("registration",r.registrationRef),version:r.version,family:r.family,mode:r.definition.mode,ownerAlias:display("owner",r.ownerRef),cadence:cadenceOf(v),observedAt:v.observedAt,validUntil:v.validUntil,cadenceStatus:v.cadenceStatus,windows:v.windows.map(w=>({runRef:w.runRef?seal("run",w.runRef):null,intendedAt:w.window.intendedAt})),coverage:v.coverage});assertActor(who,principalRef);snapshot.assertCurrent();assertActor(who,principalRef);return result;}
-  return{authenticateMachine,execute,readRun,readRegistration,registrationRef:(ref:string)=>seal("registration",runtimeRef.parse(ref)),runRef:(ref:string)=>seal("run",runtimeRef.parse(ref))};
+  async function readRegistrationEvidence(registrationRef:string,principalRef:string){const who=await actor(principalRef),ref=unseal("registration",publicRef.parse(registrationRef),true);const snapshot=await options.runtime.readRegistrationWithFence(ref),v=snapshot.value,r=v.registration;
+    const result=safeRuntimeRegistrationSchema.parse({kind:"registered-runtime",source:"native-runtime",environment:"sandbox",registrationRef:seal("registration",r.registrationRef),version:r.version,family:r.family,mode:r.definition.mode,ownerAlias:display("owner",r.ownerRef),cadence:cadenceOf(v),observedAt:v.observedAt,validUntil:v.validUntil,cadenceStatus:v.cadenceStatus,windows:v.windows.map(w=>({runRef:w.runRef?seal("run",w.runRef):null,intendedAt:w.window.intendedAt})),coverage:v.coverage});
+    const assertCurrent=()=>{assertActor(who,principalRef);assertSynchronousVoid(snapshot.assertCurrent);assertActor(who,principalRef);};
+    assertCurrent();return {data:result,assertCurrent,binding:{registrationRef:r.registrationRef,registrationVersion:r.version,jobId:r.definition.jobId,jobVersion:r.definition.version}};
+  }
+  async function readRun(runRef:string,principalRef:string){const evidence=await readRunEvidence(runRef,principalRef);evidence.assertCurrent();return evidence.data;}
+  async function readRegistration(registrationRef:string,principalRef:string){const evidence=await readRegistrationEvidence(registrationRef,principalRef);evidence.assertCurrent();return evidence.data;}
+  return{authenticateMachine,execute,readRun,readRegistration,readRunEvidence,readRegistrationEvidence,registrationRef:(ref:string)=>seal("registration",runtimeRef.parse(ref)),runRef:(ref:string)=>seal("run",runtimeRef.parse(ref))};
 }

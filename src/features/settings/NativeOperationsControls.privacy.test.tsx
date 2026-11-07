@@ -15,7 +15,7 @@ const native=():FardaAdapter=>{
   if(request.viewKey!=="operationsControl")return response;
   const data=nativeOperationsControlSchema.parse(response.data);
   return {...response,data:{...data,actorRef:"agent-reviewer",role:"reviewer",sourceState:"current",sourceObservedAt:data.observedAt,
-   actions:[{kind:"task",targetRef:"synthetic-target",title:"Synthetic bounded task",details:[["Scope","Synthetic finite item"]],allowed:true,reasonCodes:[]}]}};
+   canonicalActions:[{kind:"task",targetRef:"synthetic-target",title:"Synthetic bounded task",details:[["Scope","Synthetic finite item"]],allowed:true,reasonCodes:[],effect:"previewOnly",items:[{itemRef:"synthetic-item",targetRef:"synthetic-subject",units:1,spendMinor:0}]}]}};
  }) as FardaAdapter["readView"]};
 };
 afterEach(()=>{sessionStorage.clear();vi.restoreAllMocks();});
@@ -39,7 +39,7 @@ it("does not restore or submit a protected reason after denial and same-version 
   const chooser=within(screen.getAllByRole("dialog",{hidden:true}).find(d=>within(d).queryByRole("heading",{name:"Choose a registered task",hidden:true}))!);
   await user.click(chooser.getByRole("button",{name:"Draft Synthetic bounded task",hidden:true}));
   const form=within(screen.getAllByRole("dialog",{hidden:true}).find(d=>within(d).queryByRole("heading",{name:"Request task",hidden:true}))!);
-  await user.type(form.getByLabelText("Reason"),"Synthetic protected in-flight reason");await user.click(form.getByRole("button",{name:"Save proposal for review",hidden:true}));await waitFor(()=>expect(digest).toHaveBeenCalledTimes(1));
+  await user.type(form.getByLabelText("Reason"),"Synthetic protected in-flight reason");await user.click(form.getByRole("button",{name:"Create approval preview",hidden:true}));await waitFor(()=>expect(digest).toHaveBeenCalledTimes(1));
   const prior=client.getQueriesData({queryKey:root}).find(([key])=>key.includes("operationsControl"))!;expect(prior[1]).toBeTruthy();
   await act(async()=>{dropProtectedData(client,root);client.setQueryData(prior[0],prior[1]);resolveDigest(new Uint8Array(32).buffer);});
   await waitFor(()=>expect(form.getByText(/Source access changed while preparing/)).toBeInTheDocument());

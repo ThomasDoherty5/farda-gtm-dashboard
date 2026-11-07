@@ -35,6 +35,21 @@ describe("registered runtime gateway authenticates exact commands and projects s
     const serialized=JSON.stringify(view);for(const privateValue of [f.registration.registrationRef,f.registration.sourceRef,f.registration.ownerRef,f.registration.apiBinding!.providerAccountId,"synthetic-subject-first-0","receipt:synthetic","route:synthetic",token,secret])expect(serialized).not.toContain(privateValue);
     const registration=await api.readRegistration(api.registrationRef("synthetic-j19"),principal);expect(registration).toMatchObject({kind:"registered-runtime",cadence:{kind:"calendar",localTime:"10:00"},coverage:{returned:1,total:null}});
   });
+  it.each(["false","promise"] as const)("requires a synchronous void named-actor fence (%s) before controls read protected runtime data",async kind=>{
+    sources.assertCurrent=kind==="false"?()=>false:async()=>{};
+    await expect(api.readRegistration(api.registrationRef("synthetic-j19"),principal)).rejects.toMatchObject({code:"AUTHORITY_REQUIRED",status:403});
+    expect(f.state.sourceCalls).toBe(0);
+  });
+  it.each(["false","promise"] as const)("requires a synchronous void machine fence (%s) before controls can admit a runtime window",async kind=>{
+    binding.assertCurrent=kind==="false"?()=>false:async()=>{};
+    await expect(api.execute("fire",fireInput(),`Bearer ${token}`)).rejects.toMatchObject({code:"RUNTIME_MACHINE_DENIED",status:403});
+    expect(db.prepare("SELECT COUNT(*) AS n FROM job_runs").get()?.n).toBe(0);expect(f.state.sourceCalls).toBe(0);
+  });
+  it.each(["false","promise"] as const)("does not hide an invalid registered activation source fence (%s) from controls reads",async kind=>{
+    f.authority.assertActivation=(kind==="false"?()=>false:async()=>{}) as never;
+    await expect(api.readRegistration(api.registrationRef("synthetic-j19"),principal)).rejects.toMatchObject({code:"RUNTIME_SOURCE_UNAVAILABLE",status:503});
+    expect(f.state.sourceCalls).toBe(0);
+  });
   it("authenticates before input exists and never reports a prior unknown request safe to resend",async()=>{
     for(const authorization of [undefined,"Bearer wrong",`Bearer ${"é".repeat(token.length)}`])expect(()=>api.authenticateMachine(authorization)).toThrowError(expect.objectContaining({code:"RUNTIME_MACHINE_REQUIRED",status:401,executionCertainty:"uncertain"}));
     const unavailable=createRuntimeApi({runtime:f.runtime,scope:runtimeSyntheticScope,secret,limits:new ApiRequestLimits(db,runtimeSyntheticScope,f.now),now:f.now});expect(()=>unavailable.authenticateMachine(`Bearer ${token}`)).toThrowError(expect.objectContaining({code:"RUNTIME_MACHINE_NOT_CONFIGURED",executionCertainty:"uncertain"}));
@@ -52,6 +67,44 @@ describe("registered runtime gateway authenticates exact commands and projects s
     const run=await f.fire();await expect(api.readRun(run.run.runId,principal)).rejects.toMatchObject({code:"RUNTIME_REFERENCE_INVALID"});
     const other=createRuntimeApi({runtime:f.runtime,scope:{...runtimeSyntheticScope,accountId:"synthetic-other-account"},secret,actorSources:sources,limits:new ApiRequestLimits(db,runtimeSyntheticScope,f.now),now:f.now});await expect(other.readRun(api.runRef(run.run.runId),principal)).rejects.toMatchObject({code:"RUNTIME_REFERENCE_INVALID"});
     const resolve=sources.resolveActor!;sources.resolveActor=async(...args)=>({...await resolve(...args) as TrustedHuman,scope:{...runtimeSyntheticScope,accountId:"synthetic-other-account"}});await expect(api.readRun(api.runRef(run.run.runId),principal)).rejects.toMatchObject({code:"AUTHORITY_REQUIRED",status:403});
+  });
+  it("retains original runtime and actor proof across later controls composition awaits",async()=>{
+    const run=await f.fire(),evidence=await api.readRunEvidence(api.runRef(run.run.runId),principal);
+    expect(evidence.data.kind).toBe("registered-runtime-run");
+    actorActive=false;expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"AUTHORITY_REQUIRED"}));
+    actorActive=true;const registration=await api.readRegistrationEvidence(api.registrationRef("synthetic-j19"),principal);
+    f.state.denied=true;expect(registration.assertCurrent).toThrowError(expect.objectContaining({code:"SOURCE_SCOPE_DENIED"}));
+    expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"SOURCE_SCOPE_DENIED"}));
+  });
+  it("invalidates retained runtime projections when the original run or registration window membership changes",async()=>{
+    const run=await f.fire(),evidence=await api.readRunEvidence(api.runRef(run.run.runId),principal);
+    f.jobs.controlRun(run.run.runId,"pause");
+    expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"RUNTIME_READ_CHANGED"}));
+    const registration=await api.readRegistrationEvidence(api.registrationRef("synthetic-j19"),principal);
+    await api.execute("fire",{...fireInput(),intendedAt:"2026-11-06T10:00:00Z",triggerEventRef:"synthetic-second-window"},`Bearer ${token}`);
+    expect(registration.assertCurrent).toThrowError(expect.objectContaining({code:"RUNTIME_READ_CHANGED"}));
+    expect(f.state.sourceCalls).toBe(0);
+  });
+  it("does not fence a refreshed page while returning pre-await source facts",async()=>{
+    const run=await f.fire(),resolve=f.authority.resolveActivation;let changed=false;
+    f.authority.resolveActivation=async registration=>{
+      const proof=await resolve(registration);
+      if(!changed){changed=true;const row=db.prepare("SELECT plan FROM job_runtime_pages WHERE run_ref=?").get(run.run.runId)!;
+        const plan=JSON.parse(String(row.plan));plan.receiptRef="receipt:synthetic-new-source-observation";
+        db.prepare("UPDATE job_runtime_pages SET plan=?,plan_hash=? WHERE run_ref=?").run(JSON.stringify(plan),digest(plan),run.run.runId);}
+      return proof;
+    };
+    await expect(api.readRun(api.runRef(run.run.runId),principal)).rejects.toMatchObject({code:"RUNTIME_READ_CHANGED"});
+    expect(f.state.sourceCalls).toBe(0);
+  });
+  it("fences scanned older-window admission even when it falls outside the latest twenty-five rows",async()=>{
+    const definition={...syntheticRuntimeRegistration().definition,jobId:"synthetic-old-backlog-job"};
+    const registration=syntheticRuntimeRegistration({registrationRef:"synthetic-old-backlog",family:"registered-business",definition,cadence:{kind:"hourly",timezone:"UTC",minute:0,startsAt:"2026-11-04T00:00:00Z"}});
+    const older=createRuntimeTestkit(db,{registration});await older.initialize();
+    for(let i=0;i<26;i++)await older.runtime.fire({registrationRef:registration.registrationRef,registrationVersion:1,intendedAt:new Date(Date.parse("2026-11-07T11:00:00Z")-i*3600000).toISOString(),triggerEventRef:"synthetic-recent-"+i},older.machine);
+    const evidence=await older.runtime.readRegistrationWithFence(registration.registrationRef);
+    await older.runtime.fire({registrationRef:registration.registrationRef,registrationVersion:1,intendedAt:"2026-11-04T00:00:00Z",triggerEventRef:"synthetic-older-scanned-window"},older.machine);
+    expect(evidence.assertCurrent).toThrowError(expect.objectContaining({code:"RUNTIME_READ_CHANGED"}));expect(older.state.sourceCalls).toBe(0);
   });
   it("a named actor withdrawn during the final source await receives no protected projection",async()=>{
     const run=await f.fire(),resolve=f.authority.resolveActivation;f.authority.resolveActivation=async r=>{const proof=await resolve(r);actorActive=false;return proof;};
