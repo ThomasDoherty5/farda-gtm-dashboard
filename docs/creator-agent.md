@@ -49,6 +49,14 @@ All three response versions hash the returned read-model data. A stale/supersede
 
 `/v1/media/` inventories advertiser accounts and per-operation capabilities, compiles an immutable, hashed campaign manifest from the actual checkout, creates a paused native draft and reads its settings back before release is requested. Publishing needs an exact J04 Linear decision for that revision, manifest and read-back, all five media gates and a Ready publish capability; a denied API capability never falls back to a browser route, and an uncertain write is reconciled by its key and native campaign before any retry. A pre-authorized safety pause can always stop live spend. Every source and the provider executor are injected through `mediaAuthority`; none is connected, and production stays held. See [`src/creator-agent/media/README.md`](../src/creator-agent/media/README.md).
 
+### Staged media release (THO-347)
+
+`/v1/media-control/` is the economic controller over native delivery. It observes, proposes, checks exact approval, executes bounded changes and reconciles. Every provider effect goes through the THO-346 media repository. The $1,500, $1,500 and $3,000 stages are each held until their own exact Linear decision and release.
+
+Launches reserve the native lifetime cap plus approved headroom atomically against the stage and account caps. Unknown, stale or mismatched exposure fails closed. Increases need met contribution-based scale criteria, the adopted review window and their own decision. A pre-authorized safety pause runs at any time on exhausted caps or failed stock, checkout, rights, permission or measurement.
+
+Contribution and allowable acquisition cost use adopted inputs only. Platform-attributed purchases stay apart from canonical retained orders. The treasury check keeps founder cash within the adopted ceiling and never counts forecasts. Every source is injected through `mediaControlAuthority`; none is connected. See [`src/creator-agent/mediaControl/README.md`](../src/creator-agent/mediaControl/README.md).
+
 ## Weight binding
 
 The owner-approved `2026-11-04.launch-v1` website and TikTok bindings are versioned under `src/creator-agent/configurations/` and loaded by the launcher by default. They preserve the explicitly adopted route percentages, existing arithmetic and80/65 bands. Historical v2 fixtures remain unchanged and are never a fallback. An explicitly unbound embedded/test instance still reports unknown numeric configuration and cannot activate.
