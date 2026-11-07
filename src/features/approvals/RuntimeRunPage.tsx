@@ -6,6 +6,7 @@ import { DataTable } from "@/components/DataTable";
 import { Details, dateTime } from "./shared";
 import styles from "./Approvals.module.css";
 import native from "./NativeApproval.module.css";
+import { RuntimeSchedulePanel } from "./RuntimeSchedulePanel";
 
 const known = (value: number | null) => value === null ? "Unknown" : value.toLocaleString("en-US");
 const outcomes = { none: "No confirmed result", observationRecorded: "Observation recorded", proposalRecorded: "Local proposal recorded", nativeReceiptRecorded: "Native receipt recorded" };
@@ -37,6 +38,7 @@ export function RuntimeRunPage({ res, tab, refresh }: { res: ReadResponse<SafeRu
       ].map(([title, note], index) => <div className={styles.step} key={title}><span className={styles.stepNumber}>{String(index + 1).padStart(2, "0")}</span>
         <div className={styles.stepBody}><p className={styles.label}>{title}</p><p className={styles.small}>{note}</p></div><span className={styles.small}>Required</span></div>)}
     </section>}
+    <RuntimeSchedulePanel data={data} stale={stale} />
     <div className={styles.runColumns}>
       <section className={styles.card} aria-labelledby="runtime-results-title"><h2 id="runtime-results-title" className={styles.h2}>From source window to recorded results</h2>
         <p className={styles.small}>Items retain their checkpoint and original attempt. A completed page may still have more source membership to read.</p>

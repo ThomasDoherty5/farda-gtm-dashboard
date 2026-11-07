@@ -62,6 +62,7 @@ describe("registered runtime run evidence", () => {
     f.deny(); await userEvent.click(screen.getByRole("button", { name: "Refresh run evidence" }));
     await waitFor(() => expect(screen.queryByRole("table", { name: "Registered work items" })).not.toBeInTheDocument());
     expect(screen.queryByRole("heading", { name: "Measured usage and unknown costs" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Registered trigger and cadence" })).not.toBeInTheDocument();
     expect(f.actions()).toBe(0);
   });
 });

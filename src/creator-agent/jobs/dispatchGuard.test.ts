@@ -22,6 +22,10 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
     let directory: string, path: string, db: DB, other: DB | undefined, now: number,approvedSpendMinor:number,approvedUnits:number, revoked: boolean, called: number, jobs: JobRepository, guard: DispatchGuard, handler: DispatchHandler, authority: DispatchApprovalAuthority;
     const proof = (input: DispatchIntent["approval"]): VerifiedApprovalProof => ({ verificationRef: "synthetic-proof", item: { itemRef: input.itemRef, itemVersion: input.itemVersion, itemHash: input.itemHash, targetRef: `synthetic-target:${input.itemRef}`, targetVersion: "v1", payloadHash: input.payloadHash, sourceRef: "synthetic-source", units: approvedUnits, spendMinor: approvedSpendMinor }, binding: input, approvalRevision: 1, observedAt: new Date(now).toISOString(), validUntil: new Date(now + 60000).toISOString(), policyEvidenceVersion: "synthetic-policy-v1", actorDirectoryVersion: "synthetic-directory-v1", decisionReceipt: { receiptRef: "synthetic-decision", scope, approvalRef: input.approvalRef, manifestVersion: 1, manifestHash: input.manifestHash, decision: "approved", proposedEditRef: null, decidedAt: new Date(now).toISOString(), principalRef: "synthetic-principal", personRef: "synthetic-person", directoryVersion: "v1", policyVersion: input.policyVersion, linearRecordRef: "synthetic-linear", linearSourceVersion: "v1", linearContentHash: "c".repeat(64), slack: { workspaceRef: "synthetic-slack", channelRef: "synthetic-channel", threadRef: "synthetic-thread", eventRef: "synthetic-event" }, slackSourceVersion: "v1", expiresAt: new Date(now + 60000).toISOString(), bounds: { maxItems: 10, maxUnits: 10, maxSpendMinor: 100, currency: "USD" } } });
     const applied = (c: Pick<DispatchContext,"dispatchKey"|"intent"|"providerBindingHash">): DispatchReadback => ({ state: "applied", receipt: { receiptRef: `synthetic-receipt:${digest(c.dispatchKey)}`, dispatchKey: c.dispatchKey, payloadHash: c.intent.approval.payloadHash, handlerRef: c.intent.handlerRef, providerBindingHash: c.providerBindingHash, sourceEffect: "localArtifact", observedAt: new Date(now).toISOString() } });
+    const closed = (c: Pick<DispatchContext, "attemptRef" | "attemptNumber" | "dispatchKey" | "intent" | "providerBindingHash">, receiptRef = "synthetic-terminal-closure"): Extract<DispatchReadback, { state: "notApplied" }> => ({
+        state: "notApplied", attemptRef: c.attemptRef, attemptNumber: c.attemptNumber, dispatchKey: c.dispatchKey, payloadHash: c.intent.approval.payloadHash,
+        handlerRef: c.intent.handlerRef, providerBindingHash: c.providerBindingHash, receiptRef, observedAt: new Date(now).toISOString(), validUntil: new Date(now + 1000).toISOString(), complete: true, originalAttemptClosed: true,
+    });
     const build = (database = db, resources?: ResourceAuthority) => { const repository = new JobRepository(database, { scope, now: () => now }); return { jobs: repository, guard: new DispatchGuard({ db: database, jobs: repository, scope, now: () => now, approvals: authority, handlers: new Map([["synthetic-export-v1", handler]]), resourceAuthority: resources }) }; };
     const handoff = (i = intent(), g = guard, key = "synthetic-request") => g.handoff(i, { principalRef: "synthetic-principal", idempotencyKey: key });
     beforeEach(() => { directory = mkdtempSync(join(tmpdir(), "farda-approved-dispatch-")); path = join(directory, "agent.sqlite"); new AgentStore(path, scope).close(); db = new DatabaseSync(path); now = Date.parse("2026-11-06T12:00:00Z"); revoked = false; called = 0;approvedSpendMinor=0;approvedUnits=0; authority = { resolveCurrentProof: async (binding) => revoked ? { state: "held", reasonCodes: ["APPROVAL_REVOKED"], historicalReceipt: null } : { state: "verified", proof: proof(binding) }, assertCurrentProof: (p, t) => { if (revoked || Date.parse(p.validUntil) <= t)
@@ -93,7 +97,20 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
  it("a closed first-attempt receipt cannot release a second uncertain attempt at the same clock time",async()=>{handler.budgets.maxAttempts=3;handler.execute=async()=>{called++;return{state:"unknown",reasonCode:"SOURCE_TIMEOUT"};};let original:DispatchReadback|null=null;handler.reconcile=async c=>original??(original={state:"notApplied",attemptRef:c.attemptRef,attemptNumber:c.attemptNumber,dispatchKey:c.dispatchKey,payloadHash:c.intent.approval.payloadHash,handlerRef:c.intent.handlerRef,providerBindingHash:c.providerBindingHash,receiptRef:"synthetic-first-attempt-closure",observedAt:new Date(now).toISOString(),validUntil:new Date(now+1000).toISOString(),complete:true,originalAttemptClosed:true});const run=await handoff();await guard.execute(run.runRef);await guard.reconcile(run.runRef);await guard.execute(run.runRef);expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(2);await expect(guard.reconcile(run.runRef)).rejects.toMatchObject({code:"DISPATCH_CLOSURE_ATTEMPT_MISMATCH",executionCertainty:"uncertain"});expect(guard.read(run.runRef).current.state).toBe("uncertain");expect(called).toBe(2);expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_readbacks").get()?.n).toBe(1);expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(1);});
 
  it("requires the full approved item amount rather than a smaller declared allocation",async()=>{approvedSpendMinor=100;handler.resources=()=>({budget:{state:"required",resourceRef:"synthetic-budget",quantity:50,unit:"minor",currency:"USD"},stock:na,quota:na});const resources:ResourceAuthority={resolveGrants:async request=>[{grantRef:"synthetic-budget-grant",issuerRef:"synthetic-budget-owner",allocationVersion:"v1",scope,dispatchKey:request.dispatchKey,dimension:"budget",resourceRef:"synthetic-budget",quantity:50,unit:"minor",currency:"USD",exclusive:true,observedAt:new Date(now).toISOString(),validUntil:new Date(now+10000).toISOString()}],assertCurrent:()=>{}};({guard}=build(db,resources));const run=await handoff();await expect(guard.execute(run.runRef)).rejects.toThrow("DISPATCH_ITEM_SPEND_BOUND");expect(called).toBe(0);});
- it("rechecks the closure generation inside the retry transaction after awaited approval",async()=>{handler.budgets.maxAttempts=3;handler.execute=async()=>({state:"unknown",reasonCode:"SOURCE_TIMEOUT"});let closureIndex=0;handler.reconcile=async c=>({state:"notApplied",attemptRef:c.attemptRef,attemptNumber:c.attemptNumber,dispatchKey:c.dispatchKey,payloadHash:c.intent.approval.payloadHash,handlerRef:c.intent.handlerRef,providerBindingHash:c.providerBindingHash,receiptRef:`synthetic-closure-${++closureIndex}`,observedAt:new Date(now).toISOString(),validUntil:new Date(now+1000).toISOString(),complete:true,originalAttemptClosed:true});const run=await handoff();await guard.execute(run.runRef);const wait=deferred<void>(),entered=deferred<void>();let block=true;const resolve=authority.resolveCurrentProof;authority.resolveCurrentProof=async binding=>{if(block){block=false;entered.resolve();await wait.promise;}return resolve(binding);};const stale=guard.reconcile(run.runRef);await entered.promise;await guard.reconcile(run.runRef);await guard.execute(run.runRef);wait.resolve();await expect(stale).rejects.toMatchObject({code:"DISPATCH_CLOSURE_ATTEMPT_MISMATCH",executionCertainty:"uncertain"});expect(guard.read(run.runRef).run.items[0]?.state).toBe("reconcile");expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(2);expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(1);});
+ it("rechecks the closure generation after a delayed source readback while another worker starts a new attempt", async () => {
+   handler.budgets.maxAttempts = 3; handler.execute = async () => ({ state: "unknown", reasonCode: "SOURCE_TIMEOUT" });
+   const waiting = deferred<void>(), entered = deferred<void>(); let block = true, closureIndex = 0;
+   handler.reconcile = async c => { const result = closed(c, `synthetic-closure-${++closureIndex}`);
+     if (block) { block = false; entered.resolve(); await waiting.promise; } return result; };
+   const run = await handoff(); await guard.execute(run.runRef);
+   const stale = guard.reconcile(run.runRef); await entered.promise;
+   await guard.reconcile(run.runRef); await guard.execute(run.runRef); waiting.resolve();
+   await expect(stale).rejects.toMatchObject({ code: "DISPATCH_CLOSURE_ATTEMPT_MISMATCH", executionCertainty: "uncertain" });
+   expect(guard.read(run.runRef).run.items[0]?.state).toBe("reconcile");
+   expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(2);
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_readbacks").get()?.n).toBe(1);
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(1);
+ });
 
  it.each(["pause","cancel","approval","lease","worker"])("the execute context final fence blocks %s after a handler await",async change=>{
    const reached=deferred<void>(),resume=deferred<void>();let active=true;let currentRun="";
@@ -123,4 +140,78 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
    handler.reconcile=async c=>{expect(Object.keys(c).sort()).toEqual(["attemptNumber","attemptRef","dispatchKey","intent","providerBindingHash"].sort());return{state:"unknown",reasonCode:"SOURCE_NOT_READY"};};
    const run=await handoff();await guard.execute(run.runRef);expect((await guard.reconcile(run.runRef)).executionCertainty).toBe("uncertain");
  });
+ it("records terminal nonapplication after approval and write capability revocation without rearming a retry", async () => {
+   const { ledger, binding } = await external();
+   handler.execute = async () => { called++; return { state: "unknown", reasonCode: "SOURCE_TIMEOUT" }; };
+   handler.reconcile = async c => closed(c);
+   const run = await handoff(); await guard.execute(run.runRef); revoked = true;
+   ledger.revoke(capabilityIdForBinding(binding), "SOURCE_SCOPE_DENIED", 2);
+   const result = await guard.reconcile(run.runRef);
+   expect(result.executionCertainty).toBe("notApplied"); expect(result.current.state).toBe("held");
+   expect(result.run.items[0]).toMatchObject({ state: "held", attempts: 1, reasonCode: "DISPATCH_NOT_APPLIED_CLOSED" });
+   expect(db.prepare("SELECT dispatch_started FROM job_items WHERE item_key=?").get(result.dispatchKey)?.dispatch_started).toBe(0);
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(0);
+   const receipt = db.prepare("SELECT * FROM job_dispatch_readbacks").get(); expect(receipt).toBeDefined();
+   await expect(guard.execute(run.runRef)).rejects.toThrow("APPROVAL_REVOKED"); expect(called).toBe(1);
+   db.close(); db = new DatabaseSync(path);
+   const restarted = new DispatchGuard({ db, jobs: new JobRepository(db, { scope, now: () => now }), scope, now: () => now, approvals: authority,
+     ledger: new CapabilityLedger(db, scope, { now: () => now }), handlers: new Map([["synthetic-export-v1", handler]]) });
+   expect((await restarted.reconcile(run.runRef)).executionCertainty).toBe("notApplied");
+   expect(db.prepare("SELECT * FROM job_dispatch_readbacks").get()).toEqual(receipt);
+   expect(restarted.read(run.runRef).run.items[0]?.attempts).toBe(1);
+ });
+ it("requires fresh approval and worker fences before retrying a positively closed original key", async () => {
+   handler.execute = async () => { called++; return { state: "unknown", reasonCode: "SOURCE_TIMEOUT" }; }; handler.reconcile = async c => closed(c);
+   const run = await handoff(); await guard.execute(run.runRef); revoked = true;
+   expect((await guard.reconcile(run.runRef)).executionCertainty).toBe("notApplied");
+   await expect(guard.execute(run.runRef)).rejects.toThrow("APPROVAL_REVOKED");
+   revoked = false;
+   await expect(guard.execute(run.runRef, { workerRef: "synthetic-worker", assertCurrent: () => { throw new DispatchError("WORKER_REVOKED", 403); } })).rejects.toThrow("WORKER_REVOKED");
+   expect(called).toBe(1); expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(1);
+   handler.execute = async c => { c.assertCurrent(); called++; return applied(c); };
+   expect((await guard.execute(run.runRef)).executionCertainty).toBe("applied"); expect(called).toBe(2);
+   expect(db.prepare("SELECT COUNT(DISTINCT dispatch_key) AS n FROM job_dispatch_attempts").get()?.n).toBe(1);
+ });
+ it("records closure without allocating resources and requires a new current grant for the next attempt", async () => {
+   approvedSpendMinor = 50; let resourceCurrent = true, resolutions = 0;
+   handler.resources = () => ({ budget: { state: "required", resourceRef: "synthetic-budget", quantity: 50, unit: "minor", currency: "USD" }, stock: na, quota: na });
+   const resources: ResourceAuthority = {
+     resolveGrants: async request => { resolutions++; if (!resourceCurrent) throw new DispatchError("SOURCE_BUDGET_UNAVAILABLE");
+       return [{ grantRef: "synthetic-original-budget", issuerRef: "synthetic-budget-owner", allocationVersion: "v1", scope, dispatchKey: request.dispatchKey,
+         dimension: "budget", resourceRef: "synthetic-budget", quantity: 50, unit: "minor", currency: "USD", exclusive: true,
+         observedAt: new Date(now).toISOString(), validUntil: new Date(now + 10000).toISOString() }]; },
+     assertCurrent: () => { if (!resourceCurrent) throw new DispatchError("SOURCE_BUDGET_UNAVAILABLE"); },
+   };
+   ({ jobs, guard } = build(db, resources)); handler.execute = async () => { called++; return { state: "unknown", reasonCode: "SOURCE_TIMEOUT" }; };
+   handler.reconcile = async c => closed(c); const run = await handoff(); await guard.execute(run.runRef); resourceCurrent = false;
+   const before = resolutions; expect((await guard.reconcile(run.runRef)).executionCertainty).toBe("notApplied"); expect(resolutions).toBe(before);
+   await expect(guard.execute(run.runRef)).rejects.toThrow("SOURCE_BUDGET_UNAVAILABLE");
+   expect(called).toBe(1); expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(1);
+ });
+ it("preserves cancellation when recording terminal nonapplication", async () => {
+   handler.execute = async () => { called++; return { state: "unknown", reasonCode: "SOURCE_TIMEOUT" }; }; handler.reconcile = async c => closed(c);
+   const run = await handoff(); await guard.execute(run.runRef); guard.control(run.runRef, guard.read(run.runRef).revision, "cancel"); revoked = true;
+   const result = await guard.reconcile(run.runRef); expect(result.executionCertainty).toBe("notApplied");
+   expect(result.run.control).toBe("cancelled"); expect(result.run.items[0]?.state).toBe("cancelled");
+   await guard.execute(run.runRef); expect(called).toBe(1);
+ });
+ it("does not close an active native lease and preserves its eventual confirmed receipt", async () => {
+   const pending = deferred<DispatchReadback>(), reached = deferred<DispatchContext>();
+   handler.execute = async c => { called++; reached.resolve(c); return pending.promise; }; handler.reconcile = async c => closed(c);
+   const run = await handoff(), running = guard.execute(run.runRef), context = await reached.promise;
+   expect((await guard.reconcile(run.runRef)).executionCertainty).toBe("uncertain");
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_readbacks").get()?.n).toBe(0);
+   pending.resolve(applied(context)); const result = await running; revoked = true;
+   expect((await guard.reconcile(run.runRef)).receipt).toEqual(result.receipt); expect(called).toBe(1);
+ });
+ it("rejects terminal closure if source read authority is withdrawn during the lookup", async () => {
+   const { ledger, reconcileBinding } = await external(); handler.execute = async () => ({ state: "unknown", reasonCode: "SOURCE_TIMEOUT" });
+   handler.reconcile = async c => { ledger.revoke(capabilityIdForBinding(reconcileBinding), "SOURCE_SCOPE_DENIED", 2); return closed(c); };
+   const run = await handoff(); await guard.execute(run.runRef);
+   await expect(guard.reconcile(run.runRef)).rejects.toMatchObject({ status: 403, executionCertainty: "uncertain" });
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_readbacks").get()?.n).toBe(0);
+   expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(1);
+   expect(guard.read(run.runRef).run.items[0]?.state).toBe("reconcile");
+ });
+
 });

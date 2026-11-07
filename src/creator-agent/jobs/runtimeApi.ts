@@ -5,7 +5,7 @@ import {openOperationsToken,sealOperationsToken} from "../operationsTokens.ts";
 import type {ApiRequestLimits} from "../apiRequestLimits.ts";
 import {approvalScopeSchema,trustedHumanSchema,type ApprovalSources,type TrustedHuman} from "../approvals/contract.ts";
 import type {JobRuntime} from "./runtime.ts";
-import {runtimeApiOperationSchema,safeRuntimeRunSchema,safeRuntimeRegistrationSchema,runtimeApiAckSchema,runtimeUsageViewSchema,type RuntimeApiOperation,type SafeRuntimeRun,type RuntimeApiAck} from "./runtimeViews.ts";
+import {runtimeApiOperationSchema,safeRuntimeRunSchema,safeRuntimeRegistrationSchema,runtimeApiAckSchema,runtimeUsageViewSchema,safeRuntimeSchedulingSchema,type RuntimeApiOperation,type SafeRuntimeRun,type RuntimeApiAck} from "./runtimeViews.ts";
 export {runtimeApiOperationSchema,safeRuntimeRunSchema,safeRuntimeRegistrationSchema,runtimeApiAckSchema} from "./runtimeViews.ts";
 import type {RuntimeUsageRead} from "./runtimeMeasurements.ts";
 import {RuntimeError,runtimeRef,runtimeInstant,runtimeFireSchema,runtimeWorkSchema,runtimeCatchUpSchema,runtimeTakeoverSchema,type RuntimeMachine,type RuntimeOptions,type RuntimeRunRead} from "./runtimeSchema.ts";
@@ -33,7 +33,7 @@ export function createRuntimeApi(options:RuntimeApiOptions){
   const now=options.now??Date.now,scope=options.scope;
   const seal=(kind:"run"|"registration"|"item",value:string)=>`rt-${kind}-${sealOperationsToken(scope,options.secret,`job-runtime-${kind}`,value)}`;
   const unseal=(kind:"run"|"registration"|"item",value:string,requireOpaque=false)=>{if(!value.startsWith(`rt-${kind}-`)){if(requireOpaque)throw new RuntimeApiError("RUNTIME_REFERENCE_INVALID",403);return runtimeRef.parse(value);}try{const decoded=openOperationsToken(scope,options.secret,`job-runtime-${kind}`,value.slice(`rt-${kind}-`.length));return runtimeRef.parse(decoded);}catch{throw new RuntimeApiError("RUNTIME_REFERENCE_INVALID",403);}};
-  const display=(kind:"owner"|"evidence"|"usage",value:string)=>`${kind}-${createHmac("sha256",options.secret).update(JSON.stringify([scope,kind,value])).digest("hex")}`;
+  const display=(kind:"owner"|"evidence"|"usage"|"trigger"|"trigger-version",value:string)=>`${kind}-${createHmac("sha256",options.secret).update(JSON.stringify([scope,kind,value])).digest("hex")}`;
   const admit=(principal:string,kind:"read"|"write",certainty:"notApplied"|"uncertain"="notApplied")=>{const result=options.limits.admit(principal,kind);if(!result.admitted)throw new RuntimeApiError("RATE_LIMITED",429,certainty,result.retryAfterMs);};
   const assertActor=(actor:TrustedHuman,principalRef:string)=>{if(!actor.active||actor.principalRef!==principalRef||digest(actor.scope)!==digest(scope)||Date.parse(actor.observedAt)>now()||Date.parse(actor.validUntil)<=now()||Date.parse(actor.validUntil)<=Date.parse(actor.observedAt)||!options.actorSources?.assertCurrent)throw new RuntimeApiError("AUTHORITY_REQUIRED");try{options.actorSources.assertCurrent({scope,actor,slack:null,linearRecords:[]},now());}catch{throw new RuntimeApiError("AUTHORITY_REQUIRED");}};
   const actor=async(principalRef:string)=>{runtimeRef.parse(principalRef);if(!options.actorSources?.resolveActor)throw new RuntimeApiError("NAMED_ACTOR_UNCONFIGURED");let raw:unknown;try{raw=await options.actorSources.resolveActor(principalRef,scope);}catch{throw new RuntimeApiError("AUTHORITY_REQUIRED");}const parsed=trustedHumanSchema.safeParse(raw);if(!parsed.success)throw new RuntimeApiError("AUTHORITY_REQUIRED");assertActor(parsed.data,principalRef);if(options.readAdmission!=="upstream")admit(principalRef,"read");return parsed.data;};
@@ -79,8 +79,21 @@ export function createRuntimeApi(options:RuntimeApiOptions){
     }
     try{proof.assertCurrent();}catch(error){throw new RuntimeApiError(error instanceof RuntimeError?error.code:"RUNTIME_MACHINE_DENIED",403,result.executionCertainty);}return result;
   }
-  async function readRun(runRef:string,principalRef:string){const who=await actor(principalRef),ref=unseal("run",publicRef.parse(runRef),true);const snapshot=await options.runtime.readRunWithFence(ref);const result=projectRun(snapshot.value,options.runtime.measurements.read(ref));assertActor(who,principalRef);snapshot.assertCurrent();assertActor(who,principalRef);return result;}
-  async function readRegistration(registrationRef:string,principalRef:string){const who=await actor(principalRef),ref=unseal("registration",publicRef.parse(registrationRef),true);const snapshot=await options.runtime.readRegistrationWithFence(ref),v=snapshot.value,r=v.registration;const cadence=r.cadence.kind==="event"?{kind:"event" as const}:r.cadence.kind==="hourly"?r.cadence:{kind:"calendar" as const,timezone:r.cadence.draft.timezone,localTime:r.cadence.draft.localTime,cadence:r.cadence.draft.cadence,startsAt:r.cadence.startsAt};
-    const result=safeRuntimeRegistrationSchema.parse({kind:"registered-runtime",source:"native-runtime",environment:"sandbox",registrationRef:seal("registration",r.registrationRef),version:r.version,family:r.family,mode:r.definition.mode,ownerAlias:display("owner",r.ownerRef),cadence,observedAt:v.observedAt,validUntil:v.validUntil,cadenceStatus:v.cadenceStatus,windows:v.windows.map(w=>({runRef:w.runRef?seal("run",w.runRef):null,intendedAt:w.window.intendedAt})),coverage:v.coverage});assertActor(who,principalRef);snapshot.assertCurrent();assertActor(who,principalRef);return result;}
+  type RegistrationRead=Awaited<ReturnType<JobRuntime["readRegistration"]>>;
+  function cadenceOf(v:RegistrationRead){const r=v.registration;return r.cadence.kind==="event"?{kind:"event" as const}:r.cadence.kind==="hourly"?r.cadence:{kind:"calendar" as const,timezone:r.cadence.draft.timezone,localTime:r.cadence.draft.localTime,cadence:r.cadence.draft.cadence,startsAt:r.cadence.startsAt};}
+  function scheduling(v:RegistrationRead){const c=v.cadenceStatus;return safeRuntimeSchedulingSchema.parse({observedAt:v.observedAt,validUntil:v.validUntil,
+    trigger:{alias:display("trigger",v.trigger.triggerRef),versionAlias:display("trigger-version",v.trigger.triggerVersion)},cadence:cadenceOf(v),
+    backlog:c.kind==="event"?{state:"notApplicable",reasonCode:"EVENT_DRIVEN_NO_DUE_SLOTS"}:{state:"observed",nextPlannedAt:c.nextPlannedAt,oldestUnadmittedAt:c.oldestUnadmittedAt,unadmittedInScannedRange:c.unadmittedInScannedRange,scannedSlots:c.scannedSlots,scanComplete:c.scanComplete,scanCursor:c.scanCursor,...v.cadenceScan,total:null}});}
+  async function readRun(runRef:string,principalRef:string){
+    const who=await actor(principalRef),ref=unseal("run",publicRef.parse(runRef),true),snapshot=await options.runtime.readRunWithFence(ref);
+    const registration=await options.runtime.readRegistrationWithFence(snapshot.value.registrationRef);
+    if(registration.value.registration.version!==snapshot.value.registrationVersion)throw new RuntimeApiError("RUNTIME_REGISTRATION_STALE",409);
+    const result=safeRuntimeRunSchema.parse({...projectRun(snapshot.value,options.runtime.measurements.read(ref)),scheduling:scheduling(registration.value)});
+    // Both observations were issued before the last await. Neither an actor check nor
+    // the later registration proof is a substitute for the retained run source fence.
+    assertActor(who,principalRef);snapshot.assertCurrent();registration.assertCurrent();assertActor(who,principalRef);return result;
+  }
+  async function readRegistration(registrationRef:string,principalRef:string){const who=await actor(principalRef),ref=unseal("registration",publicRef.parse(registrationRef),true);const snapshot=await options.runtime.readRegistrationWithFence(ref),v=snapshot.value,r=v.registration;
+    const result=safeRuntimeRegistrationSchema.parse({kind:"registered-runtime",source:"native-runtime",environment:"sandbox",registrationRef:seal("registration",r.registrationRef),version:r.version,family:r.family,mode:r.definition.mode,ownerAlias:display("owner",r.ownerRef),cadence:cadenceOf(v),observedAt:v.observedAt,validUntil:v.validUntil,cadenceStatus:v.cadenceStatus,windows:v.windows.map(w=>({runRef:w.runRef?seal("run",w.runRef):null,intendedAt:w.window.intendedAt})),coverage:v.coverage});assertActor(who,principalRef);snapshot.assertCurrent();assertActor(who,principalRef);return result;}
   return{authenticateMachine,execute,readRun,readRegistration,registrationRef:(ref:string)=>seal("registration",runtimeRef.parse(ref)),runRef:(ref:string)=>seal("run",runtimeRef.parse(ref))};
 }

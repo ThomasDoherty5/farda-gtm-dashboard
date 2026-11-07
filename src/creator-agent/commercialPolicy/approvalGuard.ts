@@ -3,6 +3,7 @@ import { ApprovalError, approvalDraftSchema, type ApprovalDraft, type ApprovalRe
 import type { OfferRepository } from "../offers/repository.ts";
 import type { OfferPhase, OfferPolicyProof } from "../offers/policy.ts";
 import { acquisitionTermsOf } from "./evaluate.ts";
+import { commercialEligibilityReasonSchema } from "./views.ts";
 
 type Offers = Pick<OfferRepository, "readOffer" | "resolvePolicyProof" | "assertPolicyProof">;
 export function commercialProofHash(proof: OfferPolicyProof) {
@@ -13,7 +14,9 @@ export function commercialProofHash(proof: OfferPolicyProof) {
 export function commercialTermsVersion(offers: { itemRef: string; offerRef: string; offerVersion: string }[]) {
   return offers.length === 1 ? offers[0]!.offerVersion : `commercial-terms:${digest(offers)}`;
 }
-const held = (code: string): never => { throw new ApprovalError(code); };
+const held = (code: string, reasons: string[] = []): never => { throw new ApprovalError(code, reasons.map(reason => {
+  const parsed = commercialEligibilityReasonSchema.safeParse(reason); return parsed.success ? parsed.data : "COMMERCIAL_SOURCE_HELD";
+})); };
 
 /** Adapt source-owned offers into the existing J04 registry. This issues no permission or execution grant. */
 export function withCommercialOffers(registry: ApprovalRegistry, offers: Offers, now: () => number = Date.now): ApprovalRegistry {
@@ -40,7 +43,9 @@ export function withCommercialOffers(registry: ApprovalRegistry, offers: Offers,
       const record = offers.readOffer(row.offerRef);
       const eligible = offers.resolvePolicyProof(row.offerRef, draft.phase as OfferPhase);
       const proof = eligible?.state === "eligible" ? eligible.proof : null;
-      if (!record || !proof) return held("COMMERCIAL_OFFER_HELD");
+      if (!record || !proof) return held("COMMERCIAL_OFFER_HELD", eligible?.reasonCodes ?? ["OFFER_NOT_FOUND"]);
+      if (row.offerVersion !== undefined && row.offerVersion !== record.version || requireHash && row.offerVersion === undefined)
+        return held("COMMERCIAL_OFFER_CHANGED", [row.offerVersion === undefined ? "OFFER_VERSION_REQUIRED" : "OFFER_VERSION_MISMATCH"]);
       offers.assertPolicyProof(proof, now());
       if (uniqueOffers.has(record.offerId)) return held("COMMERCIAL_OFFER_REUSED");
       uniqueOffers.add(record.offerId);
@@ -58,7 +63,7 @@ export function withCommercialOffers(registry: ApprovalRegistry, offers: Offers,
       const basisHash = commercialProofHash(proof);
       if (requireHash && row.basisHash !== basisHash) return held("COMMERCIAL_OFFER_CHANGED");
       versions.push({ itemRef: item.itemRef, offerRef: row.offerRef, offerVersion: record.version });
-      return { itemRef: item.itemRef, offerRef: row.offerRef, basisHash };
+      return { itemRef: item.itemRef, offerRef: row.offerRef, offerVersion: record.version, basisHash };
     });
     if (BigInt(draft.bounds.maxUnits) > maximumUnits || BigInt(draft.bounds.maxSpendMinor) > maximumSampleSpend)
       return held("COMMERCIAL_SAMPLE_BOUND_MISMATCH");

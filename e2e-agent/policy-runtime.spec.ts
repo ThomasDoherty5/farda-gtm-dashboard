@@ -1,4 +1,4 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -17,6 +17,7 @@ import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-age
 
 // Actual service, source-owned runtime and shared SQLite. All policies, actors, source events and prices are fictional.
 // No real provider, creator contact, approval adoption or financial effect is exercised.
+const test = base.extend<{ runtimeCadence: "event" | "daily" | "hourly" }>({ runtimeCadence: ["event", { option: true }] });
 const machineToken = "synthetic-policy-runtime-machine-not-for-deployment";
 let directory: string, app: ReturnType<typeof createAgentServer>;
 let offers: ReturnType<typeof offerPolicyFixture>, kit: ReturnType<typeof createRuntimeTestkit>;
@@ -24,8 +25,7 @@ let actorActive: boolean, sourceResolved: boolean;
 let captures: { file: string; width: number; height: number; sha256: string; state: string }[];
 const service = () => `http://127.0.0.1:${process.env.E2E_AGENT_SERVER_PORT}`;
 
-// eslint-disable-next-line no-empty-pattern
-test.beforeEach(async ({}) => {
+test.beforeEach(async ({ runtimeCadence }) => {
   directory = mkdtempSync(join(tmpdir(), "farda-policy-runtime-browser-"));
   offers = offerPolicyFixture(join(directory, "native.sqlite"), scope);
   actorActive = true; sourceResolved = false; captures = [];
@@ -39,7 +39,11 @@ test.beforeEach(async ({}) => {
   offers.terms.pricingVersion = policy.pricing.version;
   // Do not call fixture.save(): no scorecard or qualification is invented for this browser offer.
   offers.repo.saveFromAdapter("synthetic-source-offer", null, offers.terms, "synthetic-source-offer-save");
-  const registration = syntheticRuntimeRegistration({ family: "registered-business", cadence: { kind: "event", eventType: "synthetic-source-event" } });
+  const registration = runtimeCadence === "daily" ? syntheticRuntimeRegistration({ cadence: {
+    kind: "calendar", draft: { cadence: "daily", localTime: "10:00", timezone: "UTC", activeCohortOverride: false },
+    draftVersion: "j1-d1", startsAt: "2026-11-05T10:00:00Z" } }) : runtimeCadence === "hourly" ?
+    syntheticRuntimeRegistration({ family: "J08", membership: "enrolled-only", cadence: { kind: "hourly", timezone: "UTC", minute: 0, startsAt: "2026-11-05T00:00:00Z" } }) :
+    syntheticRuntimeRegistration({ family: "registered-business", cadence: { kind: "event", eventType: "synthetic-source-event" } });
   kit = createRuntimeTestkit(offers.store.database, { registration, now: offers.now });
   await kit.initialize();
   const resolveTakeover = kit.authority.resolveTakeover, assertTakeover = kit.authority.assertTakeover;
@@ -92,9 +96,9 @@ async function machine(operation: string, input: unknown) {
   expect(response.status, JSON.stringify(body)).toBe(200);
   return runtimeApiAckSchema.parse(body);
 }
-async function fire(event: string) {
+async function fire(event: string, intendedAt = new Date(offers.now() - 3_600_000).toISOString()) {
   return machine("fire", { registrationRef: kit.registration.registrationRef, registrationVersion: kit.registration.version,
-    intendedAt: new Date(offers.now() - 3_600_000).toISOString(), triggerEventRef: event });
+    intendedAt, triggerEventRef: event });
 }
 async function readRun(runRef: string) {
   const response = await fetch(service() + "/v1/read", { method: "POST",
@@ -107,7 +111,7 @@ async function readRun(runRef: string) {
   return { data: safeRuntimeRunSchema.parse(body.data), dataState: body.dataState };
 }
 const proofDirectory = (info: TestInfo) => process.env.FARDA_POLICY_RUNTIME_PROOF_DIR ?? info.outputPath("policy-runtime-evidence");
-const originalComparisonStates = new Set(["offer-source-held", "runtime-completed", "runtime-recovery-held"]);
+const originalComparisonStates = new Set(["offer-source-held", "runtime-completed", "runtime-recovery-held", "runtime-daily-schedule", "runtime-hourly-backlog"]);
 async function compareOriginal(page: Page, state: string) {
   const configured = process.env.FARDA_POLICY_RUNTIME_COMPARE_DIR;
   if (!configured || !originalComparisonStates.has(state)) return;
@@ -155,7 +159,7 @@ async function capture(page: Page, info: TestInfo, state: string) {
   writeFileSync(join(output, `provenance-${info.testId.replace(/[^a-zA-Z0-9]/g, "").slice(-40)}.json`), JSON.stringify({
     source: "Actual authenticated dashboard HTTP and shared SQLite with fictional source-owned policy/runtime bindings.",
     providerBusinessWrites: 0, sourceContacts: 0, adoptedCompanyPolicy: false, fabricatedScorecards: 0,
-    sourceMapping: { offer: "65:634", run: "5:13", recovery: "5:156" },
+    sourceMapping: { offer: "65:634", run: "5:13", recovery: "5:156", scheduling: "14:911" },
     visualClaim: "Native source-state adaptations; no pixel-parity claim and no original Figma media included.",
     captures,
   }, null, 2));
@@ -204,6 +208,8 @@ test("registered completed and partial source windows show actual observations a
   await expect(page.getByRole("table", { name: "Registered work items" })).toContainText("Observation recorded");
   await expect(page.getByRole("heading", { name: "Measured usage and unknown costs", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Resume source work", exact: true })).toBeDisabled();
+  await expect(page.getByText("Not applicable · event-driven", { exact: true })).toBeVisible();
+  await expect(page.getByText("Global backlog total", { exact: true })).toHaveCount(0);
   await capture(page, info, "runtime-completed");
   await keyboardTable(page, "Registered work items");
   await machine("work", { runRef: completedRef, maxItems: 1 }); expect(kit.state.sourceCalls).toBe(1);
@@ -265,4 +271,60 @@ test("source takeover stays held through reload and resumes only from its exact 
   await expect(page.getByRole("heading", { name: "Measured usage and unknown costs", exact: true })).toHaveCount(0);
   await capture(page, info, "runtime-access-denied");
   expect(kit.state.sourceCalls).toBe(2);
+});
+
+
+async function inspectTriggerWithKeyboard(page: Page) {
+  const summary = page.locator("summary", { hasText: "Trigger evidence references" });
+  await summary.focus(); await page.keyboard.press("Enter");
+  await expect(summary.locator("..")).toHaveAttribute("open", "");
+  await expect(summary.locator("..")).toContainText(/trigger-[a-f0-9]{64}/);
+  await page.keyboard.press("Enter"); await expect(summary.locator("..")).not.toHaveAttribute("open", "");
+}
+
+test.describe("registered daily scheduling", () => {
+  test.use({ runtimeCadence: "daily" });
+  test("actual daily trigger evidence distinguishes one admitted run from the remaining scanned due work", async ({ page }, info) => {
+    test.setTimeout(120000);
+    const runRef = (await fire("synthetic-daily-scheduled-window", "2026-11-06T10:00:00Z")).runRefs[0]!;
+    await machine("work", { runRef, maxItems: 1 });
+    const result = await readRun(runRef);
+    expect(result.data.scheduling).toMatchObject({ cadence: { kind: "calendar", cadence: "daily", localTime: "10:00", timezone: "UTC" },
+      backlog: { state: "observed", unadmittedInScannedRange: 1, scannedSlots: 2, scanComplete: true, scanCursor: null, total: null,
+        oldestUnadmittedAt: "2026-11-05T10:00:00.000Z", scannedThrough: "2026-11-06T10:00:00.000Z" } });
+    await login(page, SYNTHETIC_READ_TOKEN); await page.goto("/runs/" + runRef);
+    await expect(page.getByText("Daily at 10:00", { exact: true })).toBeVisible();
+    const backlog = page.getByRole("region", { name: "Due work in the inspected range", exact: true });
+    await expect(backlog).toContainText("Inspected range complete");
+    await expect(backlog.locator("dt", { hasText: "Unadmitted in inspected range" }).locator("..")).toHaveText("Unadmitted in inspected range1");
+    await expect(backlog.locator("dt", { hasText: "Global backlog total" }).locator("..")).toHaveText("Global backlog totalUnknown");
+    await inspectTriggerWithKeyboard(page);
+    await expect(page.getByRole("button", { name: /enable|activate|save schedule/i })).toHaveCount(0);
+    await capture(page, info, "runtime-daily-schedule");
+    expect(kit.state.sourceCalls).toBe(1);
+  });
+});
+
+test.describe("registered hourly scheduling", () => {
+  test.use({ runtimeCadence: "hourly" });
+  test("actual hourly inspection discloses its finite 24-slot range, continuation and unknown global backlog", async ({ page }, info) => {
+    test.setTimeout(120000);
+    const runRef = (await fire("synthetic-hourly-scheduled-window")).runRefs[0]!;
+    const result = await readRun(runRef);
+    expect(result.data.scheduling).toMatchObject({ cadence: { kind: "hourly", minute: 0, timezone: "UTC" },
+      backlog: { state: "observed", unadmittedInScannedRange: 24, scannedSlots: 24, scanComplete: false,
+        scannedThrough: "2026-11-05T23:00:00.000Z", scanCursor: "2026-11-06T00:00:00.000Z", total: null } });
+    await login(page, SYNTHETIC_READ_TOKEN); await page.goto("/runs/" + runRef);
+    await expect(page.getByText("Hourly at minute 00", { exact: true })).toBeVisible();
+    const backlog = page.getByRole("region", { name: "Due work in the inspected range", exact: true });
+    await expect(backlog).toContainText("Partial due-work scan");
+    await expect(backlog.locator("dt", { hasText: "Slots inspected" }).locator("..")).toHaveText("Slots inspected24");
+    await expect(backlog.locator("dt", { hasText: "Global backlog total" }).locator("..")).toHaveText("Global backlog totalUnknown");
+    await inspectTriggerWithKeyboard(page);
+    await capture(page, info, "runtime-hourly-backlog");
+    actorActive = false; await page.getByRole("button", { name: "Refresh run evidence", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Registered trigger and cadence", exact: true })).toHaveCount(0);
+    await expect(backlog).toHaveCount(0);
+    expect(kit.state.sourceCalls).toBe(0);
+  });
 });

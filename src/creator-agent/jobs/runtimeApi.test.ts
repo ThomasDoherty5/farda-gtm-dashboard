@@ -10,7 +10,9 @@ import {AgentStore} from "../store.ts";
 import {ApiRequestLimits} from "../apiRequestLimits.ts";
 import type {ApprovalSources,TrustedHuman} from "../approvals/contract.ts";
 import {createRuntimeApi,type RuntimeMachineBinding} from "./runtimeApi.ts";
-import {createRuntimeTestkit,runtimeSyntheticScope} from "./runtime.testkit.ts";
+import {createRuntimeTestkit,syntheticRuntimeRegistration,runtimeSyntheticScope} from "./runtime.testkit.ts";
+import {RuntimeError} from "./runtimeSchema.ts";
+import {safeRuntimeRunSchema} from "./runtimeViews.ts";
 const {DatabaseSync}=createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 const token="synthetic-runtime-machine-token-only-fixture",secret="synthetic-runtime-reference-secret-only-fixture",principal="synthetic-named-viewer";
 
@@ -77,6 +79,37 @@ describe("registered runtime gateway authenticates exact commands and projects s
     await api.readRun(ref,principal);expect(db.prepare("SELECT COUNT(*) AS n FROM api_principal_events WHERE principal=? AND kind='read'").get(principal)?.n).toBe(1);
     const limits=new ApiRequestLimits(db,runtimeSyntheticScope,f.now);for(let i=1;i<120;i++)expect(limits.admit(principal,"read").admitted).toBe(true);
     await expect(api.readRun(ref,principal)).rejects.toMatchObject({code:"RATE_LIMITED",status:429});
+  });
+  it("adds current daily trigger/cadence and finite backlog evidence without raw source locators",async()=>{
+    const run=await f.fire(),view=await api.readRun(api.runRef(run.run.runId),principal);
+    expect(view.scheduling).toMatchObject({trigger:{alias:expect.stringMatching(/^trigger-[a-f0-9]{64}$/),versionAlias:expect.stringMatching(/^trigger-version-[a-f0-9]{64}$/)},
+      cadence:{kind:"calendar",cadence:"daily",timezone:"UTC",localTime:"10:00",startsAt:"2026-11-06T10:00:00Z"},
+      backlog:{state:"observed",nextPlannedAt:"2026-11-08T10:00:00.000Z",oldestUnadmittedAt:"2026-11-06T10:00:00.000Z",unadmittedInScannedRange:1,scannedSlots:2,scanComplete:true,scanCursor:null,total:null,scannedFrom:"2026-11-06T10:00:00Z",requestedThrough:"2026-11-07T12:00:00.000Z",scannedThrough:"2026-11-07T10:00:00.000Z"}});
+    expect(JSON.stringify(view.scheduling)).not.toContain("synthetic-trigger");
+    const legacy={...view};delete legacy.scheduling;expect(safeRuntimeRunSchema.parse(legacy).scheduling).toBeUndefined();
+  });
+  it("event-driven scheduling is explicitly inapplicable to clock-based backlog",async()=>{
+    const r=syntheticRuntimeRegistration();r.registrationRef="synthetic-event-runtime";r.definition.jobId=r.registrationRef;r.family="registered-business";r.cadence={kind:"event",eventType:"synthetic-event"};
+    const event=createRuntimeTestkit(db,{registration:r});await event.initialize();const run=await event.fire();
+    const eventApi=createRuntimeApi({runtime:event.runtime,scope:runtimeSyntheticScope,secret,actorSources:sources,limits:new ApiRequestLimits(db,runtimeSyntheticScope,event.now),now:event.now});
+    const data=await eventApi.readRun(eventApi.runRef(run.run.runId),principal);expect(data.scheduling).toMatchObject({cadence:{kind:"event"},backlog:{state:"notApplicable",reasonCode:"EVENT_DRIVEN_NO_DUE_SLOTS"}});
+    expect(data.scheduling?.cadence).not.toHaveProperty("startsAt");expect(data.scheduling?.backlog).not.toHaveProperty("nextPlannedAt");expect(data.scheduling?.backlog).not.toHaveProperty("scannedSlots");
+  });
+  it("hourly backlog discloses the bounded inspected range and next uninspected slot, never a total",async()=>{
+    const r=syntheticRuntimeRegistration();r.registrationRef="synthetic-hourly-runtime";r.definition.jobId=r.registrationRef;r.family="J08";r.membership="enrolled-only";r.cadence={kind:"hourly",timezone:"UTC",minute:0,startsAt:"2026-11-05T00:00:00Z"};
+    const hourly=createRuntimeTestkit(db,{registration:r});await hourly.initialize();const run=await hourly.fire();
+    const hourlyApi=createRuntimeApi({runtime:hourly.runtime,scope:runtimeSyntheticScope,secret,actorSources:sources,limits:new ApiRequestLimits(db,runtimeSyntheticScope,hourly.now),now:hourly.now});
+    const data=await hourlyApi.readRun(hourlyApi.runRef(run.run.runId),principal);expect(data.scheduling).toMatchObject({cadence:{kind:"hourly",timezone:"UTC",minute:0},backlog:{state:"observed",scannedSlots:24,unadmittedInScannedRange:24,scanComplete:false,scanCursor:"2026-11-06T00:00:00.000Z",scannedThrough:"2026-11-05T23:00:00.000Z",requestedThrough:"2026-11-07T12:00:00.000Z",total:null}});
+  });
+  it("retains both source fences when the first run observation is withdrawn during the registration await",async()=>{
+    const run=await f.fire(),resolve=f.authority.resolveActivation,assert=f.authority.assertActivation;let firstRef:string|null=null,revoked:string|null=null,reads=0;
+    f.authority.resolveActivation=async r=>{f.advance(1);const proof=await resolve(r);if(++reads===1)firstRef=(proof as {receiptRef:string}).receiptRef;else revoked=firstRef;return proof;};
+    f.authority.assertActivation=(proof,...args)=>{assert(proof,...args);if(proof.receiptRef===revoked)throw new RuntimeError("SOURCE_SCOPE_DENIED",403);};
+    await expect(api.readRun(api.runRef(run.run.runId),principal)).rejects.toMatchObject({code:"SOURCE_SCOPE_DENIED",status:403});expect(reads).toBe(2);
+  });
+  it("rechecks the named actor after the final registration lookup",async()=>{
+    const run=await f.fire(),resolve=f.authority.resolveActivation;let reads=0;f.authority.resolveActivation=async r=>{const proof=await resolve(r);if(++reads===2)actorActive=false;return proof;};
+    await expect(api.readRun(api.runRef(run.run.runId),principal)).rejects.toMatchObject({code:"AUTHORITY_REQUIRED",status:403});expect(reads).toBe(2);
   });
   it("partial source coverage is not promoted to a complete-window acknowledgment",async()=>{
     f.state.partial=true;const run=await api.execute("fire",fireInput(),`Bearer ${token}`);expect((await api.execute("work",{runRef:run.runRefs[0]!},`Bearer ${token}`)).state).toBe("partial");

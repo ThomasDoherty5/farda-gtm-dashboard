@@ -39,6 +39,19 @@ describe("native exact approval and finite handoff",()=>{
     expect(screen.queryByText(/Social Cat|routine.with.ella|15% per/)).not.toBeInTheDocument();
     expect(w.calls).toHaveLength(0);
   });
+  it("shows the authorized media allocation cap separately from its zero immediate spend", async () => {
+    const w=fixture(), a=w.approval(); w.setApproval(nativeApprovalViewSchema.parse({...a,actionKind:"media.stageRelease",phase:"mediaStageRelease",
+      bounds:{maxItems:1,maxUnits:0,maxSpendMinor:150000,currency:"USD"},exposure:{state:"known",minor:150000,currency:"USD"},
+      authorization:{kind:"mediaStageCap",accountKind:"internalGovernance",capMinor:150000,currency:"USD",allocationHash:"b".repeat(64),immediateProviderSpendMinor:0},
+      items:[{...a.items[0],units:0,spendMinor:0}]}));
+    renderRoute("/approvals/approval-opaque",w.adapter); await screen.findByRole("heading",{name:"Media stage authorization"});
+    expect(screen.getByText("Authorized stage cap").nextElementSibling).toHaveTextContent("$1,500.00");
+    expect(screen.getByText("Immediate provider spend").nextElementSibling).toHaveTextContent("$0.00");
+    expect(screen.getByText(/does not charge the cap or publish/)).toBeInTheDocument(); expect(w.calls).toHaveLength(0);
+    const bad={...w.approval(),authorization:{...w.approval().authorization!,capMinor:149999}};
+    expect(nativeApprovalViewSchema.safeParse(bad).success).toBe(false);
+    expect(nativeApprovalViewSchema.safeParse({...w.approval(),phase:"other"}).success).toBe(false);
+  });
   it("queues exactly the selected subset, never marks queued work done and links the acknowledged run",async()=>{
     const w=fixture(),u=userEvent.setup();renderRoute("/approvals/approval-opaque",w.adapter);await screen.findByLabelText("Select item 1");await u.click(screen.getByLabelText("Select item 2"));await u.click(button("Queue selected approved items"));
     expect(await screen.findByRole("link",{name:"Open recorded run"})).toHaveAttribute("href","/runs/run-opaque?tab=approval");
@@ -99,3 +112,37 @@ it("the native controller rejects injected payload text, duplicate subset and fo
   const w=fixture(),c=nativeCommandSchema.parse(command),r=w.ack({...c,schemaVersion:SCHEMA_VERSION,requestedScope:scope,idempotencyKey:"k",requestId:"r"});expect(validNativeAcknowledgment({...r,scope:{...scope,accountIds:["other"]}},c,scope)).toBe(false);
 });
 it("keeps exact cents for the largest allowed minor-unit bound",()=>expect(nativeMoney(Number.MAX_SAFE_INTEGER)).toBe("$90,071,992,547,409.91"));
+
+
+describe("per-item commercial eligibility beside immutable action evidence",()=>{
+  const eligibility = () => ({kind:"commercial-eligibility" as const,selected:{offerRef:`commercial-offer-${"c".repeat(64)}`,version:"v1"},phase:"invitation" as const,state:"held" as const,reasonCodes:["CREATOR_FEE_REQUEST" as const],basisStatus:"current" as const,policyVersion:`commercial-policy-${"c".repeat(64)}`,modelVersion:`commercial-model-${"c".repeat(64)}`,configVersion:`commercial-config-${"c".repeat(64)}`,rewardBasis:"notApplicable" as const,rewardVersion:null,basisHash:"c".repeat(64),confersApproval:false as const,sourceEffect:"none" as const});
+  it("shows a current fee hold without changing the recorded approval or enabling app decisions",async()=>{
+    const w=fixture(),a=w.approval();w.setApproval(nativeApprovalViewSchema.parse({...a,items:a.items.map((item,index)=>({...item,commercialApplicability:index===0?"required":"notApplicable",...(index===0?{commercialEligibility:eligibility()}:{})}))}));
+    renderRoute("/approvals/approval-opaque",w.adapter);await screen.findByText("CREATOR_FEE_REQUEST");
+    expect(screen.getByText("Commercial invitation held")).toBeInTheDocument();expect(screen.getByText(/not applicable to this recorded item/)).toBeInTheDocument();
+    expect(screen.getByTestId("native-approval-status")).toHaveTextContent("Approved, awaiting dispatch");expect(button("Approve this version")).toHaveAccessibleDescription(/APPROVAL_CHANNEL_REQUIRED/);expect(w.calls).toHaveLength(0);
+  });
+  it("retains a confirmed native outcome while current commercial work is held",async()=>{
+    const w=fixture(),r=w.run();w.setRun(nativeRunViewSchema.parse({...r,items:r.items.map((item,index)=>({...item,commercialApplicability:"required",commercialEligibility:eligibility(),...(index===0?{receiptRef:"receipt-original",sourceEffect:"providerApplied",observedAt:"2026-11-06T12:05:00Z"}:{})}))}));
+    renderRoute("/runs/run-opaque?tab=approval",w.adapter);await screen.findAllByText("CREATOR_FEE_REQUEST");expect(screen.getByText("Provider receipt confirmed · outcome unknown")).toBeInTheDocument();expect(screen.getByText("receipt-original")).toBeInTheDocument();expect(screen.getByText(/Confirmed receipts remain immutable/)).toBeInTheDocument();expect(w.calls).toHaveLength(0);
+  });
+});
+
+
+describe("provider receipt outcomes remain separate from business success",()=>{
+  it("shows a terminal rejection warning and preserves its applied receipt without offering resend",async()=>{
+    const w=fixture(),r=w.run();w.setRun(nativeRunViewSchema.parse({...r,state:"failed",executionCertainty:"applied",providerRejectedCount:1,
+      items:[{...r.items[0],receiptRef:"receipt-rejected",sourceEffect:"providerApplied",observedAt:"2026-11-06T12:05:00Z",providerOutcome:{state:"rejected",reasonCode:"PROVIDER_REJECTED"}}],counts:{...r.counts,total:1,due:0,failed:1}}));
+    renderRoute("/runs/run-opaque?tab=recovery",w.adapter);await screen.findByRole("heading",{name:"Provider rejection is a confirmed outcome."});
+    expect(screen.getByTestId("native-run-status")).toHaveTextContent("Provider rejected 1 item");
+    expect(screen.getByText("Provider rejected · receipt confirmed")).toBeInTheDocument();expect(screen.getByText("receipt-rejected")).toBeInTheDocument();
+    expect(screen.getByText("Provider-rejected items").nextElementSibling).toHaveTextContent("1");expect(screen.getByRole("progressbar")).toHaveAttribute("value","1");
+    expect(button("Request a fresh attempt")).toHaveAttribute("aria-disabled","true");expect(screen.queryByText("All item receipts confirmed")).not.toBeInTheDocument();expect(w.calls).toHaveLength(0);
+  });
+  it("distinguishes explicit operation acknowledgment from a legacy receipt with unknown provider result",async()=>{
+    const w=fixture(),r=w.run();w.setRun(nativeRunViewSchema.parse({...r,executionCertainty:"applied",items:r.items.map((item,index)=>({...item,receiptRef:`receipt-${index}`,sourceEffect:"providerApplied",observedAt:"2026-11-06T12:05:00Z",...(index===0?{providerOutcome:{state:"accepted",reasonCode:null}}:{})}))}));
+    renderRoute("/runs/run-opaque?tab=approval",w.adapter);await screen.findByText("Provider operation acknowledged");
+    expect(screen.getByText("Provider receipt confirmed · outcome unknown")).toBeInTheDocument();expect(screen.getByTestId("native-run-status")).toHaveTextContent("provider outcome unknown");
+    expect(screen.getByText("Provider-rejected items").nextElementSibling).toHaveTextContent("Unknown");expect(screen.getByText(/not delivery, publication success or business results/)).toBeInTheDocument();expect(w.calls).toHaveLength(0);
+  });
+});

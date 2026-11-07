@@ -58,6 +58,10 @@ export class DispatchGuard {
             throw new DispatchError("DISPATCH_POLICY_STALE");
         if (handler.idempotency !== "source-enforced")
             throw new DispatchError("DISPATCH_IDEMPOTENCY_UNSUPPORTED");
+        if (intent.approval.phase === "mediaStageRelease" && (handler.sourceEffect !== "localArtifact" || handler.provider.state !== "notApplicable"))
+            throw new DispatchError("MEDIA_STAGE_LOCAL_HANDLER_REQUIRED");
+        if (intent.approval.phase === "mediaSafetyPause" && (handler.sourceEffect !== "providerApplied" || handler.provider.state !== "required"))
+            throw new DispatchError("MEDIA_SAFETY_NATIVE_HANDLER_REQUIRED");
         providerRequirementSchema.parse(handler.provider);
         if (handler.provider.state === "required" && (handler.sourceEffect !== "providerApplied" || handler.provider.binding.mode !== "executeApproved" || digest({ workspaceId: handler.provider.binding.workspaceId, accountId: handler.provider.binding.accountId, environment: handler.provider.binding.environment }) !== digest(this.options.scope) || handler.provider.binding.providerAccountId !== intent.approval.providerAccountRef || handler.provider.binding.action !== intent.approval.actionKind))
             throw new DispatchError("DISPATCH_PROVIDER_BINDING_MISMATCH");
@@ -278,8 +282,7 @@ export class DispatchGuard {
                 throw new DispatchError("DISPATCH_READBACK_STALE", 409, "uncertain");
             if (this.jobs.getRun(runRef).items.find(i => i.itemKey === s.dispatchKey)?.state === "leased")
                 return;
-            const p = await this.preflight(s);
-            this.jobs.retryApproved(runRef, s.dispatchKey, () => { this.assertReadbackAttempt(s,result);this.assert(s, p); if (Date.parse(result.validUntil) <= this.now())
+            this.jobs.closeApprovedAttempt(runRef, s.dispatchKey, result.attemptNumber, () => { this.assertReadbackAttempt(s,result);this.capability(handler, true); if (Date.parse(result.validUntil) <= this.now())
                 throw new DispatchError("DISPATCH_READBACK_STALE", 409, "uncertain"); const old = this.db.prepare("SELECT body_hash FROM job_dispatch_readbacks WHERE dispatch_key=? AND receipt_ref=?").get(s.dispatchKey, result.receiptRef); if (old && old.body_hash !== digest(result))
                 throw new DispatchError("DISPATCH_RECEIPT_REUSED", 409, "uncertain"); this.db.prepare("INSERT OR IGNORE INTO job_dispatch_readbacks VALUES(?,?,?,?)").run(s.dispatchKey, result.receiptRef, digest(result), JSON.stringify(result)); this.db.prepare("DELETE FROM job_dispatch_effect_fences WHERE dispatch_key=?").run(s.dispatchKey); });
         }

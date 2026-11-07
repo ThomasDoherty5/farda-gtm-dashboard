@@ -7,11 +7,12 @@ import type { DispatchHandler } from "../jobs/dispatchSchema.ts";
 import { createActionService, domainActionSchema, foundationActionSchema } from "./service.ts";
 import { SCHEMA_VERSION } from "../../adapter/contract.ts";
 import { actionTestSecret as secret } from "./fixtures.testkit.ts";
+import type { RegisteredAction } from "./registration.ts";
 
 const databases: ReturnType<typeof approvalFixture>["db"][] = [];
 const principal = { principalRef: "synthetic:requester" };
-function setup(batch = 1) {
-  const a = approvalFixture();
+function setup(batch = 1, routing: RegisteredAction = { handlerRef: "synthetic-task.v1" }) {
+  const a = approvalFixture(); databases.push(a.db);
   a.draft.actionKind = "synthetic-task"; a.draft.phase = "other"; a.draft.acquisitionTerms = null; a.draft.effects.sendsCreator = false;
   a.command.actionKind = a.draft.actionKind;
   a.draft.items = Array.from({ length: batch }, (_, i) => ({ ...a.draft.items[0]!, itemRef: `synthetic:item-${i + 1}`, targetRef: `synthetic:task-${i + 1}` }));
@@ -24,8 +25,8 @@ function setup(batch = 1) {
       dispatchKey: c.dispatchKey, payloadHash: c.intent.approval.payloadHash, handlerRef: c.intent.handlerRef, providerBindingHash: c.providerBindingHash, sourceEffect: "localArtifact", observedAt: a.at() } }; },
     reconcile: async () => ({ state: "unknown", reasonCode: "SYNTHETIC_NO_LOOKUP" }) };
   const jobs = new JobRepository(a.db, { scope, now: () => a.state.now });
-  const dispatch = new DispatchGuard({ db: a.db, jobs, scope, approvals: a.repo, handlers: new Map([["synthetic-task.v1", handler]]), now: () => a.state.now });
-  const service = createActionService({ scope, secret, approvals: a.repo, dispatch, registry: new Map([["synthetic-task", { handlerRef: "synthetic-task.v1" }]]), authorize: a.sources.resolveActor, assertAuthority: a.sources.assertCurrent, now: () => a.state.now });
+  const dispatch = new DispatchGuard({ db: a.db, jobs, scope, approvals: a.repo, handlers: new Map([["synthetic-task.v1", handler], ["synthetic-second.v1", handler]]), now: () => a.state.now });
+  const service = createActionService({ scope, secret, approvals: a.repo, dispatch, registry: new Map([["synthetic-task", routing]]), authorize: a.sources.resolveActor, assertAuthority: a.sources.assertCurrent, now: () => a.state.now });
   const base = { schemaVersion: SCHEMA_VERSION, requestId: "synthetic-http-1", requestedScope: { workspaceId: scope.workspaceId, accountIds: [scope.accountId], environment: "sandbox" as const }, entityRefs: [], approvalRef: null, manifestRef: null, runRef: null, idempotencyKey: "synthetic-preview", expectedVersion: "offer-v1" };
   const preview = { ...base, operation: "previewAction" as const, actionKind: "synthetic-task", payload: { entityRef: a.command.entityRef, entityVersion: a.command.entityVersion, selectionRefs: a.command.selectionRefs } };
   async function approved() {
@@ -37,11 +38,51 @@ function setup(batch = 1) {
     return { request, current, dispatchInput: { ...base, operation: "dispatchApprovedAction" as const, actionKind: "dispatchApprovedAction" as const,
       approvalRef: r.approvalRef!, manifestRef: service.manifestRef(current), expectedVersion: service.approvalVersion(current), idempotencyKey: "synthetic-dispatch", payload: {} } };
   }
-  const world = { ...a, jobs, dispatch, service, handler, base, preview, approved, calls: () => calls }; databases.push(a.db); return world;
+  const world = { ...a, jobs, dispatch, service, handler, base, preview, approved, calls: () => calls }; return world;
 }
 afterEach(() => { for (const db of databases.splice(0)) db.close(); });
 
 describe("strict shared orchestration with actual J04 and existing SQLite runner", () => {
+  it("selects each handler from the actual approved account, with no synthetic combined account", async () => {
+    const routing = { handlerRefsByAccount: new Map([["synthetic-account-a", "synthetic-task.v1"], ["synthetic-account-b", "synthetic-second.v1"]]) };
+    for (const [account, expected] of routing.handlerRefsByAccount) {
+      const w = setup(1, routing); w.draft.providerAccountRef = account;
+      const approved = await w.approved(), queued = await w.service.execute(approved.dispatchInput, principal);
+      const result = await w.dispatch.execute(queued.runRef!);
+      expect(result.items[0]!.intent).toMatchObject({ handlerRef: expected, approval: { providerAccountRef: account } });
+      expect(result.items[0]!.receipt?.handlerRef).toBe(expected); expect(w.calls()).toBe(1);
+    }
+  });
+  it("projects the real stage cap separately from immediate provider spend without exposing governance locators", async () => {
+    const w = setup(); w.draft.actionKind = "media.stageRelease"; w.command.actionKind = w.draft.actionKind;
+    w.draft.phase = "mediaStageRelease"; w.draft.items[0]!.units = 0; w.draft.items[0]!.spendMinor = 0;
+    w.draft.bounds = { maxItems: 1, maxUnits: 0, maxSpendMinor: 150000, currency: "USD" };
+    w.draft.exposure = { state: "known", minor: 150000, currency: "USD" };
+    w.draft.gates.launchReadiness = structuredClone(w.draft.gates.sourcePermission);
+    w.draft.mediaAuthorization = { kind: "stageCap", accountKind: "internalGovernance", poolRef: "synthetic-private-pool",
+      poolVersion: "synthetic-private-pool-v1", allocationHash: "a".repeat(64), capMinor: 150000, currency: "USD" };
+    const preview = await w.repo.preparePreview(w.command, principal, "synthetic-stage-preview"), view = await w.service.readApproval(preview.manifest.approvalRef, principal);
+    expect(view.authorization).toMatchObject({ kind: "mediaStageCap", capMinor: 150000, immediateProviderSpendMinor: 0 });
+    expect(view.exposure).toEqual({ state: "known", minor: 150000, currency: "USD" });
+    expect(JSON.stringify(view)).not.toMatch(/synthetic-private-pool/);
+  });
+  it("holds an unmapped approved account rather than falling back to another native handler", async () => {
+    const w = setup(1, { handlerRefsByAccount: new Map([["synthetic-account-a", "synthetic-task.v1"]]) });
+    w.draft.providerAccountRef = "synthetic-account-unconfigured";
+    const approved = await w.approved();
+    await expect(w.service.execute(approved.dispatchInput, principal)).rejects.toMatchObject({ code: "SOURCE_ACTION_UNSUPPORTED" });
+    expect(w.calls()).toBe(0); expect(w.db.prepare("SELECT COUNT(*) AS n FROM job_runs").get()?.n).toBe(0);
+  });
+  it("keeps its compiled routing snapshot when an external input map is subsequently edited", async () => {
+    const routes = new Map([["synthetic:provider-account", "synthetic-task.v1"]]), w = setup(1, { handlerRefsByAccount: routes });
+    const approved = await w.approved(); routes.set("synthetic:provider-account", "synthetic-second.v1");
+    const queued = await w.service.execute(approved.dispatchInput, principal), result = await w.dispatch.execute(queued.runRef!);
+    expect(result.items[0]!.receipt?.handlerRef).toBe("synthetic-task.v1"); expect(w.calls()).toBe(1);
+  });
+  it("refuses ambiguous and empty routing at composition", () => {
+    for (const routing of [{}, { handlerRefsByAccount: new Map() }, { handlerRef: "synthetic-task.v1", handlerRefsByAccount: new Map([["synthetic-account", "synthetic-task.v1"]]) }])
+      expect(() => setup(1, routing as RegisteredAction)).toThrow();
+  });
   it("stores exact preview and canonical decision request without source execution; re-envelopes replay requestId", async () => {
     const w = setup(), p = await w.service.execute(w.preview, principal);
     expect(p.runRef).toBeNull(); expect(p.executionCertainty).toBe("applied"); expect(w.calls()).toBe(0);

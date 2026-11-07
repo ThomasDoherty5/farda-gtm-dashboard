@@ -16,6 +16,8 @@ type Verification = { proof: VerifiedApprovalProof; draft: ApprovalDraft; actor:
 type WriteFence = { manifest: ApprovalManifest; draft: ApprovalDraft; authority: ApprovalAuthoritySnapshot; revision: number; policyHash: string; validUntil: string };
 const parse = <T>(value: unknown): T => JSON.parse(String(value)) as T;
 const error = (reason: string): never => { throw new ApprovalError(reason); };
+const sourceFailureReasons = (cause: unknown, fallback: string): readonly string[] => cause instanceof ApprovalError
+  ? cause.reasonCodes.length ? cause.reasonCodes : [cause.code] : [fallback];
 const minTime = (...values: string[]) => new Date(Math.min(...values.map(value => Date.parse(value)))).toISOString();
 const policyHash = (policy: ApprovalPolicy) => digest(Object.fromEntries(Object.entries(policy).filter(([key]) => key !== "observedAt" && key !== "validUntil")));
 /** Source leases may renew without changing the exact approved action. Material source revisions may not. */
@@ -217,7 +219,8 @@ export class ApprovalRepository {
     catch (cause) { if (knownEvent) this.fenceKnownEvent(locator, "AUTHORITY_REQUIRED"); throw cause; }
     if (head.hold) return error(head.hold);
     let observedDraft: ApprovalDraft;
-    try { observedDraft = approvalDraftSchema.parse(await this.options.registry?.currentDraft(manifest)); } catch { return error("APPROVAL_SOURCE_UNAVAILABLE"); }
+    try { observedDraft = approvalDraftSchema.parse(await this.options.registry?.currentDraft(manifest)); }
+    catch (cause) { if (cause instanceof ApprovalError) throw cause; return error("APPROVAL_SOURCE_UNAVAILABLE"); }
     if (digest(stableApprovalDraft(observedDraft)) !== digest(stableApprovalDraft(manifest.draft))) return error("APPROVAL_SOURCE_CHANGED");
     const policy = this.policy(); if (!policy || policyHash(policy) !== manifest.policyHash) return error("APPROVAL_POLICY_CHANGED");
     if (human.personRef !== event.personRef) return error("SLACK_ACTOR_MISMATCH");
@@ -333,7 +336,8 @@ export class ApprovalRepository {
     if (head.version !== manifest.manifestVersion || head.hold || !receipt || receipt.decision !== "approved") return held(head.hold ?? "APPROVAL_NOT_CURRENT");
     if (!this.options.registry) return held("APPROVAL_SOURCE_UNAVAILABLE");
     let draft: ApprovalDraft;
-    try { draft = approvalDraftSchema.parse(await this.options.registry.currentDraft(manifest)); } catch { return held("APPROVAL_SOURCE_UNAVAILABLE"); }
+    try { draft = approvalDraftSchema.parse(await this.options.registry.currentDraft(manifest)); }
+    catch (cause) { return held(...sourceFailureReasons(cause, "APPROVAL_SOURCE_UNAVAILABLE")); }
     if (digest(stableApprovalDraft(draft)) !== digest(stableApprovalDraft(manifest.draft))) return held("APPROVAL_SOURCE_CHANGED");
     const boxes = this.boxes(manifest.approvalRef, manifest.manifestVersion), request = boxes.find(box => box.intent.kind === "request"), decision = boxes.find(box => box.record?.recordRef === receipt.linearRecordRef);
     if (!request || !decision) return held("DECISION_READBACK_UNVERIFIED");
@@ -359,7 +363,7 @@ export class ApprovalRepository {
       this.assertSources(manifest, draft, authority, this.now());
       this.saveBox({ ...request, record: requestRead, state: "recorded" }); this.saveBox({ ...decision, record: decisionRead, state: "recorded" });
       this.db.prepare("INSERT INTO approval_current VALUES(?,?,?) ON CONFLICT(ref) DO UPDATE SET version=excluded.version,reasons=excluded.reasons").run(manifest.approvalRef, manifest.manifestVersion, "[]"); this.db.prepare("INSERT INTO approval_verifications VALUES(?,?,?)").run(proof.verificationRef, manifest.approvalRef, JSON.stringify({ proof, draft, actor: human, authority, policyHash: policyHash(policy) } satisfies Verification)); }); }
-    catch (cause) { return held(cause instanceof ApprovalError ? cause.code : "APPROVAL_CURRENT_SOURCE_UNVERIFIED"); }
+    catch (cause) { return held(...sourceFailureReasons(cause, "APPROVAL_CURRENT_SOURCE_UNVERIFIED")); }
     return { state: "verified", proof };
   }
 

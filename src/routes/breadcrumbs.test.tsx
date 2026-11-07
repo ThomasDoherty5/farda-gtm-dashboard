@@ -22,6 +22,11 @@ describe("FE00-04 breadcrumbs", () => {
     expect(breadcrumbsFor("/creators/discovery").at(-1)!.label).toBe("Daily sourcing and invitation plan");
   });
 
+  it("does not label every registered cadence as an hourly run", () => {
+    expect(breadcrumbsFor("/runs/rt-run-synthetic").at(-2)?.label).toBe("Registered source run");
+    expect(breadcrumbsFor("/runs/demo-run").at(-2)?.label).toBe("Hourly run");
+  });
+
   it("an address outside the manifest says so rather than inventing a trail", () => {
     expect(breadcrumbsFor("/not-a-route")).toEqual([{ label: "Page not found" }]);
   });
