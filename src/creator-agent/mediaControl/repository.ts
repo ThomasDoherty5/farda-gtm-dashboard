@@ -3,7 +3,7 @@ import { z } from "zod";
 import { digest } from "../config.ts";
 import { AgentConflict } from "../store.ts";
 import type { CampaignView, MediaProvider, MutationView } from "../media/contract.ts";
-import { MediaSourceUnavailable, type PaidMediaRepository } from "../media/repository.ts";
+import { MediaSourceUnavailable, MediaWriteUncertain, type PaidMediaRepository } from "../media/repository.ts";
 import {
   HEALTH_CHECKS, authorizationSchema, changeInputSchema, healthSchema, launchInputSchema, orderFeedSchema, parameterSetSchema, ref, safetyInputSchema,
   spendReportSchema, stageDecisionSchema, stageInputSchema, treasurySchema,
@@ -297,8 +297,9 @@ export class MediaReleaseController {
       const stored = key ? this.storedSpend(key) : null;
       const rowFresh = !!row && row.fresh;
       const rb = v?.native.readback ?? null;
-      const readback = rb && rb.nativeCampaignId === nativeId && rb.providerAccountRef === r.providerAccountRef && v?.environment === r.environment
-        && v.provider === r.provider && this.fresh(rb.observedAt, freshness) ? rb : null;
+      // A read-back counts only for the exact campaign, provider, account and environment, observed no later than now.
+      const readback = rb && rb.nativeCampaignId === nativeId && rb.provider === r.provider && rb.providerAccountRef === r.providerAccountRef
+        && rb.environment === r.environment && this.fresh(rb.observedAt, freshness) ? rb : null;
       for (const c of v?.manifest?.creatives ?? []) if (!(ms(c.rightsExpiresAt) > now)) triggers.push(`RIGHTS_EXPIRED:${r.campaignId}`);
       if (r.state === "pending") {
         campaigns.push({ campaignId: r.campaignId, key: key ?? `pending|${r.reservationId}`, reservation: "pending", status: row?.status ?? v?.native.status ?? null,
@@ -726,8 +727,12 @@ export class MediaReleaseController {
       if (existing?.state === "committed") return { s, r: existing, refusal: null, send: false };
       const v = this.readCampaign(campaignId);
       if (!v || !v.manifest) throw new AgentConflict("CAMPAIGN_UNKNOWN");
-      // A confirmed pause is never undone by a later publish.
-      if (v.mutations.some((m) => m.action === "pause" && m.state === "confirmed") || existing?.pausedAt) throw new AgentConflict("SUPERSEDED_BY_PAUSE");
+      // A confirmed pause is never undone by a later publish. A pending launch is handed back to the media module only so it closes the
+      // superseded write without sending; nothing new is reserved or published.
+      if (v.mutations.some((m) => m.action === "pause" && m.state === "confirmed") || existing?.pausedAt) {
+        if (existing?.state === "pending" && v.execution.pending) return { s, r: existing, refusal: null, send: true };
+        throw new AgentConflict("SUPERSEDED_BY_PAUSE");
+      }
       const binding = { provider: v.provider, providerAccountRef: v.manifest.account.providerAccountRef, environment: v.environment };
       const alloc = s.terms.allocations.find((a) => allocKey(a) === allocKey(binding));
       if (!alloc) throw new AgentConflict("CAMPAIGN_OUTSIDE_STAGE_ALLOCATIONS");
@@ -761,7 +766,9 @@ export class MediaReleaseController {
       const r = this.reservations("reservation_id=?", r0.reservationId)[0]!;
       if (r.state !== "pending") return r;
       if (after?.state === "confirmed") {
-        Object.assign(r, { state: "committed", confirmedAt: this.iso(), nativeCampaignId: after.native.nativeCampaignId, gates: after.gates.map((g) => ({ gate: g.gate, state: g.state })) });
+        // A publish that landed before a confirmed pause is released and then paused: its spend still counts against the stage.
+        Object.assign(r, { state: "committed", confirmedAt: this.iso(), nativeCampaignId: after.native.nativeCampaignId, gates: after.gates.map((g) => ({ gate: g.gate, state: g.state })),
+          pausedAt: after.native.status === "PAUSED" ? this.iso() : r.pausedAt });
         if (after.gates.some((g) => g.state !== "verified")) this.addIncident(r.stageRef, "GATES_NOT_VERIFIED_AT_PUBLISH", r.campaignId);
       } else if (after && NOT_WRITTEN.includes(after.state) && !after.execution.pending && !after.receipts.some((x) => x.kind === "publish")) r.state = "released";
       this.saveReservation(r);
@@ -769,6 +776,7 @@ export class MediaReleaseController {
     });
     if (failure) {
       if (r.state === "released" && passthrough(failure)) throw failure;
+      // MediaWriteUncertain, or any error with the write still pending: never reported as not applied.
       throw new MediaControlUncertain(failure instanceof Error ? failure.message : "MEDIA_PUBLISH_UNCERTAIN");
     }
     return this.launchView(r, after);
@@ -900,7 +908,8 @@ export class MediaReleaseController {
       return c;
     });
     if (failure) {
-      if (latest && (latest.state === "uncertain" || latest.state === "applying")) throw new MediaControlUncertain(failure instanceof Error ? failure.message : "MEDIA_MUTATION_UNCERTAIN");
+      if (failure instanceof MediaWriteUncertain || (latest && (latest.state === "uncertain" || latest.state === "applying")))
+        throw new MediaControlUncertain(failure instanceof Error ? failure.message : "MEDIA_MUTATION_UNCERTAIN");
       throw failure;
     }
     return this.changeView(c);

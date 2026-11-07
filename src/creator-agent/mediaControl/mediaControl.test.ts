@@ -4,7 +4,7 @@ import { AgentStore } from "../store";
 import { createAgentServer } from "../server";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures";
 import type { CampaignView, Manifest, MutationView, NativeSettings } from "../media/contract";
-import { PaidMediaRepository, type MediaAuthority } from "../media/repository";
+import { MediaWriteUncertain, PaidMediaRepository, type MediaAuthority } from "../media/repository";
 import type { StageInput, StageView } from "./contract";
 import { MediaControlUncertain, MediaReleaseController, type MediaControlAuthority } from "./repository";
 import { handleMediaControlRoute } from "./routes";
@@ -21,7 +21,7 @@ const A = <T>(value: T) => ({ value, state: "adopted", adoptionRef: "decision:ow
 const P = <T>(value: T) => ({ value, state: "proposed", adoptionRef: null, adoptedAt: null });
 
 function settingsFrom(m: Manifest, nativeCampaignId: string): NativeSettings {
-  return { nativeCampaignId, providerAccountRef: m.account.providerAccountRef, identityRef: m.account.identityRef, nativeAdIds: [`native:ad-${nativeCampaignId}`],
+  return { nativeCampaignId, provider: m.provider, providerAccountRef: m.account.providerAccountRef, environment: m.environment, identityRef: m.account.identityRef, nativeAdIds: [`native:ad-${nativeCampaignId}`],
     previewRef: `preview:${nativeCampaignId}`, status: "PAUSED", objective: m.objective, optimizationEvent: m.optimizationEvent, currency: m.currency,
     dailyBudgetMinor: m.caps.dailyBudgetMinor, lifetimeBudgetMinor: m.caps.lifetimeBudgetMinor, startAt: m.schedule.startAt, endAt: m.schedule.endAt,
     attributionSetting: m.attributionSetting, destinationRef: m.destinationRef, creativeHashes: m.creatives.map((c) => c.contentHash), markets: m.targeting.markets,
@@ -91,7 +91,8 @@ function world() {
         verifiedAt: "2026-11-06T00:00:00Z", expiresAt: "2026-12-01T00:00:00Z", receiptOrigin: "synthetic", ...over };
     },
     decision: (r) => decisions.get(r) ?? null,
-    safetyPolicy: (r) => r === "policy:auto-pause" ? { scope, policyRef: r, state: "current", allows: ["pause"], providerAccountRefs: [META, TIKTOK],
+    safetyPolicy: (r) => r === "policy:auto-pause" ? { scope, policyRef: r, state: "current", allows: ["pause"],
+      accounts: [{ provider: "meta", providerAccountRef: META, environment: "sandbox" }, { provider: "tiktok", providerAccountRef: TIKTOK, environment: "sandbox" }],
       validUntil: "2026-12-31T00:00:00Z" } : null,
     executor,
   };
@@ -259,12 +260,50 @@ describe("observe → propose → exact approve → bounded execute → reconcil
     w.released();
     const c = await w.campaign();
     w.executor.fail = "after";
-    const first = await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1");
-    expect(first).toMatchObject({ reservation: "pending", executionCertainty: "uncertain", campaignState: "uncertain" });
+    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1")).rejects.toBeInstanceOf(MediaControlUncertain);
+    expect(w.control.read("stage:initial")!.reservations[0]!.state).toBe("pending");
+    expect(w.media.read(c.campaignId)!.state).toBe("uncertain");
     expect(w.control.observe("stage:initial", "o1").exposure.pendingMinor).toBe(0);
     expect(w.control.read("stage:initial")!.reservations[0]!.state).toBe("committed");
     expect((await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l2")).reservation).toBe("committed");
     expect(w.executor.calls.publish).toBe(1);
+  });
+});
+
+describe("THO-346 uncertainty and pause supersession", () => {
+  it("closes a pending launch superseded by a confirmed pause without publishing, and frees its reservation", async () => {
+    const w = world();
+    w.released();
+    const c = await w.campaign();
+    w.executor.fail = "before";
+    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l1")).rejects.toBeInstanceOf(MediaControlUncertain);
+    const nativeId = w.media.read(c.campaignId)!.native.nativeCampaignId!;
+    w.native.get(nativeId)!.status = "ACTIVE";
+    w.reportOver.set(META, { scope: { workspaceId: "other-workspace", accountId: "other-account" } });
+    w.health.stock = { state: "failed", code: "stock:short" };
+    expect((await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1")).campaigns).toEqual([expect.objectContaining({ outcome: "paused" })]);
+    expect(w.control.read("stage:initial")!.reservations[0]!.state).toBe("pending");
+    w.reportOver.delete(META);
+    delete w.health.stock;
+    const closed = await w.control.launch("stage:initial", { campaignId: c.campaignId }, "l2");
+    expect(closed).toMatchObject({ reservation: "released", executionCertainty: "notApplied", campaignState: "draft",
+      heldReasons: ["NEW_DECISION_REQUIRED", "SUPERSEDED_BY_PAUSE"] });
+    expect(w.executor.calls.publish).toBe(1);
+    expect(w.native.get(nativeId)!.status).toBe("PAUSED");
+    await expect(w.control.launch("stage:initial", { campaignId: c.campaignId }, "l3")).rejects.toThrow("SUPERSEDED_BY_PAUSE");
+    expect(w.control.observe("stage:initial", "o1").exposure.plannedMaxMinor).toBe(0);
+  });
+
+  it("reports a change whose media write is uncertain as uncertain, then reconciles it by its key", async () => {
+    const w = world();
+    const { c } = await profitable(w);
+    const red = w.control.proposeChange("stage:initial", { campaignId: c.campaignId, kind: "reduce-budget", dailyBudgetMinor: 1000, rationale: "Slow down." }, "ch1");
+    const decisionRef = w.approveMutation(w.media.read(c.campaignId)!, w.media.readMutation(c.campaignId, red.mutationId!)!);
+    w.executor.mutateFail = "after";
+    await expect(w.control.applyChange(red.changeId, { decisionRef }, "ap1")).rejects.toBeInstanceOf(MediaControlUncertain);
+    expect(w.control.readChange(red.changeId)!.state).toBe("uncertain");
+    expect(await w.control.applyChange(red.changeId, { decisionRef }, "ap2")).toMatchObject({ state: "confirmed", effect: { after: { dailyBudgetMinor: 1000 } } });
+    expect(w.executor.calls.mutate).toBe(1);
   });
 });
 
@@ -563,7 +602,7 @@ describe("safety: pause or hold on exhausted cap, stock, checkout, rights, permi
     w.health.stock = { state: "failed", code: "stock:short" };
     w.executor.mutateFail = "before";
     const failed = await w.control.runSafety("stage:initial", { policyRef: "policy:auto-pause" }, "safe-1");
-    expect(failed).toMatchObject({ campaigns: [{ outcome: "failed", code: "PAUSE_UNCERTAIN" }], executionCertainty: "uncertain" });
+    expect(failed).toMatchObject({ campaigns: [{ outcome: "failed", code: "MUTATION_OUTCOME_UNKNOWN" }], executionCertainty: "uncertain" });
     expect(failed.incidents.map((i) => i.code)).toEqual(["QUALIFIED_STOCK_SHORTAGE", expect.stringMatching(/^PAUSE_FAILED:/)]);
     expect(w.native.get(nativeId)!.status).toBe("ACTIVE");
     delete w.health.stock;
@@ -679,6 +718,9 @@ describe("media-control routes and the authenticated service", () => {
     const uncertain = { launch: async () => { throw new MediaControlUncertain("MEDIA_PUBLISH_UNCERTAIN"); } } as unknown as MediaReleaseController;
     expect(await handleMediaControlRoute({ method: "POST", path: "/v1/media-control/stages/s/launches", role: "reviewer", body: { campaignId: "c" }, idempotencyKey: "u" },
       uncertain)).toEqual({ status: 409, body: { code: "MEDIA_PUBLISH_UNCERTAIN", executionCertainty: "uncertain" } });
+    const raw = { runSafety: async () => { throw new MediaWriteUncertain("MUTATION_OUTCOME_UNKNOWN"); } } as unknown as MediaReleaseController;
+    expect(await handleMediaControlRoute({ method: "POST", path: "/v1/media-control/stages/s/safety", role: "reviewer", body: { policyRef: "p" }, idempotencyKey: "v" },
+      raw)).toEqual({ status: 409, body: { code: "MUTATION_OUTCOME_UNKNOWN", executionCertainty: "uncertain" } });
   });
 
   it("serves the controller through the HTTP service, holding every stage when nothing is connected", async () => {

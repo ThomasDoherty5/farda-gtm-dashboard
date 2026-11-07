@@ -18,7 +18,7 @@ Every POST needs the reviewer role and an `Idempotency-Key` bound to one operati
 
 - The $6,000 envelope is three held stages: $1,500 initial, $1,500 second and $3,000 third. Each needs its own exact decision and release, and stage N is released only after stage N−1. Profitable evidence never releases a stage.
 - Release and launch run only inside the adopted review window. They need a current stage decision, no safety trigger or hold, and the founder cash ceiling respected.
-- A launch needs a THO-346 campaign with its own J04 publish approval, inside a stage allocation and schedule. Its planned maximum is the native lifetime cap plus approved headroom. That maximum is reserved in the same SQLite transaction that re-observes exposure, so concurrent launches cannot both consume the same remaining authorization. The media module then re-checks its decision, sources and all five gates before publishing. A refused write frees the reservation. An uncertain write keeps it reserved until reconciled.
+- A launch needs a THO-346 campaign with its own J04 publish approval, inside a stage allocation and schedule. Its planned maximum is the native lifetime cap plus approved headroom. That maximum is reserved in the same SQLite transaction that re-observes exposure, so concurrent launches cannot both consume the same remaining authorization. The media module then re-checks its decision, sources and all five gates before publishing. A refused write frees the reservation. An uncertain write (including the media module's `MediaWriteUncertain`) keeps it reserved until reconciled and answers `executionCertainty: "uncertain"`. A pending publish superseded by a confirmed pause is closed by the media module without a send, and its reservation is freed.
 - **Exposure.** Stage and account exposure is each committed campaign's native lifetime cap plus headroom (or its spend, if higher), plus pending reservations. An account spend limit bounds it too. Daily budgets are never a ceiling. Any of these makes exposure undemonstrated and holds new dispatch: an unknown cap, a missing end date, stale, future-dated or mismatched spend, or an untracked active campaign in a stage account.
 
 ## Safety
@@ -54,7 +54,7 @@ It must stay at or below the adopted $40,000 ceiling. Remaining media authorizat
 
 ## Clocks and identity
 
-The controller keeps three clocks apart: the provider's data-as-of time, Farda's read time and the controller clock. A future or invalid timestamp is unknown. An older report never moves spend backwards. A newer lower figure is recorded as a correction. Provider-local IDs are namespaced by kind, provider, account and environment.
+The controller keeps three clocks apart: the provider's data-as-of time, Farda's read time and the controller clock. A future or invalid timestamp is unknown. An older report never moves spend backwards. A newer lower figure is recorded as a correction. Provider-local IDs are namespaced by kind, provider, account and environment. A media read-back counts only when its campaign, provider, account and environment match the reservation.
 
 ## Not done here
 

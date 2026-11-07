@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AgentConflict } from "../store.ts";
-import { MediaSourceUnavailable } from "../media/repository.ts";
+import { MediaSourceUnavailable, MediaWriteUncertain } from "../media/repository.ts";
 import { ref } from "./contract.ts";
 import { MediaControlUncertain, MediaReleaseController } from "./repository.ts";
 
@@ -44,7 +44,7 @@ export async function handleMediaControlRoute(input: Input, controller: MediaRel
     return fail(404, "UNSUPPORTED_OPERATION");
   } catch (error) {
     // A media write may have reached the provider: never report it as not applied.
-    if (error instanceof MediaControlUncertain) return fail(409, error.message, "uncertain");
+    if (error instanceof MediaControlUncertain || error instanceof MediaWriteUncertain) return fail(409, error.message, "uncertain");
     if (error instanceof z.ZodError) return fail(422, "INVALID_MEDIA_CONTROL_REQUEST");
     if (error instanceof AgentConflict) return fail(409, error.message);
     if (error instanceof MediaSourceUnavailable) return fail(503, error.message);
