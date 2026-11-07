@@ -228,6 +228,21 @@ describe("the daily sourcing plan reader", () => {
     const unconfigured = completeSourcingFixture();
     unconfigured.schedule = { ...unconfigured.schedule, state: "unconfigured", cadence: null, timezone: null, nextRunAt: null, scheduleRef: null };
     expect((await setup(async () => unconfigured).service.read({}, "reviewer")).coverage).toMatchObject({ expectedCount: 45, observedCount: 45, complete: true });
+    // Only an active schedule is expected to name a next run: a paused or draft schedule without one is a definite answer.
+    for (const state of ["paused", "draft"] as const) {
+      const stopped = completeSourcingFixture(); stopped.schedule = { ...stopped.schedule, state, nextRunAt: null };
+      expect((await setup(async () => stopped).service.read({}, "reviewer")).coverage, state).toMatchObject({ expectedCount: 45, observedCount: 45, complete: true });
+    }
+  });
+
+  it("refuses with a retryable upstream error, never an unhandled crash, when the service clock is not a finite time", async () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      for (const source of [undefined, async () => sourcingSourceFixture()]) {
+        const store = new AgentStore(":memory:", scope); stores.push(store);
+        const service = createSourcingPlanReader({ db: store.database, scope, secret, now: () => bad, source });
+        expect(await failure(service.read({}, "reviewer")), `${bad} ${source ? "with" : "without"} a source`).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", status: 502 });
+      }
+    }
   });
 
   it("keeps the worst case of dispatch hold reasons within the contract bound", async () => {

@@ -150,10 +150,12 @@ export function createSourcingPlanReader(options: Options) {
     // and schedule, and is the response time. A lease that ends while the source is awaited is expired here, and a clock
     // step between two readings can never let a future observation through.
     const at = now();
+    // A service clock that isn't a finite time can judge nothing, with or without a plan: refuse before any projection.
+    if (!Number.isFinite(at)) fail("SOURCE_RESPONSE_INVALID", 502);
     let s: SourceRead;
     if ("factsHash" in observation) {
       // A small, documented clock skew is tolerated; an observation further in the future is refused.
-      if (!Number.isFinite(at) || Date.parse(observation.snapshot.observedAt) > at + SOURCING_CLOCK_SKEW_MS) fail("SOURCE_RESPONSE_INVALID", 502);
+      if (Date.parse(observation.snapshot.observedAt) > at + SOURCING_CLOCK_SKEW_MS) fail("SOURCE_RESPONSE_INVALID", 502);
       persist(observation);
       s = classify(observation.snapshot, at);
     } else s = observation;
@@ -173,10 +175,11 @@ export function createSourcingPlanReader(options: Options) {
       // A capacity row is observed only when current (every displayed dimension known) or wholly not applicable.
       expectedCount += plan.capacity.length; observedCount += plan.capacity.filter((r) => r.state === "current" || r.state === "notApplicable").length;
       // Setup the schedule depends on: each account, its access and session, the two versions and, unless the schedule is
-      // unconfigured (where none exists), its cadence, timezone and next run. Unknown setup is never ready.
-      const unconfigured = plan.schedule.declaredState === "unconfigured";
+      // unconfigured (where none exists), its cadence and timezone. A next run is expected only of an active schedule: a draft
+      // or paused schedule with no next run is a definite answer, not a gap. Unknown setup is never ready.
+      const unconfigured = plan.schedule.declaredState === "unconfigured", runs = plan.schedule.declaredState === "active";
       const setup = [...plan.sources.flatMap((a) => [a.accountRef !== null, a.access !== "unknown", a.session !== "unknown"]), plan.icpVersion !== null, plan.policyVersion !== null,
-        unconfigured || plan.schedule.cadence !== null, unconfigured || plan.schedule.timezone !== null, unconfigured || plan.schedule.nextRunAt !== null];
+        unconfigured || plan.schedule.cadence !== null, unconfigured || plan.schedule.timezone !== null, !runs || plan.schedule.nextRunAt !== null];
       expectedCount += setup.length; observedCount += setup.filter(Boolean).length;
       const { evidenceRefs: _refs, ...identity } = plan.identity; void _refs;
       tally(Object.values(identity));
