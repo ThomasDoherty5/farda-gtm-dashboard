@@ -9,13 +9,15 @@ import type { PostGmv, PostPerformanceData } from "@/fixtures/monitor";
 import { count, deltaHeight, interactionsOf, ratePct } from "./monitorMath";
 import a from "@/features/analytics/Analytics.module.css";
 import m from "./Monitor.module.css";
+import type { NativePost } from "@/creator-agent/monitor/contract";
+import { NativePostBody } from "./NativeMonitorViews";
 
 /** Post performance (Figma source 25:481, owner THO-299). Preserves the original receipts and metric scope; TikTok GMV is never retained net sales. */
 export function PostPage() {
   const { postId = "" } = useParams();
-  const query = useView<{ postId: string }, PostPerformanceData>("postPerformance", { postId });
+  const query = useView<{ postId: string }, PostPerformanceData | NativePost>("postPerformance", { postId });
   const record = query.data?.data ?? null;
-  const wrongPost = record !== null && record.postId !== postId;
+  const wrongPost = record !== null && ("kind" in record ? record.post.id : record.postId) !== postId;
   return (
     <section aria-labelledby="post-title" data-figma-source="25:481" className={a.page}>
       {(!record || wrongPost) && <h1 id="post-title" style={{ font: "var(--text-h1)", margin: 0 }}>Post performance</h1>}
@@ -23,7 +25,7 @@ export function PostPage() {
         <p>The source returned a different post. Refresh to request the selected post again.</p>
         <Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh post</Button>
       </EmptyState> : <ViewShell query={query} subject="The post" emptyTitle="No post record" emptyBody="The source responded, but there is no post to show.">
-        {(data) => <Post data={data} />}
+        {(data) => "kind" in data ? <NativePostBody data={data}/> : <Post data={data} />}
       </ViewShell>}
     </section>
   );

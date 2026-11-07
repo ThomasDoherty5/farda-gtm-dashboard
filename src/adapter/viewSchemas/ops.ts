@@ -20,6 +20,7 @@
  * A live adapter in sandbox or production should refuse a key that names a demo dataset; that is an adapter decision.
  */
 import { z } from "zod";
+import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema";
 import { moneySchema, provenanceValueSchema } from "../contract";
 import { receiptBackedResponse } from "./approvals";
 
@@ -304,8 +305,8 @@ export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
   operationsOverview: operationsOverviewSchema,
   orderDetail: orderDetailSchema,
   shippingException: shippingExceptionSchema,
-  inventoryOverview: inventoryOverviewSchema,
-  supportWorkspace: supportWorkspaceSchema,
+  inventoryOverview: z.union([nativeInventorySchema,inventoryOverviewSchema]),
+  supportWorkspace: z.union([nativeSupportSchema,supportWorkspaceSchema]),
   returnDetail: returnDetailSchema,
   fulfillmentAnalytics: fulfillmentAnalyticsSchema,
   operationsShipping: operationsShippingSchema,
@@ -330,7 +331,8 @@ export const requestStockTransferPayload = z
 export const opsActionSchemas: Record<string, { payload: z.ZodTypeAny }> = {
   recordShippingDecision: { payload: recordShippingDecisionPayload },
   prepareReturnTask: { payload: prepareReturnTaskPayload },
-  requestStockTransfer: { payload: requestStockTransferPayload },
+  requestStockTransfer: { payload: z.union([requestStockTransferPayload,transferIntent]) },
+  requestSupportHandoff: { payload: handoffIntent },
 };
 
 /**

@@ -68,7 +68,7 @@ const rejects = (key: string, data: unknown) => expect(viewSchema(key).safeParse
 describe("the schema registry covers every operations view the demo serves", () => {
   it("has exactly these view keys", () => {
     expect(Object.keys(opsViewSchemas).sort()).toEqual(["fulfillmentAnalytics", "inventoryOverview", "operationsOverview", "operationsShipping", "opsHealth", "orderCustomer", "orderDetail", "returnDetail", "shippingException", "supportWorkspace"]);
-    expect(Object.keys(opsActionSchemas).sort()).toEqual(["prepareReturnTask", "recordShippingDecision", "requestStockTransfer"]);
+    expect(Object.keys(opsActionSchemas).sort()).toEqual(["prepareReturnTask", "recordShippingDecision", "requestStockTransfer", "requestSupportHandoff"]);
   });
 });
 

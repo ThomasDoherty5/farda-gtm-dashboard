@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativeSupportPage } from "./NativeSupportPage";
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -24,6 +26,10 @@ const pct = (n: number, d: number) => (d > 0 ? `${Math.round((100 * n) / d)}%` :
  * The 14-day cohort and the all-time open queue are different sets and are labeled as such.
  */
 export function SupportPage() {
+  return useScope().scope.environment === "demo" ? <DemoSupportPage /> : <NativeSupportPage />;
+}
+
+function DemoSupportPage() {
   const { caseId = "" } = useParams();
   const [search] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;

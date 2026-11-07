@@ -11,6 +11,7 @@ import type { HourlyRunData } from "@/fixtures/monitor";
 import { DEMO_POST_ID } from "@/fixtures/monitor";
 import a from "@/features/analytics/Analytics.module.css";
 import m from "./Monitor.module.css";
+import { NativeHourlyPage } from "./NativeMonitorViews";
 
 type Evidence = HourlyRunData["evidence"][number];
 
@@ -19,6 +20,9 @@ type Evidence = HourlyRunData["evidence"][number];
  * schedule, next run and retry are snapshots, and nothing here sends or authorizes anything outbound.
  */
 export function HourlyRunPage() {
+  return useIsDemo() ? <DemoHourlyRunPage/> : <NativeHourlyPage/>;
+}
+function DemoHourlyRunPage() {
   const { runId = "" } = useParams();
   const query = useView<{ runId: string }, HourlyRunData>("hourlyRun", { runId });
   const record = query.data?.data ?? null;
