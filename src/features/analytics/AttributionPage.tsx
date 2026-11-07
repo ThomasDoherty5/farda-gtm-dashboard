@@ -168,7 +168,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
           <div className={styles.legend}>
             <Badge tone="violet" width={132}>Shopify</Badge>
             <Badge width={146}>TikTok Shop</Badge>
-            <p className={styles.small}>Totals: {usd({ minorUnits: totals.shopify, currency: "USD" })} / {usd({ minorUnits: totals.tiktok, currency: "USD" })}</p>
+            <p className={styles.small}>Totals: {data.weeks.length === 0 ? "N/A" : `${usd({ minorUnits: totals.shopify, currency: "USD" })} / ${usd({ minorUnits: totals.tiktok, currency: "USD" })}`}</p>
           </div>
           <div className={styles.weekly}>
             <div className={styles.yAxis} aria-hidden="true">
@@ -223,7 +223,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
             <DetailRow key={c.key} label={`${c.label} · ${percent(c.netReceipts.minorUnits, channelTotal)}`} value={usd(c.netReceipts)} />
           ))}
           <hr className={styles.divider} />
-          <p className={styles.label}>{orders === null ? "Orders unknown" : `${count(orders)} orders`} · {count(data.retainedUnits)} retained units</p>
+          <p className={styles.label}>{orders === null ? "Orders unknown" : `${count(orders)} orders`} · {data.retainedUnits === null ? "retained units unknown" : `${count(data.retainedUnits)} retained units`}</p>
           <p className={styles.small}>Attribution is a second view of these same orders, not additional revenue.</p>
           <div className={styles.btnRow}><LinkButton variant="secondary" to="/operations" style={{ minWidth: 230 }}>View channel orders</LinkButton></div>
         </Card>

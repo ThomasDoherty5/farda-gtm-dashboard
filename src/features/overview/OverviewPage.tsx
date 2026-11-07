@@ -12,6 +12,8 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { MetricValue, formatCompact, formatCount, formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import type { OverviewData } from "@/fixtures/overview";
+import type { Measure } from "@/adapter/viewSchemas/analytics";
+import { SourceStates } from "@/features/analytics/parts";
 import { axisMax, engagementRate, weeklyTotals } from "./metrics";
 import styles from "./OverviewPage.module.css";
 
@@ -19,6 +21,20 @@ const dateTime = (iso: string) =>
   new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Los_Angeles", timeZoneName: "short" }).format(new Date(iso));
 const shortDate = (date: string) => new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(`${date}T00:00:00Z`));
 const usd = (minorUnits: number) => formatMoney({ minorUnits, currency: "USD" });
+const exactOrNa = (minorUnits: number | null) => (minorUnits === null ? "N/A" : formatMoneyExact({ minorUnits, currency: "USD" }));
+/** Daily rows with every value known. A served day with an unreported channel draws no bar, never a zero bar. */
+const completeDaily = (data: OverviewData) => data.daily.every((d) => d.shopify !== null && d.tiktok !== null) ? data.daily as { date: string; shopify: number; tiktok: number }[] : [];
+const measureOf = (data: OverviewData, key: string): Measure | null => (data.datasetKey === "overview-observed" ? data.measures.find((m) => m.key === key) ?? null : null);
+/** Server-computed measure text. N/A always says why; a ratio states its numerator and denominator. */
+const MEASURE_REASONS: Record<string, string> = {
+  CREATOR_COST_SOURCE_UNCONFIGURED: "creator costs are not connected",
+  AD_PLATFORM_SOURCE_UNCONFIGURED: "ad platforms are not connected",
+  ZERO_DENOMINATOR: "zero denominator",
+};
+function measureText(m: Measure, format: (v: number) => string) {
+  if (m.state === "known" && m.value !== null) return format(m.value);
+  return `N/A · ${(m.reasonCode && MEASURE_REASONS[m.reasonCode]) ?? "an input is unknown"}`;
+}
 const pct = (part: number, whole: number) => (whole === 0 ? 0 : (100 * part) / whole);
 
 /** Performance overview (Figma source 10:217, owner THO-293). */
@@ -72,6 +88,7 @@ function Body({ res, demo }: { res: ReadResponse<OverviewData>; demo: boolean })
           <p>{res.coverage.observedCount} of {res.coverage.expectedCount} source records are available. Totals cover only those records.</p>
         </Alert>
       )}
+      {res.data?.datasetKey === "overview-observed" && <SourceStates sources={res.data.sources} />}
       {res.dataState === "empty" || !res.data ? (
         <EmptyState state="Empty" title="No matching records"><p>The source responded, but nothing matches the current filters.</p></EmptyState>
       ) : (
@@ -111,18 +128,24 @@ function Dashboard({ data, demo }: { data: OverviewData; demo: boolean }) {
   );
 }
 
-function marginOf(data: OverviewData, contribution: number, net: number): number | null {
-  return data.netReceipts.state === "known" && data.contribution.state === "known" && net > 0 ? pct(contribution, net) : null;
+/** A value only when its state is known. A derived figure is computed only when every input is known; otherwise it is N/A. */
+const knownOf = <T,>(v: ProvenanceValue<T>): T | null => (v.state === "known" ? v.value : null);
+function marginOf(data: OverviewData): number | null {
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null, contribution = knownOf(data.contribution)?.minorUnits ?? null;
+  return net !== null && contribution !== null && net > 0 ? pct(contribution, net) : null;
+}
+/** Average net receipts per order: both inputs known, and orders above zero. */
+function averageText(data: OverviewData) {
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null, orders = knownOf(data.orders);
+  if (net === null || orders === null) return "Average net receipts N/A";
+  return orders ? `${formatMoneyExact({ minorUnits: Math.round(net / orders), currency: "USD" })} average net receipts` : "No average without orders";
 }
 
 function Kpis({ data }: { data: OverviewData }) {
-  const net = data.netReceipts.value?.minorUnits ?? 0;
-  const contribution = data.contribution.value?.minorUnits ?? 0;
-  const orders = data.orders.value ?? 0;
-  const weeks = weeklyTotals(data.daily);
+  const weeks = weeklyTotals(completeDaily(data));
   const peak = Math.max(1, ...weeks);
   // A margin needs both figures to be known, and receipts above zero. Otherwise it is N/A, never 0%.
-  const margin = marginOf(data, contribution, net);
+  const margin = marginOf(data);
   const circumference = 2 * Math.PI * 39.6;
   const totalOrders = data.channels.reduce((s, c) => s + c.orders, 0);
   const [mainChannel, secondChannel] = data.channels;
@@ -156,9 +179,9 @@ function Kpis({ data }: { data: OverviewData }) {
         <dl className={styles.kpiText}>
           <dt>Paid orders</dt>
           <dd data-testid="metric-Paid orders"><MetricValue value={data.orders} format={formatCount} /></dd>
-          <dd className={styles.note}>{orders ? `${formatMoneyExact({ minorUnits: Math.round(net / orders), currency: "USD" })} average net receipts` : "No average without orders"}</dd>
+          <dd className={styles.note}>{averageText(data)}</dd>
         </dl>
-        {mainChannel && secondChannel && (
+        {mainChannel && secondChannel && data.orders.state === "known" && (
           // Bubble sizes are fixed as in Figma; the labels carry the values.
           <div className={styles.bubbles} role="img" aria-label={`${mainChannel.label} ${mainChannel.orders} orders, ${secondChannel.label} ${secondChannel.orders} orders`}>
             <span className={`${styles.bubble} ${styles.bubbleMain}`}>{Math.round(pct(mainChannel.orders, totalOrders))}%</span>
@@ -172,7 +195,8 @@ function Kpis({ data }: { data: OverviewData }) {
 
 function SalesByChannel({ data }: { data: OverviewData }) {
   const { daily, channels } = data;
-  const max = useMemo(() => axisMax(daily.flatMap((d) => [d.shopify, d.tiktok]), 20_000), [daily]);
+  const fmt = (v: number | null) => exactOrNa(v);
+  const max = useMemo(() => axisMax(daily.flatMap((d) => [d.shopify, d.tiktok]).filter((v): v is number => v !== null), 20_000), [daily]);
   const ticks = [1, 2 / 3, 1 / 3, 0];
   const count = Math.max(1, daily.length);
   const [shopify, tiktok] = channels;
@@ -195,9 +219,9 @@ function SalesByChannel({ data }: { data: OverviewData }) {
           ))}
           <div className={styles.plot}>
             {daily.map((d, i) => (
-              <div key={d.date} className={styles.day} style={{ left: `${(i / count) * 100}%` }} title={`${shortDate(d.date)}: Shopify ${formatMoneyExact({ minorUnits: d.shopify, currency: "USD" })}, TikTok Shop ${formatMoneyExact({ minorUnits: d.tiktok, currency: "USD" })}`}>
-                <span className={`${styles.bar} ${styles.barShopify}`} style={{ height: `${(d.shopify / max) * 100}%` }} />
-                <span className={`${styles.bar} ${styles.barTiktok}`} style={{ height: `${(d.tiktok / max) * 100}%` }} />
+              <div key={d.date} className={styles.day} style={{ left: `${(i / count) * 100}%` }} title={`${shortDate(d.date)}: Shopify ${fmt(d.shopify)}, TikTok Shop ${fmt(d.tiktok)}`}>
+                {d.shopify !== null && <span className={`${styles.bar} ${styles.barShopify}`} style={{ height: `${(d.shopify / max) * 100}%` }} />}
+                {d.tiktok !== null && <span className={`${styles.bar} ${styles.barTiktok}`} style={{ height: `${(d.tiktok / max) * 100}%` }} />}
               </div>
             ))}
           </div>
@@ -208,7 +232,7 @@ function SalesByChannel({ data }: { data: OverviewData }) {
         <caption>Daily net receipts by channel, in US dollars</caption>
         <thead><tr><th scope="col">Date</th><th scope="col">Shopify</th><th scope="col">TikTok Shop</th></tr></thead>
         <tbody>
-          {daily.map((d) => <tr key={d.date}><th scope="row">{shortDate(d.date)}</th><td>{formatMoneyExact({ minorUnits: d.shopify, currency: "USD" })}</td><td>{formatMoneyExact({ minorUnits: d.tiktok, currency: "USD" })}</td></tr>)}
+          {daily.map((d) => <tr key={d.date}><th scope="row">{shortDate(d.date)}</th><td>{fmt(d.shopify)}</td><td>{fmt(d.tiktok)}</td></tr>)}
         </tbody>
       </table></div>
       <div className={styles.chartTotals}>
@@ -228,27 +252,31 @@ function ChannelShare({ data }: { data: OverviewData }) {
     <section className={styles.card} aria-labelledby="share-title" data-testid="share-card">
       <h2 id="share-title" className={styles.cardTitle}>Where sales come from</h2>
       {data.channels.map((c) => {
-        const share = pct(c.netReceipts.minorUnits, total);
+        // A share needs every channel's receipts. With one channel unreported, a share of the rest would overstate it.
+        const share = data.netReceipts.state === "known" ? pct(c.netReceipts.minorUnits, total) : null;
         return (
           <div key={c.key} className={styles.channel}>
             <div className={styles.channelAmount}><span>{c.label}</span><span>{formatMoney(c.netReceipts)}</span></div>
-            <div className={styles.progress} aria-hidden="true"><span style={{ width: `${share}%` }} /></div>
-            <p className={styles.note}>{share.toFixed(1)}% of net receipts</p>
+            <div className={styles.progress} aria-hidden="true"><span style={{ width: `${share ?? 0}%` }} /></div>
+            <p className={styles.note}>{share === null ? "Share N/A · another channel is unreported" : `${share.toFixed(1)}% of net receipts`}</p>
           </div>
         );
       })}
-      <p className={styles.note}>{formatCount(orders)} orders · {data.channels.map((c) => `${c.orders} ${c.label.split(" ")[0]}`).join(" / ")}</p>
+      <p className={styles.note}>{data.orders.state === "known" ? `${formatCount(orders)} orders` : "Order total N/A"} · {data.channels.map((c) => `${c.orders} ${c.label.split(" ")[0]}`).join(" / ")}</p>
     </section>
   );
 }
 
 function Efficiency({ data }: { data: OverviewData }) {
-  const net = data.netReceipts.value?.minorUnits ?? 0;
-  const contribution = data.contribution.value?.minorUnits ?? 0;
-  const spend = data.marketingSpend.minorUnits;
-  const margin = marginOf(data, contribution, net);
-  const cac = data.newRetainedCustomers ? formatMoneyExact({ minorUnits: Math.round(spend / data.newRetainedCustomers), currency: "USD" }) : "N/A";
-  const mer = spend ? `${(net / spend).toFixed(2)}×` : "N/A";
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null;
+  const margin = marginOf(data);
+  // Served data carries the server's CAC and MER with their own denominators; the demo derives them from its fixed figures.
+  const cacMeasure = measureOf(data, "blendedCac"), merMeasure = measureOf(data, "mer");
+  const spend = data.marketingSpend?.minorUnits ?? null;
+  const cac = cacMeasure ? measureText(cacMeasure, (v) => formatMoneyExact({ minorUnits: Math.round(v), currency: "USD" }))
+    : spend !== null && data.newRetainedCustomers ? formatMoneyExact({ minorUnits: Math.round(spend / data.newRetainedCustomers), currency: "USD" }) : "N/A";
+  const mer = merMeasure ? measureText(merMeasure, (v) => `${v.toFixed(2)}×`) : spend && net !== null ? `${(net / spend).toFixed(2)}×` : "N/A";
+  const cacNote = `${data.marketingSpend ? formatMoney(data.marketingSpend) : "Acquisition cost N/A"} / ${data.newRetainedCustomers ?? "N/A"} new retained customers`;
   return (
     <section className={styles.card} aria-labelledby="growth-title" data-testid="growth-card">
       <h2 id="growth-title" className={styles.cardTitle}>Growth, with discipline.</h2>
@@ -256,7 +284,7 @@ function Efficiency({ data }: { data: OverviewData }) {
         <div>
           <dt>Blended CAC</dt>
           <dd className={styles.value} data-testid="metric-Blended CAC">{cac}</dd>
-          <dd className={styles.note}>{formatMoney(data.marketingSpend)} / {data.newRetainedCustomers} new retained customers</dd>
+          <dd className={styles.note}>{cacNote}</dd>
         </div>
         <div>
           <dt>Marketing efficiency</dt>
@@ -275,11 +303,13 @@ function Efficiency({ data }: { data: OverviewData }) {
 
 function CreatorActivity({ data, demo }: { data: OverviewData; demo: boolean }) {
   const eng = engagementRate(data.posts);
-  const views = data.posts.every((p) => p.views !== null) ? data.posts.reduce((s, p) => s + (p.views ?? 0), 0) : null;
+  // A served overview carries no monitor posts (the monitor is its own read), so views are unknown there, never a summed zero.
+  const monitorSeparate = data.datasetKey === "overview-observed";
+  const views = !monitorSeparate && data.posts.every((p) => p.views !== null) ? data.posts.reduce((s, p) => s + (p.views ?? 0), 0) : null;
   const viewsValue: ProvenanceValue<number> = views === null
-    ? { ...data.orders, state: "unknown", value: null, reasonCode: "VIEWS_UNAVAILABLE" }
+    ? { ...data.orders, state: "unknown", value: null, reasonCode: monitorSeparate ? "MONITOR_SEPARATE" : "VIEWS_UNAVAILABLE" }
     : { ...data.orders, value: views };
-  const engValue: ProvenanceValue<number> = eng.state === "known"
+  const engValue: ProvenanceValue<number> = monitorSeparate ? { ...data.orders, state: "unknown", value: null, reasonCode: "MONITOR_SEPARATE" } : eng.state === "known"
     ? { ...data.orders, value: eng.ratePct }
     : { ...data.orders, state: "notApplicable", value: null, reasonCode: eng.reasonCode === "NO_COMPLETE_POSTS" ? "SHARES_UNAVAILABLE" : eng.reasonCode };
   return (
