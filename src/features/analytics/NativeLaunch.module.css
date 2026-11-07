@@ -1,0 +1,4 @@
+.page { overflow-wrap: anywhere; }
+.note { display: block; font: var(--text-small); color: var(--color-muted); }
+.reference { overflow-wrap: anywhere; font: var(--text-small); }
+.recovery { display: flex; flex-direction: column; gap: var(--space-12); }

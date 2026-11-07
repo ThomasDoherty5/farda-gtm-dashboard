@@ -22,7 +22,7 @@ The register tables are checked against the source by `npm run test` (`src/adapt
 
 | Area | Defined values |
 | -- | -- |
-| Operations (`ActionOperation`) | `previewAction`, `requestApproval`, `decideApproval`, `dispatchApprovedAction`, `inspectRun`, `reconcileRun`, `controlRun`, `refreshObservation`. Reads use `readView`, saves use `saveResource`. |
+| Operations (`ActionOperation`) | `previewAction`, `requestApproval`, `decideApproval`, `dispatchApprovedAction`, `inspectRun`, `reconcileRun`, `controlRun`, `refreshObservation`, `recordSourceDecision`, `exportSnapshot`. Reads use `readView`, saves use `saveResource`. |
 | Resource kinds (`SaveResourceRequest`) | `actionDraft`, `reviewerAssessment`, `evidenceDraft`, `configurationDraft` |
 | Action state (`ActionResponse.state`) | `draft`, `approvalPending`, `approved`, `queued`, `blocked`, `running`, `succeeded`, `partiallySucceeded`, `failed`, `outcomeUncertain`, `reconciling`, `paused`, `canceled` |
 | Data state (`ReadResponse.dataState`) | `ready`, `empty`, `partial`, `stale`, `unavailable` |
@@ -44,6 +44,8 @@ Which `operation` values screens send. The demo adapter routes `submitAction` by
 | `reconcileRun` | contract + conflict | `approvals/RunPage` | `demoApprovals` | `actionKind` is the request name (C-03). |
 | `controlRun` | contract + conflict | `approvals/RunPage`, `monitor/HourlyRunPage`, `recruitment/BatchPage` | `demoApprovals` (run pause), `demoMonitor`, `demoBatch` | Three unrelated payload shapes (C-01). |
 | `refreshObservation` | native | `settings/NativeHealthCheck` | none | Exact bounded `refreshOperationsHealth` read only. No input run reference; the existing J14 service owns any resulting run. Run-control requirements remain unchanged. |
+| `recordSourceDecision` | native | `analytics/NativeLaunchDecision` | none | Exact founder readiness record; verified source acknowledgment confers no release. |
+| `exportSnapshot` | native | typed authorized ledger client | none | Bounded existing-runner source snapshot with private CSV artifact receipt. |
 
 ## View keys
 
@@ -52,7 +54,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | View key | Filters sent | Response data type | Read by (screen, under `src/features/`) | Demo handler (under `src/adapter/`) | Status | Note |
 | -- | -- | -- | -- | -- | -- | -- |
 | `activationRetention` | none | ActivationData / NativeActivation | `lifecycle/ActivationPage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Anonymous matched cohort/window, nullable counts and export approval; app interaction is not ingestion. |
-| `approvalDetail` | `approvalId` | ApprovalDetail | `approvals/ApprovalPage` | `demoAdapter` | proposed | Shape in `features/approvals/types.ts`, marked PROPOSED (THO-283, THO-321). Demo id `demo-approval-forbidden` answers `FORBIDDEN`. |
+| `approvalDetail` | `approvalId` | ApprovalDetail / NativeApprovalView | `approvals/ApprovalPage`, `NativeApprovalPage` | `demoAdapter` | native + historical demo | Exact finite manifest and current source decision projection; no fabricated creator payload or app decision release. |
 | `assessmentRecord` | `creatorId`, `assessmentId` | AssessmentData | `scorecards/AssessmentPage` | `demoAdapter` | proposed |  |
 | `attribution` | none | AttributionData | `analytics/AttributionPage` | `demoAnalytics` | proposed |  |
 | `automationRuns` | none | AutomationData | `settings/AutomationsPage` | `demoSettings` | proposed |  |
@@ -74,7 +76,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `hourlyRun` | `runId` | HourlyRunData | `monitor/HourlyRunPage` | `demoMonitor` | proposed |  |
 | `inventoryOverview` | `scenario?` | InventoryOverview | `inventory/InventoryPage` | `demoOps` | proposed + conflict | C-06. |
 | `invitationDraft` | none | InvitationData | `recruitment/InvitationPage` | `demoAdapter` | proposed |  |
-| `launchControl` | none | LaunchControlData | `analytics/LaunchControlPage` | `demoAnalytics` | proposed |  |
+| `launchControl` | optional original `requestKey` | LaunchControlData / NativeReadinessView | `analytics/LaunchControlPage`, `NativeLaunchControl` | `demoAnalytics` | native + historical demo | Source-owned readiness facts and exact original request recovery; recording does not grant release. |
 | `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData / NativeLifecycle | `lifecycle/LifecyclePage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Source catalog/outcome evidence remains separate from local configuration and provider sends. |
@@ -100,7 +102,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `recruitmentQueue` | `networks`, `route` | RecruitmentData | `recruitment/RecruitmentPage` | `demoAdapter` | proposed + conflict | C-05. Uses `keepPrevious`. Demo refuses unknown facet values. |
 | `reportManifest` | none | Manifest | `finance/CloseViews` | `demoFinance` | proposed | Synthetic dry-run manifest of the seven package reports. Nothing is generated. |
 | `returnDetail` | `returnId`, `scenario?` | ReturnDetail | `operations/ReturnPage` | `demoOps` | proposed + conflict | C-06, C-07. |
-| `runDetail` | `runId` | RunDetail | `approvals/RunPage` | `demoAdapter` | proposed + conflict | Same PROPOSED shapes. The contract's `inspectRun` operation is not used; runs are read as a view (C-14). |
+| `runDetail` | `runId` | RunDetail / NativeRunView | `approvals/RunPage`, `NativeRunPage` | `demoAdapter` | native + historical demo | The existing runner supplies finite item outcomes; local artifacts and provider effects remain distinct. `inspectRun` is not sent. |
 | `scheduleDetail` | `jobId` | ScheduleData | `settings/SchedulePage` | `demoSettings` | proposed |  |
 | `settlementDetail` | `settlementId` | SettlementRecord | `finance/SettlementPage` | `demoFinance` | proposed |  |
 | `shippingException` | `shipmentId`, `exceptionId` | ShippingExceptionDetail | `operations/ShippingExceptionPage` | `demoOps` | proposed + conflict | C-07. |
@@ -189,6 +191,16 @@ Native sandbox action added in the review-completion increment:
 | -- | -- | -- |
 | `proposeCollaborationReview` | `requestApproval`; typed collaboration/kind/reason and optional exact deliverable/submission/outcome; empty entity refs and null approval/manifest/run | Durable local `approvalPending` proposal; J04 decision/dispatch held. `collaboration/NativeCollaboration`; see `collaboration-workflow.md`. |
 
+### Native action foundation variants
+
+| Action kind | Operation | Payload | Result | Holds | Sent by | Stage |
+| -- | -- | -- | -- | -- | -- | -- |
+| `requestApproval` | `requestApproval` | `{}` plus exact approval/manifest/version | recorded request; no dispatch | current named/source approval holds | native approval | native |
+| `reconcileApproval` | `requestApproval` | `{}` plus original exact approval/manifest/version | current source readback; no dispatch | original persistence uncertainty | native approval | native |
+| `resumeRun` | `controlRun` | `{ control: "resume" }` plus top-level run reference/version | original run-control receipt | current owner/version/lease holds | native run | native |
+| `exportLedger` | `exportSnapshot` | exact snapshot filters and CSV format; null approval/manifest/run input | actual artifact/job receipt | source permission, completeness, expiry | typed ledger export | native source-bound |
+| `recordLaunchReadiness` | `recordSourceDecision` | exact scoped source reference/version, verdict/date/rationale/evidence | verified Notion record receipt; no release | named founder, phase, source and Go gates | native launch control | native source-bound |
+
 ## Resource kinds
 
 Sent by a screen through `useSave`. The request has no `actionKind`, so the demo adapter picks a service from `resourceKind` and then from a prefix of `resourceRef`.
@@ -268,7 +280,7 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `UNAUTHENTICATED` | unauthenticated | never raised |
 | `VALIDATION_FAILED` | validation | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `demoCreators`, `demoEvidence`, `demoFinance`, `demoLifecycle`, `demoMonitor`, `demoOps`, `demoSettings` |
 
-Never raised by the demo: `UNAUTHENTICATED`, `LEASE_CONFLICT`, `CAPABILITY_UNVERIFIED`, `CAPABILITY_UNSUPPORTED`, `SOURCE_LOGIN_REQUIRED` (used only as a reason code), `SOURCE_UI_CHANGED`, `BUDGET_HOLD`, `RATE_LIMITED`, `TIMEOUT`. They are in the map, so screens map them to a category, but no screen behavior for them has been exercised.
+Historical demo coverage (native coverage is recorded separately): `UNAUTHENTICATED`, `LEASE_CONFLICT`, `CAPABILITY_UNVERIFIED`, `CAPABILITY_UNSUPPORTED`, `SOURCE_LOGIN_REQUIRED` (used only as a reason code), `SOURCE_UI_CHANGED`, `BUDGET_HOLD`, `RATE_LIMITED`, `TIMEOUT`. They are in the map, so screens map them to a category, but no screen behavior for them has been exercised.
 
 Categories (`ErrorCategory`): `unauthenticated`, `forbidden`, `notFound`, `validation`, `conflict`, `approvalHold`, `capabilityHold`, `resourceHold`, `rateLimited`, `unavailable`, `outcomeUncertain`, `replayed`, `unknown`. `replayed` has no code mapped to it. `unknown` is the fallback for a code not in the map. `unauthenticated` and `forbidden` clear protected data (`mustClearProtectedData`).
 
@@ -298,6 +310,89 @@ Native review-completion error codes (same adapter catalogue):
 | `CREATOR_PLATFORM_CURSOR_INVALID` | conflict | Reload the same view and filters. |
 | `CREATOR_PLATFORM_SCOPE_MISMATCH` | forbidden | Clear protected data and check account scope. |
 | `FUNNEL_NARROW_COHORT_WINDOW` | validation | Narrow cohort dates rather than truncating. |
+
+
+### Native approval, domain-action and dispatch errors
+
+These source-derived catalogue entries preserve distinct typed recovery categories. Their implementation tests use fictional adapters; source-qualified permission and production release remain separate.
+
+| Error code | Category | Recovery |
+| -- | -- | -- |
+| `SOURCE_ACTION_BOUNDARY_REQUIRED` | forbidden | Use the protected native read/action boundary; legacy routes cannot expose or control source-owned jobs. |
+| `ACTION_SCOPE_DENIED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `ACTOR_AUTHORITY_FENCE_UNCONFIGURED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `ACTOR_PROOF_INVALID` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `APPROVAL_CHANNEL_REQUIRED` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_CURRENT_AUTHORITY_UNAVAILABLE` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_CURRENT_SOURCE_UNVERIFIED` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_INGRESS_UNCONFIGURED` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `APPROVAL_NOT_CURRENT` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_POLICY_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `APPROVAL_POLICY_UNAVAILABLE` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `APPROVAL_PROOF_EXPIRED` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_PROOF_UNVERIFIED` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_REQUEST_UNVERIFIED` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `APPROVAL_SOURCE_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `APPROVAL_SOURCE_UNAVAILABLE` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `APPROVAL_VERSION_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `AUTHORITY_REQUIRED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `DISPATCH_APPROVAL_BINDING_MISMATCH` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_BATCH_BOUND` | validation | Use the exact bounded registered envelope and manifest membership. |
+| `DISPATCH_BUDGET_REQUIRED` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_CLOSURE_ATTEMPT_MISMATCH` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_GRANT_ALREADY_CLAIMED` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_HANDLER_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_IDEMPOTENCY_KEY_REUSED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_IDEMPOTENCY_UNSUPPORTED` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `DISPATCH_ITEM_ALREADY_IN_RUN` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_ITEM_REUSED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_ITEM_SPEND_BOUND` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_ITEM_UNIT_BOUND` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_MIXED_MANIFEST_OR_BINDING` | validation | Use the exact bounded registered envelope and manifest membership. |
+| `DISPATCH_NO_ACTIVE_LEASE` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_POLICY_STALE` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `DISPATCH_PRIOR_OUTCOME_UNCERTAIN` | outcomeUncertain | Reconcile the original source key and attempt; do not mint a new effect. |
+| `DISPATCH_PROVIDER_AUTHORITY_UNKNOWN` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `DISPATCH_PROVIDER_BINDING_MISMATCH` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_RECEIPT_CONFLICT` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_RECEIPT_REUSED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_RECONCILIATION_BINDING_MISMATCH` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `DISPATCH_RESOURCE_AUTHORITY_UNAVAILABLE` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_RESOURCE_POLICY_MISMATCH` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_RESOURCE_PROOF_INVALID` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_SCOPE_DENIED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `DISPATCH_SHARED_QUOTA_REQUIRED` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_SHARED_QUOTA_UNVERIFIED` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_STOCK_REQUIRED` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `DISPATCH_VERSION_CONFLICT` | conflict | Reconcile the original immutable request/version before changing it. |
+| `DISPATCH_WORKER_AUTHORITY_INVALID` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `DISPATCH_WORKER_UNCONFIGURED` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `EXACT_MANIFEST_ITEM_REQUIRED` | validation | Use the exact bounded registered envelope and manifest membership. |
+| `EXPORT_ACCESS_DENIED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `EXPORT_EXPIRED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `EXPORT_RECONCILIATION_REQUIRED` | outcomeUncertain | Reconcile the original source key and attempt; do not mint a new effect. |
+| `EXPORT_REQUEST_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `EXPORT_SNAPSHOT_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `EXPORT_SOURCE_INVALID` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `EXPORT_SOURCE_UNCONFIGURED` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `EXPORT_TOO_LARGE` | resourceHold | Obtain current source-issued allocation or lease; do not infer remaining capacity. |
+| `LAUNCH_GO_HELD` | approvalHold | Read current exact approval, policy, phase and source evidence. |
+| `NAMED_ACTOR_UNCONFIGURED` | forbidden | Restore the current named actor/source authority; clear protected data. |
+| `PREVIEW_SELECTION_MISMATCH` | validation | Use the exact bounded registered envelope and manifest membership. |
+| `READINESS_BASIS_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `READINESS_PRIOR_OUTCOME_UNCERTAIN` | outcomeUncertain | Reconcile the original source key and attempt; do not mint a new effect. |
+| `READINESS_RECEIPT_CONFLICT` | outcomeUncertain | Reconcile the original source key and attempt; do not mint a new effect. |
+| `READINESS_SOURCE_INVALID` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `READINESS_SOURCE_UNCONFIGURED` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `SOURCE_ACTION_UNCONFIGURED` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `SOURCE_ACTION_UNSUPPORTED` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `SOURCE_CAPABILITY_UNAVAILABLE` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `SOURCE_EVENT_CHANGED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `SOURCE_OUTCOME_UNCERTAIN` | outcomeUncertain | Reconcile the original source key and attempt; do not mint a new effect. |
+| `SOURCE_RECONCILIATION_CAPABILITY_UNAVAILABLE` | capabilityHold | Resolve the registered account/action capability; never bypass a denial. |
+| `SOURCE_RECONCILIATION_UNAVAILABLE` | unavailable | Restore the configured source/readback boundary; no provider success is inferred. |
+| `SOURCE_REGRESSED` | conflict | Reconcile the original immutable request/version before changing it. |
+| `SOURCE_VERSION_CONFLICT` | conflict | Reconcile the original immutable request/version before changing it. |
 
 ## Vocabularies the contract does not define
 
