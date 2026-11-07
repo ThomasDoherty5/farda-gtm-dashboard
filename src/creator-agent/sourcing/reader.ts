@@ -3,13 +3,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { digest } from "../config.ts";
 import type { OperationsScope } from "../operations.ts";
-import { SOURCING_PLAN_VIEW, sourcingPlanFilters, sourcingPlanSchema, type SourcingPlan, type SourcingPlanBody } from "./contract.ts";
+import {
+  SOURCING_CLOCK_SKEW_MS, SOURCING_PLAN_MAX_AGE_MS, SOURCING_PLAN_VIEW, capacityUnits, recruitmentSources, runStateKeys, sourcingPlanFilters, sourcingPlanSchema,
+  type CapacityKind, type MissingReason, type ObservedCount, type SourcingPlan, type SourcingPlanBody,
+} from "./contract.ts";
 import { SourcingError, sourcingSnapshotSchema, type SourcingPlanSourceReader, type SourcingSnapshot } from "./source.ts";
 
 export { SourcingError } from "./source.ts";
 type Role = "reader" | "reviewer";
 type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: SourcingPlanSourceReader; now?: () => number; sourceTimeoutMs?: number };
-type SourceRead = { snapshot: SourcingSnapshot | null; state: SourcingPlan["sourceState"]; reason: string | null };
+/** `validUntil` is the earlier of the source's lease and the server's maximum age. */
+type SourceRead = { snapshot: SourcingSnapshot | null; state: SourcingPlan["sourceState"]; reason: string | null; validUntil: string | null };
 type Capability = { actionKind: string; state: "available" | "held" | "denied"; reasonCodes: string[] };
 export type SourcingPlanReadResult = {
   data: SourcingPlan; version: string; dataState: "ready" | "partial" | "stale" | "unavailable";
@@ -18,7 +22,13 @@ export type SourcingPlanReadResult = {
   capabilities: Capability[];
 };
 const fail = (code: string, status: number): never => { throw new SourcingError(code, status); };
-const unknownCount = (missingReason: string) => ({ value: null, missingReason });
+const unknownCount = (missingReason: MissingReason) => ({ value: null, missingReason });
+/** A definite answer: observed, or explicitly not applicable. Unknown is never counted as observed. */
+const resolved = (c: ObservedCount) => c.value !== null || c.missingReason === "NOT_APPLICABLE";
+/** Every capacity row the contract expects: four per planned source and two shared. Unreported ones are added as unknown. */
+const sourceCapacityKinds: CapacityKind[] = ["invitations", "collaborationSlots", "apiRequests", "browserActions"];
+const sharedCapacityKinds: CapacityKind[] = ["sampleUnits", "authorizedCost"];
+const RUN_COUNTS = runStateKeys.length + 3;
 
 /**
  * Read-only daily sourcing plan (THO-287). It projects the injected J19 source; with no source it answers an honest
@@ -35,22 +45,23 @@ export function createSourcingPlanReader(options: Options) {
   function tx<T>(fn: () => T): T { db.exec("BEGIN IMMEDIATE"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }
 
   async function observe(): Promise<SourceRead> {
-    if (!source) return { snapshot: null, state: "unconfigured", reason: "SOURCING_SOURCE_UNCONFIGURED" };
+    if (!source) return { snapshot: null, state: "unconfigured", reason: "SOURCING_SOURCE_UNCONFIGURED", validUntil: null };
     let raw: unknown, timer: ReturnType<typeof setTimeout> | undefined;
     try {
       raw = await Promise.race([source({ ...scope }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("SOURCE_TIMEOUT")), timeoutMs); })]);
     } catch (error) {
       if (error instanceof SourcingError && (error.status === 401 || error.status === 403)) fail("SOURCE_AUTHORITY_DENIED", 403);
-      return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE" };
+      return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE", validUntil: null };
     } finally { clearTimeout(timer); }
-    if (raw === null) return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE" };
+    if (raw === null) return { snapshot: null, state: "unavailable", reason: "SOURCING_SOURCE_UNAVAILABLE", validUntil: null };
     // A malformed answer is a source failure, never an empty plan.
     const parsed = sourcingSnapshotSchema.safeParse(raw);
     if (!parsed.success) fail("SOURCE_RESPONSE_INVALID", 502);
     const s = parsed.data!;
     if (digest(s.scope) !== digest(scope)) fail("SOURCE_SCOPE_DENIED", 403);
     const current = now();
-    if (!Number.isFinite(current) || Date.parse(s.observedAt) > current) fail("SOURCE_RESPONSE_INVALID", 502);
+    // A small, documented clock skew is tolerated; an observation further in the future is refused.
+    if (!Number.isFinite(current) || Date.parse(s.observedAt) > current + SOURCING_CLOCK_SKEW_MS) fail("SOURCE_RESPONSE_INVALID", 502);
     const { observedAt, validUntil, ...facts } = s; void observedAt; void validUntil;
     const factsHash = digest(facts);
     tx(() => {
@@ -62,8 +73,12 @@ export function createSourcingPlanReader(options: Options) {
       db.prepare("INSERT OR IGNORE INTO sourcing_plan_source_versions VALUES(?,?)").run(s.version, factsHash);
       db.prepare("INSERT INTO sourcing_plan_source_head VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,observed_at=excluded.observed_at").run(s.version, s.observedAt);
     });
-    const expired = Date.parse(s.validUntil) <= current;
-    return { snapshot: s, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current", reason: expired ? "SOURCE_STALE" : s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null };
+    // The server's maximum age applies whatever lease the source claims.
+    const ageLimit = Date.parse(s.observedAt) + SOURCING_PLAN_MAX_AGE_MS;
+    const leaseEnd = Math.min(Date.parse(s.validUntil), ageLimit);
+    const expired = leaseEnd <= current;
+    const reason = !expired ? s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null : ageLimit <= current && ageLimit <= Date.parse(s.validUntil) ? "SOURCE_MAX_AGE_EXCEEDED" : "SOURCE_STALE";
+    return { snapshot: s, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current", reason, validUntil: new Date(leaseEnd).toISOString() };
   }
 
   function project(s: SourcingSnapshot, read: SourceRead, at: number): SourcingPlanBody {
@@ -81,17 +96,23 @@ export function createSourcingPlanReader(options: Options) {
     // Unconfigured schedules and closed sessions never read as active, whatever the source claims.
     const effectiveState = s.schedule.state === "active" && holds.length > 0 ? "draft" : s.schedule.state;
     const reported = new Set(s.capacity.map((r) => `${r.source}:${r.kind}`));
-    const missing = s.sources.filter((a) => !reported.has(`${a.source}:invitations`)).map((a) => ({
-      source: a.source, kind: "invitations" as const, unit: "invitations" as const, currency: null,
+    const expected: [SourcingSnapshot["capacity"][number]["source"], CapacityKind][] = [
+      ...recruitmentSources.filter((source) => s.sources.some((a) => a.source === source)).flatMap((source) => sourceCapacityKinds.map((kind) => [source, kind] as [typeof source, CapacityKind])),
+      ...sharedCapacityKinds.map((kind) => ["shared", kind] as ["shared", CapacityKind]),
+    ];
+    const missing = expected.filter(([source, kind]) => !reported.has(`${source}:${kind}`)).map(([source, kind]) => ({
+      source, kind, unit: capacityUnits[kind], currency: kind === "authorizedCost" ? "USD" as const : null,
       limit: unknownCount("CAPACITY_NOT_REPORTED"), used: unknownCount("CAPACITY_NOT_REPORTED"), remaining: unknownCount("CAPACITY_NOT_REPORTED"),
       resetAt: null, observedAt: null, validUntil: null, receipt: null,
     }));
     const capacity = [...s.capacity, ...missing].map((r) => {
       const leaseExpired = read.state === "expired" || r.validUntil !== null && Date.parse(r.validUntil) <= at;
+      const aged = r.observedAt !== null && at - Date.parse(r.observedAt) > SOURCING_PLAN_MAX_AGE_MS;
       const resetPassed = r.resetAt !== null && Date.parse(r.resetAt) <= at && (r.observedAt === null || Date.parse(r.observedAt) < Date.parse(r.resetAt));
-      const state = r.remaining.value === null ? "unknown" as const : leaseExpired || resetPassed ? "stale" as const : "current" as const;
-      const blockReason = state === "unknown" ? r.remaining.missingReason === "CAPACITY_NOT_REPORTED" ? "CAPACITY_NOT_REPORTED" : "CAPACITY_UNKNOWN"
-        : state === "stale" ? resetPassed ? "CAPACITY_RESET_STALE" : "CAPACITY_LEASE_EXPIRED" : r.remaining.value === 0 ? "CAPACITY_EXHAUSTED" : null;
+      const state = r.remaining.missingReason === "NOT_APPLICABLE" ? "notApplicable" as const : r.remaining.value === null ? "unknown" as const
+        : leaseExpired || aged || resetPassed ? "stale" as const : "current" as const;
+      const blockReason = state === "notApplicable" ? null : state === "unknown" ? r.remaining.missingReason === "CAPACITY_NOT_REPORTED" ? "CAPACITY_NOT_REPORTED" : "CAPACITY_UNKNOWN"
+        : state === "stale" ? resetPassed ? "CAPACITY_RESET_STALE" : aged ? "CAPACITY_MAX_AGE_EXCEEDED" : "CAPACITY_LEASE_EXPIRED" : r.remaining.value === 0 ? "CAPACITY_EXHAUSTED" : null;
       return { ...r, receipt: r.receipt ? alias("receipt", r.receipt) : null, state, dispatchBlocked: blockReason !== null, blockReason };
     });
     const capacityHolds = capacity.filter((r) => r.blockReason).map((r) => `${r.blockReason}:${r.source}:${r.kind}`);
@@ -109,17 +130,26 @@ export function createSourcingPlanReader(options: Options) {
 
   async function read(rawFilters: unknown, role: Role): Promise<SourcingPlanReadResult> {
     if (role !== "reader" && role !== "reviewer") fail("FORBIDDEN", 403);
-    if (!sourcingPlanFilters.safeParse(rawFilters).success) fail("VALIDATION_FAILED", 400);
+    if (!sourcingPlanFilters.safeParse(rawFilters).success) fail("VALIDATION_FAILED", 422);
     const s = await observe(), at = now(), observedAt = new Date(at).toISOString();
     const plan = s.snapshot ? project(s.snapshot, s, at) : null;
     const data = sourcingPlanSchema.parse({
       kind: "agent-sourcing-plan", observedAt, sourceAsOf: s.snapshot?.observedAt ?? null, sourceVersion: s.snapshot ? alias("source", s.snapshot.version) : null,
-      validUntil: s.snapshot?.validUntil ?? null, freshness: s.state === "expired" ? "stale" : s.snapshot ? "current" : "unknown",
+      validUntil: s.validUntil, freshness: s.state === "expired" ? "stale" : s.snapshot ? "current" : "unknown",
       coverage: s.snapshot?.coverage ?? "unknown", sourceState: s.state, missingReason: s.reason, plan,
     });
-    const steps = plan?.steps ?? [], capacity = plan?.capacity ?? [];
-    const expectedCount = plan ? steps.length + capacity.length : 0;
-    const observedCount = steps.filter((x) => x.count.value !== null).length + capacity.filter((r) => r.state === "current").length;
+    // The full expected set: every step, every expected capacity row, every identity count and, once a run exists, every run count.
+    let expectedCount = 0, observedCount = 0;
+    const tally = (values: ObservedCount[]) => { expectedCount += values.length; observedCount += values.filter(resolved).length; };
+    if (plan) {
+      tally(plan.steps.map((x) => x.count));
+      expectedCount += plan.capacity.length; observedCount += plan.capacity.filter((r) => r.state === "current" || r.state === "notApplicable").length;
+      const { evidenceRefs: _refs, ...identity } = plan.identity; void _refs;
+      tally(Object.values(identity));
+      const run = plan.latestRun;
+      if (run) tally([...runStateKeys.map((k) => run.states[k]), run.attempts, run.distinctOpportunities, run.confirmedInvitations]);
+      else if (plan.schedule.lastRunAt !== null) expectedCount += RUN_COUNTS; // a run happened but was not reported
+    }
     const missingCount = expectedCount - observedCount;
     const dataState = !plan ? "unavailable" as const : s.state === "expired" ? "stale" as const : s.state === "partial" || missingCount > 0 ? "partial" as const : "ready" as const;
     const { observedAt: _readAt, ...stable } = data; void _readAt;
@@ -142,14 +172,14 @@ export function createSourcingPlanReader(options: Options) {
       code, message, requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" as const, ...(fieldErrors ? { fieldErrors } : {}) } });
     const issues = (error: z.ZodError, prefix: string) => Object.fromEntries(error.issues.slice(0, 20).map((i) => [[prefix, ...i.path].filter(Boolean).join(".") || "request", i.message]));
     const envelope = envelopeSchema(schemaVersion).safeParse(raw);
-    if (!envelope.success) return refuse(400, "VALIDATION_FAILED", "The daily sourcing plan request is not valid.", issues(envelope.error, ""));
+    if (!envelope.success) return refuse(422, "VALIDATION_FAILED", "The daily sourcing plan request is not valid.", issues(envelope.error, ""));
     const input = envelope.data;
     const requested = input.requestedScope;
     if (requested.workspaceId !== scope.workspaceId || requested.environment !== scope.environment || requested.accountIds.length !== 1 || requested.accountIds[0] !== scope.accountId)
       return refuse(403, "FORBIDDEN", "This scope is not available.");
-    if (input.page.cursor !== null) return refuse(400, "INVALID_CURSOR", "The daily sourcing plan has one page.");
+    if (input.page.cursor !== null) return refuse(422, "INVALID_CURSOR", "The daily sourcing plan has one page.");
     const filters = sourcingPlanFilters.safeParse(input.filters);
-    if (!filters.success) return refuse(400, "VALIDATION_FAILED", "The daily sourcing plan accepts no filters.", issues(filters.error, "filters"));
+    if (!filters.success) return refuse(422, "VALIDATION_FAILED", "The daily sourcing plan accepts no filters.", issues(filters.error, "filters"));
     let result: SourcingPlanReadResult;
     try { result = await read(filters.data, role); }
     catch (error) {

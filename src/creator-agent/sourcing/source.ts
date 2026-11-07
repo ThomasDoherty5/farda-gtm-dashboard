@@ -1,15 +1,14 @@
 import { z } from "zod";
 import type { OperationsScope } from "../operations.ts";
 import {
-  accessStates, capacityKinds, capacityUnits, instantSchema, observedCountSchema, ownerRoles, recruitmentSourceSchema, recruitmentSources, refSchema,
-  runStateKeys, scheduleStates, sessionStates, stepKeys, timezoneSchema, type CapacityKind, type ObservedCount,
+  accessStates, capacityKinds, capacityUnits, instantSchema, nextActionSchema, observedCountSchema, ownerRoles, recruitmentSourceSchema, recruitmentSources, refSchema,
+  runStateKeys, scheduleStates, sessionStates, stepKeys, timezoneSchema, versionLabelSchema, type CapacityKind, type ObservedCount,
 } from "./contract.ts";
 
 /**
  * Server-only boundary to the J19 daily sourcing service (THO-325). It is read-only: no discovery start, invitation,
  * approval, lease or dispatch is reachable through it. The reader is injected by the trusted server, never by a request.
  */
-const text = z.string().trim().min(1).max(500);
 const known = (c: ObservedCount) => c.value;
 const after = (a: string | null, b: string) => a !== null && Date.parse(a) > Date.parse(b);
 
@@ -29,7 +28,7 @@ const schedule = z.object({
 });
 
 const step = z.object({
-  step: z.enum(stepKeys), count: observedCountSchema, owner: z.enum(ownerRoles).nullable(), evidenceRefs: z.array(refSchema).max(20), nextAction: text.nullable(),
+  step: z.enum(stepKeys), count: observedCountSchema, owner: z.enum(ownerRoles).nullable(), evidenceRefs: z.array(refSchema).max(20), nextAction: nextActionSchema,
 }).strict().refine((v) => v.count.value === null || v.evidenceRefs.length > 0, "An observed step count needs evidence.");
 
 const capacity = z.object({
@@ -44,6 +43,8 @@ const capacity = z.object({
   if ((limit !== null || used !== null || remaining !== null) && (v.receipt === null || v.observedAt === null || v.validUntil === null))
     c.addIssue({ code: "custom", message: "An observed capacity needs a receipt and a lease." });
   if (v.observedAt !== null && v.validUntil !== null && Date.parse(v.validUntil) <= Date.parse(v.observedAt)) c.addIssue({ code: "custom", message: "Invalid capacity lease." });
+  const na = [v.limit, v.used, v.remaining].filter((n) => n.missingReason === "NOT_APPLICABLE").length;
+  if (na !== 0 && na !== 3) c.addIssue({ code: "custom", message: "A capacity row is either wholly not applicable or not at all." });
   if (limit !== null && (used !== null && used > limit || remaining !== null && remaining > limit || used !== null && remaining !== null && used + remaining > limit))
     c.addIssue({ code: "custom", message: "Used and remaining capacity cannot exceed the limit." });
 });
@@ -79,7 +80,7 @@ const latestRun = z.object({
 export const sourcingSnapshotSchema = z.object({
   scope: z.object({ workspaceId: refSchema, accountId: refSchema, environment: z.literal("sandbox") }).strict(),
   version: refSchema, observedAt: instantSchema, validUntil: instantSchema, coverage: z.enum(["complete", "partial"]),
-  planRef: refSchema, icpVersion: refSchema.nullable(), policyVersion: refSchema.nullable(),
+  planRef: refSchema, icpVersion: versionLabelSchema.nullable(), policyVersion: versionLabelSchema.nullable(),
   sources: z.array(sourceAccount).min(1).max(2), schedule, steps: z.array(step).length(stepKeys.length),
   capacity: z.array(capacity).max(24), identity, latestRun: latestRun.nullable(),
 }).strict().superRefine((s, c) => {

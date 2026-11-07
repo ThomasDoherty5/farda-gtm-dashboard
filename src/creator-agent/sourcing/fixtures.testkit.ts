@@ -1,4 +1,5 @@
 import type { OperationsScope } from "../operations.ts";
+import type { MissingReason } from "./contract.ts";
 import type { SourcingSnapshot } from "./source.ts";
 
 /** Fictional server-injected J19 plan only. No real creator, account, provider or receipt is represented. */
@@ -6,7 +7,7 @@ export const sourcingTestScope: OperationsScope = { workspaceId: "synthetic-sour
 export const sourcingTestTime = Date.parse("2026-11-07T16:00:00Z");
 export const sourcingTestSecret = "synthetic-sourcing-private-key-00000000000000000000";
 const known = (value: number) => ({ value, missingReason: null });
-const unknown = (missingReason: string) => ({ value: null, missingReason });
+const unknown = (missingReason: MissingReason) => ({ value: null, missingReason });
 
 export function sourcingSourceFixture(scope: OperationsScope = sourcingTestScope, timestamp = sourcingTestTime): SourcingSnapshot {
   const at = (offsetMs: number) => new Date(timestamp + offsetMs).toISOString();
@@ -20,11 +21,11 @@ export function sourcingSourceFixture(scope: OperationsScope = sourcingTestScope
     ],
     schedule: { state: "active", cadence: "daily", timezone: "America/Los_Angeles", lastRunAt: at(-8 * 3600_000), nextRunAt: at(16 * 3600_000), scheduleRef: "synthetic-daily-schedule" },
     steps: [
-      { step: "discovery", count: known(40), owner: "creator-agent", evidenceRefs: ["synthetic-discovery-receipt"], nextAction: "Resolve identities" },
-      { step: "identityResolution", count: known(31), owner: "creator-agent", evidenceRefs: ["synthetic-identity-receipt"], nextAction: "Queue direct video review" },
-      { step: "videoReview", count: known(12), owner: "reviewer", evidenceRefs: ["synthetic-review-receipt"], nextAction: "Review the remaining clips" },
-      { step: "qualification", count: unknown("J20_REVIEW_INCOMPLETE"), owner: "reviewer", evidenceRefs: [], nextAction: "Finish direct video review first" },
-      { step: "invitationPlanning", count: known(0), owner: "operator", evidenceRefs: ["synthetic-planning-receipt"], nextAction: "Wait for qualified creators" },
+      { step: "discovery", count: known(40), owner: "creator-agent", evidenceRefs: ["synthetic-discovery-receipt"], nextAction: "RESOLVE_IDENTITIES" },
+      { step: "identityResolution", count: known(31), owner: "creator-agent", evidenceRefs: ["synthetic-identity-receipt"], nextAction: "QUEUE_VIDEO_REVIEW" },
+      { step: "videoReview", count: known(12), owner: "reviewer", evidenceRefs: ["synthetic-review-receipt"], nextAction: "REVIEW_REMAINING_CLIPS" },
+      { step: "qualification", count: unknown("J20_REVIEW_INCOMPLETE"), owner: "reviewer", evidenceRefs: [], nextAction: "FINISH_VIDEO_REVIEW" },
+      { step: "invitationPlanning", count: known(0), owner: "operator", evidenceRefs: ["synthetic-planning-receipt"], nextAction: "WAIT_FOR_QUALIFIED_CREATORS" },
     ],
     capacity: [
       { source: "social-cat", kind: "invitations", unit: "invitations", currency: null, limit: known(50), used: known(20), remaining: known(30), resetAt: at(8 * 3600_000), ...lease, receipt: "synthetic-sc-quota-receipt" },
@@ -38,4 +39,21 @@ export function sourcingSourceFixture(scope: OperationsScope = sourcingTestScope
       queued: known(0), running: known(0), quotaDeferred: known(1), loginRequired: known(0), permissionDenied: known(0), paused: known(0), confirmed: known(2), failed: known(0), uncertain: unknown("RECEIPT_NOT_RECONCILED"),
     }, attempts: known(5), distinctOpportunities: known(3), confirmedInvitations: known(2), receiptRefs: ["synthetic-invite-receipt-1", "synthetic-invite-receipt-2"] },
   };
+}
+
+/** The same plan with every count known or explicitly not applicable, and every expected capacity row reported. */
+export function completeSourcingFixture(scope: OperationsScope = sourcingTestScope, timestamp = sourcingTestTime): SourcingSnapshot {
+  const s = sourcingSourceFixture(scope, timestamp);
+  const lease = { observedAt: new Date(timestamp - 5 * 60_000).toISOString(), validUntil: new Date(timestamp + 55 * 60_000).toISOString() };
+  const na = { limit: unknown("NOT_APPLICABLE"), used: unknown("NOT_APPLICABLE"), remaining: unknown("NOT_APPLICABLE"), resetAt: null, observedAt: null, validUntil: null, receipt: null };
+  s.steps[3]!.count = known(5); s.steps[3]!.evidenceRefs = ["synthetic-qualification-receipt"];
+  s.capacity[1] = { ...s.capacity[1]!, limit: known(20), remaining: known(16) };
+  for (const source of ["social-cat", "tiktok-shop"] as const) {
+    s.capacity.push({ source, kind: "collaborationSlots", unit: "slots", currency: null, limit: known(10), used: known(3), remaining: known(7), resetAt: null, ...lease, receipt: `synthetic-${source}-slots-receipt` });
+    s.capacity.push({ source, kind: "apiRequests", unit: "requests", currency: null, ...na });
+    s.capacity.push({ source, kind: "browserActions", unit: "actions", currency: null, ...na });
+  }
+  s.identity.suppressedExistingRelationship = known(0);
+  s.latestRun!.states.uncertain = known(0);
+  return s;
 }

@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentStore } from "../store.ts";
 import { createSourcingPlanReader, isSourcingPlanRead } from "./reader.ts";
 import { SourcingError, sourcingSnapshotSchema, type SourcingPlanSourceReader, type SourcingSnapshot } from "./source.ts";
-import { sourcingPlanSchema } from "./contract.ts";
-import { sourcingSourceFixture, sourcingTestScope as scope, sourcingTestSecret as secret, sourcingTestTime } from "./fixtures.testkit.ts";
+import { SOURCING_CLOCK_SKEW_MS, SOURCING_PLAN_MAX_AGE_MS, sourcingPlanSchema } from "./contract.ts";
+import { completeSourcingFixture, sourcingSourceFixture, sourcingTestScope as scope, sourcingTestSecret as secret, sourcingTestTime } from "./fixtures.testkit.ts";
 
 const stores: AgentStore[] = [];
 function setup(reader?: SourcingPlanSourceReader | null, options: { timeoutMs?: number } = {}) {
@@ -24,7 +24,6 @@ describe("the J19 source boundary", () => {
     expect(sourcingSnapshotSchema.safeParse({ ...sourcingSourceFixture(), [field]: "not-permitted" }).success).toBe(false);
   });
   it.each([
-    ["an ISO-shaped impossible date", (s: SourcingSnapshot) => { s.observedAt = "2026-02-30T00:00:00Z"; }],
     ["a capacity unit that is not native to its kind", (s: SourcingSnapshot) => { s.capacity[0]!.unit = "units"; }],
     ["a cost without a currency", (s: SourcingSnapshot) => { s.capacity[3]!.currency = null; }],
     ["used and remaining above the limit", (s: SourcingSnapshot) => { s.capacity[0]!.used = { value: 40, missingReason: null }; }],
@@ -41,6 +40,28 @@ describe("the J19 source boundary", () => {
     ["evidence after the snapshot", (s: SourcingSnapshot) => { s.capacity[0]!.observedAt = new Date(sourcingTestTime + 1000).toISOString(); }],
     ["steps out of order", (s: SourcingSnapshot) => { s.steps.reverse(); }],
   ])("refuses %s", (_name, mutate) => {
+    const s = sourcingSourceFixture(); mutate(s);
+    expect(sourcingSnapshotSchema.safeParse(s).success).toBe(false);
+  });
+
+  it("refuses an ISO-shaped impossible date for that reason alone", () => {
+    // The same position with a real date parses, so the impossible date is the only fault.
+    const valid = sourcingSourceFixture(); valid.capacity[0]!.resetAt = "2026-11-30T00:00:00Z";
+    expect(sourcingSnapshotSchema.safeParse(valid).success).toBe(true);
+    const impossible = sourcingSourceFixture(); impossible.capacity[0]!.resetAt = "2026-11-31T00:00:00Z";
+    const result = sourcingSnapshotSchema.safeParse(impossible);
+    expect(result.success).toBe(false);
+    expect(result.error!.issues.map((i) => [i.path.join("."), i.message])).toEqual([["capacity.0.resetAt", "Invalid datetime"]]);
+  });
+
+  it.each([
+    ["a handle in a next action", (s: SourcingSnapshot) => { (s.steps[0] as { nextAction: string }).nextAction = "DM @synthetic.creator about the brief"; }],
+    ["an address in a missing reason", (s: SourcingSnapshot) => { (s.steps[3]!.count as { missingReason: string }).missingReason = "ask synthetic.person@example.test"; }],
+    ["a URL in a missing reason", (s: SourcingSnapshot) => { (s.capacity[1]!.limit as { missingReason: string }).missingReason = "https://example.test/profile"; }],
+    ["prose shaped like a code", (s: SourcingSnapshot) => { (s.identity.suppressedExistingRelationship as { missingReason: string }).missingReason = "SYNTHETIC_CREATOR_HANDLE"; }],
+    ["an address in a version label", (s: SourcingSnapshot) => { s.icpVersion = "synthetic.person@example.test"; }],
+    ["a URL in a version label", (s: SourcingSnapshot) => { s.policyVersion = "https://example.test/policy"; }],
+  ])("refuses personal-looking text: %s", (_name, mutate) => {
     const s = sourcingSourceFixture(); mutate(s);
     expect(sourcingSnapshotSchema.safeParse(s).success).toBe(false);
   });
@@ -96,7 +117,71 @@ describe("the daily sourcing plan reader", () => {
     expect(await failure(setup(async () => "not a plan").service.read({}, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", status: 502 });
     const foreign = sourcingSourceFixture({ ...scope, accountId: "synthetic-foreign-account" });
     expect(await failure(setup(async () => foreign).service.read({}, "reviewer"))).toMatchObject({ code: "SOURCE_SCOPE_DENIED", status: 403 });
-    expect(await failure(setup(async () => sourcingSourceFixture(scope, sourcingTestTime + 60_000)).service.read({}, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID" });
+    expect(await failure(setup(async () => sourcingSourceFixture(scope, sourcingTestTime + SOURCING_CLOCK_SKEW_MS + 1)).service.read({}, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", status: 502 });
+  });
+
+  it("tolerates a source clock up to the documented skew ahead", async () => {
+    for (const ahead of [1, SOURCING_CLOCK_SKEW_MS]) {
+      const result = await setup(async () => sourcingSourceFixture(scope, sourcingTestTime + ahead)).service.read({}, "reviewer");
+      expect(result.data.sourceState).toBe("current");
+    }
+  });
+
+  it("applies the server's maximum age whatever lease the source claims", async () => {
+    const long = sourcingSourceFixture();
+    long.validUntil = new Date(sourcingTestTime + 365 * 86_400_000).toISOString();
+    for (const row of long.capacity) row.validUntil = long.validUntil;
+    const { service, setTime } = setup(async () => structuredClone(long));
+    const fresh = await service.read({}, "reviewer");
+    expect(fresh.data).toMatchObject({ sourceState: "current", freshness: "current", validUntil: new Date(sourcingTestTime + SOURCING_PLAN_MAX_AGE_MS).toISOString() });
+    setTime(sourcingTestTime + 300 * 86_400_000);
+    const old = await service.read({}, "reviewer");
+    expect(old.data).toMatchObject({ sourceState: "expired", freshness: "stale", missingReason: "SOURCE_MAX_AGE_EXCEEDED" });
+    expect(old.dataState).toBe("stale");
+    expect(old.data.plan!.capacity.filter((r) => r.state === "current")).toEqual([]);
+  });
+
+  it("marks a capacity row older than the maximum age stale even inside a fresh snapshot", async () => {
+    const result = await setup(withSource((s) => {
+      s.capacity[0]!.observedAt = new Date(sourcingTestTime - SOURCING_PLAN_MAX_AGE_MS - 60_000).toISOString();
+      s.capacity[0]!.validUntil = new Date(sourcingTestTime + 86_400_000).toISOString();
+    })).service.read({}, "reviewer");
+    expect(result.data.plan!.capacity[0]).toMatchObject({ state: "stale", blockReason: "CAPACITY_MAX_AGE_EXCEEDED", dispatchBlocked: true });
+  });
+
+  it("is ready and complete only when every expected value is known or not applicable", async () => {
+    const result = await setup(async () => completeSourcingFixture()).service.read({}, "reviewer");
+    expect(result.dataState).toBe("ready");
+    expect(result.coverage).toEqual({ expectedCount: 34, observedCount: 34, missingCount: 0, complete: true, reasonCodes: [] });
+    expect(result.data.plan!.capacity.filter((r) => r.state === "notApplicable").map((r) => [r.source, r.kind, r.dispatchBlocked])).toEqual([
+      ["social-cat", "apiRequests", false], ["social-cat", "browserActions", false], ["tiktok-shop", "apiRequests", false], ["tiktok-shop", "browserActions", false]]);
+  });
+
+  it("counts identity, run and unreported capacity in coverage, so mostly unknown is never complete", async () => {
+    const unknownAll = (c: { value: number | null; missingReason: string | null }) => Object.assign(c, { value: null, missingReason: "NOT_READ" });
+    const s = completeSourcingFixture();
+    s.steps.forEach((x) => { unknownAll(x.count); x.evidenceRefs = []; });
+    s.capacity = s.capacity.filter((r) => r.kind === "invitations");
+    Object.entries(s.identity).forEach(([k, v]) => { if (k !== "evidenceRefs") unknownAll(v as never); });
+    s.identity.evidenceRefs = [];
+    Object.values(s.latestRun!.states).forEach((v) => unknownAll(v));
+    for (const v of [s.latestRun!.attempts, s.latestRun!.distinctOpportunities, s.latestRun!.confirmedInvitations]) unknownAll(v);
+    s.latestRun!.receiptRefs = [];
+    const result = await setup(async () => s).service.read({}, "reviewer");
+    expect(result.dataState).toBe("partial");
+    // 5 steps + 10 capacity rows + 7 identity + 12 run counts; only the two invitation rows are known.
+    expect(result.coverage).toMatchObject({ expectedCount: 34, observedCount: 2, missingCount: 32, complete: false });
+    expect(result.data.plan!.capacity.filter((r) => r.blockReason === "CAPACITY_NOT_REPORTED").map((r) => `${r.source}:${r.kind}`)).toEqual([
+      "social-cat:collaborationSlots", "social-cat:apiRequests", "social-cat:browserActions", "tiktok-shop:collaborationSlots", "tiktok-shop:apiRequests",
+      "tiktok-shop:browserActions", "shared:sampleUnits", "shared:authorizedCost"]);
+    expect(result.data.plan!.capacity.find((r) => r.kind === "authorizedCost")).toMatchObject({ unit: "minorUnits", currency: "USD", state: "unknown" });
+  });
+
+  it("expects the run counts once a run has happened but none is reported", async () => {
+    const result = await setup(withSource((s) => { s.latestRun = null; })).service.read({}, "reviewer");
+    expect(result.coverage.expectedCount).toBe(5 + 10 + 7 + 12);
+    const never = await setup(withSource((s) => { s.latestRun = null; s.schedule.lastRunAt = null; })).service.read({}, "reviewer");
+    expect(never.coverage.expectedCount).toBe(5 + 10 + 7);
   });
 
   it("never shows a schedule as active with a closed session, unverified access, no timezone or an overdue run", async () => {
@@ -136,7 +221,7 @@ describe("the daily sourcing plan reader", () => {
     })).service.read({}, "reviewer");
     const [social, ...rest] = result.data.plan!.capacity;
     expect(social).toMatchObject({ state: "current", remaining: { value: 0, missingReason: null }, blockReason: "CAPACITY_EXHAUSTED" });
-    expect(rest.find((r) => r.source === "tiktok-shop")).toMatchObject({ kind: "invitations", state: "unknown", blockReason: "CAPACITY_NOT_REPORTED", limit: { value: null } });
+    expect(rest.find((r) => r.source === "tiktok-shop" && r.kind === "invitations")).toMatchObject({ kind: "invitations", state: "unknown", blockReason: "CAPACITY_NOT_REPORTED", limit: { value: null } });
   });
 
   it("refuses a reused source version with changed facts and a regressed snapshot", async () => {
@@ -157,7 +242,7 @@ describe("the daily sourcing plan reader", () => {
     let reads = 0;
     const { service } = setup(async () => { reads++; return sourcingSourceFixture(); });
     for (const filters of [{ fixture: "demo" }, { scenario: "ready" }, { sourceAccount: "synthetic-other" }, null, "plan"])
-      expect(await failure(service.read(filters, "reviewer"))).toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
+      expect(await failure(service.read(filters, "reviewer"))).toMatchObject({ code: "VALIDATION_FAILED", status: 422 });
     expect(reads).toBe(0);
   });
 

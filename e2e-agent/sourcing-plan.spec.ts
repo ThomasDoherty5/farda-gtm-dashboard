@@ -37,14 +37,16 @@ test("the daily plan detail reads the served sourcing plan over actual HTTP and 
     await expect(page).toHaveURL(/\/creators\/discovery\?view=plan$/);
     await expect(page.getByTestId("live-plan-schedule")).toContainText("Active");
     const capacity = page.getByRole("table", { name: "Source capacity in native units" });
-    await expect(capacity.getByRole("row", { name: /^TikTok Shop · Invitations/ })).toContainText("Unknown · SOURCE_LIMIT_NOT_PUBLISHED");
+    await expect(capacity.getByRole("row", { name: /^TikTok Shop · Invitations/ })).toContainText("Unknown · source limit not published");
     await expect(capacity.getByRole("row", { name: /^TikTok Shop · Invitations/ })).toContainText("Blocked · CAPACITY_UNKNOWN");
     await expect(capacity.getByRole("row", { name: /^Social Cat · Invitations/ })).toContainText("30 invitations");
-    await expect(page.getByRole("table", { name: "Daily plan steps" }).getByRole("row", { name: /^Qualification/ })).toContainText("Unknown · J20_REVIEW_INCOMPLETE");
+    await expect(page.getByRole("table", { name: "Daily plan steps" }).getByRole("row", { name: /^Qualification/ })).toContainText("Unknown · direct video review incomplete");
     await expect(page.getByTestId("view-partial")).toBeVisible();
     const text = await page.locator("main").innerText();
     for (const raw of ["synthetic-social-cat-account", "synthetic-invite-receipt-1", "synthetic-daily-plan"]) expect(text).not.toContain(raw);
     await expect(page.getByRole("button", { name: /Request approval for a batch/ })).toHaveAttribute("aria-disabled", "true");
+    // This session is a reader: the reason names the role and does not imply a reviewer could request approval today.
+    await expect(page.getByText("Requires the reviewer role. Batch approval is also not connected yet, so no role can request it here today.")).toBeVisible();
     await accessible(page);
 
     // The source claims active, but a closed browser session keeps the schedule a draft.
@@ -59,6 +61,7 @@ test("the daily plan detail reads the served sourcing plan over actual HTTP and 
     await page.reload();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByTestId("live-plan-versions")).toHaveCount(0);
+    await expect(page.getByText("No access to this account")).toBeVisible();
   } finally { await app.close(); }
 
   // With no source configured, the same route says so: no demo plan and no zeros.

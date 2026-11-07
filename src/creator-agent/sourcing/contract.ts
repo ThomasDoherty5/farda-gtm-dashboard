@@ -19,8 +19,36 @@ export const timezoneSchema = z.string().min(1).max(100).refine((v) => {
   try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; }
 }, "Unknown timezone.");
 
-/** A count the source observed, or unknown with a reason. Never both, never neither. */
-export const observedCountSchema = z.object({ value: count.nullable(), missingReason: text.nullable() }).strict()
+/**
+ * D-13 has no row for a once-a-day plan. J19 runs daily (THO-287 is the daily plan; the hourly monitor is a separate job),
+ * so a plan observation is stale after one cadence plus a two-hour grace, whatever lease the source claims.
+ */
+export const SOURCING_PLAN_MAX_AGE_MS = 26 * 3600_000;
+/** A source clock may run slightly ahead of the server's. Beyond this the observation is refused. */
+export const SOURCING_CLOCK_SKEW_MS = 2 * 60_000;
+
+/**
+ * Why a count is not known. Enumerated so no source prose (a handle, an address, a link) can reach the browser.
+ * `NOT_APPLICABLE` is a definite answer, distinct from both zero and unknown.
+ */
+export const missingReasonCodes = [
+  "NOT_APPLICABLE", "NOT_READ", "SOURCE_DID_NOT_REPORT", "SOURCE_LIMIT_NOT_PUBLISHED", "SOURCE_PERMISSION_DENIED", "SOURCE_LOGIN_REQUIRED",
+  "J20_REVIEW_INCOMPLETE", "IDENTITY_RESOLUTION_INCOMPLETE", "RELATIONSHIP_LEDGER_NOT_READ", "SUPPRESSION_LIST_NOT_READ",
+  "RECEIPT_NOT_RECONCILED", "RUN_IN_PROGRESS", "CAPACITY_NOT_REPORTED",
+] as const;
+export const missingReasonSchema = z.enum(missingReasonCodes);
+export type MissingReason = typeof missingReasonCodes[number];
+/** The next action for a plan step, as a code. The browser holds the copy. */
+export const nextActionCodes = [
+  "RESOLVE_IDENTITIES", "QUEUE_VIDEO_REVIEW", "REVIEW_REMAINING_CLIPS", "FINISH_VIDEO_REVIEW", "QUALIFY_REVIEWED_CREATORS",
+  "WAIT_FOR_QUALIFIED_CREATORS", "PREPARE_FINITE_PREVIEW", "RESTORE_SOURCE_ACCESS", "NONE",
+] as const;
+export const nextActionSchema = z.enum(nextActionCodes);
+/** A configuration version label the browser shows as is: short, no spaces, no `@`, no slash, so no address or URL. */
+export const versionLabelSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/, "A version label is a short code.");
+
+/** A count the source observed, or unknown with an enumerated reason. Never both, never neither. */
+export const observedCountSchema = z.object({ value: count.nullable(), missingReason: missingReasonSchema.nullable() }).strict()
   .refine((v) => (v.value === null) === (v.missingReason !== null), "Unknown counts need a reason; observed counts do not.");
 export type ObservedCount = z.infer<typeof observedCountSchema>;
 
@@ -58,7 +86,7 @@ const scheduleView = z.object({
 });
 
 const stepView = z.object({
-  step: z.enum(stepKeys), count: observedCountSchema, owner: z.enum(ownerRoles).nullable(), evidenceRefs: z.array(refSchema).max(20), nextAction: text.nullable(),
+  step: z.enum(stepKeys), count: observedCountSchema, owner: z.enum(ownerRoles).nullable(), evidenceRefs: z.array(refSchema).max(20), nextAction: nextActionSchema,
 }).strict();
 
 const capacityView = z.object({
@@ -66,12 +94,13 @@ const capacityView = z.object({
   unit: z.enum(["invitations", "slots", "requests", "actions", "units", "minorUnits"]), currency: z.literal("USD").nullable(),
   limit: observedCountSchema, used: observedCountSchema, remaining: observedCountSchema,
   resetAt: instantSchema.nullable(), observedAt: instantSchema.nullable(), validUntil: instantSchema.nullable(), receipt: refSchema.nullable(),
-  /** `current` only with a receipt inside its lease and before any reset. Unknown and stale rows block dependent dispatch. */
-  state: z.enum(["current", "stale", "unknown"]), dispatchBlocked: z.boolean(), blockReason: text.nullable(),
+  /** `current` only with a receipt inside its lease, the server's maximum age and before any reset. Unknown and stale rows block dependent dispatch; `notApplicable` rows are not a constraint for this source. */
+  state: z.enum(["current", "stale", "unknown", "notApplicable"]), dispatchBlocked: z.boolean(), blockReason: text.nullable(),
 }).strict().superRefine((v, c) => {
   if (v.unit !== capacityUnits[v.kind]) c.addIssue({ code: "custom", message: "Capacity unit does not match its kind." });
   if ((v.currency !== null) !== (v.kind === "authorizedCost")) c.addIssue({ code: "custom", message: "Only authorized cost carries a currency." });
-  if (v.state !== "current" && !v.dispatchBlocked) c.addIssue({ code: "custom", message: "Unknown or stale capacity must block dispatch." });
+  if ((v.state === "unknown" || v.state === "stale") && !v.dispatchBlocked) c.addIssue({ code: "custom", message: "Unknown or stale capacity must block dispatch." });
+  if (v.state === "notApplicable" && [v.limit, v.used, v.remaining].some((n) => n.missingReason !== "NOT_APPLICABLE")) c.addIssue({ code: "custom", message: "Only an all-N/A row is not applicable." });
   if (v.dispatchBlocked !== (v.blockReason !== null)) c.addIssue({ code: "custom", message: "A blocked row needs its reason." });
 });
 
@@ -91,7 +120,7 @@ export const sourcingPlanSchema = z.object({
   observedAt: instantSchema, sourceAsOf: instantSchema.nullable(), sourceVersion: refSchema.nullable(), validUntil: instantSchema.nullable(),
   freshness: z.enum(["current", "stale", "unknown"]), coverage: z.enum(["complete", "partial", "unknown"]), sourceState: z.enum(sourceStates), missingReason: text.nullable(),
   plan: z.object({
-    planRef: refSchema, icpVersion: refSchema.nullable(), policyVersion: refSchema.nullable(),
+    planRef: refSchema, icpVersion: versionLabelSchema.nullable(), policyVersion: versionLabelSchema.nullable(),
     schedule: scheduleView, sources: z.array(sourceAccountView).min(1).max(2), steps: z.array(stepView).length(stepKeys.length),
     capacity: z.array(capacityView).max(24), identity: identityView, latestRun: latestRunView.nullable(),
     /** Every reason nothing may dispatch from this plan. Reading the plan never dispatches. */

@@ -7,7 +7,7 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { formatCount, formatMoney } from "@/components/MetricValue";
 import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
-import { runStateKeys, type CapacityKind, type ObservedCount, type SourcingPlan, type SourcingPlanBody } from "@/creator-agent/sourcing/contract";
+import { runStateKeys, type CapacityKind, type MissingReason, type ObservedCount, type SourcingPlan, type SourcingPlanBody, nextActionCodes } from "@/creator-agent/sourcing/contract";
 import styles from "./Acquisition.module.css";
 
 const FILTERS: Record<string, never> = {};
@@ -20,8 +20,21 @@ const SOURCE_LABEL = { "social-cat": "Social Cat", "tiktok-shop": "TikTok Shop",
 const KIND_LABEL: Record<CapacityKind, string> = { invitations: "Invitations", collaborationSlots: "Collaboration slots", apiRequests: "API requests", browserActions: "Browser actions", sampleUnits: "Approved sample units", authorizedCost: "Authorized cost" };
 const RUN_LABEL: Record<typeof runStateKeys[number], string> = { queued: "Queued", running: "Running", quotaDeferred: "Quota-deferred", loginRequired: "Login / MFA required", permissionDenied: "Permission denied", paused: "Paused", confirmed: "Confirmed", failed: "Failed", uncertain: "Uncertain" };
 
-/** A known zero reads 0; an unknown reads Unknown with its reason. Neither is ever shown as the other. */
-const countText = (c: ObservedCount, format: (n: number) => string = formatCount) => c.value === null ? `Unknown · ${c.missingReason}` : format(c.value);
+/** Copy for the source's enumerated codes. The service forwards codes only, never source prose. */
+const REASON_COPY: Record<MissingReason, string> = {
+  NOT_APPLICABLE: "not applicable", NOT_READ: "not read", SOURCE_DID_NOT_REPORT: "source did not report it", SOURCE_LIMIT_NOT_PUBLISHED: "source limit not published",
+  SOURCE_PERMISSION_DENIED: "source permission denied", SOURCE_LOGIN_REQUIRED: "source login required", J20_REVIEW_INCOMPLETE: "direct video review incomplete",
+  IDENTITY_RESOLUTION_INCOMPLETE: "identity resolution incomplete", RELATIONSHIP_LEDGER_NOT_READ: "relationship ledger not read", SUPPRESSION_LIST_NOT_READ: "suppression list not read",
+  RECEIPT_NOT_RECONCILED: "receipt not reconciled", RUN_IN_PROGRESS: "run in progress", CAPACITY_NOT_REPORTED: "capacity not reported",
+};
+const NEXT_ACTION_COPY: Record<typeof nextActionCodes[number], string> = {
+  RESOLVE_IDENTITIES: "Resolve identities", QUEUE_VIDEO_REVIEW: "Queue direct video review", REVIEW_REMAINING_CLIPS: "Review the remaining clips",
+  FINISH_VIDEO_REVIEW: "Finish direct video review first", QUALIFY_REVIEWED_CREATORS: "Qualify reviewed creators", WAIT_FOR_QUALIFIED_CREATORS: "Wait for qualified creators",
+  PREPARE_FINITE_PREVIEW: "Prepare a finite preview", RESTORE_SOURCE_ACCESS: "Restore source access", NONE: "None",
+};
+/** A known zero reads 0, N/A reads N/A, and an unknown reads Unknown with its reason. None is ever shown as another. */
+const countText = (c: ObservedCount, format: (n: number) => string = formatCount) =>
+  c.value !== null ? format(c.value) : c.missingReason === "NOT_APPLICABLE" ? "N/A" : `Unknown · ${REASON_COPY[c.missingReason!]}`;
 const time = (iso: string | null, empty: string) => iso ? <time dateTime={iso}>{iso}</time> : empty;
 
 /** The served daily plan detail (THO-287, Figma 102:555 plan view) on a live adapter. Read-only: it starts nothing, approves nothing and sends nothing. */
@@ -49,8 +62,10 @@ function NoSource({ data }: { data: SourcingPlan }) {
 function PlanDetail({ res, data, plan }: { res: ReadResponse<SourcingPlan>; data: SourcingPlan; plan: SourcingPlanBody }) {
   const { schedule, latestRun, identity } = plan;
   const approvalCapability = res.capabilities.find((c) => c.actionKind === "requestBatchApproval");
-  // This view never requests approval itself; the approval service owns that action.
-  const approval = approvalCapability?.state === "denied" ? "Only a reviewer can request batch approval." : "Batch approval requests are not connected to the daily sourcing service.";
+  // This view never requests approval itself; the approvals work owns that action, and it is not connected for anyone yet.
+  const approval = approvalCapability?.state === "denied"
+    ? "Requires the reviewer role. Batch approval is also not connected yet, so no role can request it here today."
+    : "Batch approval is not connected yet. It belongs to the approvals work, not this plan view.";
   return <>
     <section className={styles.card} aria-labelledby="live-versions-title" data-testid="live-plan-versions">
       <div className={styles.sectionTitle}>
@@ -78,7 +93,7 @@ function PlanDetail({ res, data, plan }: { res: ReadResponse<SourcingPlan>; data
       <DataTable caption="Daily plan steps" testId="live-plan-steps" minWidth={720}
         columns={[{ label: "Step" }, { label: "Count" }, { label: "Owner" }, { label: "Evidence" }, { label: "Next action" }]}
         rows={plan.steps.map((s) => [STEP_LABEL[s.step], countText(s.count), s.owner ? OWNER_LABEL[s.owner] : "Unassigned",
-          s.evidenceRefs.length ? `${s.evidenceRefs.length} source receipt${s.evidenceRefs.length === 1 ? "" : "s"}` : "No receipt", s.nextAction ?? "None recorded"])} />
+          s.evidenceRefs.length ? `${s.evidenceRefs.length} source receipt${s.evidenceRefs.length === 1 ? "" : "s"}` : "No receipt", NEXT_ACTION_COPY[s.nextAction]])} />
     </section>
 
     <section className={styles.card} aria-labelledby="live-capacity-title">
@@ -91,8 +106,8 @@ function PlanDetail({ res, data, plan }: { res: ReadResponse<SourcingPlan>; data
         rows={plan.capacity.map((r) => {
           const format = r.kind === "authorizedCost" && r.currency ? (n: number) => formatMoney({ minorUnits: n, currency: r.currency! }) : (n: number) => `${formatCount(n)} ${r.unit}`;
           return [`${SOURCE_LABEL[r.source]} · ${KIND_LABEL[r.kind]}`, countText(r.limit, format), countText(r.used, format), countText(r.remaining, format),
-            <span key="reading"><Badge tone={r.state === "current" ? "success" : "warning"}>{r.state === "current" ? "Current" : r.state === "stale" ? "Stale" : "Unknown"}</Badge>{r.resetAt && <> · resets {time(r.resetAt, "")}</>}</span>,
-            r.dispatchBlocked ? `Blocked · ${r.blockReason}` : "Not blocked by this row"];
+            <span key="reading"><Badge tone={r.state === "current" ? "success" : r.state === "notApplicable" ? "neutral" : "warning"}>{{ current: "Current", stale: "Stale", unknown: "Unknown", notApplicable: "N/A" }[r.state]}</Badge>{r.resetAt && <> · resets {time(r.resetAt, "")}</>}</span>,
+            r.dispatchBlocked ? `Blocked · ${r.blockReason}` : r.state === "notApplicable" ? "Not a limit for this source" : "Not blocked by this row"];
         })} />
     </section>
 

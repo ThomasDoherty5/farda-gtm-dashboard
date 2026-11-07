@@ -7,7 +7,7 @@ import { readResponseSchema } from "@/adapter/contract";
 import { viewSchemas } from "@/adapter/viewSchemas";
 import { adapterErrorBodySchema } from "@/adapter/wire";
 import { createAgentServer, type AgentServerOptions } from "./server";
-import { sourcingPlanSchema } from "./sourcing/contract";
+import { SOURCING_CLOCK_SKEW_MS, sourcingPlanSchema } from "./sourcing/contract";
 import { sourcingSourceFixture, sourcingTestScope, sourcingTestTime } from "./sourcing/fixtures.testkit";
 import { SourcingError, type SourcingSnapshot } from "./sourcing/source";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
@@ -90,8 +90,11 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     expect(reviewer.dataVersion).toMatch(/^sp1-[a-f0-9]{64}$/);
     const data = sourcingPlanSchema.parse(reviewer.data);
     expect(data.plan!.schedule.effectiveState).toBe("active");
-    expect(data.plan!.capacity.map((r) => [r.source, r.kind, r.unit])).toEqual([
-      ["social-cat", "invitations", "invitations"], ["tiktok-shop", "invitations", "invitations"], ["shared", "sampleUnits", "units"], ["shared", "authorizedCost", "minorUnits"]]);
+    expect(data.plan!.capacity.map((r) => [r.source, r.kind, r.unit, r.state])).toEqual([
+      ["social-cat", "invitations", "invitations", "current"], ["tiktok-shop", "invitations", "invitations", "unknown"], ["shared", "sampleUnits", "units", "current"],
+      ["shared", "authorizedCost", "minorUnits", "current"],
+      ...(["social-cat", "tiktok-shop"] as const).flatMap((source) => [["collaborationSlots", "slots"], ["apiRequests", "requests"], ["browserActions", "actions"]]
+        .map(([kind, unit]) => [source, kind, unit, "unknown"]))]);
     expect(reviewer.sourceFreshness[0]).toMatchObject({ freshnessState: "current", lastSourceSuccessAt: new Date(sourcingTestTime).toISOString(), staleReasonCode: null });
     expect(reviewer.capabilities).toContainEqual({ actionKind: "requestBatchApproval", state: "held", reasonCodes: ["APPROVAL_SERVICE_NOT_CONNECTED"] });
 
@@ -114,7 +117,8 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     const plan = sourcingPlanSchema.parse(partial.data).plan!;
     expect(plan.steps[3]!.count).toEqual({ value: null, missingReason: "J20_REVIEW_INCOMPLETE" });
     expect(plan.capacity[1]).toMatchObject({ state: "unknown", dispatchBlocked: true, remaining: { value: null } });
-    expect(partial.coverage).toMatchObject({ expectedCount: 9, observedCount: 7, missingCount: 2, complete: false });
+    // 5 steps + 10 expected capacity rows + 7 identity counts + 12 run counts.
+    expect(partial.coverage).toMatchObject({ expectedCount: 34, observedCount: 24, missingCount: 10, complete: false });
 
     // A new source version must also be a newer observation; an equal time under another version is a conflict.
     clock.now = sourcingTestTime + 1000;
@@ -134,26 +138,35 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
     const { read } = await start({ sourcingPlanSource: source });
     for (const filters of [{ fixture: "discovery-demo" }, { scenario: "ready" }, { workspaceId: "synthetic-foreign-workspace" }, { sourceAccount: "synthetic-other" }, null]) {
       const forged = await read({ filters });
-      expect(forged.status).toBe(400);
+      expect(forged.status).toBe(422);
       expectCanonicalError(forged.body, "VALIDATION_FAILED");
       expect(Object.keys(forged.body.fieldErrors).every((key: string) => key.startsWith("filters"))).toBe(true);
     }
-    for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }])
-      expectCanonicalError((await read(overrides)).body, "VALIDATION_FAILED");
+    for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }]) {
+      const refused = await read(overrides);
+      expect(refused.status).toBe(422);
+      expectCanonicalError(refused.body, "VALIDATION_FAILED");
+    }
     const cursor = await read({ page: { cursor: "sc1.synthetic", limit: 50 } });
-    expect(cursor.status).toBe(400);
+    expect(cursor.status).toBe(422);
     expectCanonicalError(cursor.body, "INVALID_CURSOR");
     expect(counter.reads).toBe(0);
   });
 
   it("fails closed on a malformed or denied source, and never answers an empty plan", async () => {
-    let mode: "malformed" | "impossible-date" | "denied" | "foreign" = "malformed";
+    let mode: "malformed" | "impossible-date" | "denied" | "foreign" | "valid-date" = "malformed";
     const { read } = await start({ sourcingPlanSource: async () => {
       if (mode === "denied") throw new SourcingError("UPSTREAM_DENIED", 403);
       if (mode === "foreign") return sourcingSourceFixture({ ...sourcingTestScope, workspaceId: "synthetic-foreign-workspace" });
       const s = sourcingSourceFixture() as unknown as Record<string, unknown>;
-      return mode === "malformed" ? { ...s, capacity: "unknown" } : { ...s, observedAt: "2026-11-31T00:00:00Z" };
+      if (mode === "malformed") return { ...s, capacity: "unknown" };
+      // Only the reset date differs between these two: a real date is served, an impossible one is refused.
+      const snapshot = sourcingSourceFixture();
+      snapshot.capacity[0]!.resetAt = mode === "valid-date" ? "2026-11-30T00:00:00Z" : "2026-11-31T00:00:00Z";
+      return snapshot;
     } });
+    mode = "valid-date";
+    expect((await read()).status).toBe(200);
     for (const [next, status, code] of [["malformed", 502, "SOURCE_RESPONSE_INVALID"], ["impossible-date", 502, "SOURCE_RESPONSE_INVALID"],
       ["denied", 403, "SOURCE_AUTHORITY_DENIED"], ["foreign", 403, "SOURCE_SCOPE_DENIED"]] as const) {
       mode = next;
@@ -161,6 +174,41 @@ describe("daily sourcing plan reads over HTTP and SQLite", () => {
       expect(result.status).toBe(status);
       expectCanonicalError(result.body, code);
     }
+  });
+
+  it("refuses source prose that could carry a handle or address, and never forwards it", async () => {
+    let snapshot: unknown = sourcingSourceFixture();
+    const { read } = await start({ sourcingPlanSource: async () => structuredClone(snapshot) });
+    const personal = ["DM @synthetic.creator now", "synthetic.person@example.test", "https://example.test/synthetic-profile"];
+    for (const text of personal) {
+      const s = sourcingSourceFixture() as unknown as { steps: { nextAction: unknown; count: { value: unknown; missingReason: unknown } }[] };
+      s.steps[0]!.nextAction = text;
+      snapshot = s;
+      const refused = await read();
+      expect(refused.status).toBe(502);
+      expectCanonicalError(refused.body, "SOURCE_RESPONSE_INVALID");
+      expect(JSON.stringify(refused.body)).not.toContain(text);
+      s.steps[0]!.nextAction = "RESOLVE_IDENTITIES"; s.steps[3]!.count.missingReason = text;
+      const again = await read();
+      expect(again.status).toBe(502);
+      expect(JSON.stringify(again.body)).not.toContain(text);
+    }
+  });
+
+  it("applies the clock-skew tolerance and the maximum age over HTTP", async () => {
+    const clock = { now: sourcingTestTime };
+    let snapshot = sourcingSourceFixture(sourcingTestScope, sourcingTestTime + SOURCING_CLOCK_SKEW_MS);
+    snapshot.validUntil = new Date(sourcingTestTime + 365 * 86_400_000).toISOString();
+    const { read } = await start({ sourcingPlanSource: async () => structuredClone(snapshot) }, clock);
+    const ahead = planEnvelope.parse((await read()).body);
+    expect(sourcingPlanSchema.parse(ahead.data).sourceState).toBe("current");
+    clock.now = sourcingTestTime + 300 * 86_400_000;
+    const aged = planEnvelope.parse((await read()).body);
+    expect(aged).toMatchObject({ dataState: "stale", sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_MAX_AGE_EXCEEDED" }] });
+    snapshot = { ...sourcingSourceFixture(sourcingTestScope, clock.now + SOURCING_CLOCK_SKEW_MS + 1), version: "synthetic-plan-source-future" };
+    const future = await read();
+    expect(future.status).toBe(502);
+    expectCanonicalError(future.body, "SOURCE_RESPONSE_INVALID");
   });
 
   it("persists the source head in SQLite so a regressed snapshot is refused after a restart", async () => {
