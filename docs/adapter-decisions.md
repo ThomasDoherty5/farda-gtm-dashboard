@@ -4,6 +4,21 @@ Recorded 2026-11-04. These answer the open questions in the backend requirements
 
 **Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. Nothing here has been verified against a real service.
 
+## Owner acceptance, 2026-11-06
+
+Thomas Doherty reviewed these defaults on 2026-11-06 and accepted every one that doesn't commit money, data retention or a vendor. The backend owner can still change any of them, using the same rule as above.
+
+| Decision | Status | Note |
+| -- | -- | -- |
+| Q-01 to Q-04 | Accepted | Already implemented in the client contract. |
+| D-1 | Accepted, except the identity provider | HTTPS, same origin, `HttpOnly` cookie session, CSRF header and the four paths are accepted. The identity provider is not chosen; the owner decided on 2026-11-06 to choose it before production. Until then, sandbox keeps the deployed service's separate reader and reviewer credentials. |
+| D-2, D-3, D-4 | Accepted | Who holds each D-3 role is assigned separately. |
+| D-5 | Accepted, with a USD 500 threshold | Owner decision on 2026-11-06: a second person approves anything that spends money, messages a creator or changes policy; the founder-only threshold is USD 500 instead of the default USD 1,000. |
+| D-6 to D-15 | Accepted | |
+| D-16 | Held | Retention periods need CPA and legal confirmation. Financial record rules and privacy law apply, and the product is health-adjacent. |
+| D-17 | Held | A safe design, but a second deployment and database cost money. No paid infrastructure is approved. |
+| D-18 | Accepted | Build-order guidance. The existing child tickets keep their owners. |
+
 Principles behind every choice: the server is the only authority (a hidden button is never authorization); a small team needs fewer moving parts, not more; money and outbound messages get a second person; an unknown outcome is never retried blind; nothing in the browser holds a secret.
 
 ## The four contract gaps
@@ -23,7 +38,7 @@ Principles behind every choice: the server is the only authority (a hidden butto
 | D-2 Operation names and versions | Keep `viewKey` and `actionKind` as the operation names. `schemaVersion` is a date string. Adding an optional field needs no new version; removing or retyping one does. The server accepts the current version and the previous one for 30 days and answers anything else with a typed `VALIDATION_FAILED` that names the supported versions. |
 | D-3 Role model | Five roles: `founder`, `operator`, `reviewer`, `finance`, `viewer`, plus a non-human `runner` for the job service. Fields are filtered on the server per role (payout and bank details: `finance` and `founder` only; creator contact data: `operator`, `reviewer`, `founder`). A role never narrows by hiding a button. |
 | D-4 Scope narrowing | Refuse, do not narrow. A request that names a workspace, account or environment outside the grant gets `FORBIDDEN`. The response scope equals the requested scope or the answer is discarded (the client already does this). |
-| D-5 Approval authority | Requester and approver must be different people for anything that spends money, sends to a creator, or changes policy. Founder-only: changing the acquisition policy, settling a historical fixed-fee liability, the launch Go decision, enabling production for a source account, and any single commitment over USD 1,000. Authority failure is one form: `FORBIDDEN` with reason `AUTHORITY_REQUIRED` naming the role; state failure (expired, changed, already decided) is `approvalHold`. |
+| D-5 Approval authority | Requester and approver must be different people for anything that spends money, sends to a creator, or changes policy. Founder-only: changing the acquisition policy, settling a historical fixed-fee liability, the launch Go decision, enabling production for a source account, and any single commitment over USD 500 (owner decision 2026-11-06; the original default was USD 1,000). Authority failure is one form: `FORBIDDEN` with reason `AUTHORITY_REQUIRED` naming the role; state failure (expired, changed, already decided) is `approvalHold`. |
 | D-6 Slack trust | Verify every Slack request with the signing secret and reject timestamps older than 5 minutes. Map a Slack user to a Farda user only through an explicit link made by a founder. One decision wins: the decision is a compare-and-set on the approval version, first valid write wins, and the second caller gets a conflict that names the stored decision. |
 | D-7 Shape of `controlRun` | Pause, cancel and retry of a batch or monitor run stay under `controlRun`, with `runRef` at the top level. `previewAction` is a separate action kind and never changes state. |
 | D-8 Idempotency retention | Keys are scoped to principal and action kind and kept 14 days with the stored response. A key reused after expiry is a new command, still protected by the expected-version check. |
