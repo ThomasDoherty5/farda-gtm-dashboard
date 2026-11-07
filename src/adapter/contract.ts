@@ -157,6 +157,8 @@ export const actionOperations = [
   "reconcileRun",
   "controlRun",
   "refreshObservation",
+  "recordSourceDecision",
+  "exportSnapshot",
 ] as const;
 export type ActionOperation = (typeof actionOperations)[number];
 

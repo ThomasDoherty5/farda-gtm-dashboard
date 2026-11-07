@@ -63,6 +63,23 @@ describe("default transport", () => {
 });
 
 describe("failures map to the right categories", () => {
+  it.each([
+    ["SOURCE_ACTION_UNSUPPORTED", "capabilityHold"], ["DISPATCH_SHARED_QUOTA_UNVERIFIED", "resourceHold"],
+    ["DISPATCH_BUDGET_REQUIRED", "resourceHold"], ["DISPATCH_NO_ACTIVE_LEASE", "resourceHold"],
+    ["APPROVAL_REQUEST_UNVERIFIED", "approvalHold"],
+  ])("preserves the distinct guarded-dispatch error %s", async (code, category) => {
+    const error = await fail(live(failingTransport(() => new TransportFailure("http", { status: 409,
+      body: { code, executionCertainty: "notApplied" } }))).submitAction(dispatch()));
+    expect(error.body.code).toBe(code); expect(error.category).toBe(category); expect(error.body.retryable).toBe(false);
+  });
+  it.each(["applied", "uncertain"] as const)("retains validated %s certainty from an unfamiliar server authorization code", async certainty => {
+    const log: TransportRequest[] = [];
+    const transport: Transport = { send: async request => { log.push(request); throw new TransportFailure("http", {
+      status: 403, body: { code: "NEW_SERVER_ACTOR_FENCE", message: "private source identity", executionCertainty: certainty } }); } };
+    const error = await fail(live(transport).submitAction(dispatch()));
+    expect(error.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: certainty, retryable: false });
+    expect(error.category).toBe("forbidden"); expect(error.message).not.toContain("private"); expect(log).toHaveLength(1);
+  });
   const cases: [string, TransportFailure, string, string][] = [
     ["401", new TransportFailure("http", { status: 401 }), "UNAUTHENTICATED", "unauthenticated"],
     ["401 with an expiry body", new TransportFailure("http", { status: 401, body: { code: "SESSION_EXPIRED" } }), "SESSION_EXPIRED", "unauthenticated"],

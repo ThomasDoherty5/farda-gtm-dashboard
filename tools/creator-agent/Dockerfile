@@ -5,6 +5,7 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY src/creator-agent/ ./src/creator-agent/
+COPY src/adapter/contract.ts src/adapter/commissionPolicy.ts ./src/adapter/
 COPY src/features/scorecards/scorecardMath.ts ./src/features/scorecards/scorecardMath.ts
 COPY tools/creator-agent/*.mjs ./tools/creator-agent/
 RUN mkdir -p /var/lib/farda-agent && chown node:node /var/lib/farda-agent && chmod 700 /var/lib/farda-agent

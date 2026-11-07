@@ -21,6 +21,7 @@ const reader = randomBytes(32).toString("hex");
 const reviewer = randomBytes(32).toString("hex");
 let child: ChildProcess | null = null;
 let startup = "";
+let admissionClock = Date.now();
 
 async function capture(page: Page, testInfo: TestInfo, name: string) {
   const path = testInfo.outputPath(name + ".png");
@@ -30,18 +31,37 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
 
 async function startService() {
   startup = "";
-  child = spawn(process.execPath, ["tools/creator-agent/run.mjs"], {
+  // Same native service/runtime configuration; the test-only IPC clock spreads synthetic seeds
+  // over admission windows without changing production limits or waiting seven real minutes.
+  child = spawn(process.execPath, ["e2e-agent/support/qualification-service.mjs"], {
     env: { ...process.env, FARDA_AGENT_PORT: process.env.E2E_AGENT_SERVER_PORT, FARDA_AGENT_DATABASE: database,
       FARDA_AGENT_READ_TOKEN: reader, FARDA_AGENT_REVIEW_TOKEN: reviewer,
       FARDA_AGENT_WORKSPACE_ID: workspaceId, FARDA_AGENT_ACCOUNT_ID: accountId,
-      FARDA_AGENT_ORIGIN: app, FARDA_AGENT_SECURE_COOKIES: "false", FARDA_AGENT_CONFIG: "" },
-    stdio: ["ignore", "pipe", "pipe"],
+      FARDA_AGENT_ORIGIN: app, FARDA_AGENT_SECURE_COOKIES: "false", FARDA_AGENT_CONFIG: "",
+      FARDA_TEST_ADMISSION_CLOCK: String(admissionClock) },
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   for (const stream of [child.stdout, child.stderr]) stream?.on("data", (chunk: Buffer) => { startup = (startup + chunk.toString()).slice(-8_000); });
   await expect.poll(async () => {
     if (child?.exitCode !== null) throw new Error(`Agent exited during startup: ${startup}`);
     try { return (await fetch(`${service}/health`)).status; } catch { return 0; }
   }, { timeout: 20_000, intervals: [100, 250, 500] }).toBe(200);
+}
+
+async function advanceAdmissionClock() {
+  const running = child;
+  if (!running?.connected) throw new Error("Missing test-only clock channel");
+  const next = admissionClock + 2100;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { cleanup(); reject(new Error("Test clock acknowledgment timed out")); }, 3000);
+    const cleanup = () => { clearTimeout(timer); running.off("message", observed); };
+    const observed = (value: unknown) => {
+      if (value && typeof value === "object" && "admissionClock" in value && value.admissionClock === next) { cleanup(); resolve(); }
+    };
+    running.on("message", observed);
+    running.send({ admissionClock: next }, error => { if (error) { cleanup(); reject(error); } });
+  });
+  admissionClock = next;
 }
 
 async function stopService() {
@@ -76,6 +96,7 @@ test("the real agent persists its assessment and the existing evidence screen re
     for (let index = 0; index < 200; index++) {
       const queueCreatorId = `synthetic-browser-queue-${String(index).padStart(3, "0")}`;
       const queuePacket = syntheticAgentEvidence({ creatorId: queueCreatorId, evidenceRevision: "synthetic-browser-pagination-1", ratings: { routine: 0, demo: 4 } });
+      await advanceAdmissionClock();
       const result = await machine.put(`/v1/creators/${queueCreatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash, packet: queuePacket } });
       expect(result.status()).toBe(200);
       const saved = await result.json();
@@ -84,6 +105,7 @@ test("the real agent persists its assessment and the existing evidence screen re
       oldestQueueRecord ??= { creatorId: queueCreatorId, runId: saved.runId };
       await result.dispose();
     }
+    await advanceAdmissionClock();
     const seeded = await machine.put(`/v1/creators/${creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 0, policyVersion: POLICY_VERSION, configHash, packet } });
     expect(seeded.status()).toBe(200);
     const receipt = await seeded.json();
@@ -126,6 +148,7 @@ test("the real agent persists its assessment and the existing evidence screen re
     expect(oldestQueueRecord).toBeDefined();
     const oldest = oldestQueueRecord!;
     const revisedPacket = syntheticAgentEvidence({ creatorId: oldest.creatorId, evidenceRevision: "synthetic-browser-pagination-2", ratings: { routine: 0, demo: 3 } });
+    await advanceAdmissionClock();
     const revisedAnswer = await machine.put(`/v1/creators/${oldest.creatorId}`, { headers: { "Idempotency-Key": randomUUID() }, data: { expectedVersion: 1, policyVersion: POLICY_VERSION, configHash, packet: revisedPacket } });
     expect(revisedAnswer.status()).toBe(200);
     const revisedReceipt = await revisedAnswer.json();
@@ -294,6 +317,7 @@ test("a reviewer saves a real offer and the reader sees retained reward evidence
     await page.getByLabel("Creator ID").fill("synthetic-offer-browser");
     await page.getByLabel("Production brief reference").fill("synthetic-browser-brief");
     const saved = page.waitForResponse(res => res.url().endsWith("/v1/save") && res.request().method() === "POST");
+    await advanceAdmissionClock();
     await page.getByRole("button", { name: "Create offer draft" }).click();
     const ack = await saved;
     expect(ack.status()).toBe(200);
@@ -324,11 +348,14 @@ test("selected saved scorecards preview their exact runs and require review afte
     const id = "synthetic-finite-" + randomUUID();
     const capabilities = await (await machine.get("/v1/capabilities")).json();
     const hash = capabilities.models.find((m: {modelId: string}) => m.modelId === "WEBSITE-AFFILIATE-v3").configHash;
-    const save = (revision: number) => machine.put(`/v1/creators/${id}`, {
-      headers: { "idempotency-key": randomUUID() },
-      data: { expectedVersion: revision, policyVersion: POLICY_VERSION, configHash: hash,
-        packet: syntheticAgentEvidence({ creatorId: id, evidenceRevision: `finite-${revision}`, ratings: { routine: 3, demo: 4 } }) },
-    });
+    const save = async (revision: number) => {
+      await advanceAdmissionClock();
+      return machine.put(`/v1/creators/${id}`, {
+        headers: { "idempotency-key": randomUUID() },
+        data: { expectedVersion: revision, policyVersion: POLICY_VERSION, configHash: hash,
+          packet: syntheticAgentEvidence({ creatorId: id, evidenceRevision: `finite-${revision}`, ratings: { routine: 3, demo: 4 } }) },
+      });
+    };
     const first = await save(0);
     expect(first.status()).toBe(200);
     const receipt = await first.json();

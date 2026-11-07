@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { digest } from "../config.ts";
 import { POLICY_VERSION } from "../assessmentSchema.ts";
 import type { CapabilityReadiness, ExpectedBinding } from "../connections/schema.ts";
-import { checkpointSchema, failureSchema, jobDefinitionSchema, jobEventSchema, jobItemViewSchema, jobRunViewSchema, localResultSchema, referenceInputSchema,
+import { checkpointSchema, dispatchResultSchema, failureSchema, jobDefinitionSchema, jobEventSchema, jobItemViewSchema, jobRunViewSchema, localResultSchema, referenceInputSchema,
   type JobDefinition, type JobItemView, type JobRunView, type LocalResult } from "./schema.ts";
 
 type Row = Record<string, unknown>;
@@ -42,6 +42,7 @@ export class JobRepository {
       CREATE TABLE IF NOT EXISTS job_transitions(transition_id TEXT PRIMARY KEY,run_id TEXT,item_id TEXT,kind TEXT NOT NULL,at INTEGER NOT NULL,detail TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS job_item_due ON job_items(state,due_at,created_at);
       CREATE INDEX IF NOT EXISTS job_transition_run ON job_transitions(run_id,at);`);
+    if (!db.prepare("PRAGMA table_info(job_items)").all().some(row => row.name === "dispatch_started")) db.exec("ALTER TABLE job_items ADD COLUMN dispatch_started INTEGER NOT NULL DEFAULT 0");
     if (db.prepare("SELECT version FROM job_schema WHERE id=1").get()?.version !== 1) throw new JobConflict("UNSUPPORTED_JOB_SCHEMA");
   }
   private tx<T>(fn: () => T): T { this.db.exec("BEGIN IMMEDIATE"); try { const result = fn(); this.db.exec("COMMIT"); return result; } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
@@ -94,16 +95,16 @@ export class JobRepository {
       if (control === "resume") this.wakeHeld(jobId, version, "JOB_PAUSED");
       this.log(null, null, control, { jobId, version }); return this.getJob(jobId); });
   }
-  ingest(input: unknown, idempotencyKey: string): JobRunView {
+  ingest(input: unknown, idempotencyKey: string, persistIngress?: (runId:string)=>void): JobRunView {
     const event = jobEventSchema.parse(input); referenceInputSchema.shape.itemKey.parse(idempotencyKey); const hash = digest(event);
     return this.tx(() => {
       const priorRequest = this.db.prepare("SELECT * FROM job_ingress_requests WHERE key=?").get(idempotencyKey);
-      if (priorRequest) { if (priorRequest.request_hash !== hash) throw new JobConflict("JOB_IDEMPOTENCY_KEY_REUSED"); return this.getRun(String(priorRequest.run_id)); }
+      if (priorRequest) { if (priorRequest.request_hash !== hash) throw new JobConflict("JOB_IDEMPOTENCY_KEY_REUSED"); persistIngress?.(String(priorRequest.run_id)); return this.getRun(String(priorRequest.run_id)); }
       const priorEvent = this.db.prepare("SELECT * FROM job_runs WHERE job_id=? AND event_id=?").get(event.jobId, event.eventId);
       if (priorEvent) { if (priorEvent.request_hash !== hash) throw new JobConflict("JOB_EVENT_REUSED");
         const priorRunId = priorEvent.run_id;
         if (typeof priorRunId !== "string" || !priorRunId) throw new JobConflict("JOB_EVENT_RECEIPT_INVALID");
-        this.db.prepare("INSERT INTO job_ingress_requests VALUES(?,?,?)").run(idempotencyKey, hash, priorRunId); return this.getRun(priorRunId); }
+        this.db.prepare("INSERT INTO job_ingress_requests VALUES(?,?,?)").run(idempotencyKey, hash, priorRunId); persistIngress?.(priorRunId); return this.getRun(priorRunId); }
       const head = this.head(event.jobId); const { definition, hash: definitionHash } = this.definition(event.jobId, event.jobVersion);
       if (head.version !== event.jobVersion) throw new JobConflict("JOB_DEFINITION_STALE");
       if (event.eventType !== definition.eventType || event.items.length > definition.budgets.maxItems) throw new JobConflict("JOB_EVENT_BUDGET_OR_TYPE_MISMATCH");
@@ -117,7 +118,7 @@ export class JobRepository {
         if (!row) { const itemId = randomUUID(); this.db.prepare("INSERT INTO job_items(item_id,job_id,item_key,input_hash,job_version,input,state,due_at,checkpoint,created_at,updated_at) VALUES(?,?,?,?,?,?,'queued',?,?,?,?)").run(itemId, event.jobId, item.itemKey, inputHash, event.jobVersion, JSON.stringify(item), now, JSON.stringify({ cursor: null, processedRefs: [] }), now, now); row = this.db.prepare("SELECT * FROM job_items WHERE item_id=?").get(itemId)!; }
         this.db.prepare("INSERT INTO job_run_items VALUES(?,?,?)").run(runId, String(row.item_id), reused ? 1 : 0); this.log(runId, String(row.item_id), reused ? "item-reused" : "item-queued");
       }
-      this.db.prepare("INSERT INTO job_ingress_requests VALUES(?,?,?)").run(idempotencyKey, hash, runId); this.log(runId, null, "event-ingested", { eventId: event.eventId, count: event.items.length }); return this.getRun(runId);
+      this.db.prepare("INSERT INTO job_ingress_requests VALUES(?,?,?)").run(idempotencyKey, hash, runId); this.log(runId, null, "event-ingested", { eventId: event.eventId, count: event.items.length }); persistIngress?.(runId); return this.getRun(runId);
     });
   }
   private itemRow(itemId: string): Row { const row = this.db.prepare("SELECT * FROM job_items WHERE item_id=?").get(itemId); if (!row) throw new JobConflict("JOB_ITEM_NOT_FOUND"); return row; }
@@ -125,7 +126,7 @@ export class JobRepository {
     attempts: row.attempts, steps: row.steps, dueAt: iso(row.due_at), lease: row.lease_token ? { ownerRef: row.lease_owner, expiresAt: iso(row.lease_until) } : null,
     checkpointVersion: row.checkpoint_version, checkpoint: parse(row.checkpoint), result: row.result ? parse(row.result) : null, reasonCode: row.reason_code, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }); }
   private currentReason(row: Row, allowPaused = false): string | null { const head = this.head(String(row.job_id)); const { definition, hash } = this.definition(String(row.job_id), Number(row.job_version));
-    if (head.version !== row.job_version) return "JOB_DEFINITION_STALE"; if (!head.enabled || head.activation_hash !== hash) return "JOB_DISABLED"; if (head.paused && !allowPaused) return "JOB_PAUSED"; if (definition.policyVersion !== POLICY_VERSION) return "JOB_POLICY_STALE"; return null; }
+    if (head.version !== row.job_version) return "JOB_DEFINITION_STALE"; if (!head.enabled || head.activation_hash !== hash) return "JOB_DISABLED"; if (head.paused && !allowPaused) return "JOB_PAUSED"; if (!(["dispatch-approved.v1", "export-ledger-snapshot.v1"].includes(definition.handler)) && definition.policyVersion !== POLICY_VERSION) return "JOB_POLICY_STALE"; return null; }
   private capabilityReason(definition: JobDefinition): string | null {
     if (!definition.capabilityBinding) return null; // N/A: both registered handlers are purely local, without a source dispatcher.
     try { const result = this.options.resolveCapability?.(definition.capabilityBinding);
@@ -139,8 +140,8 @@ export class JobRepository {
   recoverExpired(limit = 100) { if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new JobConflict("INVALID_RECOVERY_LIMIT");
     return this.tx(() => { const rows = this.db.prepare("SELECT * FROM job_items WHERE state='leased' AND lease_until<=? ORDER BY lease_until,item_id LIMIT ?").all(this.now(), limit);
       for (const row of rows) { const { definition } = this.definition(String(row.job_id), Number(row.job_version)); const currentReason = this.currentReason(row); const active = this.uncancelledRun(String(row.item_id));
-        const state = !active ? "cancelled" : currentReason ? "held" : Number(row.attempts) >= definition.budgets.maxAttempts ? "failed" : "retryWait";
-        const reason = !active ? "NO_ACTIVE_RUN" : currentReason ?? (state === "failed" ? "ATTEMPT_LIMIT" : "WORKER_LEASE_EXPIRED"); this.release(row);
+        const state = row.dispatch_started ? "reconcile" : !active ? "cancelled" : currentReason ? "held" : Number(row.attempts) >= definition.budgets.maxAttempts ? "failed" : "retryWait";
+        const reason = row.dispatch_started ? "DISPATCH_OUTCOME_UNCERTAIN" : !active ? "NO_ACTIVE_RUN" : currentReason ?? (state === "failed" ? "ATTEMPT_LIMIT" : "WORKER_LEASE_EXPIRED"); this.release(row);
         this.db.prepare("UPDATE job_items SET state=?,reason_code=?,due_at=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?").run(state, reason, this.now() + definition.budgets.retryBaseMs, this.now(), row.item_id!);
         this.log(String(row.lease_run_id), String(row.item_id), "lease-recovered", { state, reason }); }
       return { recovered: rows.length, remainingExpired: Number(this.db.prepare("SELECT COUNT(*) AS count FROM job_items WHERE state='leased' AND lease_until<=?").get(this.now())?.count ?? 0) }; });
@@ -149,7 +150,7 @@ export class JobRepository {
     return this.tx(() => { const query = `SELECT i.* FROM job_items i WHERE i.state IN ('queued','retryWait') AND i.due_at<=?
       AND EXISTS(SELECT 1 FROM job_run_items dispatch_item INNER JOIN job_runs dispatch_run ON dispatch_run.run_id=dispatch_item.run_id WHERE dispatch_item.item_id=i.item_id AND dispatch_run.control='active')
       AND EXISTS(SELECT 1 FROM job_definitions def WHERE def.job_id=i.job_id AND def.version=i.job_version
-        AND (json_extract(def.body,'$.handler')='probe-provider-health.v1')=?)
+        AND json_extract(def.body,'$.handler') NOT IN ('dispatch-approved.v1','export-ledger-snapshot.v1') AND (json_extract(def.body,'$.handler')='probe-provider-health.v1')=?)
       ${jobId ? "AND i.job_id=?" : ""} ${healthRunId ? "AND EXISTS(SELECT 1 FROM job_run_items jr WHERE jr.item_id=i.item_id AND jr.run_id=?)" : ""} ORDER BY i.created_at,i.item_id LIMIT 100`;
       const candidates = this.db.prepare(query).all(this.now(), healthRunId ? 1 : 0, ...(jobId ? [jobId] : []), ...(healthRunId ? [healthRunId] : []));
       for (const row of candidates) { const run = this.activeRun(String(row.item_id)); if (!run) continue; const runId = String(run.run_id); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
@@ -180,6 +181,7 @@ export class JobRepository {
   complete(itemId: string, token: string, input: unknown, persistHealthObservation?: () => void) { const result = localResultSchema.parse(input); const outcomeHash = digest({ operation: "complete", result });
     return this.tx(() => { const current = this.itemRow(itemId); if (current.last_token_hash === digest(token) && current.last_outcome_hash === outcomeHash) return this.viewItem(current);
       const row = this.leased(itemId, token); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
+      if (["dispatch-approved.v1","export-ledger-snapshot.v1"].includes(definition.handler)) throw new JobConflict("APPROVED_DISPATCH_REQUIRES_RECEIPT");
       if (this.currentReason(row, true) || this.capabilityReason(definition)) throw new JobConflict("JOB_PREFLIGHT_HELD");
       if ((definition.mode === "observe") !== (result.kind === "reference-recorded") || (definition.handler === "probe-provider-health.v1") !== Boolean(persistHealthObservation)) throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH");
       if (persistHealthObservation) {
@@ -193,18 +195,63 @@ export class JobRepository {
   fail(itemId: string, token: string, input: unknown) { const failure = failureSchema.parse(input); const outcomeHash = digest({ operation: "fail", failure });
     return this.tx(() => { const current = this.itemRow(itemId); if (current.last_token_hash === digest(token) && current.last_outcome_hash === outcomeHash) return this.viewItem(current);
       const row = this.leased(itemId, token); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
+      if (row.dispatch_started) throw new JobConflict("APPROVED_DISPATCH_REQUIRES_RECONCILIATION");
       const state = failure.certainty === "uncertain" ? "reconcile" : failure.retryable && Number(row.attempts) < definition.budgets.maxAttempts ? "retryWait" : "failed";
       const delay = Math.max(failure.retryAfterMs, definition.budgets.retryBaseMs * 2 ** Math.max(0, Number(row.attempts) - 1)); this.release(row);
       this.db.prepare("UPDATE job_items SET state=?,reason_code=?,due_at=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,last_token_hash=?,last_outcome_hash=?,updated_at=? WHERE item_id=?").run(state, failure.reasonCode, this.now() + delay, digest(token), outcomeHash, this.now(), itemId);
       this.log(String(row.lease_run_id), itemId, "failed-attempt", { state, ...failure }); return this.viewItem(this.itemRow(itemId)); });
   }
-  controlRun(runId: string, command: "pause" | "resume" | "cancel") { if (!["pause", "resume", "cancel"].includes(command)) throw new JobConflict("INVALID_RUN_CONTROL");
-    return this.tx(() => { const run = this.db.prepare("SELECT * FROM job_runs WHERE run_id=?").get(runId); if (!run) throw new JobConflict("JOB_RUN_NOT_FOUND"); if (run.control === "cancelled" && command !== "cancel") throw new JobConflict("RUN_CANCELLED");
+  /** Trusted server-only seam: synchronous final guards execute inside the existing job transaction. */
+  activateApproved(jobId: string, version: number, decisionRef: string, assertCurrent: () => void) {
+    return this.tx(() => { const head = this.head(jobId); const { definition, hash } = this.definition(jobId, version);
+      if (definition.handler !== "dispatch-approved.v1" || head.version !== version) throw new JobConflict("JOB_DEFINITION_STALE");
+      assertCurrent(); this.db.prepare("UPDATE job_heads SET enabled=1,activation_ref=?,activation_hash=? WHERE job_id=?").run(decisionRef, hash, jobId); return this.getJob(jobId); });
+  }
+  activateLocalArtifact(jobId:string,version:number,sourceGrantRef:string,assertCurrent:()=>void){return this.tx(()=>{const head=this.head(jobId);const {definition,hash}=this.definition(jobId,version);if(definition.handler!=="export-ledger-snapshot.v1"||head.version!==version)throw new JobConflict("JOB_DEFINITION_STALE");assertCurrent();this.db.prepare("UPDATE job_heads SET enabled=1,activation_ref=?,activation_hash=? WHERE job_id=?").run(sourceGrantRef,hash,jobId);return this.getJob(jobId);});}
+  completeLocalArtifact(itemId:string,token:string,input:unknown,assertAndPersist:()=>void){const result=localResultSchema.parse(input);if(result.kind!=="reference-recorded")throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH");const outcomeHash=digest({operation:"local-artifact",result});return this.tx(()=>{const current=this.itemRow(itemId);if(current.last_token_hash===digest(token)&&current.last_outcome_hash===outcomeHash)return this.viewItem(current);const row=this.leased(itemId,token);const {definition}=this.definition(String(row.job_id),Number(row.job_version));if(definition.handler!=="export-ledger-snapshot.v1"||this.currentReason(row)||this.capabilityReason(definition)||this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control!=="active")throw new JobConflict("LOCAL_ARTIFACT_PREFLIGHT_HELD");assertAndPersist();this.release(row);this.db.prepare("UPDATE job_items SET state='completed',result=?,reason_code=NULL,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,last_token_hash=?,last_outcome_hash=?,updated_at=? WHERE item_id=?").run(JSON.stringify(result),digest(token),outcomeHash,this.now(),itemId);this.log(String(row.lease_run_id),itemId,"completed",{result});return this.viewItem(this.itemRow(itemId));});}
+  claimLocalArtifact(runId:string,workerId:string,assertCurrent:()=>void):JobClaim|null{const run=this.getRun(runId);if(run.items.length!==1)throw new JobConflict("LOCAL_ARTIFACT_SINGLE_ITEM_REQUIRED");return this.claimFinite(runId,workerId,run.items[0]!.itemKey,assertCurrent,"export-ledger-snapshot.v1");}
+  claimApproved(runId: string, workerId: string, itemKey: string, assertAndClaim: () => void): JobClaim | null {return this.claimFinite(runId,workerId,itemKey,assertAndClaim,"dispatch-approved.v1");}
+  private claimFinite(runId: string, workerId: string, itemKey: string, assertAndClaim: () => void,handler:"dispatch-approved.v1"|"export-ledger-snapshot.v1"): JobClaim | null {
+    referenceInputSchema.shape.subjectRef.parse(workerId); this.recoverExpired();
+    return this.tx(() => { const run = this.getRun(runId); if (run.definition.handler !== handler) throw new JobConflict("DISPATCH_HANDLER_REQUIRED");
+      const item = run.items.find(item=>item.itemKey===itemKey); if (!item) throw new JobConflict("DISPATCH_SINGLE_ITEM_REQUIRED"); const row = this.itemRow(item.itemId);
+      if (run.control !== "active" || !["queued", "retryWait", "held"].includes(String(row.state)) || row.dispatch_started || Number(row.due_at) > this.now()) return null;
+      const reason = this.currentReason(row); if (reason) throw new JobConflict(reason);
+      const dbRun = this.db.prepare("SELECT started_at FROM job_runs WHERE run_id=?").get(runId)!; const startedAt = dbRun.started_at === null ? this.now() : Number(dbRun.started_at);
+      if (this.now() >= startedAt + run.definition.budgets.maxRunMs || this.steps(runId) >= run.definition.budgets.maxSteps || Number(row.attempts) >= run.definition.budgets.maxAttempts) throw new JobConflict("DISPATCH_RUNTIME_BUDGET");
+      if (Number(this.db.prepare("SELECT COUNT(*) AS n FROM job_items WHERE job_id=? AND state='leased' AND lease_until>?").get(String(row.job_id), this.now())?.n) >= run.definition.budgets.maxConcurrency) return null;
+      const b = run.definition.capabilityBinding; const resource = b ? digest({provider:b.provider,account:b.providerAccountId,action:b.action}) : null;
+      if (resource) { this.db.prepare("DELETE FROM job_resource_leases WHERE resource_key=? AND lease_until<=?").run(resource,this.now()); if (this.db.prepare("SELECT 1 FROM job_resource_leases WHERE resource_key=?").get(resource)) return null; }
+      assertAndClaim(); const token = randomUUID(), until = Math.min(this.now()+run.definition.budgets.leaseMs, startedAt+run.definition.budgets.maxRunMs);
+      this.db.prepare("UPDATE job_runs SET started_at=COALESCE(started_at,?),activation_ref=? WHERE run_id=?").run(startedAt,this.head(String(row.job_id)).activation_ref!,runId);
+      this.db.prepare("UPDATE job_items SET state='leased',attempts=attempts+1,steps=steps+1,lease_token=?,lease_owner=?,lease_until=?,lease_run_id=?,reason_code=NULL,updated_at=? WHERE item_id=?").run(token,workerId,until,runId,this.now(),item.itemId);
+      if (resource) this.db.prepare("INSERT INTO job_resource_leases VALUES(?,?,?,?)").run(resource,item.itemId,token,until);
+      this.log(runId,item.itemId,"leased",{ownerRef:workerId,expiresAt:iso(until)}); return {runId,item:this.viewItem(this.itemRow(item.itemId)),definition:run.definition,leaseToken:token}; });
+  }
+  startApproved(itemId: string, token: string, assertAndRecord: () => void) { return this.tx(() => {
+    const row=this.leased(itemId,token); if(this.definition(String(row.job_id),Number(row.job_version)).definition.handler!=="dispatch-approved.v1" || row.dispatch_started || this.currentReason(row) || this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control!=="active") throw new JobConflict("DISPATCH_PREFLIGHT_HELD");
+    assertAndRecord(); this.db.prepare("UPDATE job_items SET dispatch_started=1,updated_at=? WHERE item_id=?").run(this.now(),itemId); this.log(String(row.lease_run_id),itemId,"dispatch-started");
+  }); }
+  heartbeatApproved(itemId:string,token:string,validUntil:number,assertCurrent:()=>void) { return this.tx(()=>{
+    const row=this.leased(itemId,token); const {definition}=this.definition(String(row.job_id),Number(row.job_version)); if(definition.handler!=="dispatch-approved.v1" || this.currentReason(row) || this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control!=="active") throw new JobConflict("DISPATCH_PREFLIGHT_HELD");
+    assertCurrent(); const start=Number(this.db.prepare("SELECT started_at FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.started_at);
+    const until=Math.min(this.now()+definition.budgets.leaseMs,start+definition.budgets.maxRunMs,validUntil); if(!Number.isFinite(until)||until<=this.now()) throw new JobConflict("DISPATCH_PROOF_EXPIRED");
+    this.db.prepare("UPDATE job_items SET lease_until=?,updated_at=? WHERE item_id=?").run(until,this.now(),itemId); this.db.prepare("UPDATE job_resource_leases SET lease_until=? WHERE item_id=? AND lease_token=?").run(until,itemId,token); return iso(until);
+  }); }
+  finishApproved(runId:string,itemKey:string,result:unknown|null,record:()=>void,reasonCode="DISPATCH_OUTCOME_UNCERTAIN") { const receipt=result===null?null:dispatchResultSchema.parse(result); failureSchema.shape.reasonCode.parse(reasonCode); return this.tx(()=>{
+    const run=this.getRun(runId); const item=run.items.find(i=>i.itemKey===itemKey);if(run.definition.handler!=="dispatch-approved.v1"||!item) throw new JobConflict("DISPATCH_HANDLER_REQUIRED"); const row=this.itemRow(item.itemId);
+    if(!row.dispatch_started) throw new JobConflict("DISPATCH_NOT_STARTED");
+    if(row.state==="completed") {if(digest(parse(row.result))!==digest(receipt)) throw new JobConflict("DISPATCH_RECEIPT_CONFLICT"); return run;}
+    record(); this.release(row); this.db.prepare("UPDATE job_items SET state=?,result=?,reason_code=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?").run(receipt?"completed":"reconcile",receipt?JSON.stringify(receipt):null,receipt?null:reasonCode,this.now(),String(row.item_id)); this.log(runId,String(row.item_id),receipt?"dispatch-receipt":"dispatch-uncertain"); return this.getRun(runId);
+  }); }
+  retryApproved(runId:string,itemKey:string,assertNotApplied:()=>void) { return this.tx(()=>{ const run=this.getRun(runId); const item=run.items.find(i=>i.itemKey===itemKey); if(!item||run.definition.handler!=="dispatch-approved.v1"||item.state!=="reconcile"||run.control!=="active") throw new JobConflict("DISPATCH_RETRY_HELD"); assertNotApplied(); this.db.prepare("UPDATE job_items SET state='queued',dispatch_started=0,reason_code=NULL,due_at=?,updated_at=? WHERE item_id=?").run(this.now(),this.now(),item.itemId); this.log(runId,item.itemId,"dispatch-not-applied"); return this.getRun(runId); }); }
+  controlRun(runId: string, command: "pause" | "resume" | "cancel", assertCurrent?:()=>boolean|void,persistControl?:()=>void) { if (!["pause", "resume", "cancel"].includes(command)) throw new JobConflict("INVALID_RUN_CONTROL");
+    return this.tx(() => { if(assertCurrent?.()===false)return this.getRun(runId); const run = this.db.prepare("SELECT * FROM job_runs WHERE run_id=?").get(runId); if (!run) throw new JobConflict("JOB_RUN_NOT_FOUND"); if (run.control === "cancelled" && command !== "cancel") throw new JobConflict("RUN_CANCELLED");
       this.db.prepare("UPDATE job_runs SET control=? WHERE run_id=?").run(command === "pause" ? "paused" : command === "cancel" ? "cancelled" : "active", runId);
       const rows = this.db.prepare("SELECT i.* FROM job_items i INNER JOIN job_run_items j ON j.item_id=i.item_id WHERE j.run_id=?").all(runId);
       for (const row of rows) { if (command === "resume" && row.state === "held") this.db.prepare("UPDATE job_items SET state='queued',reason_code=NULL,updated_at=? WHERE item_id=?").run(this.now(), row.item_id!);
         if (command === "cancel" && !terminal.has(String(row.state)) && row.state !== "leased" && !this.uncancelledRun(String(row.item_id))) { this.db.prepare("UPDATE job_items SET state='cancelled',reason_code='RUN_CANCELLED',updated_at=? WHERE item_id=?").run(this.now(), row.item_id!); this.log(runId, String(row.item_id), "cancelled"); } }
-      this.log(runId, null, command); return this.getRun(runId); });
+      this.log(runId, null, command); persistControl?.(); return this.getRun(runId); });
   }
   processOne(workerId: string, jobId?: string) { const claim = this.claim(workerId, jobId); if (!claim) return null;
     const result: LocalResult = { schemaVersion: "job-local-result.v1", kind: claim.definition.mode === "observe" ? "reference-recorded" : "proposal-recorded", artifactRef: `job-artifact:${claim.item.itemId}`, sourceEffect: "none" };
@@ -218,7 +265,7 @@ export class JobRepository {
     const control = String(run.control); const state = counts.reconcile ? "reconcile" : control === "cancelled" ? counts.leased ? "cancelling" : "cancelled" : counts.completed === rows.length ? rows.length ? "completed" : "empty" : control === "paused" || head.paused ? "paused" : counts.leased ? "running" : counts.failed === rows.length ? "failed" : counts.failed + counts.cancelled > 0 ? "partial" : !enabled || counts.held ? "held" : counts.deferred && !due ? "deferred" : "queued";
     return jobRunViewSchema.parse({ schemaVersion: "farda.jobs.v1", environment: this.options.scope.environment, runId, jobId: run.job_id, eventId: run.event_id, eventAt: run.event_at, observedAt: iso(run.observed_at), definition, definitionHash: run.definition_hash, enabled,
       activationRef: run.activation_ref === null ? null : String(run.activation_ref), control, state, counts, blockerCodes, nextAction: state === "reconcile" ? "Reconcile uncertainty; do not retry automatically." : state === "held" ? "Resolve the registration, policy or capability hold." : state === "deferred" ? "Wait for the due time before the next bounded claim." : "Read the per-item state; no source executor is registered.",
-      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: definition.handler === "probe-provider-health.v1" && rows.some((row) => Number(row.attempts) > 0) ? null : 0, modelCalls: 0, sourceQuota: definition.handler === "probe-provider-health.v1" ? "unknown" : "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
+      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1"].includes(definition.handler) && rows.some((row) => Number(row.attempts) > 0) ? null : 0, modelCalls: 0, sourceQuota: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1"].includes(definition.handler) ? "unknown" : "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
   }
   history(runId: string, limit = 100) { this.getRun(runId); if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new JobConflict("INVALID_HISTORY_LIMIT"); const total = Number(this.db.prepare("SELECT COUNT(*) AS count FROM job_transitions WHERE run_id=?").get(runId)?.count ?? 0);
     return { total, partial: total > limit, transitions: this.db.prepare("SELECT * FROM job_transitions WHERE run_id=? ORDER BY at,transition_id LIMIT ?").all(runId, limit).map((row) => ({ transitionId: row.transition_id, itemId: row.item_id, kind: row.kind, at: iso(row.at), detail: parse(row.detail) })) }; }

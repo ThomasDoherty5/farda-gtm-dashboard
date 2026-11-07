@@ -159,7 +159,10 @@ export function createOperationsControls(input:Input){
         ["State",run.state],["Job version",String(run.definition.version)],["Mode",run.definition.mode],["Observed",run.observedAt],["Due items",String(run.counts.due)],
         ["Completed",String(run.counts.completed)],["Uncertain",String(run.counts.reconcile)],["Checkpoint policy","Completed items are preserved; uncertain effects are not retried"],
         ["History coverage",h.transitions.length+" of "+h.total],...h.transitions.map(e=>[String(e.kind),String(e.at)] as [string,string]),
-        ...run.items.slice(0,20).map(i=>["Item "+alias(i.itemId),i.state+" · checkpoint "+i.checkpointVersion+" · "+(i.result?"Local receipt "+alias(i.result.artifactRef):"No local result")] as [string,string])
+        ...run.items.slice(0,20).map(i=>["Item "+alias(i.itemId),i.state+" · checkpoint "+i.checkpointVersion+" · "+(i.result
+          ? i.result.schemaVersion === "job-local-result.v1" ? "Local receipt "+alias(i.result.artifactRef)
+            : (i.result.sourceEffect === "providerApplied" ? "Confirmed source receipt " : "Artifact receipt ")+alias(i.result.receiptRef)
+          : "No result receipt")] as [string,string])
       ] as [string,string][]}];
     });
     if(f.q)localRuns=localRuns.filter(r=>JSON.stringify(r).toLowerCase().includes(f.q!.toLowerCase()));

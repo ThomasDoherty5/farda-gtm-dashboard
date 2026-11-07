@@ -48,6 +48,13 @@ import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifec
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
 import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
+import { createActionFoundation, assertMachineTokens, type ActionFoundationBindings } from "./actionFoundation.ts";
+import { foundationActionSchema, domainActionSchema } from "./actions/wire.ts";
+import { ActionServiceError } from "./actions/contract.ts";
+import { ApprovalError } from "./approvals/contract.ts";
+import { DispatchError } from "./jobs/dispatchSchema.ts";
+import { apiRequestKind } from "./apiRequestLimits.ts";
+import { apiErrorEnvelope } from "./apiErrorEnvelope.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -70,6 +77,7 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
+  actionFoundation?: ActionFoundationBindings;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -77,6 +85,7 @@ const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), 
 export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
+  assertMachineTokens(options.actionFoundation, options.readToken, options.reviewToken);
   const store = new AgentStore(options.databasePath, { workspaceId: options.workspaceId, accountId: options.accountId });
   let operations: ReturnType<typeof createOperations>;
   let providerHealth: ReturnType<typeof createProviderHealth>;
@@ -94,6 +103,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
+  let actionFoundation: ReturnType<typeof createActionFoundation>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -126,6 +136,10 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
+    actionFoundation = createActionFoundation({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, jobs: operations.jobs, ledger: operations.ledger,
+      bindings: options.actionFoundation, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -214,6 +228,9 @@ export function createAgentServer(options: AgentServerOptions) {
     collaborationActionSchema.extend({ actionKind: z.literal("requestSupportHandoff"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: handoffIntent }),
   ]);
   const readSchema = z.discriminatedUnion("viewKey", [
+    readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
     readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
       period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -241,9 +258,12 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
   ]);
+  const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
+  const requestIds = new WeakMap<IncomingMessage, string>();
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
-    res.end(JSON.stringify(body));
+    const req = responseRequests.get(res);
+    res.end(JSON.stringify(status >= 400 ? apiErrorEnvelope(status, body, req ? requestIds.get(req) ?? null : null) : body));
   };
   const bodyOf = async (req: IncomingMessage): Promise<unknown> => {
     const chunks: Buffer[] = [];
@@ -254,12 +274,26 @@ export function createAgentServer(options: AgentServerOptions) {
       if (size > 1_048_576) throw new Error("BODY_TOO_LARGE");
       chunks.push(buffer);
     }
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (body && typeof body === "object" && "requestId" in body && typeof body.requestId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/.test(body.requestId))
+      requestIds.set(req, body.requestId);
+    return body;
   };
   const server = createServer(async (req, res) => {
+    responseRequests.set(res, req);
     try {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
       if (path === "/health" && req.method === "GET") return reply(res, 200, { service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION });
+      if (path === "/v1/worker/dispatch" || path === "/v1/approvals/observe") {
+        // These are distinct machine-only authorities. Browser sessions and the shared reviewer/reader cannot execute them.
+        const kind = path === "/v1/worker/dispatch" ? "worker" : "decisionRelay";
+        actionFoundation.authenticateMachine(kind, req.headers.authorization);
+        if (req.method !== "POST" || new URL(req.url!, "http://localhost").search) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "notApplied" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
+        const raw = await bodyOf(req);
+        return reply(res, 200, await (kind === "worker" ? actionFoundation.executeWorker(raw, req.headers.authorization)
+          : actionFoundation.observeDecision(raw, req.headers.authorization)));
+      }
       if (path === "/v1/session" && req.method === "GET") {
         let authenticated = authorize(req);
         if (!authenticated && req.headers.authorization?.startsWith("Basic ")) {
@@ -267,6 +301,8 @@ export function createAgentServer(options: AgentServerOptions) {
           if (name === "reader" && token && safeEqual(token, options.readToken)) authenticated = { role: "reader", session: null };
         }
         if (!authenticated) return reply(res, 401, { code: "AUTH_REQUIRED" }, req.headers.accept?.includes("text/html") ? { "www-authenticate": 'Basic realm="Farda agent reader", charset="UTF-8"' } : {});
+        const admission = actionFoundation.limits.admit(`agent-${authenticated.role}`, "read");
+        if (!admission.admitted) return reply(res, 429, { code: "RATE_LIMITED", retryAfterMs: admission.retryAfterMs }, { "retry-after": String(Math.ceil(admission.retryAfterMs / 1000)) });
         for (const [key, session] of sessions) if (session.expiresAt <= Date.now()) sessions.delete(key);
         if (sessions.size >= 1000) return reply(res, 429, { code: "SESSION_CAPACITY" });
         const token = randomBytes(32).toString("hex");
@@ -275,12 +311,27 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, { csrfToken: session.csrf, role: session.role, principal: `agent-${session.role}`, scope: { workspaceId: options.workspaceId, accountIds: [options.accountId], environment: "sandbox", authorizationScopeVersion: "creator-agent.scope.v1" } }, { "set-cookie": `farda_agent=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600${options.secureCookies ? "; Secure" : ""}` });
       }
       const auth = authorize(req);
-      if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED", executionCertainty: "notApplied" });
+      if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED",
+        executionCertainty: apiRequestKind(req.method ?? "GET", path) === "read" ? "notApplied" : "uncertain" });
       // Cookie-authorized writes require both CSRF proof and exact same-origin. Machine bearer requests are separate.
       if (req.method !== "GET" && path !== "/v1/read" && auth.session) {
         const origin = options.publicOrigin ?? `http://${req.headers.host}`;
         if (req.headers.origin !== origin || req.headers["x-csrf-token"] !== auth.session.csrf)
-          return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "notApplied" });
+          return reply(res, 403, { code: "CSRF_REJECTED", executionCertainty: "uncertain" });
+      }
+      const kind = apiRequestKind(req.method ?? "GET", path);
+      const admission = actionFoundation.limits.admit(`agent-${auth.role}`, kind);
+      if (!admission.admitted) return reply(res, 429, { code: "RATE_LIMITED", retryAfterMs: admission.retryAfterMs,
+        // Admission refusal describes this transport attempt. It cannot prove the result of a previous lost acknowledgment.
+        ...(kind === "write" ? { executionCertainty: "uncertain" } : {}) }, { "retry-after": String(Math.ceil(admission.retryAfterMs / 1000)) });
+      const artifact = /^\/v1\/action-artifacts\/([A-Za-z0-9][A-Za-z0-9._:-]{0,239})$/.exec(path);
+      if (artifact && req.method === "GET") {
+        if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected artifact query");
+        const exported = await actionFoundation.domains.downloadExport(artifact[1]!, { principalRef: `agent-${auth.role}` });
+        res.writeHead(200, { "content-type": exported.receipt.contentType, "content-length": Buffer.byteLength(exported.body),
+          "content-disposition": 'attachment; filename="ledger-export.csv"', "cache-control": "no-store", "x-content-type-options": "nosniff",
+          "content-security-policy": "default-src 'none'; frame-ancestors 'none'" });
+        return res.end(exported.body);
       }
       if (path === "/v1/identity" && req.method === "GET") return reply(res, 200, {
         service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION, role: auth.role,
@@ -406,7 +457,10 @@ export function createAgentServer(options: AgentServerOptions) {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
-        const input = adapterActionSchema.parse(await bodyOf(req));
+        const raw = await bodyOf(req);
+        const native = foundationActionSchema.safeParse(raw), domain = domainActionSchema.safeParse(raw);
+        if (native.success || domain.success) return reply(res, 200, await actionFoundation.execute(raw, `agent-${auth.role}`));
+        const input = adapterActionSchema.parse(raw);
         if (input.actionKind === "refreshOperationsHealth") {
           const result = await controls.refreshHealth(input, "agent-reviewer", auth.role);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
@@ -445,6 +499,9 @@ export function createAgentServer(options: AgentServerOptions) {
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
+        actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
+          dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
+          ledgerExport: options.actionFoundation?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
@@ -473,6 +530,49 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "launchControl") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const recovery = input.filters.requestKey === undefined ? null
+            : await actionFoundation.domains.recoverReadinessRequest(input.filters.requestKey, { principalRef: `agent-${auth.role}` });
+          const latest = await actionFoundation.readReadiness(`agent-${auth.role}`);
+          if (recovery?.intent && recovery.intent.targetRef !== latest.targetRef) return reply(res, 403, { code: "FORBIDDEN", executionCertainty: "uncertain" });
+          const data = { ...latest, requestRecovery: recovery };
+          const incomplete = data.gates.some(gate => gate.state === "unknown");
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: data.version,
+            dataState: incomplete ? "partial" : "ready", data, sourceFreshness: [],
+            coverage: { expectedCount: data.gates.length, observedCount: data.gates.filter(gate => gate.state !== "unknown").length,
+              missingCount: data.gates.filter(gate => gate.state === "unknown").length, complete: !incomplete,
+              reasonCodes: incomplete ? ["READINESS_GATES_UNOBSERVED"] : [] },
+            capabilities: [{ actionKind: "recordLaunchReadiness", state: auth.role !== "reviewer" ? "denied" : data.phaseAllowed ? "available" : "held",
+              reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : data.phaseAllowed ? [] : ["READINESS_PHASE_REQUIRED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (input.viewKey === "approvalDetail" || input.viewKey === "runDetail") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const principal = { principalRef: `agent-${auth.role}` };
+          const data = input.viewKey === "approvalDetail" ? await actionFoundation.service.readApproval(input.filters.approvalId, principal)
+            : await actionFoundation.service.readRun(input.filters.runId, principal);
+          const capability = (actionKind: string, allowed: boolean, reason: string) => ({ actionKind,
+            state: auth.role !== "reviewer" ? "denied" : allowed ? "available" : "held",
+            reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : allowed ? [] : [reason] });
+          const capabilities = data.kind === "native-approval" ? [
+            capability("requestApproval", data.requestState === "local" && !["canceled", "rejected", "editRequired"].includes(data.current.state), "APPROVAL_REQUEST_ALREADY_RECORDED"),
+            capability("reconcileApproval", true, "APPROVAL_REQUEST_UNVERIFIED"),
+            capability("dispatchApprovedAction", data.current.state === "approved", "APPROVAL_REQUIRED"),
+            capability("decideApproval", false, "APPROVAL_CHANNEL_REQUIRED"),
+          ] : [
+            capability("pauseRun", data.control === "active" && !["completed", "cancelled"].includes(data.current.state), "NOTHING_TO_PAUSE"),
+            capability("cancelUnsent", data.control !== "cancelled" && data.current.state !== "completed", "NOTHING_TO_CANCEL"),
+            capability("resumeRun", data.control === "paused", "RUN_NOT_PAUSED"),
+            capability("lookup", true, "SOURCE_RECONCILIATION_CAPABILITY_UNAVAILABLE"),
+          ];
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: data.version,
+            dataState: "ready", data, sourceFreshness: [],
+            coverage: { expectedCount: data.items.length, observedCount: data.items.length, missingCount: 0, complete: true,
+              reasonCodes: [] }, capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")
@@ -712,6 +812,16 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof ActionServiceError || error instanceof DispatchError) return reply(res,
+        error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? 502 : error.status,
+        { code: error.executionCertainty === "uncertain" && ![401, 403, 429].includes(error.status) ? "OUTCOME_UNCERTAIN" : error.code,
+          executionCertainty: error.executionCertainty,
+          ...(error instanceof ActionServiceError && error.currentVersion !== undefined ? { currentVersion: error.currentVersion } : {}),
+          ...(error instanceof DispatchError && error.retryAfterMs !== null ? { retryAfterMs: error.retryAfterMs } : {}) });
+      if (error instanceof ApprovalError) {
+        const denied = ["AUTHORITY_REQUIRED", "SLACK_ACTOR_MISMATCH", "APPROVAL_INGRESS_UNVERIFIED"].includes(error.code);
+        return reply(res, denied ? 403 : 502, { code: denied ? "FORBIDDEN" : "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+      }
       if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
@@ -742,7 +852,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }

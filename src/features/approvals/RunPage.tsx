@@ -12,6 +12,8 @@ import { ViewError } from "@/components/ViewError";
 import { HourlyRunPage } from "@/features/monitor/HourlyRunPage";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, SourceDialog, blockedReason, dateTime } from "./shared";
 import type { ControlPayload, ReconcilePayload, RunCounts, RunDetail } from "./types";
+import { nativeRunViewSchema, type NativeRunView } from "@/creator-agent/actions/views";
+import { NativeRunPage } from "./NativeRunPage";
 import styles from "./Approvals.module.css";
 
 type Res = ReadResponse<RunDetail>;
@@ -33,13 +35,20 @@ function Run({ tab }: { tab: Tab }) {
   const { adapter } = useScope();
   const { runId = "" } = useParams();
   const filters = useMemo(() => ({ runId }), [runId]);
-  const query = useView<{ runId: string }, RunDetail>("runDetail", filters);
-  const data = query.data?.data ?? null;
+  const query = useView<{ runId: string }, RunDetail | NativeRunView>("runDetail", filters);
+  const raw = query.data?.data ?? null;
+  const data = raw && !("kind" in raw) ? raw : null;
   const source = data?.source ?? "";
   const uncertain = data?.state === "outcomeUncertain";
   const control = useAction<ControlPayload>();
   const [dialog, setDialog] = useState<"source" | "slack" | "takeover" | null>(null);
   const pause = () => data && control.mutate({ operation: "controlRun", actionKind: "pauseRun", entityRefs: [], expectedVersion: data.version, approvalRef: data.approvalRef, manifestRef: null, runRef: data.runRef, payload: { control: "pause" } });
+
+  if (raw && "kind" in raw) {
+    const parsed = nativeRunViewSchema.safeParse(raw);
+    if (!parsed.success) return <section><h1>Run unavailable</h1><p role="alert">The native run response did not match its contract. No action is available.</p></section>;
+    return <>{query.isError && <ViewError error={query.error} subject="This run" hasPriorData onRetry={() => void query.refetch()} />}<NativeRunPage res={{ ...query.data!, data: parsed.data, ...(query.isError || query.isFetching ? { dataState: "stale" as const } : {}) }} tab={tab} refresh={() => void query.refetch()} /></>;
+  }
 
   return (
     <section aria-labelledby="run-title" data-figma-source={tab === "approval" ? "5:13" : "5:156"} className={styles.page}>

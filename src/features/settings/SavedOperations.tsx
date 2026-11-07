@@ -110,12 +110,12 @@ export function SavedRunsPanel({ data, tab }: { data: SavedRuns; tab: "runs" | "
     {visible.length ? <DataTable variant="dense" caption="Saved run traces" columns={[{ label: "Run / job" }, { label: "State" }, { label: "Observed" }, { label: "Next action" }]} rows={visible.map(run =>
       [<span key="run">{run.id}<br />{run.job} · v{run.version}</span>, run.state, stamp(run.observedAt), <Button key="detail" variant="secondary" aria-haspopup="dialog" onClick={() => selection.select(run.id)}>Inspect run</Button>])} />
       : <p>{data.coverage.total ? "No displayed runs match this search." : "No runs are saved in this workspace and account. Provider run volume is unknown."}</p>}
-    <Small>Ledger read {stamp(data.observedAt)}. Result receipts identify saved local work.</Small>
+    <Small>Ledger read {stamp(data.observedAt)}. Result receipts identify saved artifacts and recorded source outcomes.</Small>
     <Dialog open={Boolean(selected)} title="Saved run trace" onClose={() => selection.select(null)}>
       <Button variant="secondary" style={{ position: "sticky", top: 0, zIndex: 1 }} onClick={() => selection.select(null)}>Close</Button>
       {selected && <DetailRows rows={[["Run", selected.id], ["Job / version", selected.job + " · v" + selected.version], ["Correlation", selected.correlation],
         ["Mode / state", selected.mode + " · " + selected.state], ["Observed", stamp(selected.observedAt)], ["Completed items", selected.completed + " of " + selected.items],
-        ["Blockers", selected.blockers.join(", ") || "None recorded"], ["Local result receipts", String(selected.receiptCount)], ["First local receipt", selected.receipt ?? "None recorded"]]} />}
+        ["Blockers", selected.blockers.join(", ") || "None recorded"], ["Recorded result receipts", String(selected.receiptCount)], ["First recorded receipt", selected.receipt ?? "None recorded"]]} />}
     </Dialog>
   </Panel></>;
 }

@@ -9,8 +9,15 @@
 !src/creator-agent/connections/*.ts
 !src/creator-agent/jobs/
 !src/creator-agent/jobs/*.ts
+!src/creator-agent/approvals/
+!src/creator-agent/approvals/*.ts
+!src/creator-agent/actions/
+!src/creator-agent/actions/*.ts
 !src/creator-agent/configurations/
 !src/creator-agent/configurations/*.json
+!src/adapter/
+!src/adapter/contract.ts
+!src/adapter/commissionPolicy.ts
 !src/features/
 !src/features/scorecards/
 !src/features/scorecards/scorecardMath.ts
@@ -19,6 +26,7 @@
 !tools/creator-agent/*.mjs
 !tools/creator-agent/Dockerfile
 **/*.test.*
+**/*.testkit.ts
 **/testFixtures.ts
 **/.env*
 **/*.sqlite*

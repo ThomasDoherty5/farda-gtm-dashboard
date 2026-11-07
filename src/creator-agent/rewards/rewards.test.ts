@@ -679,7 +679,8 @@ describe("reward routes and the authenticated service", () => {
     expect((await post(SYNTHETIC_READ_TOKEN)).status).toBe(403);
     const res = await post(SYNTHETIC_REVIEW_TOKEN);
     expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ code: "ENTITLEMENT_UNVERIFIED", executionCertainty: "notApplied" });
+    expect(await res.json()).toEqual({ code: "ENTITLEMENT_UNVERIFIED", executionCertainty: "notApplied",
+      message: "The service could not complete the request.", requestId: null, correlationId: expect.any(String), retryable: true, retryAfterMs: null });
   });
 });
 

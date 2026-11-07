@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import { moneySchema, provenanceValueSchema } from "../contract";
+import { nativeReadinessViewSchema } from "../../creator-agent/actions/views";
 
 const count = z.number().int().nonnegative();
 const nonNegativeMoney = moneySchema.extend({ minorUnits: z.number().int().nonnegative() });
@@ -258,7 +259,7 @@ export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
   launchReconciliation: launchReconciliationSchema,
   overviewSummary: overviewSummarySchema,
   launchSnapshot: launchSnapshotSchema,
-  launchControl: launchControlSchema,
+  launchControl: z.union([nativeReadinessViewSchema, launchControlSchema]),
   attribution: attributionSchema,
   paidMedia: paidMediaSchema,
   campaignFunnel: campaignFunnelSchema,
