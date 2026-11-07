@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { analyticsViewSchemas } from "../../adapter/viewSchemas/analytics";
 import { createAnalyticsReader, resolveWindow, type AnalyticsViewKey } from "./reader";
 import { freshnessOf, observed, operand, ratio, sumOperands, worstFreshness } from "./metrics";
-import { AnalyticsError, FRESHNESS_LIMIT_MS, type AnalyticsSourceRequest, type AnalyticsSources } from "./sources";
+import { AnalyticsError, CLOCK_SKEW_MS, FRESHNESS_LIMIT_MS, type AnalyticsSourceRequest, type AnalyticsSources, type OrderRow, type OrdersSnapshot } from "./sources";
 import { adPlatformsFixture, analyticsTestScope, analyticsTestSecret, analyticsTestTime, analyticsTestTimezone, ordersFixture, sessionsFixture,
   supportFixture, syntheticAnalyticsSources } from "./fixtures.testkit";
 
@@ -11,7 +11,7 @@ const T = analyticsTestTime;
 const reader = (sources: AnalyticsSources = syntheticAnalyticsSources(), now = () => T) =>
   createAnalyticsReader({ scope: analyticsTestScope, secret: analyticsTestSecret, sources, now, timezone: analyticsTestTimezone });
 const measure = (data: Record<string, unknown>, key: string) => (data.measures as { key: string; state: string; value: number | null; reasonCode: string | null;
-  numerator: { value: number | null }; denominator: { value: number | null } | null; window: unknown; freshnessState: string }[]).find(m => m.key === key)!;
+  numerator: { value: number | null }; denominator: { value: number | null } | null; window: unknown; freshnessState: string; definition: string }[]).find(m => m.key === key)!;
 async function failure(promise: Promise<unknown>) {
   try { await promise; } catch (error) { if (error instanceof AnalyticsError) return { code: error.code, status: error.status }; throw error; }
   throw new Error("Expected a typed analytics failure");
@@ -50,7 +50,9 @@ describe("analytics metric arithmetic", () => {
     expect(freshnessOf("orders", feed(60_000, { syncState: "error" }), T, FRESHNESS_LIMIT_MS.orders)).toEqual({ freshnessState: "error", staleReasonCode: "SOURCE_SYNC_FAILED" });
     expect(freshnessOf("orders", { lastSuccessAt: null, syncState: "error", coverage: "complete" }, T, 1)).toEqual({ freshnessState: "neverSynced", staleReasonCode: "SOURCE_SYNC_FAILED" });
     expect(freshnessOf("orders", null, T, 1)).toEqual({ freshnessState: "neverSynced", staleReasonCode: "SOURCE_UNCONFIGURED" });
-    expect(freshnessOf("orders", feed(-60_000), T, FRESHNESS_LIMIT_MS.orders)).toEqual({ freshnessState: "error", staleReasonCode: "SOURCE_TIME_UNVERIFIED" });
+    // A source clock up to two minutes ahead is tolerated; further ahead is unverified.
+    expect(freshnessOf("orders", feed(-60_000), T, FRESHNESS_LIMIT_MS.orders)).toEqual({ freshnessState: "current", staleReasonCode: null });
+    expect(freshnessOf("orders", feed(-CLOCK_SKEW_MS - 1_000), T, FRESHNESS_LIMIT_MS.orders)).toEqual({ freshnessState: "error", staleReasonCode: "SOURCE_TIME_UNVERIFIED" });
     expect(freshnessOf("orders", feed(0), NaN, FRESHNESS_LIMIT_MS.orders).staleReasonCode).toBe("SOURCE_TIME_UNVERIFIED");
   });
 });
@@ -101,9 +103,18 @@ describe("overview and attribution from synthetic order and ad readers", () => {
     expect(d.daily).toHaveLength(30);
     expect(d.daily.reduce((n: number, x: { shopify: number }) => n + x.shopify, 0)).toBe(836_400);
     expect(d.daily.reduce((n: number, x: { tiktok: number }) => n + x.tiktok, 0)).toBe(423_200);
-    expect(d.attributedOrders.value).toBe(180);
-    expect(d.attributedNetSales.value).toEqual({ minorUnits: 567_420, currency: "USD" });
+    // Creator orders are creator-marked codes only: 180 discount-code orders include 20 sitewide-promotion orders.
+    expect(d.attributedOrders.value).toBe(160);
+    expect(d.attributedNetSales.value).toEqual({ minorUnits: 503_080, currency: "USD" });
+    expect(measure(d, "discountCodeOrders").value).toBe(180);
+    // Distinct customers: 290 flagged orders come from 280 customers.
     expect(d.newRetainedCustomers).toBe(280);
+    expect(measure(d, "zeroNetValidOrders")).toMatchObject({ state: "known", value: 0 });
+    // Earlier-period refunds are a separate correction, never subtracted from this cohort's net receipts.
+    expect(measure(d, "priorPeriodRefundCorrections")).toMatchObject({ state: "known", value: 9_000 });
+    expect(measure(d, "netReceipts").definition).toMatch(/Refunds of orders placed before the period are corrections/);
+    expect(measure(d, "aov").definition).toMatch(/\$0 net after refunds stay in the denominator/);
+    expect(d.sources).toEqual([{ source: "orders", state: "current", reasonCode: null }, { source: "adPlatforms", state: "current", reasonCode: null }]);
     expect(measure(d, "aov")).toMatchObject({ state: "known", value: 3149, numerator: { value: 1_259_600 }, denominator: { value: 400 } });
     expect(measure(d, "paidMediaSpend")).toMatchObject({ state: "known", value: 650_000 });
     expect(measure(d, "platformRoas.meta").value).toBeCloseTo(2.1, 10);
@@ -141,10 +152,32 @@ describe("overview and attribution from synthetic order and ad readers", () => {
     expect(analyticsViewSchemas.attribution!.safeParse(d).success).toBe(true);
   });
 
-  it("answers a typed unconfigured state with no orders reader, and keeps media spend unknown without ad readers", async () => {
-    expect(await failure(reader({}).read("overviewSummary", {}, null))).toEqual({ code: "ANALYTICS_SOURCE_UNCONFIGURED", status: 503 });
-    expect(await failure(reader({ orders: async () => null }).read("attribution", {}, null))).toEqual({ code: "ANALYTICS_SOURCE_UNAVAILABLE", status: 503 });
-    expect(await failure(reader({ orders: async () => { throw new Error("socket"); } }).read("overviewSummary", {}, null))).toEqual({ code: "ANALYTICS_SOURCE_UNAVAILABLE", status: 503 });
+  it("reports an unconfigured or unavailable source as its own state, while every available source still renders", async () => {
+    // No readers at all: a 200 read whose sources say unconfigured and never synced, with every figure unknown, not zero.
+    const none = await reader({}).read("overviewSummary", {}, null);
+    const n = none.data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(none.dataState).toBe("partial");
+    expect(n.sources).toEqual([{ source: "orders", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }, { source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]);
+    expect(none.sourceFreshness.map(f => [f.sourceRef.source, f.freshnessState, f.staleReasonCode])).toEqual([["orders", "neverSynced", "SOURCE_UNCONFIGURED"], ["adPlatforms", "neverSynced", "SOURCE_UNCONFIGURED"]]);
+    expect([n.orders.state, n.netReceipts.state, n.attributedOrders.state]).toEqual(["unknown", "unknown", "unknown"]);
+    expect(n.orders.reasonCode).toBe("ORDERS_SOURCE_UNCONFIGURED");
+    expect(n.daily.every((x: { shopify: unknown; tiktok: unknown }) => x.shopify === null && x.tiktok === null)).toBe(true);
+    expect(none.coverage).toMatchObject({ observedCount: 0, complete: false });
+    expect(analyticsViewSchemas.overviewSummary!.safeParse(n).success).toBe(true);
+    // Ad platforms present, orders missing: media spend and ROAS still render.
+    const adsOnly = await reader({ adPlatforms: syntheticAnalyticsSources().adPlatforms }).read("overviewSummary", {}, null);
+    expect(measure(adsOnly.data, "paidMediaSpend")).toMatchObject({ state: "known", value: 650_000 });
+    expect(measure(adsOnly.data, "aov")).toMatchObject({ state: "unknown", reasonCode: "ORDERS_SOURCE_UNCONFIGURED" });
+    for (const [orders, state] of [[async () => null, "unavailable"], [async () => { throw new Error("socket"); }, "unavailable"]] as const) {
+      const result = await reader({ ...syntheticAnalyticsSources(), orders }).read("attribution", {}, null);
+      expect((result.data as Record<string, any>).sources[0]).toEqual({ source: "orders", state, reasonCode: "SOURCE_UNAVAILABLE" }); // eslint-disable-line @typescript-eslint/no-explicit-any
+      expect(analyticsViewSchemas.attribution!.safeParse(result.data).success).toBe(true);
+    }
+    for (const view of ["paidMedia", "customerJourney", "attribution"] as const) {
+      const result = await reader({}).read(view, {}, null);
+      expect(result.dataState).toBe("partial");
+      expect(analyticsViewSchemas[view]!.safeParse(result.data).success, view).toBe(true);
+    }
     const { orders } = syntheticAnalyticsSources();
     const result = await reader({ orders }).read("overviewSummary", {}, null);
     const d = result.data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -190,7 +223,7 @@ describe("overview and attribution from synthetic order and ad readers", () => {
 
   it("keeps not-yet-attributed and retention-unknown orders unknown rather than unattributed or zero", async () => {
     const r = reader({ ...syntheticAnalyticsSources(), orders: async req => { const s = ordersFixture(req);
-      s.feeds[0]!.orders[0]!.attribution = null; s.feeds[0]!.orders[1]!.newRetainedCustomer = null; s.feeds[0]!.orders[2]!.unitsRetained = null; return s; } });
+      Object.assign(s.feeds[0]!.orders[0]!, { attribution: null, codeOwner: null }); s.feeds[0]!.orders[1]!.newRetainedCustomer = null; s.feeds[0]!.orders[2]!.unitsRetained = null; return s; } });
     const d = (await r.read("attribution", {}, null)).data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     expect(d.attribution.reduce((n: number, b: { orders: number }) => n + b.orders, 0)).toBe(399);
     expect(d.newRetainedCustomers).toBeNull();
@@ -198,6 +231,40 @@ describe("overview and attribution from synthetic order and ad readers", () => {
     expect(d.retainedCustomerScope).toBeUndefined();
     expect(measure(d, "creatorCodeOrders")).toMatchObject({ state: "unknown", reasonCode: "ATTRIBUTION_NOT_EVALUATED" });
     expect(d.provenance.coverage).toContain("1 not yet attributed");
+  });
+
+  it("counts distinct customers, keeps sitewide codes out of creator orders, and keeps $0-net orders in the AOV cohort", async () => {
+    const r = (mutate: (rows: OrderRow[]) => void) => reader({ ...syntheticAnalyticsSources(), orders: async req => { const s = ordersFixture(req); mutate(s.feeds[0]!.orders); return s; } });
+    const missingCustomer = (await r(rows => { rows[0]!.customerRef = null; }).read("overviewSummary", {}, null)).data;
+    expect(missingCustomer.newRetainedCustomers).toBeNull();
+    expect(measure(missingCustomer, "newRetainedCustomers")).toMatchObject({ state: "unknown", reasonCode: "CUSTOMER_IDENTITY_UNAVAILABLE" });
+    const unverifiedOwner = (await r(rows => { rows[0]!.codeOwner = "unknown"; }).read("overviewSummary", {}, null)).data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(unverifiedOwner.attributedOrders).toMatchObject({ state: "unknown", reasonCode: "CODE_OWNER_UNVERIFIED" });
+    expect(measure(unverifiedOwner, "discountCodeOrders").value).toBe(180);
+    const refunded = (await r(rows => { rows[0]!.netReceiptsMinor = 0; }).read("overviewSummary", {}, null)).data;
+    expect(measure(refunded, "aov")).toMatchObject({ numerator: { value: 1_259_600 - 3217 }, denominator: { value: 400 } });
+    expect(measure(refunded, "zeroNetValidOrders").value).toBe(1);
+    const noRefundReport = await reader({ ...syntheticAnalyticsSources(), orders: async req => { const s = ordersFixture(req); s.feeds[1]!.priorPeriodRefunds = null; return s; } }).read("overviewSummary", {}, null);
+    expect(measure(noRefundReport.data, "priorPeriodRefundCorrections")).toMatchObject({ state: "unknown", reasonCode: "PRIOR_PERIOD_REFUNDS_NOT_REPORTED" });
+    expect(measure(noRefundReport.data, "netReceipts").value).toBe(1_259_600);
+  });
+
+  it("counts an order once across Shopify and TikTok Shop, and does not claim ready without canonical identity", async () => {
+    const r = (mutate: (s: OrdersSnapshot) => void) => reader({ ...syntheticAnalyticsSources(), orders: async req => { const s = ordersFixture(req); mutate(s); return s; } });
+    // A copy of a Shopify order inside the TikTok Shop feed, owned by Shopify, is dropped there.
+    const copy = await r(s => { s.feeds[1]!.orders.push({ ...s.feeds[0]!.orders[0]!, orderRef: s.feeds[0]!.orders[0]!.orderRef }); }).read("overviewSummary", {}, null);
+    expect(copy.data.orders).toMatchObject({ value: 400 });
+    expect(copy.dataState).toBe("ready");
+    expect(copy.coverage.reasonCodes).toContain("CROSS_CHANNEL_COPY_DROPPED");
+    // Both feeds claim the same canonical order: counted once, and the read is partial.
+    const conflict = await r(s => { s.feeds[1]!.orders.push({ ...s.feeds[0]!.orders[0]!, recordOwner: "tiktokShop" }); }).read("overviewSummary", {}, null);
+    expect(conflict.data.orders).toMatchObject({ value: 400 });
+    expect(conflict.dataState).toBe("partial");
+    expect(conflict.coverage.reasonCodes).toContain("ORDER_IDENTITY_CONFLICT");
+    // The same order reference in both feeds without canonical identity cannot be proven distinct.
+    const unresolved = await r(s => { for (const f of s.feeds) for (const o of f.orders) o.canonicalOrderId = null; s.feeds[1]!.orders[0]!.orderRef = s.feeds[0]!.orders[0]!.orderRef; }).read("overviewSummary", {}, null);
+    expect(unresolved.dataState).toBe("partial");
+    expect(unresolved.coverage.reasonCodes).toContain("ORDER_IDENTITY_UNRESOLVED");
   });
 
   it("never double counts a mirror: identical rows add nothing, differing rows mark the read partial, a mirror alone is disclosed", async () => {
@@ -223,36 +290,74 @@ describe("overview and attribution from synthetic order and ad readers", () => {
     expect(mirrorOnly.sourceFreshness[0]!.sourceRef.source).toBe("orders.shopify.mirror");
   });
 
-  it("fails closed on malformed, foreign, out-of-period and future source answers", async () => {
+  it("degrades a malformed, mis-dated or future source to its own state, and refuses a foreign scope outright", async () => {
     const base = syntheticAnalyticsSources();
     const orders = (mutate: (s: any) => void) => reader({ ...base, orders: async r => { const s: any = ordersFixture(r); mutate(s); return s; } }); // eslint-disable-line @typescript-eslint/no-explicit-any
-    const cases: [ReturnType<typeof reader>, string, number][] = [
-      [orders(s => { s.feeds[0].orders[0].placedAt = "2026-02-30T10:00:00Z"; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].orders[0].placedAt = "not-a-time"; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].orders[0].netReceiptsMinor = -5; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].orders[0].netReceiptsMinor = "3217"; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].orders[1].orderRef = s.feeds[0].orders[0].orderRef; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].orders[0].placedAt = "2026-09-01T10:00:00Z"; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].observedAt = new Date(T + 60_000).toISOString(); }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].lastSuccessAt = new Date(T).toISOString(); s.feeds[0].observedAt = new Date(T - 60_000).toISOString(); }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.window.start = "2026-10-01"; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.scope.accountId = "foreign-account"; }), "SOURCE_SCOPE_DENIED", 403],
-      [orders(s => { s.feeds.push({ ...s.feeds[0], feedRef: "second-native" }); }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(s => { s.feeds[0].extra = true; }), "ANALYTICS_SOURCE_INVALID", 502],
-      [orders(() => undefined), "", 0],
-      [reader({ ...base, orders: async () => { throw new AnalyticsError("FORBIDDEN", 403, "denied"); } }), "SOURCE_SCOPE_DENIED", 403],
-      [reader({ ...base, orders: async () => [] }), "ANALYTICS_SOURCE_INVALID", 502],
-      [reader({ ...base, adPlatforms: async r => { const s = adPlatformsFixture(r); s.feeds.push({ ...s.feeds[0]!, feedRef: "copy" }); return s; } }), "ANALYTICS_SOURCE_INVALID", 502],
-      [reader({ ...base, adPlatforms: async r => { const s = adPlatformsFixture(r); s.feeds[0]!.campaigns[0]!.clicks = 10_000_000; return s; } }), "ANALYTICS_SOURCE_INVALID", 502],
+    const ads = (mutate: (s: any) => void) => reader({ ...base, adPlatforms: async r => { const s: any = adPlatformsFixture(r); mutate(s); return s; } }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    type Expect = { source: "orders" | "adPlatforms"; state: string; reason: string } | { status: number } | "ready";
+    const cases: [ReturnType<typeof reader>, Expect][] = [
+      [orders(s => { s.feeds[0].orders[0].placedAt = "2026-02-30T10:00:00Z"; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].orders[0].placedAt = "not-a-time"; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].orders[0].netReceiptsMinor = -5; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].orders[0].netReceiptsMinor = "3217"; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].orders[1].orderRef = s.feeds[0].orders[0].orderRef; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].orders[0].placedAt = "2026-09-01T10:00:00Z"; }), { source: "orders", state: "error", reason: "ORDER_OUTSIDE_PERIOD" }],
+      // Within the two-minute clock tolerance a source slightly ahead is accepted; beyond it the source is unverified.
+      [orders(s => { s.feeds[0].observedAt = new Date(T + 60_000).toISOString(); s.feeds[0].lastSuccessAt = new Date(T + 30_000).toISOString(); }), "ready"],
+      [orders(s => { s.feeds[0].observedAt = new Date(T + CLOCK_SKEW_MS + 60_000).toISOString(); }), { source: "orders", state: "invalid", reason: "SOURCE_TIME_UNVERIFIED" }],
+      [orders(s => { s.feeds[0].orders[0].placedAt = new Date(T + 60_000).toISOString(); }), "ready"],
+      [orders(s => { s.feeds[0].orders[0].placedAt = new Date(T + 5 * 60_000).toISOString(); }), { source: "orders", state: "error", reason: "ORDER_TIME_UNVERIFIED" }],
+      [orders(s => { s.feeds[0].lastSuccessAt = new Date(T).toISOString(); s.feeds[0].observedAt = new Date(T - 60_000).toISOString(); }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.window.start = "2026-10-01"; }), { source: "orders", state: "invalid", reason: "SOURCE_PERIOD_MISMATCH" }],
+      [orders(s => { s.feeds.push({ ...s.feeds[0], feedRef: "second-native" }); }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.feeds[0].extra = true; }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(() => undefined), "ready"],
+      [reader({ ...base, orders: async () => [] }), { source: "orders", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [ads(s => { s.feeds.push({ ...s.feeds[0], feedRef: "copy" }); }), { source: "adPlatforms", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [ads(s => { s.feeds[0].campaigns[0].clicks = 10_000_000; }), { source: "adPlatforms", state: "invalid", reason: "SOURCE_RESPONSE_INVALID" }],
+      [orders(s => { s.scope.accountId = "foreign-account"; }), { status: 403 }],
+      [reader({ ...base, orders: async () => { throw new AnalyticsError("FORBIDDEN", 403, "denied"); } }), { status: 403 }],
     ];
-    // V8 reads 31 September as 1 October; inside a period that includes 1 October it must still fail closed.
+    // V8 reads 31 September as 1 October; inside a period that includes 1 October it must still be refused.
     const september = { startAt: "2026-09-01", endAt: "2026-10-31", timezone: analyticsTestTimezone, basis: "eventTime" };
-    expect(await failure(orders(s => { s.feeds[0].orders[0].placedAt = "2026-09-31T20:00:00Z"; }).read("overviewSummary", {}, september))).toEqual({ code: "ANALYTICS_SOURCE_INVALID", status: 502 });
-    await expect(orders(() => undefined).read("overviewSummary", {}, september)).resolves.toBeTruthy();
-    for (const [r, code, status] of cases) {
-      if (!code) { await expect(r.read("overviewSummary", {}, null)).resolves.toBeTruthy(); continue; }
-      expect(await failure(r.read("overviewSummary", {}, null))).toEqual({ code, status });
+    const rolled = await orders(s => { s.feeds[0].orders[0].placedAt = "2026-09-31T20:00:00Z"; }).read("overviewSummary", {}, september);
+    expect((rolled.data as Record<string, any>).sources[0]).toMatchObject({ state: "invalid" }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    for (const [r, expected] of cases) {
+      if (typeof expected === "object" && "status" in expected) { expect(await failure(r.read("overviewSummary", {}, null))).toEqual({ code: "SOURCE_SCOPE_DENIED", status: 403 }); continue; }
+      const result = await r.read("overviewSummary", {}, null);
+      const d = result.data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      if (expected === "ready") { expect(result.dataState).toBe("ready"); continue; }
+      expect(result.dataState).toBe("partial");
+      expect(d.sources.find((x: { source: string }) => x.source === expected.source)).toEqual({ source: expected.source, state: expected.state, reasonCode: expected.reason });
+      // The other source still renders: a broken ad feed leaves orders known, and a broken order feed leaves media spend known.
+      if (expected.source === "orders") { expect(d.orders.state).toBe("unknown"); expect(measure(d, "paidMediaSpend").value).toBe(650_000); }
+      else { expect(d.orders.value).toBe(400); expect(measure(d, "paidMediaSpend").state).toBe("unknown"); }
+      expect(analyticsViewSchemas.overviewSummary!.safeParse(d).success).toBe(true);
     }
+  });
+
+  it("refuses personal-looking free text from sources, and emits only enumerated or opaque values", async () => {
+    const personal = ["jane.doe@example.com", "+1 555 010 0199", "@janedoe_creator", "Jane Doe GRWM"];
+    const base = syntheticAnalyticsSources();
+    for (const text of personal) {
+      const variants: [AnalyticsSources, AnalyticsViewKey, "orders" | "adPlatforms" | "support"][] = [
+        [{ ...base, adPlatforms: async r => { const s: any = adPlatformsFixture(r); s.feeds[0].assets[0].label = text; return s; } }, "paidMedia", "adPlatforms"], // eslint-disable-line @typescript-eslint/no-explicit-any
+        [{ ...base, adPlatforms: async r => { const s: any = adPlatformsFixture(r); s.feeds[0].campaigns[0].attributionWindow = text; return s; } }, "paidMedia", "adPlatforms"], // eslint-disable-line @typescript-eslint/no-explicit-any
+        [{ ...base, support: async r => { const s: any = supportFixture(r); s.feed.tickets[0].category = text; return s; } }, "customerJourney", "support"], // eslint-disable-line @typescript-eslint/no-explicit-any
+        [{ ...base, orders: async r => { const s: any = ordersFixture(r); s.feeds[0].orders[0].customerRef = text; return s; } }, "customerJourney", "orders"], // eslint-disable-line @typescript-eslint/no-explicit-any
+      ];
+      for (const [sources, view, source] of variants) {
+        const result = await reader(sources).read(view, {}, null);
+        expect((result.data as Record<string, any>).sources.find((x: { source: string }) => x.source === source).state).toBe("invalid"); // eslint-disable-line @typescript-eslint/no-explicit-any
+        expect(JSON.stringify(result)).not.toContain(text);
+      }
+    }
+    const clean = await reader().read("paidMedia", {}, null);
+    const d = clean.data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(d.assets.map((a: { label: string }) => a.label)).toEqual(["AD-01 · Meta", "AD-03 · TikTok", expect.stringMatching(/^Asset [a-f0-9]{6} · TikTok$/)]);
+    expect(d.channels.map((c: { attributionWindow: { label: string } | null }) => c.attributionWindow?.label)).toEqual(["7-day click, 1-day view", "7-day click"]);
+    const journey = (await reader().read("customerJourney", {}, null)).data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(journey.tickets.map((t: { category: string }) => t.category)).toEqual(["Setup", "Delivery", "Returns"]);
   });
 });
 
@@ -269,10 +374,16 @@ describe("paid media and customer journey", () => {
     expect(measure(d, "gmvMaxSpend.tiktok").value).toBe(150_000);
     expect(d.assetTotal).toBe(3);
     expect(d.assets.find((a: { rights: string }) => a.rights === "expiring").expiresInDays).toBe(12);
+    // Lapsed rights are expired, never "expires in 0 days".
+    const lapsed = (await reader({ adPlatforms: async r => { const s = adPlatformsFixture(r); s.feeds[1]!.assets[0]!.expiresOn = "2026-11-01"; return s; } }).read("paidMedia", {}, null)).data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect(lapsed.assets.find((a: { label: string }) => a.label.startsWith("AD-03"))).toMatchObject({ rights: "expired", expiresInDays: null });
+    expect(((await reader({ adPlatforms: async r => { const s = adPlatformsFixture(r); s.feeds[1]!.assets[0]!.expiresOn = "2026-11-06"; return s; } }).read("paidMedia", {}, null)).data as Record<string, any>).assets[1]).toMatchObject({ rights: "expiring", expiresInDays: 0 }); // eslint-disable-line @typescript-eslint/no-explicit-any
     expect(analyticsViewSchemas.paidMedia!.safeParse(d).success).toBe(true);
     const filtered = (await reader().read("paidMedia", { rights: "notGranted", platform: "tiktok" }, null)).data as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
     expect([filtered.assets.length, filtered.assetTotal]).toEqual([1, 3]);
-    expect(await failure(reader({ orders: syntheticAnalyticsSources().orders }).read("paidMedia", {}, null))).toEqual({ code: "ANALYTICS_SOURCE_UNCONFIGURED", status: 503 });
+    const noAds = await reader({ orders: syntheticAnalyticsSources().orders }).read("paidMedia", {}, null);
+    expect((noAds.data as Record<string, any>).sources).toEqual([{ source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]); // eslint-disable-line @typescript-eslint/no-explicit-any
+    expect((noAds.data as Record<string, any>).channels).toEqual([]); // eslint-disable-line @typescript-eslint/no-explicit-any
     const nullSpend = await reader({ adPlatforms: async r => { const s = adPlatformsFixture(r); s.feeds[0]!.campaigns[0]!.spendMinor = null; return s; } }).read("paidMedia", {}, null);
     expect((nullSpend.data as Record<string, any>).channels[0].spend).toBeNull(); // eslint-disable-line @typescript-eslint/no-explicit-any
     expect(measure(nullSpend.data, "platformRoas.meta")).toMatchObject({ state: "unknown", reasonCode: "SPEND_NOT_REPORTED" });

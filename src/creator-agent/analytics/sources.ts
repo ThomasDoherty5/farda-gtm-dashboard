@@ -4,13 +4,17 @@ import type { OperationsScope } from "../operations.ts";
 /**
  * Trusted, server-injected source boundaries for the THO-293 analytics reads (orders, ad platforms, storefront sessions and
  * support). Each reader is optional. An absent reader is "unconfigured", never demo data and never zero. Readers return
- * unknown JSON that is validated here; a malformed answer fails closed instead of reading as empty.
+ * unknown JSON that is validated here; a malformed answer makes that source "invalid" (its figures unknown), never empty.
  *
- * No provider credential, customer identity or message text crosses this boundary: rows carry opaque references only.
+ * No provider credential, customer identity or free text crosses this boundary. References are opaque tokens (no spaces,
+ * "@" or "+", so an email address or formatted phone number is refused); windows, categories and rights are enumerated
+ * codes; an asset label is a short code such as "AD-01" or is replaced by an opaque alias.
  */
 export const ANALYTICS_MAX_ORDERS = 50_000;
+/** Tolerated difference between a source clock and this service's clock. Beyond it, an observation is unverified. */
+export const CLOCK_SKEW_MS = 2 * 60_000;
 
-const ref = z.string().trim().min(1).max(240);
+const ref = z.string().regex(/^[A-Za-z0-9._:-]{1,240}$/, "An opaque reference without free text is required.");
 const realDay = (v: string) => {
   const t = Date.parse(`${v}T00:00:00Z`);
   return Number.isFinite(t) && new Date(t).toISOString().slice(0, 10) === v;
@@ -45,14 +49,34 @@ const headerRefine = (f: { observedAt: string; lastSuccessAt: string | null; syn
 export const orderChannels = ["shopify", "tiktokShop"] as const;
 export type OrderChannel = typeof orderChannels[number];
 const orderRow = z.object({
-  orderRef: ref, placedAt: instantSchema, currency, netReceiptsMinor: minor, valid: z.boolean(),
+  orderRef: ref,
+  /**
+   * The order's identity across channel systems, resolved by the order source (for example, a TikTok Shop order that an
+   * integration also writes into Shopify carries one canonical ID). Null means identity is not established.
+   */
+  canonicalOrderId: ref.nullable(),
+  /** The channel that owns the order. A row in another channel's feed is a copy and is never counted there. */
+  recordOwner: z.enum(orderChannels),
+  placedAt: instantSchema, currency,
+  /** Net of refunds and cancellations posted to date for this order. Refunds of orders placed before the period are reported per feed, not here. */
+  netReceiptsMinor: minor, valid: z.boolean(),
   /** Source-assigned attribution. Null means not evaluated, which is unknown, not unattributed. */
   attribution: z.enum(["code", "utm", "platform", "unattributed"]).nullable(),
+  /** Who issued the discount code: a creator's code, a sitewide promotion, or not known. Present only for code attribution. */
+  codeOwner: z.enum(["creator", "sitewide", "unknown"]).nullable(),
+  /** Opaque, source-pseudonymous customer reference used only to count distinct customers. It is never returned. */
+  customerRef: ref.nullable(),
   newRetainedCustomer: z.boolean().nullable(), unitsRetained: count.nullable(),
-}).strict();
+}).strict().refine(o => (o.attribution === "code") === (o.codeOwner !== null), "A code owner belongs only to code-attributed orders.");
 export type OrderRow = z.infer<typeof orderRow>;
-const orderFeed = z.object({ ...feedHeader, channel: z.enum(orderChannels), origin: z.enum(["native", "mirror"]), orders: z.array(orderRow).max(ANALYTICS_MAX_ORDERS) })
-  .strict().superRefine(headerRefine);
+/** Refunds posted in the period for orders placed before it. They correct the earlier period and never reduce this period's cohort. */
+const priorPeriodRefunds = z.object({ count, amountMinor: minor, currency }).strict();
+const orderFeed = z.object({ ...feedHeader, channel: z.enum(orderChannels), origin: z.enum(["native", "mirror"]), orders: z.array(orderRow).max(ANALYTICS_MAX_ORDERS),
+  priorPeriodRefunds: priorPeriodRefunds.nullable() })
+  .strict().superRefine(headerRefine).superRefine((f, c) => {
+    const ids = f.orders.map(o => o.canonicalOrderId).filter((v): v is string => v !== null);
+    if (new Set(ids).size !== ids.length) c.addIssue({ code: "custom", message: "Duplicate canonical order within one feed." });
+  });
 export type OrderFeed = z.infer<typeof orderFeed>;
 export const ordersSnapshotSchema = z.object({ scope: scopeSchema, window: windowSchema, feeds: z.array(orderFeed).max(8) }).strict().superRefine((s, c) => {
   if (new Set(s.feeds.map(f => f.feedRef)).size !== s.feeds.length) c.addIssue({ code: "custom", message: "Duplicate order feed." });
@@ -64,15 +88,21 @@ export type OrdersSnapshot = z.infer<typeof ordersSnapshotSchema>;
 
 /* ---------- Ad platforms (Meta and TikTok) ---------- */
 
+export const attributionWindowSchema = z.object({ clickDays: z.number().int().min(0).max(28), viewDays: z.number().int().min(0).max(7) }).strict()
+  .refine(w => w.clickDays + w.viewDays > 0, "An attribution window needs a click or view duration.");
+export type AttributionWindow = z.infer<typeof attributionWindowSchema>;
+export const assetRights = ["cleared", "expiring", "expired", "notGranted", "unknown"] as const;
 const campaignRow = z.object({
   campaignRef: ref,
   /** GMV Max optimises TikTok Shop GMV that the shop would partly see anyway. Its value is never treated as incremental. */
   kind: z.enum(["standard", "gmvMax"]),
   spendMinor: minor.nullable(), impressions: count, clicks: count, platformPurchaseValueMinor: minor.nullable(),
-  attributionWindow: z.string().trim().min(1).max(120).nullable(),
+  /** The platform's attribution window as a structured duration; null when the platform did not state it. */
+  attributionWindow: attributionWindowSchema.nullable(),
 }).strict().refine(r => r.clicks <= r.impressions, "Clicks cannot exceed impressions.");
-const assetRow = z.object({ assetRef: ref, label: z.string().trim().min(1).max(120), clicks: count, impressions: count,
-  rights: z.enum(["cleared", "expiring", "notGranted", "unknown"]), expiresOn: day.nullable() }).strict()
+/** An asset label is a short code ("AD-01"), never a caption, handle or name; without one the asset is shown by an opaque alias. */
+const assetRow = z.object({ assetRef: ref, label: z.string().regex(/^[A-Z]{2,6}-\d{1,6}$/).nullable(), clicks: count, impressions: count,
+  rights: z.enum(assetRights), expiresOn: day.nullable() }).strict()
   .refine(r => r.clicks <= r.impressions, "Clicks cannot exceed impressions.");
 const adFeed = z.object({ ...feedHeader, platform: z.enum(["meta", "tiktok"]), currency, campaigns: z.array(campaignRow).max(500), assets: z.array(assetRow).max(500) })
   .strict().superRefine(headerRefine).superRefine((f, c) => {
@@ -96,10 +126,11 @@ export type SessionsSnapshot = z.infer<typeof sessionsSnapshotSchema>;
 
 /* ---------- Support, returns and reviews ---------- */
 
+export const ticketCategories = ["setup", "delivery", "returns", "product", "billing", "account", "other"] as const;
 const star = z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]);
 export const supportSnapshotSchema = z.object({ scope: scopeSchema, window: windowSchema, feed: z.object({ ...feedHeader,
   deliveredWindowDays: z.number().int().min(1).max(90), deliveredUnits: count.nullable(),
-  tickets: z.array(z.object({ category: z.string().trim().min(1).max(80), count }).strict()).max(30).nullable(),
+  tickets: z.array(z.object({ category: z.enum(ticketCategories), count }).strict()).max(30).nullable(),
   resolution: z.object({ byAutomation: count, byPeople: count, open: count }).strict().nullable(),
   returns: z.object({ returned: count, received: count, awaitingInspection: count, restocked: count, quarantined: count }).strict().nullable(),
   reviews: z.object({ ratedCount: count.nullable(), stars: z.array(z.object({ star, count }).strict()).length(5).nullable() }).strict(),

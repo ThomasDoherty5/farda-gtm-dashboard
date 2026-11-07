@@ -7,7 +7,7 @@
  */
 import type { Money, ProvenanceValue, SourceRef } from "@/adapter/contract";
 import type { PostCounters } from "@/features/overview/metrics";
-import type { Measure } from "@/adapter/viewSchemas/analytics";
+import type { Measure, SourceStatus } from "@/adapter/viewSchemas/analytics";
 
 export const DEMO_NOW = "2026-11-02T17:00:00.000Z";
 export const DEMO_WORKSPACE = "demo-workspace";
@@ -40,6 +40,7 @@ export type OverviewObservedData = Omit<OverviewOriginalData, "datasetKey" | "ma
   daily: { date: string; shopify: number | null; tiktok: number | null }[];
   window: { start: string; end: string; timezone: string };
   measures: Measure[];
+  sources: SourceStatus[];
 };
 export type OverviewData = OverviewOriginalData | OverviewObservedData;
 

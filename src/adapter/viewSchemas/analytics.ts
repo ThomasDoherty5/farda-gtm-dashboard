@@ -45,12 +45,21 @@ export const measureSchema = z.object({
   state: valueStateSchema, value: z.number().finite().nullable(), reasonCode: z.string().nullable(),
   numerator: measureOperand, denominator: measureOperand.nullable(),
   window: z.object({ start: date, end: date, timezone: z.string().min(1) }), provenance: z.array(z.string()), freshnessState: freshnessStateSchema,
+  definition: z.string().min(1),
 }).superRefine((m, ctx) => {
   if ((m.state === "known") !== (m.value !== null) || (m.state !== "known") !== (m.reasonCode !== null))
     ctx.addIssue({ code: "custom", message: "A measure is known with a value, or unknown/not applicable with a reason." });
 });
 export type Measure = z.infer<typeof measureSchema>;
 const measures = z.array(measureSchema).max(60);
+/** Each served source's own state. Unconfigured, unavailable and invalid are states shown on the page, not an error for the view. */
+export const sourceStatusSchema = z.object({
+  source: z.enum(["orders", "adPlatforms", "sessions", "support"]),
+  state: z.enum(["current", "noChange", "partial", "stale", "error", "neverSynced", "unconfigured", "unavailable", "invalid"]),
+  reasonCode: z.string().nullable(),
+});
+export type SourceStatus = z.infer<typeof sourceStatusSchema>;
+const sources = z.array(sourceStatusSchema).min(1).max(4);
 
 const overviewOriginalSchema = z.object({
   datasetKey: z.literal("overview-original"),
@@ -81,6 +90,7 @@ const overviewObservedSchema = overviewOriginalSchema.extend({
   // The content monitor is its own read (THO-299); this projection never invents posts.
   posts: z.array(postCounters).max(0),
   measures,
+  sources,
 });
 
 export const overviewSummarySchema = z.discriminatedUnion("datasetKey", [overviewOriginalSchema, overviewObservedSchema]);
@@ -167,6 +177,7 @@ export const attributionSchema = z.object({
   creators: z.array(z.object({ handle: z.string(), roi: z.number().finite() })),
   provenance: provenanceDisclosure,
   measures: measures.optional(),
+  sources: sources.optional(),
 }).superRefine((v, ctx) => {
   if (v.datasetKey === "overview-original" && v.retainedUnits === null) ctx.addIssue({ code: "custom", message: "The demo states its retained units." });
   const amounts = [v.marketingSpend, v.netReceipts.value, v.contribution.value, ...v.channels.map(c => c.netReceipts), ...v.weeks.flatMap(w => [w.shopify, w.tiktok])];
@@ -189,13 +200,14 @@ export const paidMediaSchema = z.object({
       label: z.string(),
       clicks: count,
       impressions: count,
-      rights: z.enum(["cleared", "expiring", "notGranted", "unknown"]),
+      rights: z.enum(["cleared", "expiring", "expired", "notGranted", "unknown"]),
       expiresInDays: count.nullable(),
     }),
   ),
   assetTotal: count,
   provenance: provenanceDisclosure,
   measures: measures.optional(),
+  sources: sources.optional(),
 }).superRefine((v, ctx) => {
   const amounts = [v.creatorSampleEconomics, ...v.channels.flatMap(c => [c.spend, c.platformPurchaseValue])];
   if (amounts.some(m => m && m.currency !== "USD") || new Set(v.channels.map(c => c.key)).size !== v.channels.length)
@@ -257,6 +269,7 @@ const customerJourneyObservedSchema = customerJourneyDemoSchema.extend({
   resolution: z.object({ byFin: count, byPeople: count, open: count }).nullable(),
   returns: z.object({ returned: count, received: count, awaitingInspection: count, restocked: count, quarantined: count }).nullable(),
   measures,
+  sources,
 });
 
 export const customerJourneySchema = z.discriminatedUnion("datasetKey", [customerJourneyDemoSchema, customerJourneyObservedSchema]);

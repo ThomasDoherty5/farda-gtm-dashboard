@@ -13,6 +13,7 @@ import { MetricValue, formatCompact, formatCount, formatMoney, formatMoneyExact 
 import { ViewError } from "@/components/ViewError";
 import type { OverviewData } from "@/fixtures/overview";
 import type { Measure } from "@/adapter/viewSchemas/analytics";
+import { SourceStates } from "@/features/analytics/parts";
 import { axisMax, engagementRate, weeklyTotals } from "./metrics";
 import styles from "./OverviewPage.module.css";
 
@@ -87,6 +88,7 @@ function Body({ res, demo }: { res: ReadResponse<OverviewData>; demo: boolean })
           <p>{res.coverage.observedCount} of {res.coverage.expectedCount} source records are available. Totals cover only those records.</p>
         </Alert>
       )}
+      {res.data?.datasetKey === "overview-observed" && <SourceStates sources={res.data.sources} />}
       {res.dataState === "empty" || !res.data ? (
         <EmptyState state="Empty" title="No matching records"><p>The source responded, but nothing matches the current filters.</p></EmptyState>
       ) : (
@@ -126,18 +128,24 @@ function Dashboard({ data, demo }: { data: OverviewData; demo: boolean }) {
   );
 }
 
-function marginOf(data: OverviewData, contribution: number, net: number): number | null {
-  return data.netReceipts.state === "known" && data.contribution.state === "known" && net > 0 ? pct(contribution, net) : null;
+/** A value only when its state is known. A derived figure is computed only when every input is known; otherwise it is N/A. */
+const knownOf = <T,>(v: ProvenanceValue<T>): T | null => (v.state === "known" ? v.value : null);
+function marginOf(data: OverviewData): number | null {
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null, contribution = knownOf(data.contribution)?.minorUnits ?? null;
+  return net !== null && contribution !== null && net > 0 ? pct(contribution, net) : null;
+}
+/** Average net receipts per order: both inputs known, and orders above zero. */
+function averageText(data: OverviewData) {
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null, orders = knownOf(data.orders);
+  if (net === null || orders === null) return "Average net receipts N/A";
+  return orders ? `${formatMoneyExact({ minorUnits: Math.round(net / orders), currency: "USD" })} average net receipts` : "No average without orders";
 }
 
 function Kpis({ data }: { data: OverviewData }) {
-  const net = data.netReceipts.value?.minorUnits ?? 0;
-  const contribution = data.contribution.value?.minorUnits ?? 0;
-  const orders = data.orders.value ?? 0;
   const weeks = weeklyTotals(completeDaily(data));
   const peak = Math.max(1, ...weeks);
   // A margin needs both figures to be known, and receipts above zero. Otherwise it is N/A, never 0%.
-  const margin = marginOf(data, contribution, net);
+  const margin = marginOf(data);
   const circumference = 2 * Math.PI * 39.6;
   const totalOrders = data.channels.reduce((s, c) => s + c.orders, 0);
   const [mainChannel, secondChannel] = data.channels;
@@ -171,9 +179,9 @@ function Kpis({ data }: { data: OverviewData }) {
         <dl className={styles.kpiText}>
           <dt>Paid orders</dt>
           <dd data-testid="metric-Paid orders"><MetricValue value={data.orders} format={formatCount} /></dd>
-          <dd className={styles.note}>{data.orders.state !== "known" ? "Average net receipts N/A" : orders ? `${formatMoneyExact({ minorUnits: Math.round(net / orders), currency: "USD" })} average net receipts` : "No average without orders"}</dd>
+          <dd className={styles.note}>{averageText(data)}</dd>
         </dl>
-        {mainChannel && secondChannel && (
+        {mainChannel && secondChannel && data.orders.state === "known" && (
           // Bubble sizes are fixed as in Figma; the labels carry the values.
           <div className={styles.bubbles} role="img" aria-label={`${mainChannel.label} ${mainChannel.orders} orders, ${secondChannel.label} ${secondChannel.orders} orders`}>
             <span className={`${styles.bubble} ${styles.bubbleMain}`}>{Math.round(pct(mainChannel.orders, totalOrders))}%</span>
@@ -260,15 +268,14 @@ function ChannelShare({ data }: { data: OverviewData }) {
 }
 
 function Efficiency({ data }: { data: OverviewData }) {
-  const net = data.netReceipts.value?.minorUnits ?? 0;
-  const contribution = data.contribution.value?.minorUnits ?? 0;
-  const margin = marginOf(data, contribution, net);
+  const net = knownOf(data.netReceipts)?.minorUnits ?? null;
+  const margin = marginOf(data);
   // Served data carries the server's CAC and MER with their own denominators; the demo derives them from its fixed figures.
   const cacMeasure = measureOf(data, "blendedCac"), merMeasure = measureOf(data, "mer");
   const spend = data.marketingSpend?.minorUnits ?? null;
   const cac = cacMeasure ? measureText(cacMeasure, (v) => formatMoneyExact({ minorUnits: Math.round(v), currency: "USD" }))
     : spend !== null && data.newRetainedCustomers ? formatMoneyExact({ minorUnits: Math.round(spend / data.newRetainedCustomers), currency: "USD" }) : "N/A";
-  const mer = merMeasure ? measureText(merMeasure, (v) => `${v.toFixed(2)}×`) : spend ? `${(net / spend).toFixed(2)}×` : "N/A";
+  const mer = merMeasure ? measureText(merMeasure, (v) => `${v.toFixed(2)}×`) : spend && net !== null ? `${(net / spend).toFixed(2)}×` : "N/A";
   const cacNote = `${data.marketingSpend ? formatMoney(data.marketingSpend) : "Acquisition cost N/A"} / ${data.newRetainedCustomers ?? "N/A"} new retained customers`;
   return (
     <section className={styles.card} aria-labelledby="growth-title" data-testid="growth-card">

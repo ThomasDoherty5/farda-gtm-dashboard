@@ -69,13 +69,17 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
     expect(calls).toEqual([]);
   });
 
-  it("answers an honest typed unconfigured state with no readers, and pending views never fall back to demo data", async () => {
+  it("returns 200 with each source's unconfigured, never-synced state and N/A figures when no reader is connected; pending views never fall back to demo data", async () => {
     const { post, envelope, capabilities } = await start();
     for (const view of served) {
-      const result = await post(envelope(view));
-      expect(result.status).toBe(503);
-      expectCanonical(result.body, "ANALYTICS_SOURCE_UNCONFIGURED");
-      expect(result.body.retryable).toBe(false);
+      const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}));
+      expect(result.status).toBe(200);
+      expect(readResponseSchema(analyticsViewSchemas[view]!).safeParse(result.body).success).toBe(true);
+      expect(result.body.dataState).toBe("partial");
+      expect(result.body.data.sources.every((x: { state: string; reasonCode: string }) => x.state === "unconfigured" && x.reasonCode === "SOURCE_UNCONFIGURED")).toBe(true);
+      expect(result.body.sourceFreshness.every((f: { freshnessState: string; lastSourceSuccessAt: unknown }) => f.freshnessState === "neverSynced" && f.lastSourceSuccessAt === null)).toBe(true);
+      expect(result.body.coverage).toMatchObject({ observedCount: 0, complete: false });
+      expect(JSON.stringify(result.body.data)).not.toMatch(/"state":"known"/);
     }
     for (const view of ["launchSnapshot", "launchControl", "launchReconciliation", "campaignFunnel", "metricDictionary"]) {
       const result = await post(envelope(view, view === "campaignFunnel" ? { campaignId: "x", cohort: "first-wave" } : {}));
@@ -138,8 +142,8 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
     expect(never.body.data.daily.every((d: { tiktok: unknown }) => d.tiktok === null)).toBe(true);
     expect(readResponseSchema(analyticsViewSchemas.overviewSummary!).safeParse(never.body).success).toBe(true);
     const paid = await post(envelope("paidMedia", { rights: "all", platform: "all" }));
-    expect(paid.status).toBe(503);
-    expectCanonical(paid.body, "ANALYTICS_SOURCE_UNCONFIGURED");
+    expect(paid.status).toBe(200);
+    expect(paid.body.data.sources).toEqual([{ source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]);
   });
 
   it("refuses forged filters, periods and envelopes with a canonical validation error and no source access", async () => {
@@ -166,13 +170,15 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
     expect(explicit.body.data.window).toEqual({ start: "2026-10-01", end: "2026-10-31", timezone: analyticsTestTimezone });
   });
 
-  it("fails closed on a malformed or foreign source answer, and keeps other read models routed as before", async () => {
+  it("degrades a malformed source to its own invalid state, refuses a foreign source scope, and keeps other read models routed as before", async () => {
     let answer: unknown = null;
     const { post, envelope } = await start({ analyticsSources: { ...syntheticAnalyticsSources(), orders: async request => answer ?? ordersFixture(request) } });
     answer = { scope: analyticsTestScope, window: { start: "2026-10-08", end: "2026-11-06", timezone: analyticsTestTimezone }, feeds: [{ feedRef: "x", observedAt: "2026-13-01T00:00:00Z" }] };
     const malformed = await post(envelope("overviewSummary"));
-    expect(malformed.status).toBe(502);
-    expectCanonical(malformed.body, "ANALYTICS_SOURCE_INVALID");
+    expect(malformed.status).toBe(200);
+    expect(malformed.body.data.sources[0]).toEqual({ source: "orders", state: "invalid", reasonCode: "SOURCE_RESPONSE_INVALID" });
+    expect(malformed.body.data.orders).toMatchObject({ state: "unknown", value: null, reasonCode: "ORDERS_SOURCE_INVALID" });
+    expect(malformed.body.data.measures.find((m: { key: string }) => m.key === "paidMediaSpend").value).toBe(650_000);
     answer = { ...ordersFixture({ scope: analyticsTestScope, window: { start: "2026-10-08", end: "2026-11-06", timezone: analyticsTestTimezone } }), scope: { ...analyticsTestScope, workspaceId: "foreign" } };
     const foreign = await post(envelope("overviewSummary"));
     expect(foreign.status).toBe(403);

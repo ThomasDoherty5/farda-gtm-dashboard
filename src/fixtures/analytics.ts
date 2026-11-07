@@ -5,7 +5,7 @@ import { metricDictionaryDemo } from "./headlineMetrics";
  * fixtures (FE01-03): money that also appears on the Overview is derived from `overviewOriginal`, so the two reconcile.
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
-import type { Measure } from "@/adapter/viewSchemas/analytics";
+import type { Measure, SourceStatus } from "@/adapter/viewSchemas/analytics";
 import { DEMO_NOW, overviewOriginal } from "./overview";
 
 const usd = (dollars: number): Money => ({ minorUnits: Math.round(dollars * 100), currency: "USD" });
@@ -173,6 +173,7 @@ export type AttributionData = {
   creators: { handle: string; roi: number }[];
   provenance: Provenance;
   measures?: Measure[];
+  sources?: SourceStatus[];
 };
 
 const o = overviewOriginal;
@@ -223,7 +224,8 @@ export const attributionDemo = {
 
 /* ---------- Paid media (Figma 30:349) ---------- */
 
-export type RightsState = "cleared" | "expiring" | "notGranted" | "unknown";
+/** "expired" is served only by the agent: lapsed rights are never shown as expiring in 0 days. */
+export type RightsState = "cleared" | "expiring" | "expired" | "notGranted" | "unknown";
 export type PaidMediaData = {
   datasetKey: "paid-media-demo" | "paid-media-observed";
   periodLabel: string;
@@ -234,6 +236,7 @@ export type PaidMediaData = {
   assetTotal: number;
   provenance: Provenance;
   measures?: Measure[];
+  sources?: SourceStatus[];
 };
 
 export const paidMediaDemo = {
@@ -297,6 +300,7 @@ export type CustomerJourneyObservedData = Omit<CustomerJourneyDemoData, "dataset
   websiteNetReceipts: Money | null; globalAov: Money | null; globalOrders: number | null;
   tickets: CustomerJourneyDemoData["tickets"] | null; resolution: CustomerJourneyDemoData["resolution"] | null; returns: CustomerJourneyDemoData["returns"] | null;
   measures: Measure[];
+  sources: SourceStatus[];
 };
 export type CustomerJourneyDemoData = {
   datasetKey: "customer-journey-demo";

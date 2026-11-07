@@ -18,7 +18,7 @@ const RIGHTS = [
   { value: "unknown", label: "unknown" },
 ];
 const allowed = (options: { value: string }[], raw: string | null) => (options.some((o) => o.value === raw) ? (raw as string) : "all");
-const RIGHTS_TONE: Record<RightsState, BadgeTone> = { cleared: "success", expiring: "warning", notGranted: "danger", unknown: "neutral" };
+const RIGHTS_TONE: Record<RightsState, BadgeTone> = { cleared: "success", expiring: "warning", expired: "danger", notGranted: "danger", unknown: "neutral" };
 
 /** Paid media (Figma source 30:349, owner THO-293, CTRL-204 to CTRL-206). Media spend is never counted as creator content fees. */
 export function PaidMediaPage() {
@@ -49,9 +49,17 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
   const [asOf, setAsOf] = useState(false);
   const [rights, setRights] = useState<PaidMediaData["assets"][number] | null>(null);
   const [source, setSource] = useState<PaidMediaData["assets"][number] | null>(null);
-  const spend = data.channels.length && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
+  // A total is known only when every input is: served data must cover both platforms, and its media spend (with GMV Max) is the server's.
+  const observed = data.datasetKey === "paid-media-observed";
+  const allPlatforms = !observed || data.channels.length === 2;
+  const served = data.measures?.find((x) => x.key === "paidMediaSpend");
+  const spend = observed ? (served?.state === "known" ? served.value : null)
+    : data.channels.length && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
   const impressions = data.channels.reduce((s, c) => s + c.impressions, 0);
   const clicks = data.channels.reduce((s, c) => s + c.clicks, 0);
+  const totalsKnown = data.channels.length > 0 && allPlatforms;
+  // CPC pairs spend and clicks from the same standard campaigns (GMV Max is excluded from both).
+  const standardSpend = totalsKnown && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
   const acquisition = spend === null || !data.creatorSampleEconomics ? null : spend + data.creatorSampleEconomics.minorUnits;
   const lead = [...data.channels].sort((a, b) => (b.spend?.minorUnits ?? -1) - (a.spend?.minorUnits ?? -1))[0];
   const ranked = [...data.assets].sort((a, b) => b.clicks / b.impressions - a.clicks / a.impressions);
@@ -64,9 +72,9 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
       </Notice>
       <KpiGrid>
         <KpiCard label="Media spend" context={data.channels.map((c) => `${c.label} ${m(c.spend?.minorUnits)}`).join(" + ")} testId="metric-media-spend">{m(spend)}</KpiCard>
-        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{data.channels.length ? compact(impressions) : "Unknown"}</KpiCard>
-        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{data.channels.length ? compact(clicks) : "Unknown"} / {pctText(clicks, impressions)}</KpiCard>
-        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{spend !== null && clicks > 0 ? dollars(spend / 100 / clicks) : "N/A"}</KpiCard>
+        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{totalsKnown ? compact(impressions) : "Unknown"}</KpiCard>
+        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{totalsKnown ? `${compact(clicks)} / ${pctText(clicks, impressions)}` : "Unknown / N/A"}</KpiCard>
+        <KpiCard label="Blended CPC" context={`${m(standardSpend)} ÷ ${totalsKnown ? count(clicks) : "unknown"} clicks`} testId="metric-cpc">{standardSpend !== null && clicks > 0 ? dollars(standardSpend / 100 / clicks) : "N/A"}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="spend-title" className={styles.card20}>
