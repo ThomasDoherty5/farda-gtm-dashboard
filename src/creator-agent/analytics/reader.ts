@@ -107,7 +107,7 @@ export function createAnalyticsReader(options: Options) {
    * Reads one source. Absent, failing, malformed, mis-scoped-period or future-dated answers become that source's state, so the
    * other sources still render. A source answering for another workspace or refusing this scope is a security failure (403).
    */
-  async function observe<T extends { scope: unknown; window: ReportingWindow }>(key: AnalyticsSourceKey, schema: Parser<T>, window: ReportingWindow, now: number): Promise<Observation<T>> {
+  async function observe<T extends { scope: unknown; window: ReportingWindow }>(key: AnalyticsSourceKey, schema: Parser<T>, window: ReportingWindow): Promise<Observation<T>> {
     const reader = sources[key];
     if (!reader) return { kind: "unconfigured" };
     let raw: unknown;
@@ -122,9 +122,24 @@ export function createAnalyticsReader(options: Options) {
     const snapshot = parsed.data;
     if (digest(snapshot.scope) !== digest(scope)) throw new AnalyticsError("SOURCE_SCOPE_DENIED", 403, "The source answered for a different scope.");
     if (digest(snapshot.window) !== digest(window)) return { kind: "invalid", reason: "SOURCE_PERIOD_MISMATCH" };
-    const feeds = "feeds" in snapshot ? snapshot.feeds as { observedAt: string }[] : [(snapshot as unknown as { feed: { observedAt: string } }).feed];
-    if (feeds.some(f => Date.parse(f.observedAt) > now + CLOCK_SKEW_MS)) return { kind: "invalid", reason: "SOURCE_TIME_UNVERIFIED" };
     return { kind: "observed", snapshot };
+  }
+  /**
+   * The instant every time rule of this read is judged at: freshness and staleness (D-13), the 2-minute skew allowance, future-dated
+   * observations and rows, and asset rights expiry. It is read after every source await, so a limit or a rights date that passes while
+   * a source is answering is applied. The request time only chose the window; a clock that steps back cannot make a read fresher.
+   */
+  function projectionTime(requestedAt: number) {
+    const at = clock();
+    if (!Number.isFinite(at)) throw new AnalyticsError("SOURCE_TIME_UNVERIFIED", 503, "The service clock could not be verified.");
+    return Math.max(at, requestedAt);
+  }
+  /** An observation stamped later than the projection time (beyond the skew allowance) is unverified, not current. */
+  function atProjection<T extends object>(o: Observation<T>, at: number): Observation<T> {
+    if (o.kind !== "observed") return o;
+    const snapshot = o.snapshot as { feeds?: { observedAt: string }[]; feed?: { observedAt: string } };
+    const feeds = snapshot.feeds ?? (snapshot.feed ? [snapshot.feed] : []);
+    return feeds.some(f => Date.parse(f.observedAt) > at + CLOCK_SKEW_MS) ? { kind: "invalid", reason: "SOURCE_TIME_UNVERIFIED" } : o;
   }
   const reasonOf = (key: AnalyticsSourceKey, o: Observation<unknown>) =>
     o.kind === "observed" ? null : `${SOURCE_PREFIX[key]}_SOURCE_${o.kind === "unconfigured" ? "UNCONFIGURED" : o.kind === "unavailable" ? "UNAVAILABLE" : "INVALID"}`;
@@ -350,8 +365,9 @@ export function createAnalyticsReader(options: Options) {
 
   /* ---------- Views ---------- */
 
-  async function overview(window: ReportingWindow, now: number) {
-    const [ordersObs, adsObs] = await Promise.all([observe("orders", ordersSnapshotSchema, window, now), observe("adPlatforms", adPlatformsSnapshotSchema, window, now)]);
+  async function overview(window: ReportingWindow, requestedAt: number) {
+    const observations = await Promise.all([observe("orders", ordersSnapshotSchema, window), observe("adPlatforms", adPlatformsSnapshotSchema, window)]);
+    const now = projectionTime(requestedAt), ordersObs = atProjection(observations[0], now), adsObs = atProjection(observations[1], now);
     const o = orderFacts(ordersObs, window, now), a = adFacts(adsObs, now), t = orderTotals(o), nowIso = new Date(now).toISOString();
     const days = daysOf(window), known = o.channels.filter(c => c.known && c.usd);
     const perDay = (c: ChannelFacts | undefined, day: string) => !c || !c.known || !c.usd ? null
@@ -377,8 +393,9 @@ export function createAnalyticsReader(options: Options) {
     return { data, ...settle([...o.primary, ...a.freshness], reasons, 4), sourceFreshness: [...o.freshness, ...a.freshness] };
   }
 
-  async function attribution(window: ReportingWindow, now: number) {
-    const [ordersObs, adsObs] = await Promise.all([observe("orders", ordersSnapshotSchema, window, now), observe("adPlatforms", adPlatformsSnapshotSchema, window, now)]);
+  async function attribution(window: ReportingWindow, requestedAt: number) {
+    const observations = await Promise.all([observe("orders", ordersSnapshotSchema, window), observe("adPlatforms", adPlatformsSnapshotSchema, window)]);
+    const now = projectionTime(requestedAt), ordersObs = atProjection(observations[0], now), adsObs = atProjection(observations[1], now);
     const o = orderFacts(ordersObs, window, now), a = adFacts(adsObs, now), t = orderTotals(o), nowIso = new Date(now).toISOString();
     const allKnown = o.channels.length > 0 && o.channels.every(c => c.known && c.usd);
     const days = daysOf(window), weeks: { label: string; note: string | null; shopify: Money; tiktok: Money }[] = [];
@@ -419,8 +436,10 @@ export function createAnalyticsReader(options: Options) {
     return { data, ...settle([...o.primary, ...a.freshness], reasons, 4), sourceFreshness: [...o.freshness, ...a.freshness] };
   }
 
-  async function paidMedia(window: ReportingWindow, now: number, filters: z.infer<typeof analyticsFilters.paidMedia>) {
-    const adsObs = await observe("adPlatforms", adPlatformsSnapshotSchema, window, now);
+  async function paidMedia(window: ReportingWindow, requestedAt: number, filters: z.infer<typeof analyticsFilters.paidMedia>) {
+    const observation = await observe("adPlatforms", adPlatformsSnapshotSchema, window);
+    // Rights expiry ("today") and freshness are judged after the await, so rights that lapse while the platform answers show expired.
+    const now = projectionTime(requestedAt), adsObs = atProjection(observation, now);
     const a = adFacts(adsObs, now), nowIso = new Date(now).toISOString(), today = localDay(now, window.timezone);
     const assets = a.platforms.filter(p => p.known && p.feed).flatMap(p => p.feed!.assets.map(asset => {
       const id = alias("asset", asset.assetRef);
@@ -451,9 +470,11 @@ export function createAnalyticsReader(options: Options) {
     return { data, ...settle(a.freshness, new Set(a.reasons), 2), sourceFreshness: a.freshness };
   }
 
-  async function customerJourney(window: ReportingWindow, now: number) {
-    const [ordersObs, sessionsObs, supportObs] = await Promise.all([observe("orders", ordersSnapshotSchema, window, now),
-      observe("sessions", sessionsSnapshotSchema, window, now), observe("support", supportSnapshotSchema, window, now)]);
+  async function customerJourney(window: ReportingWindow, requestedAt: number) {
+    const observations = await Promise.all([observe("orders", ordersSnapshotSchema, window),
+      observe("sessions", sessionsSnapshotSchema, window), observe("support", supportSnapshotSchema, window)]);
+    const now = projectionTime(requestedAt), ordersObs = atProjection(observations[0], now);
+    const sessionsObs = atProjection(observations[1], now), supportObs = atProjection(observations[2], now);
     const o = orderFacts(ordersObs, window, now), t = orderTotals(o), nowIso = new Date(now).toISOString();
     const reasons = new Set(o.reasons);
     const shopify = o.channels.find(c => c.channel === "shopify"), tiktok = o.channels.find(c => c.channel === "tiktokShop");
@@ -510,10 +531,11 @@ export function createAnalyticsReader(options: Options) {
     if (!isAnalyticsViewKey(viewKey)) throw new AnalyticsError("VALIDATION_FAILED", 400, "Unknown analytics view.");
     const parsed = analyticsFilters[viewKey].safeParse(rawFilters);
     if (!parsed.success) throw new AnalyticsError("VALIDATION_FAILED", 400, "Unknown or invalid filter for this view.");
-    const now = clock();
-    const window = resolveWindow(period, parsed.data.preset, now, timezone);
-    const result = viewKey === "overviewSummary" ? await overview(window, now) : viewKey === "attribution" ? await attribution(window, now)
-      : viewKey === "paidMedia" ? await paidMedia(window, now, analyticsFilters.paidMedia.parse(parsed.data)) : await customerJourney(window, now);
+    // The request time chooses the reporting window only. Each view reads the clock again after its source awaits (projectionTime).
+    const requestedAt = clock();
+    const window = resolveWindow(period, parsed.data.preset, requestedAt, timezone);
+    const result = viewKey === "overviewSummary" ? await overview(window, requestedAt) : viewKey === "attribution" ? await attribution(window, requestedAt)
+      : viewKey === "paidMedia" ? await paidMedia(window, requestedAt, analyticsFilters.paidMedia.parse(parsed.data)) : await customerJourney(window, requestedAt);
     return { ...result, version: "an1-" + digest([viewKey, result.data, result.sourceFreshness, result.coverage]) };
   }
   return { read };

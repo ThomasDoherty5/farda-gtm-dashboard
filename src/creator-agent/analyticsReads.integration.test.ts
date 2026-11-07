@@ -173,6 +173,21 @@ describe("THO-293 analytics reads through the authenticated creator-agent servic
     expect(paid.body.data.sources).toEqual([{ source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]);
   });
 
+  it("judges freshness over HTTP at projection time when the order limit passes during the source await", async () => {
+    let t = analyticsTestTime;
+    const orders = async (request: AnalyticsSourceRequest) => {
+      const s = ordersFixture(request);
+      for (const feed of s.feeds) feed.lastSuccessAt = new Date(analyticsTestTime - 14 * 60_000).toISOString();
+      t += 2 * 60_000;
+      return s;
+    };
+    const { post, envelope } = await start({ operations: { now: () => t }, analyticsSources: { ...syntheticAnalyticsSources(), orders } });
+    const result = await post(envelope("overviewSummary"));
+    expect(result.status).toBe(200);
+    expect(result.body.dataState).toBe("stale");
+    expect(result.body.data.sources[0]).toEqual({ source: "orders", state: "stale", reasonCode: "SOURCE_STALE" });
+  });
+
   it("refuses forged filters, periods and envelopes with a canonical validation error and no source access", async () => {
     const { calls, sources } = counted();
     const { post, envelope } = await start({ analyticsSources: sources });

@@ -424,3 +424,101 @@ describe("paid media and customer journey", () => {
     expect(z.reviews.ratedCount).toMatchObject({ state: "unknown", value: null });
   });
 });
+
+describe("time rules are judged at projection time, after the source awaits", () => {
+  /** An injected clock that a synthetic source advances while the read is awaiting it. */
+  function steppingClock() {
+    let t = T;
+    return { now: () => t, advance: (ms: number) => { t += ms; } };
+  }
+  type Data = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  it("marks an orders feed stale when its 15-minute limit passes while the orders reader is answering", async () => {
+    const clock = steppingClock();
+    const orders = async (r: AnalyticsSourceRequest) => {
+      const s = ordersFixture(r);
+      for (const f of s.feeds) f.lastSuccessAt = new Date(T - 14 * 60_000).toISOString(); // current when the read starts
+      clock.advance(2 * 60_000); // 16 minutes old by the time the answer is projected
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), orders }, clock.now).read("overviewSummary", {}, null);
+    expect(result.dataState).toBe("stale");
+    const ordersFreshness = result.sourceFreshness.filter(f => f.sourceRef.source.startsWith("orders."));
+    expect(ordersFreshness.map(f => [f.freshnessState, f.staleReasonCode])).toEqual([["error", "SOURCE_STALE"], ["error", "SOURCE_STALE"]]);
+    expect((result.data as Data).sources[0]).toEqual({ source: "orders", state: "stale", reasonCode: "SOURCE_STALE" });
+    // Figures still render, but their observation stamp is the projection time, not the request time.
+    expect((result.data as Data).orders.observedAt).toBe(new Date(T + 2 * 60_000).toISOString());
+  });
+
+  it("marks ad platforms stale when their 26-hour limit passes during the await", async () => {
+    const clock = steppingClock();
+    const adPlatforms = async (r: AnalyticsSourceRequest) => {
+      const s = adPlatformsFixture(r);
+      for (const f of s.feeds) f.lastSuccessAt = new Date(T - 25.5 * 3_600_000).toISOString();
+      clock.advance(3_600_000);
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), adPlatforms }, clock.now).read("paidMedia", {}, null);
+    expect(result.dataState).toBe("stale");
+    expect(result.sourceFreshness.every(f => f.freshnessState === "error" && f.staleReasonCode === "SOURCE_STALE")).toBe(true);
+    expect((result.data as Data).sources).toEqual([{ source: "adPlatforms", state: "stale", reasonCode: "SOURCE_STALE" }]);
+  });
+
+  it("keeps sessions and support on the same projection time in the customer journey", async () => {
+    const clock = steppingClock();
+    const support = async (r: AnalyticsSourceRequest) => {
+      const s = supportFixture(r);
+      s.feed.lastSuccessAt = new Date(T - 23.5 * 3_600_000).toISOString();
+      clock.advance(3_600_000);
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), support }, clock.now).read("customerJourney", {}, null);
+    expect(result.dataState).toBe("stale");
+    expect((result.data as Data).sources.find((x: { source: string }) => x.source === "support")).toEqual({ source: "support", state: "stale", reasonCode: "SOURCE_STALE" });
+  });
+
+  it("shows rights that lapse during the await as expired, and counts the remaining days from projection time", async () => {
+    const clock = steppingClock();
+    const adPlatforms = async (r: AnalyticsSourceRequest) => {
+      const s = adPlatformsFixture(r);
+      s.feeds[1]!.assets[0]!.expiresOn = "2026-11-06"; // expiring today (America/Los_Angeles) when the read starts
+      s.feeds[1]!.assets.push({ assetRef: "synthetic-tiktok-asset-3", label: "AD-04", clicks: 10, impressions: 500, rights: "expiring", expiresOn: "2026-11-18" });
+      clock.advance(13 * 3_600_000); // 2026-11-07 01:00 in Los Angeles
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), adPlatforms }, clock.now).read("paidMedia", {}, null);
+    const assets = (result.data as Data).assets as { label: string; rights: string; expiresInDays: number | null }[];
+    expect(assets.find(a => a.label.startsWith("AD-03"))).toMatchObject({ rights: "expired", expiresInDays: null });
+    expect(assets.find(a => a.label.startsWith("AD-04"))).toMatchObject({ rights: "expiring", expiresInDays: 11 });
+    expect(analyticsViewSchemas.paidMedia!.safeParse(result.data).success).toBe(true);
+  });
+
+  it("applies the 2-minute skew allowance against projection time, not request time", async () => {
+    const clock = steppingClock();
+    const orders = async (r: AnalyticsSourceRequest) => {
+      const s = ordersFixture(r);
+      // Three minutes ahead of the request time, but only one minute ahead of the time the answer is projected.
+      s.feeds[0]!.observedAt = new Date(T + 3 * 60_000).toISOString();
+      s.feeds[0]!.lastSuccessAt = new Date(T + 3 * 60_000).toISOString();
+      s.feeds[0]!.orders[0]!.placedAt = new Date(T + 3 * 60_000).toISOString();
+      clock.advance(2 * 60_000);
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), orders }, clock.now).read("overviewSummary", {}, null);
+    expect(result.dataState).toBe("ready");
+    expect((result.data as Data).sources[0]).toEqual({ source: "orders", state: "current", reasonCode: null });
+  });
+
+  it("never judges a read fresher than its request time when the clock steps back during the await", async () => {
+    const clock = steppingClock();
+    const orders = async (r: AnalyticsSourceRequest) => {
+      const s = ordersFixture(r);
+      for (const f of s.feeds) f.lastSuccessAt = new Date(T - 16 * 60_000).toISOString(); // already stale at request time
+      clock.advance(-10 * 60_000);
+      return s;
+    };
+    const result = await reader({ ...syntheticAnalyticsSources(), orders }, clock.now).read("overviewSummary", {}, null);
+    expect(result.dataState).toBe("stale");
+    expect((result.data as Data).orders.observedAt).toBe(new Date(T).toISOString());
+  });
+});
