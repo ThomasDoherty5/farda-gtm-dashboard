@@ -48,6 +48,8 @@ import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifec
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
 import { operationsControlAction, operationsControlFilters, operationsHealthAction } from "./operationsControlsSchema.ts";
+import { createSourcingPlanReader, isSourcingPlanRead } from "./sourcing/reader.ts";
+import type { SourcingPlanSourceReader } from "./sourcing/source.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -70,6 +72,7 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
   operationsControlSource?: OperationsControlSource;
+  sourcingPlanSource?: SourcingPlanSourceReader;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -94,6 +97,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let controls: ReturnType<typeof createOperationsControls>;
+  let sourcingPlan: ReturnType<typeof createSourcingPlanReader>;
   try {
     offers = new OfferRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, {
       ...options.offerAuthority,
@@ -126,6 +130,9 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now });
+    sourcingPlan = createSourcingPlanReader({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      source: options.sourcingPlanSource, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -444,6 +451,7 @@ export function createAgentServer(options: AgentServerOptions) {
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
+        dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: "notConnected", repairExecution: "notConnected", assignmentAuthority: "source-owned" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
@@ -472,7 +480,12 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const input = readSchema.parse(await bodyOf(req));
+        const body = await bodyOf(req);
+        if (isSourcingPlanRead(body)) {
+          const result = await sourcingPlan.respond(body, auth.role, ADAPTER_SCHEMA);
+          return reply(res, result.status, result.body);
+        }
+        const input = readSchema.parse(body);
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")
