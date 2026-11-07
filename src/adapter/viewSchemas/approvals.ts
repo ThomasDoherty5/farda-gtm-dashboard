@@ -21,6 +21,7 @@
 import { z } from "zod";
 import { actionResponseSchema, actionStateSchema, environmentSchema, executionModeSchema, moneySchema, sourceRefSchema } from "../contract";
 import { nativeApprovalViewSchema, nativeRunViewSchema } from "../../creator-agent/actions/views";
+import { safeRuntimeRunSchema } from "../../creator-agent/jobs/runtimeViews";
 import { exportPayloadSchema, readinessPayloadSchema, reference } from "../../creator-agent/actions/contract";
 import { previewPayload } from "../../creator-agent/actions/wire";
 
@@ -176,7 +177,7 @@ export const runDetailSchema = z
 
 export const approvalViewSchemas: Record<string, z.ZodTypeAny> = {
   approvalDetail: z.union([nativeApprovalViewSchema, approvalDetailSchema]),
-  runDetail: z.union([nativeRunViewSchema, runDetailSchema]),
+  runDetail: z.union([nativeRunViewSchema, safeRuntimeRunSchema, runDetailSchema]),
 };
 
 /* ---------- action responses ---------- */

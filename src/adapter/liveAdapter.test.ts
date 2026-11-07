@@ -116,13 +116,20 @@ describe("failures map to the right categories", () => {
     [403, "SOURCE_SCOPE_DENIED", "applied", "forbidden"],
     [401, "SESSION_EXPIRED", "uncertain", "unauthenticated"],
   ] as const)("preserves a typed %i write outcome without exposing denied source details", async (status, code, executionCertainty, category) => {
-    const body = { code, executionCertainty, retryable: true, message: "Synthetic private source observation exists" };
+    const body = { code, executionCertainty, retryable: true, message: "Synthetic private source observation exists",
+      currentVersion: "private-version", fieldErrors: { owner: "private owner" }, reasonCodes: ["PRIVATE_REASON"], rowIndex: 3 };
     for (const call of [(a: ReturnType<typeof live>) => a.submitAction(act()), (a: ReturnType<typeof live>) => a.saveResource(save())]) {
       const error = await fail(call(live(failingTransport(() => new TransportFailure("http", { status, body })))));
       expect(error.category).toBe(category);
       expect(error.body).toMatchObject({ code, executionCertainty, retryable: false });
       expect(error.message).not.toContain("Synthetic private");
+      for (const field of ["currentVersion", "fieldErrors", "reasonCodes", "rowIndex"]) expect(error.body).not.toHaveProperty(field);
     }
+  });
+  it("keeps typed policy import reasons and row index on permitted validation responses", async () => {
+    const body = { code: "POLICY_VIOLATION", reasonCodes: ["GUARANTEED_FEE_FORBIDDEN"], rowIndex: 4, executionCertainty: "notApplied" };
+    const error = await fail(live(failingTransport(() => new TransportFailure("http", { status: 422, body }))).saveResource(save()));
+    expect(error.body).toMatchObject(body); expect(error.category).toBe("validation");
   });
   it("does not trust malformed certainty claims on an authentication refusal", async () => {
     for (const status of [401, 403]) for (const body of [

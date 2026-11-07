@@ -21,9 +21,10 @@ const policyHash = (policy: ApprovalPolicy) => digest(Object.fromEntries(Object.
 /** Source leases may renew without changing the exact approved action. Material source revisions may not. */
 export function stableApprovalDraft(draft: ApprovalDraft) {
   const value = Object.fromEntries(Object.entries(draft).filter(([key]) => key !== "sourceValidUntil" && key !== "gates" && key !== "historicalLiability"));
-  return { ...value, gates: Object.fromEntries(Object.entries(draft.gates).map(([key, gate]) => {
-    if (gate.state !== "satisfied") return [key, gate];
-    return [key, { state: gate.state, sourceRef: gate.sourceRef, sourceVersion: gate.sourceVersion }];
+  return { ...value, gates: Object.fromEntries(Object.entries(draft.gates).flatMap(([key, gate]): [string, unknown][] => {
+    if (!gate) return [];
+    if (gate.state !== "satisfied") return [[key, gate]];
+    return [[key, { state: gate.state, sourceRef: gate.sourceRef, sourceVersion: gate.sourceVersion }]];
   })), historicalLiability: draft.historicalLiability ? { sourceRef: draft.historicalLiability.sourceRef, sourceVersion: draft.historicalLiability.sourceVersion, acceptedMinor: draft.historicalLiability.acceptedMinor, currency: draft.historicalLiability.currency } : null };
 }
 export function approvalDispatchBinding(manifest: ApprovalManifest, itemRef: string): DispatchApprovalBinding {
@@ -121,7 +122,7 @@ export class ApprovalRepository {
     if (!actor || !actorCanPropose(actor, this.now()) || !policy || policyHash(policy) !== manifest.policyHash || draftPolicyReasons(draft, policy, this.now()).length) return null;
     if (intent.decision && (!slack || slack.state !== "current" || digest(stableSlack(slack)) !== digest(stableSlack(intent.decision)) || actor.personRef !== slack.personRef || decisionAuthorityReasons(manifest, actor, policy, this.now()).length)) return null;
     const validUntil = minTime(actor.validUntil, policy.validUntil, draft.sourceValidUntil, draft.expiresAt, ...(slack ? [slack.validUntil] : []),
-      ...Object.values(draft.gates).flatMap(gate => gate.state === "satisfied" ? [gate.validUntil] : []), ...(draft.historicalLiability ? [draft.historicalLiability.validUntil] : []));
+      ...Object.values(draft.gates).flatMap(gate => gate?.state === "satisfied" ? [gate.validUntil] : []), ...(draft.historicalLiability ? [draft.historicalLiability.validUntil] : []));
     return { manifest, draft, authority: { scope: this.scope, actor, slack, linearRecords: [], linearWriteIntent: intent }, revision: head.revision, policyHash: policyHash(policy), validUntil };
   }
 
@@ -348,7 +349,7 @@ export class ApprovalRepository {
     const reasons = [...draftPolicyReasons(draft, policy, this.now()), ...decisionAuthorityReasons(manifest, human, policy, this.now())];
     if (reasons.length) return held(...reasons);
     const leases = [draft.sourceValidUntil, draft.expiresAt, policy.validUntil, human.validUntil, slack.validUntil, requestRead.validUntil, decisionRead.validUntil,
-      ...Object.values(draft.gates).flatMap(gate => gate.state === "satisfied" ? [gate.validUntil] : []), ...(draft.historicalLiability ? [draft.historicalLiability.validUntil] : [])];
+      ...Object.values(draft.gates).flatMap(gate => gate?.state === "satisfied" ? [gate.validUntil] : []), ...(draft.historicalLiability ? [draft.historicalLiability.validUntil] : [])];
     const validUntil = minTime(...leases), now = this.now();
     if (!fresh(human.observedAt, human.validUntil, now) || !fresh(requestRead.observedAt, requestRead.validUntil, now) || !fresh(decisionRead.observedAt, decisionRead.validUntil, now) || Date.parse(validUntil) <= now) return held("APPROVAL_PROOF_EXPIRED");
     const proof: VerifiedApprovalProof = { verificationRef: `j04:verification:${randomUUID()}`, binding, approvalRevision: head.revision, decisionReceipt: receipt,

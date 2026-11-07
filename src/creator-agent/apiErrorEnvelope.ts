@@ -16,6 +16,10 @@ export function apiErrorEnvelope(status: number, raw: unknown, requestId: string
     retryable: status === 429 || status >= 500 && certainty !== "uncertain",
     retryAfterMs: typeof value.retryAfterMs === "number" && Number.isSafeInteger(value.retryAfterMs) && value.retryAfterMs >= 0 ? value.retryAfterMs : null,
     executionCertainty: certainty,
+    ...(![401, 403].includes(status) && Array.isArray(value.reasonCodes)
+      ? { reasonCodes: value.reasonCodes.filter((v): v is string => typeof v === "string" && /^[A-Z][A-Z0-9_]{0,99}$/.test(v)).slice(0, 100) } : {}),
+    ...(![401, 403].includes(status) && (value.rowIndex === null || typeof value.rowIndex === "number" && Number.isSafeInteger(value.rowIndex) && value.rowIndex >= 0 && value.rowIndex < 100)
+      ? { rowIndex: value.rowIndex as number | null } : {}),
     ...(![401, 403].includes(status) && (typeof value.currentVersion === "string" || value.currentVersion === null) ? { currentVersion: value.currentVersion } : {}),
     ...(![401, 403].includes(status) && value.fieldErrors && typeof value.fieldErrors === "object" && !Array.isArray(value.fieldErrors)
       ? { fieldErrors: Object.fromEntries(Object.entries(value.fieldErrors).filter(([key, field]) => /^[A-Za-z0-9_.-]{1,120}$/.test(key) && typeof field === "string" && field.length <= 500)) } : {}) };

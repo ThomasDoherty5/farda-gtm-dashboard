@@ -24,7 +24,7 @@ test.beforeEach(async ({}) => {
   a.policy.observedAt = a.at(); a.policy.validUntil = a.until();
   a.draft.actionKind = "synthetic-local-task"; a.command.actionKind = a.draft.actionKind; a.draft.phase = "other";
   a.draft.acquisitionTerms = null; a.draft.effects.sendsCreator = false; a.draft.sourceValidUntil = a.until(); a.draft.expiresAt = a.until();
-  for (const gate of Object.values(a.draft.gates)) if (gate.state === "satisfied") gate.validUntil = a.until();
+  for (const gate of Object.values(a.draft.gates)) if (gate?.state === "satisfied") gate.validUntil = a.until();
   a.draft.items = [0, 1, 2].map(n => ({ ...a.draft.items[0]!, itemRef: "synthetic:item-" + n, targetRef: "synthetic:task-" + n }));
   a.draft.bounds.maxItems = 3; a.command.selectionRefs = a.draft.items.map(item => item.itemRef);
   for (const human of a.humans.values()) { human.observedAt = a.at(); human.validUntil = a.until(); }

@@ -62,9 +62,12 @@ export function createOperations(database: string | DatabaseType, scope: Operati
   let closed = false;
   const close = () => { if (closed) return; closed = true; try { connectionLedger.close(); } finally { if (ownsDatabase) operationDb.close(); } };
   const safeScope = { workspaceId: scope.workspaceId, accountIds: [scope.accountId], environment: scope.environment, authorizationScopeVersion: "operations.scope.v1" };
-  const sourceOwned = (handler: string) => handler === "dispatch-approved.v1" || handler === "export-ledger-snapshot.v1";
-  const publicJobPredicate = "json_extract(d.body,'$.handler') NOT IN ('dispatch-approved.v1','export-ledger-snapshot.v1')";
-  const publicRunPredicate = "json_extract(definition,'$.handler') NOT IN ('dispatch-approved.v1','export-ledger-snapshot.v1')";
+  // Only these original observation handlers inherit legacy API authority. New source-owned families
+  // must explicitly expose their own named/source-authorized projections and controls.
+  const legacyHandlers = new Set(["record-reference.v1", "draft-reference.v1", "probe-provider-health.v1"]);
+  const sourceOwned = (handler: string) => !legacyHandlers.has(handler);
+  const publicJobPredicate = "json_extract(d.body,'$.handler') IN ('record-reference.v1','draft-reference.v1','probe-provider-health.v1')";
+  const publicRunPredicate = "json_extract(definition,'$.handler') IN ('record-reference.v1','draft-reference.v1','probe-provider-health.v1')";
 
   async function handle({ req, res, role, reply, bodyOf }: HttpContext): Promise<boolean> {
     const url = new URL(req.url ?? "/", "http://localhost");
