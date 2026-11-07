@@ -1,3 +1,4 @@
+import { ReportError } from "./slackReporting/contract.ts";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -108,7 +109,7 @@ export function createAgentServer(options: AgentServerOptions) {
   if (options.runtime?.machine) {
     const token = options.runtime.machine.token;
     if (token.length < 32 || [options.readToken, options.reviewToken, options.actionFoundation?.worker?.token,
-      options.actionFoundation?.decisionRelay?.token].some(other => other !== undefined && safeEqual(token, other)))
+      options.actionFoundation?.decisionRelay?.token, options.actionFoundation?.reporting?.token].some(other => other !== undefined && safeEqual(token, other)))
       throw new Error("Runtime machine authority requires its own distinct server-only credential.");
   }
   if (options.commercialPolicy && options.offerAuthority?.commercialPolicy && options.commercialPolicy !== options.offerAuthority.commercialPolicy)
@@ -328,7 +329,7 @@ export function createAgentServer(options: AgentServerOptions) {
   ]);
   const readSchema = z.discriminatedUnion("viewKey", [
     readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240), manifestVersion:z.number().int().positive().safe().optional(), history:z.boolean().optional(), beforeVersion:z.number().int().positive().safe().optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(1400) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: scorecardPreviewFilters }),
     readBase.extend({ viewKey: z.literal("recruitmentQueue"), filters: recruitmentFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -407,6 +408,18 @@ export function createAgentServer(options: AgentServerOptions) {
           throw new RuntimeApiError("RUNTIME_MACHINE_BOUNDARY_REQUIRED", 403, "uncertain");
         return reply(res, 200, await (kind === "worker" ? actionFoundation.executeWorker(raw, req.headers.authorization)
           : actionFoundation.observeDecision(raw, req.headers.authorization)));
+      }
+      if(path.startsWith("/v1/reports/")) {
+        actionFoundation.authenticateReporting(req.headers.authorization);
+        if(new URL(req.url!,"http://localhost").search) return reply(res,400,{code:"INVALID_INPUT",executionCertainty:"uncertain"});
+        if(req.method==="POST" && ["/v1/reports/accept","/v1/reports/work","/v1/reports/reconcile"].includes(path)) {
+          if(!req.headers["content-type"]?.startsWith("application/json")) return reply(res,415,{code:"JSON_REQUIRED",executionCertainty:"uncertain"});
+          const operation=path.slice("/v1/reports/".length) as "accept"|"work"|"reconcile";
+          return reply(res,200,await actionFoundation.executeReporting(operation,await bodyOf(req),req.headers.authorization));
+        }
+        const reportMatch=/^\/v1\/reports\/([^/]+)$/.exec(path);
+        if(req.method==="GET" && reportMatch) return reply(res,200,await actionFoundation.executeReporting("read",{reportRef:decodeURIComponent(reportMatch[1]!)},req.headers.authorization));
+        return reply(res,404,{code:"UNSUPPORTED_OPERATION",executionCertainty:"notApplied"});
       }
       if (path === "/v1/session" && req.method === "GET") {
         let authenticated = authorize(req);
@@ -677,15 +690,18 @@ export function createAgentServer(options: AgentServerOptions) {
               page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
           }
           const principal = { principalRef: `agent-${auth.role}` };
-          const data = input.viewKey === "approvalDetail" ? await actionFoundation.service.readApproval(input.filters.approvalId, principal)
+          const data = input.viewKey === "approvalDetail" ? await actionFoundation.service.readApproval(input.filters.approvalId, principal, input.filters)
             : await actionFoundation.service.readRun(input.filters.runId, principal);
+          const currentAuth = authorize(req);
+          if (!currentAuth || currentAuth.role !== auth.role) return reply(res,currentAuth ? 403 : 401,{code:currentAuth ? "SOURCE_ROLE_CHANGED" : "UNAUTHENTICATED",executionCertainty:"notApplied"});
+          const historical = data.kind === "native-approval" && data.history?.mode === "history";
           const capability = (actionKind: string, allowed: boolean, reason: string) => ({ actionKind,
-            state: auth.role !== "reviewer" ? "denied" : allowed ? "available" : "held",
-            reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : allowed ? [] : [reason] });
+            state: auth.role !== "reviewer" ? "denied" : historical ? "held" : allowed ? "available" : "held",
+            reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : historical ? ["HISTORICAL_VIEW_READ_ONLY"] : allowed ? [] : [reason] });
           const capabilities = data.kind === "native-approval" ? [
             capability("requestApproval", data.requestState === "local" && !["canceled", "rejected", "editRequired"].includes(data.current.state), "APPROVAL_REQUEST_ALREADY_RECORDED"),
             capability("reconcileApproval", true, "APPROVAL_REQUEST_UNVERIFIED"),
-            capability("dispatchApprovedAction", data.current.state === "approved", "APPROVAL_REQUIRED"),
+            capability("dispatchApprovedAction", data.current.state === "approved" && !(data.execution?.coverage.total), data.execution?.coverage.total ? "EXISTING_CANONICAL_EXECUTION" : "APPROVAL_REQUIRED"),
             capability("decideApproval", false, "APPROVAL_CHANNEL_REQUIRED"),
           ] : [
             capability("pauseRun", data.control === "active" && !["completed", "cancelled"].includes(data.current.state), "NOTHING_TO_PAUSE"),
@@ -694,7 +710,7 @@ export function createAgentServer(options: AgentServerOptions) {
             capability("lookup", true, "SOURCE_RECONCILIATION_CAPABILITY_UNAVAILABLE"),
           ];
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
-            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: data.version,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "actions.scope.v1" }, dataVersion: versionOfData(data),
             dataState: "ready", data, sourceFreshness: [],
             coverage: { expectedCount: data.items.length, observedCount: data.items.length, missingCount: 0, complete: true,
               reasonCodes: [] }, capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
@@ -986,6 +1002,8 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if(error instanceof ReportError) return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty,
+        ...(error.retryAfterMs===null?{}:{retryAfterMs:error.retryAfterMs})});
       if (error instanceof CommercialProjectionError || error instanceof RecruitmentSourceError)
         return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty });
       if (error instanceof RuntimeError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,

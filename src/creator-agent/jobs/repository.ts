@@ -2,9 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { digest } from "../config.ts";
 import { POLICY_VERSION } from "../assessmentSchema.ts";
-import type { CapabilityReadiness, ExpectedBinding } from "../connections/schema.ts";
-import { checkpointSchema, dispatchResultSchema, failureSchema, jobDefinitionSchema, jobEventSchema, jobItemViewSchema, jobRunViewSchema, localResultSchema, referenceInputSchema,
-  type JobDefinition, type JobItemView, type JobRunView, type LocalResult } from "./schema.ts";
+import { expectedBindingSchema, type CapabilityReadiness, type ExpectedBinding } from "../connections/schema.ts";
+import { checkpointSchema, dispatchResultSchema, failureSchema, jobDefinitionSchema, jobEventSchema, jobItemViewSchema, jobRunViewSchema, localResultSchema, referenceInputSchema, reportResultSchema,
+  type JobDefinition, type JobItemView, type JobRunView, type LocalResult, type ReportResult } from "./schema.ts";
 
 type Row = Record<string, unknown>;
 type Scope = { workspaceId: string; accountId: string; environment: "sandbox" };
@@ -78,7 +78,8 @@ export class JobRepository {
   activate(jobId: string, version: number, decisionRef: string) {
     referenceInputSchema.shape.subjectRef.parse(decisionRef);
     return this.tx(() => {
-      const head = this.head(jobId); const { hash } = this.definition(jobId, version);
+      const head = this.head(jobId); const { hash, definition } = this.definition(jobId, version);
+      if (definition.handler === "deliver-report.v1") throw new JobConflict("REPORT_POLICY_ACTIVATION_REQUIRED");
       if (head.version !== version) throw new JobConflict("JOB_VERSION_CONFLICT");
       const proof = this.options.resolveActivation?.({ jobId, version, definitionHash: hash, decisionRef });
       if (!proof?.approved || proof.decisionRef !== decisionRef || proof.definitionHash !== hash) throw new JobConflict("JOB_ACTIVATION_UNVERIFIED");
@@ -126,7 +127,7 @@ export class JobRepository {
     attempts: row.attempts, steps: row.steps, dueAt: iso(row.due_at), lease: row.lease_token ? { ownerRef: row.lease_owner, expiresAt: iso(row.lease_until) } : null,
     checkpointVersion: row.checkpoint_version, checkpoint: parse(row.checkpoint), result: row.result ? parse(row.result) : null, reasonCode: row.reason_code, createdAt: iso(row.created_at), updatedAt: iso(row.updated_at) }); }
   private currentReason(row: Row, allowPaused = false): string | null { const head = this.head(String(row.job_id)); const { definition, hash } = this.definition(String(row.job_id), Number(row.job_version));
-    if (head.version !== row.job_version) return "JOB_DEFINITION_STALE"; if (!head.enabled || head.activation_hash !== hash) return "JOB_DISABLED"; if (head.paused && !allowPaused) return "JOB_PAUSED"; if (!(["dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1"].includes(definition.handler)) && definition.policyVersion !== POLICY_VERSION) return "JOB_POLICY_STALE"; return null; }
+    if (head.version !== row.job_version) return "JOB_DEFINITION_STALE"; if (!head.enabled || head.activation_hash !== hash) return "JOB_DISABLED"; if (head.paused && !allowPaused) return "JOB_PAUSED"; if (!(["dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1", "deliver-report.v1"].includes(definition.handler)) && definition.policyVersion !== POLICY_VERSION) return "JOB_POLICY_STALE"; return null; }
   private capabilityReason(definition: JobDefinition): string | null {
     if (!definition.capabilityBinding) return null; // N/A: both registered handlers are purely local, without a source dispatcher.
     try { const result = this.options.resolveCapability?.(definition.capabilityBinding);
@@ -150,7 +151,7 @@ export class JobRepository {
     return this.tx(() => { const query = `SELECT i.* FROM job_items i WHERE i.state IN ('queued','retryWait') AND i.due_at<=?
       AND EXISTS(SELECT 1 FROM job_run_items dispatch_item INNER JOIN job_runs dispatch_run ON dispatch_run.run_id=dispatch_item.run_id WHERE dispatch_item.item_id=i.item_id AND dispatch_run.control='active')
       AND EXISTS(SELECT 1 FROM job_definitions def WHERE def.job_id=i.job_id AND def.version=i.job_version
-        AND json_extract(def.body,'$.handler') NOT IN ('dispatch-approved.v1','export-ledger-snapshot.v1','registered-source.v1') AND (json_extract(def.body,'$.handler')='probe-provider-health.v1')=?)
+        AND json_extract(def.body,'$.handler') NOT IN ('dispatch-approved.v1','export-ledger-snapshot.v1','registered-source.v1','deliver-report.v1') AND (json_extract(def.body,'$.handler')='probe-provider-health.v1')=?)
       ${jobId ? "AND i.job_id=?" : ""} ${healthRunId ? "AND EXISTS(SELECT 1 FROM job_run_items jr WHERE jr.item_id=i.item_id AND jr.run_id=?)" : ""} ORDER BY i.created_at,i.item_id LIMIT 100`;
       const candidates = this.db.prepare(query).all(this.now(), healthRunId ? 1 : 0, ...(jobId ? [jobId] : []), ...(healthRunId ? [healthRunId] : []));
       for (const row of candidates) { const run = this.activeRun(String(row.item_id)); if (!run) continue; const runId = String(run.run_id); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
@@ -181,7 +182,7 @@ export class JobRepository {
   complete(itemId: string, token: string, input: unknown, persistHealthObservation?: () => void) { const result = localResultSchema.parse(input); const outcomeHash = digest({ operation: "complete", result });
     return this.tx(() => { const current = this.itemRow(itemId); if (current.last_token_hash === digest(token) && current.last_outcome_hash === outcomeHash) return this.viewItem(current);
       const row = this.leased(itemId, token); const { definition } = this.definition(String(row.job_id), Number(row.job_version));
-      if (["dispatch-approved.v1","export-ledger-snapshot.v1","registered-source.v1"].includes(definition.handler)) throw new JobConflict("APPROVED_DISPATCH_REQUIRES_RECEIPT");
+      if (["dispatch-approved.v1","export-ledger-snapshot.v1","registered-source.v1","deliver-report.v1"].includes(definition.handler)) throw new JobConflict("APPROVED_DISPATCH_REQUIRES_RECEIPT");
       if (this.currentReason(row, true) || this.capabilityReason(definition)) throw new JobConflict("JOB_PREFLIGHT_HELD");
       if ((definition.mode === "observe") !== (result.kind === "reference-recorded") || (definition.handler === "probe-provider-health.v1") !== Boolean(persistHealthObservation)) throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH");
       if (persistHealthObservation) {
@@ -220,7 +221,7 @@ export class JobRepository {
   completeRegistered(itemId:string,token:string,binding:ExpectedBinding,input:unknown,assertAndPersist:()=>void){const result=localResultSchema.parse(input);return this.tx(()=>{this.assertRegisteredLease(itemId,token,binding);const row=this.leased(itemId,token);const {definition}=this.definition(String(row.job_id),Number(row.job_version));if((definition.mode==="propose")!==(result.kind==="proposal-recorded"))throw new JobConflict("JOB_HANDLER_RESULT_MISMATCH");assertAndPersist();this.release(row);this.db.prepare("UPDATE job_items SET state='completed',result=?,reason_code=NULL,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,last_token_hash=?,last_outcome_hash=?,updated_at=? WHERE item_id=?").run(JSON.stringify(result),digest(token),digest(result),this.now(),itemId);this.log(String(row.lease_run_id),itemId,"completed",{result});return this.viewItem(this.itemRow(itemId));});}
   holdRegistered(runId:string,itemKey:string,reasonCode:string,persist?:()=>void,token?:string){failureSchema.shape.reasonCode.parse(reasonCode);return this.tx(()=>{const run=this.getRun(runId);const item=run.items.find(i=>i.itemKey===itemKey);if(run.definition.handler!=="registered-source.v1"||!item)throw new JobConflict("RUNTIME_ITEM_NOT_FOUND");const row=token?this.leased(item.itemId,token):this.itemRow(item.itemId);if(!token&&row.state==="leased")return run;if(["completed","cancelled","failed","reconcile"].includes(String(row.state)))return run;persist?.();this.release(row);this.db.prepare("UPDATE job_items SET state='held',reason_code=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?").run(reasonCode,this.now(),item.itemId);this.log(runId,item.itemId,"held",{reason:reasonCode});return this.getRun(runId);});}
   resumeRegistered(runId:string,itemId:string,assertAndPersist:()=>boolean|void){return this.tx(()=>{const run=this.getRun(runId);const item=run.items.find(i=>i.itemId===itemId);if(run.definition.handler!=="registered-source.v1"||!item)throw new JobConflict("RUNTIME_RESUME_HELD");if(assertAndPersist()===false)return run;if(item.state!=="held"||run.control!=="active")throw new JobConflict("RUNTIME_RESUME_HELD");this.db.prepare("UPDATE job_items SET state='queued',reason_code=NULL,due_at=?,updated_at=? WHERE item_id=?").run(this.now(),this.now(),itemId);this.log(runId,itemId,"hold-resolved");return this.getRun(runId);});}
-  private claimFinite(runId: string, workerId: string, itemKey: string, assertAndClaim: () => void,handler:"dispatch-approved.v1"|"export-ledger-snapshot.v1"|"registered-source.v1", selectedBinding?:ExpectedBinding): JobClaim | null {
+  private claimFinite(runId: string, workerId: string, itemKey: string, assertAndClaim: () => void,handler:"dispatch-approved.v1"|"export-ledger-snapshot.v1"|"registered-source.v1"|"deliver-report.v1", selectedBinding?:ExpectedBinding): JobClaim | null {
     referenceInputSchema.shape.subjectRef.parse(workerId); this.recoverExpired();
     return this.tx(() => { const run = this.getRun(runId); if (run.definition.handler !== handler) throw new JobConflict("DISPATCH_HANDLER_REQUIRED");
       const item = run.items.find(item=>item.itemKey===itemKey); if (!item) throw new JobConflict("DISPATCH_SINGLE_ITEM_REQUIRED"); const row = this.itemRow(item.itemId);
@@ -231,11 +232,111 @@ export class JobRepository {
       if (Number(this.db.prepare("SELECT COUNT(*) AS n FROM job_items WHERE job_id=? AND state='leased' AND lease_until>?").get(String(row.job_id), this.now())?.n) >= run.definition.budgets.maxConcurrency) return null;
       const b = selectedBinding??run.definition.capabilityBinding; const resource = b ? digest({provider:b.provider,account:b.providerAccountId,action:b.action}) : null;
       if (resource) { this.db.prepare("DELETE FROM job_resource_leases WHERE resource_key=? AND lease_until<=?").run(resource,this.now()); if (this.db.prepare("SELECT 1 FROM job_resource_leases WHERE resource_key=?").get(resource)) return null; }
-      assertAndClaim(); const token = randomUUID(), until = Math.min(this.now()+run.definition.budgets.leaseMs, startedAt+run.definition.budgets.maxRunMs);
+      assertAndClaim();
+      if (handler === "deliver-report.v1") {
+        const current = this.itemRow(item.itemId);
+        if (this.currentReason(current) || this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(runId)?.control !== "active" ||
+          current.state !== row.state || current.dispatch_started || current.attempts !== row.attempts || this.now() >= startedAt + run.definition.budgets.maxRunMs) throw new JobConflict("REPORT_PREFLIGHT_HELD");
+      }
+      const token = randomUUID(), until = Math.min(this.now()+run.definition.budgets.leaseMs, startedAt+run.definition.budgets.maxRunMs);
       this.db.prepare("UPDATE job_runs SET started_at=COALESCE(started_at,?),activation_ref=? WHERE run_id=?").run(startedAt,this.head(String(row.job_id)).activation_ref!,runId);
       this.db.prepare("UPDATE job_items SET state='leased',attempts=attempts+1,steps=steps+1,lease_token=?,lease_owner=?,lease_until=?,lease_run_id=?,reason_code=NULL,updated_at=? WHERE item_id=?").run(token,workerId,until,runId,this.now(),item.itemId);
       if (resource) this.db.prepare("INSERT INTO job_resource_leases VALUES(?,?,?,?)").run(resource,item.itemId,token,until);
       this.log(runId,item.itemId,"leased",{ownerRef:workerId,expiresAt:iso(until)}); return {runId,item:this.viewItem(this.itemRow(item.itemId)),definition:run.definition,leaseToken:token}; });
+  }
+  private reportFence<T>(callback: () => T): T {
+    const result = callback();
+    if (result !== null && (typeof result === "object" || typeof result === "function") && "then" in result && typeof result.then === "function") throw new JobConflict("REPORT_ASYNC_FENCE_UNSUPPORTED");
+    return result;
+  }
+  /** Reserved report-policy execution on the existing queue; no J04 business decision is manufactured. */
+  activateReport(jobId: string, version: number, grantRef: string, assertCurrent: () => void) {
+    referenceInputSchema.shape.subjectRef.parse(grantRef);
+    return this.tx(() => {
+      const { definition, hash } = this.definition(jobId, version);
+      if (definition.handler !== "deliver-report.v1" || this.head(jobId).version !== version) throw new JobConflict("REPORT_HANDLER_REQUIRED");
+      this.reportFence(assertCurrent);
+      if (this.head(jobId).version !== version || this.definition(jobId, version).hash !== hash) throw new JobConflict("JOB_DEFINITION_STALE");
+      this.db.prepare("UPDATE job_heads SET enabled=1,activation_ref=?,activation_hash=? WHERE job_id=?").run(grantRef, hash, jobId);
+      this.log(null, null, "report-policy-activated", { jobId, version, grantRef, definitionHash: hash });
+      return this.getJob(jobId);
+    });
+  }
+  private reportBinding(definition: JobDefinition, supplied: ExpectedBinding): ExpectedBinding {
+    const binding = expectedBindingSchema.parse(supplied);
+    if (definition.handler !== "deliver-report.v1" || !definition.capabilityBinding) throw new JobConflict("REPORT_HANDLER_REQUIRED");
+    if (digest(binding) !== digest(definition.capabilityBinding)) throw new JobConflict("REPORT_BINDING_MISMATCH");
+    return binding;
+  }
+  claimReport(runId: string, workerId: string, itemKey: string, supplied: ExpectedBinding, assertCurrent: () => void): JobClaim | null {
+    const binding = this.reportBinding(this.getRun(runId).definition, supplied);
+    return this.claimFinite(runId, workerId, itemKey, () => this.reportFence(assertCurrent), "deliver-report.v1", binding);
+  }
+  assertReportLease(itemId: string, token: string, supplied: ExpectedBinding): void {
+    const row = this.leased(itemId, token), { definition } = this.definition(String(row.job_id), Number(row.job_version));
+    const binding = this.reportBinding(definition, supplied);
+    if (this.currentReason(row) || this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control !== "active") throw new JobConflict("REPORT_PREFLIGHT_HELD");
+    const resourceKey = digest({ provider: binding.provider, account: binding.providerAccountId, action: binding.action });
+    const resource = this.db.prepare("SELECT * FROM job_resource_leases WHERE resource_key=?").get(resourceKey);
+    if (!resource || resource.item_id !== itemId || resource.lease_token !== token || Number(resource.lease_until) <= this.now()) throw new JobConflict("JOB_LEASE_FENCED");
+  }
+  startReport(itemId: string, token: string, assertAndRecord: () => void): void {
+    this.tx(() => {
+      const row = this.leased(itemId, token), { definition } = this.definition(String(row.job_id), Number(row.job_version));
+      if (definition.handler !== "deliver-report.v1" || !definition.capabilityBinding || row.dispatch_started) throw new JobConflict("REPORT_PREFLIGHT_HELD");
+      this.assertReportLease(itemId, token, definition.capabilityBinding);
+      this.reportFence(assertAndRecord);
+      this.assertReportLease(itemId, token, definition.capabilityBinding);
+      this.db.prepare("UPDATE job_items SET dispatch_started=1,updated_at=? WHERE item_id=?").run(this.now(), itemId);
+      this.log(String(row.lease_run_id), itemId, "report-started", { attemptNumber: Number(row.attempts) });
+    });
+  }
+  finishReport(runId: string, itemKey: string, input: ReportResult | null, assertAndPersist: (currentAttemptNumber: number) => void, reasonCode = "REPORT_OUTCOME_UNCERTAIN"): JobRunView {
+    const result = input === null ? null : reportResultSchema.parse(input);
+    failureSchema.shape.reasonCode.parse(reasonCode);
+    if (result && Date.parse(result.observedAt) > this.now()) throw new JobConflict("REPORT_RECEIPT_INVALID");
+    return this.tx(() => {
+      const run = this.getRun(runId), item = run.items.find(value => value.itemKey === itemKey);
+      if (run.definition.handler !== "deliver-report.v1" || !item) throw new JobConflict("REPORT_HANDLER_REQUIRED");
+      const row = this.itemRow(item.itemId);
+      if (row.state === "completed") {
+        if (result && digest(parse(row.result)) !== digest(result)) throw new JobConflict("REPORT_RECEIPT_CONFLICT");
+        return run;
+      }
+      if (!row.dispatch_started) throw new JobConflict("REPORT_NOT_STARTED");
+      const attempt = Number(row.attempts);
+      this.reportFence(() => assertAndPersist(attempt));
+      const current = this.itemRow(item.itemId);
+      if (current.attempts !== row.attempts || !current.dispatch_started || current.state === "completed" || current.result !== null) throw new JobConflict("REPORT_ATTEMPT_CHANGED");
+      this.release(current);
+      this.db.prepare("UPDATE job_items SET state=?,result=?,reason_code=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?")
+        .run(result ? "completed" : "reconcile", result ? JSON.stringify(result) : null, result ? null : reasonCode, this.now(), item.itemId);
+      this.log(runId, item.itemId, result ? "report-receipt" : "report-uncertain", { attemptNumber: attempt });
+      return this.getRun(runId);
+    });
+  }
+  /** A positive original-attempt closure is a read fact, never a fresh send authorization. */
+  closeReportAttempt(runId: string, itemKey: string, attemptNumber: number, assertAndPersist: () => void, retryAfterMs = 0): JobRunView {
+    if (!Number.isSafeInteger(attemptNumber) || attemptNumber < 1) throw new JobConflict("REPORT_ATTEMPT_UNVERIFIED");
+    failureSchema.shape.retryAfterMs.parse(retryAfterMs);
+    return this.tx(() => {
+      const run = this.getRun(runId), item = run.items.find(value => value.itemKey === itemKey);
+      if (run.definition.handler !== "deliver-report.v1" || !item) throw new JobConflict("REPORT_HANDLER_REQUIRED");
+      const row = this.itemRow(item.itemId);
+      if (row.state === "completed" || row.result !== null) return run;
+      if (Number(row.attempts) !== attemptNumber) throw new JobConflict("REPORT_CLOSURE_ATTEMPT_MISMATCH");
+      if (row.state === "leased") return run;
+      this.reportFence(assertAndPersist);
+      if (!row.dispatch_started) return this.getRun(runId);
+      const current = this.itemRow(item.itemId);
+      if (current.attempts !== row.attempts || !current.dispatch_started || current.state === "completed" || current.result !== null) throw new JobConflict("REPORT_ATTEMPT_CHANGED");
+      this.release(current);
+      const cancelled = run.control === "cancelled" || current.state === "cancelled";
+      this.db.prepare("UPDATE job_items SET state=?,dispatch_started=0,reason_code='REPORT_NOT_APPLIED_CLOSED',due_at=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?")
+        .run(cancelled ? "cancelled" : "held", this.now() + retryAfterMs, this.now(), item.itemId);
+      this.log(runId, item.itemId, "report-not-applied", { attemptNumber, retryArmed: false, retryAfterMs });
+      return this.getRun(runId);
+    });
   }
   startApproved(itemId: string, token: string, assertAndRecord: () => void) { return this.tx(() => {
     const row=this.leased(itemId,token); if(this.definition(String(row.job_id),Number(row.job_version)).definition.handler!=="dispatch-approved.v1" || row.dispatch_started || this.currentReason(row) || this.db.prepare("SELECT control FROM job_runs WHERE run_id=?").get(String(row.lease_run_id))?.control!=="active") throw new JobConflict("DISPATCH_PREFLIGHT_HELD");
@@ -299,8 +400,8 @@ export class JobRepository {
     const blockerCodes = [...new Set([...(enabled ? [] : ["JOB_DISABLED_OR_STALE"]), ...rows.flatMap((row) => row.reason_code ? [String(row.reason_code)] : [])])];
     const control = String(run.control); const state = counts.reconcile ? "reconcile" : control === "cancelled" ? counts.leased ? "cancelling" : "cancelled" : counts.completed === rows.length ? rows.length ? "completed" : "empty" : control === "paused" || head.paused ? "paused" : counts.leased ? "running" : counts.failed === rows.length ? "failed" : counts.failed + counts.cancelled > 0 ? "partial" : !enabled || counts.held ? "held" : counts.deferred && !due ? "deferred" : "queued";
     return jobRunViewSchema.parse({ schemaVersion: "farda.jobs.v1", environment: this.options.scope.environment, runId, jobId: run.job_id, eventId: run.event_id, eventAt: run.event_at, observedAt: iso(run.observed_at), definition, definitionHash: run.definition_hash, enabled,
-      activationRef: run.activation_ref === null ? null : String(run.activation_ref), control, state, counts, blockerCodes, nextAction: state === "reconcile" ? "Reconcile uncertainty; do not retry automatically." : state === "held" ? "Resolve the registration, policy or capability hold." : state === "deferred" ? "Wait for the due time before the next bounded claim." : definition.handler==="registered-source.v1" ? "Use the registered bounded worker; inspect source coverage, checkpoints and takeover state." : "Read the per-item state; no source executor is registered.",
-      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1"].includes(definition.handler) && rows.some((row) => Number(row.attempts) > 0) ? null : 0, modelCalls: definition.handler==="registered-source.v1"?null:0, sourceQuota: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1"].includes(definition.handler) ? "unknown" : "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
+      activationRef: run.activation_ref === null ? null : String(run.activation_ref), control, state, counts, blockerCodes, nextAction: state === "reconcile" ? "Reconcile uncertainty; do not retry automatically." : state === "held" ? "Resolve the registration, policy or capability hold." : state === "deferred" ? "Wait for the due time before the next bounded claim." : definition.handler==="registered-source.v1" ? "Use the registered bounded worker; inspect source coverage, checkpoints and takeover state." : definition.handler === "deliver-report.v1" ? "Use the source-authorized report worker; preserve the original attempt until native readback resolves it." : "Read the per-item state; no source executor is registered.",
+      items: rows.map((row) => this.viewItem(row)), usage: { workSteps: this.steps(runId), externalCalls: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1", "deliver-report.v1"].includes(definition.handler) && rows.some((row) => Number(row.attempts) > 0) ? null : 0, modelCalls: definition.handler==="registered-source.v1"?null:0, sourceQuota: ["probe-provider-health.v1", "dispatch-approved.v1", "export-ledger-snapshot.v1", "registered-source.v1", "deliver-report.v1"].includes(definition.handler) ? "unknown" : "notApplicable", zapierTasks: "unknown", runtimeCost: "unknown" } });
   }
   history(runId: string, limit = 100) { this.getRun(runId); if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new JobConflict("INVALID_HISTORY_LIMIT"); const total = Number(this.db.prepare("SELECT COUNT(*) AS count FROM job_transitions WHERE run_id=?").get(runId)?.count ?? 0);
     return { total, partial: total > limit, transitions: this.db.prepare("SELECT * FROM job_transitions WHERE run_id=? ORDER BY at,transition_id LIMIT ?").all(runId, limit).map((row) => ({ transitionId: row.transition_id, itemId: row.item_id, kind: row.kind, at: iso(row.at), detail: parse(row.detail) })) }; }

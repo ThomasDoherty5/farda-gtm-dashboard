@@ -12,7 +12,12 @@ import type { CapabilityLedger } from "./connections/ledger.ts";
 import { createActionService, domainActionSchema, foundationActionSchema, type RegisteredAction } from "./actions/service.ts";
 import { createActionDomainServices } from "./actions/domainServices.ts";
 import type { LedgerSource, ReadinessSource, ActionScope } from "./actions/contract.ts";
+import { createActionReviewService } from "./actions/review.ts";
+import type { ActionReviewSource } from "./actions/reviewSource.ts";
+import { createSlackReporting } from "./slackReporting/service.ts";
+import { ReportError, reportLocatorSchema, reportReference, reportReadSchema, type ReportingSource, type ReportRead } from "./slackReporting/contract.ts";
 import { ApiRequestLimits } from "./apiRequestLimits.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 
 export const dispatchWorkerProofSchema = z.object({ scope: approvalScopeSchema, runRef: approvalRefSchema,
   workerRef: approvalRefSchema, authorityVersion: approvalRefSchema, observedAt: approvalInstantSchema,
@@ -27,6 +32,10 @@ export type ActionFoundationBindings = {
   ledger?: LedgerSource;
   readiness?: ReadinessSource;
   readinessTargetRef?: string;
+  reviewSource?: ActionReviewSource;
+  reviewLinkOrigins?: readonly string[];
+  reporting?: {token:string;workerRef:string;source:ReportingSource;
+    assertCurrent(request:{scope:ActionScope;workerRef:string;operation:"accept"|"read"|"work"|"reconcile";reference:string},now:number):void};
   worker?: { token: string; workerRef: string;
     resolve: (scope: ActionScope, runRef: string) => Promise<unknown>;
     /** Synchronous current-authority fence, checked again in the existing job transaction. */
@@ -39,12 +48,14 @@ const equal = (a: string, b: string) => timingSafeEqual(createHash("sha256").upd
 const request = z.object({ runRef: approvalRefSchema }).strict();
 export function assertMachineTokens(bindings: ActionFoundationBindings | undefined, readToken: string, reviewToken: string) {
   const tokens = [readToken, reviewToken];
-  for (const machine of [bindings?.worker, bindings?.decisionRelay]) {
+  for (const machine of [bindings?.worker, bindings?.decisionRelay, bindings?.reporting]) {
     if (!machine) continue;
     if (machine.token.length < 32 || tokens.some(token => equal(token, machine.token))) throw new Error("Machine authority requires its own distinct server-only credential.");
     tokens.push(machine.token);
   }
   if (bindings?.worker) approvalRefSchema.parse(bindings.worker.workerRef);
+  if (bindings?.reporting) { reportReference.parse(bindings.reporting.workerRef);
+    if(typeof bindings.reporting.assertCurrent!=="function") throw new Error("Reporting requires a source-owned machine fence."); }
   if (bindings?.decisionRelay) {
     approvalRefSchema.parse(bindings.decisionRelay.ingressRef);
     if (!bindings.approvals?.sources?.readSlackDecision) throw new Error("Decision relay requires an independent native event reader.");
@@ -64,8 +75,39 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     assertAuthority: bindings.approvals?.sources?.assertCurrent,
     ledger: bindings.ledger, readiness: bindings.readiness });
   const service = createActionService({ scope, secret, approvals, dispatch, domains, registry: bindings.registry ?? new Map(),
-    authorize: bindings.approvals?.sources?.resolveActor, assertAuthority: bindings.approvals?.sources?.assertCurrent, commercialEligibility: options.commercialEligibility, now });
+    authorize: bindings.approvals?.sources?.resolveActor, assertAuthority: bindings.approvals?.sources?.assertCurrent,
+    attemptOutcomes: runRef => dispatch.readAttemptOutcomes(runRef),
+    executionRuns:(ref,version)=>dispatch.readApprovalRuns(ref,version),
+    review: createActionReviewService({scope,referenceKey:secret,source:bindings.reviewSource,permittedLinkOrigins:bindings.reviewLinkOrigins,now}),
+    commercialEligibility: options.commercialEligibility, now });
   const limits = new ApiRequestLimits(db, scope, now);
+  const reporting=bindings.reporting ? createSlackReporting({db,scope,secret,jobs,source:bindings.reporting.source,now}) : undefined;
+  const reportAccept=z.object({locator:reportLocatorSchema,idempotencyKey:reportReference}).strict();
+  const reportTarget=z.object({reportRef:reportReference}).strict();
+  function authenticateReporting(authorization:string|undefined) {
+    if(!bindings.reporting || !reporting) throw new ReportError("REPORTING_MACHINE_UNCONFIGURED",503,"uncertain");
+    if(!authorization?.startsWith("Bearer ") || !equal(authorization.slice(7),bindings.reporting.token)) throw new ReportError("UNAUTHENTICATED",401,"uncertain");
+  }
+  async function executeReporting(operation:"accept"|"read"|"work"|"reconcile", raw:unknown, authorization:string|undefined) {
+    authenticateReporting(authorization);
+    const configured=bindings.reporting!;
+    const target=operation==="accept" ? reportAccept.parse(raw) : reportTarget.parse(raw);
+    const reference="locator" in target ? "report-event-"+createHash("sha256").update(JSON.stringify(target.locator)).digest("hex") : target.reportRef;
+    const assertCurrent=()=>{try{
+      // A void callback can still be async at runtime. A final authority fence
+      // must finish synchronously before the same-database effect transaction.
+      assertSynchronousVoid(()=>configured.assertCurrent({scope:structuredClone(scope),workerRef:configured.workerRef,operation,reference},now()));
+    }
+      catch{throw new ReportError("REPORT_MACHINE_AUTHORITY_INVALID",403,"uncertain");}};
+    assertCurrent();const admission=limits.admit("report-machine:"+configured.workerRef,operation==="read"?"read":"write");
+    if(!admission.admitted)throw new ReportError("RATE_LIMITED",429,"uncertain",admission.retryAfterMs);
+    const machine={workerRef:configured.workerRef,assertCurrent};
+    let result:ReportRead;
+    if("locator" in target) result=await reporting!.accept(target.locator,target.idempotencyKey,machine);
+    else result=operation==="read" ? await reporting!.read(target.reportRef,machine) : operation==="work" ? await reporting!.work(target.reportRef,machine) : await reporting!.reconcile(target.reportRef,machine);
+    try{assertCurrent();}catch{throw new ReportError("REPORT_MACHINE_AUTHORITY_INVALID",403,result.executionCertainty);}
+    return reportReadSchema.parse(result);
+  }
 
   function machineBearer(authorization: string | undefined, token: string) {
     return authorization?.startsWith("Bearer ") === true && equal(authorization.slice(7), token);
@@ -94,7 +136,7 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
         proof.runRef !== input.runRef || proof.workerRef !== worker.workerRef || Date.parse(proof.observedAt) > t || Date.parse(proof.validUntil) <= t ||
         Date.parse(proof.validUntil) - Date.parse(proof.observedAt) > 300_000 || Date.parse(proof.validUntil) <= Date.parse(proof.observedAt))
         throw new DispatchError("DISPATCH_WORKER_AUTHORITY_INVALID", 403, "uncertain");
-      try { worker.assertCurrent(proof, t); }
+      try { assertSynchronousVoid(()=>worker.assertCurrent(proof, t)); }
       catch { throw new DispatchError("DISPATCH_WORKER_AUTHORITY_INVALID", 403, "uncertain"); }
     };
     assertCurrent();
@@ -146,5 +188,5 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     if (!bindings.readinessTargetRef) throw new DispatchError("READINESS_SOURCE_UNCONFIGURED", 503);
     return domains.readReadiness(bindings.readinessTargetRef, { principalRef });
   }
-  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision };
+  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting };
 }

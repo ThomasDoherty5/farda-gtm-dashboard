@@ -1,7 +1,7 @@
 import { expect, type Page } from "@playwright/test";
 
 /** Real browser geometry: opaque identifiers may wrap, ordinary words and currency must remain readable. */
-export async function assertNativeTableReadability(page: Page, kind: "approval" | "run", viewport: number) {
+export async function assertNativeTableReadability(page: Page, kind: "approval" | "run", viewport: number, options: { keyboardProof?: "probe" | "fullTraversalFollows" } = {}) {
   const caption = kind === "approval" ? "Exact approved manifest" : "Finite run item outcomes";
   const region = page.locator(`[role="region"][aria-label="${caption}"][tabindex="0"]`);
   const table = region.getByRole("table", { name: caption });
@@ -26,7 +26,10 @@ export async function assertNativeTableReadability(page: Page, kind: "approval" 
   }));
   expect(brokenWords, `${caption}: ordinary words/currency must not split across lines`).toEqual([]);
   const overflow = await region.evaluate(element => element.scrollWidth > element.clientWidth);
-  if (overflow) {
+  // A caller that immediately traverses to the final column owns the full
+  // keyboard proof. Avoid starting and then cancelling an extra native scroll
+  // animation before that traversal; geometry/readability checks still run.
+  if (overflow && options.keyboardProof !== "fullTraversalFollows") {
     await region.scrollIntoViewIfNeeded(); await region.focus(); await page.keyboard.press("ArrowRight");
     await expect.poll(() => region.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
     await region.evaluate(element => { element.scrollLeft = 0; });

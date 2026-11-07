@@ -33,6 +33,13 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
     afterEach(() => { other?.close(); other = undefined; db.close(); rmSync(directory, { recursive: true, force: true }); });
     it("queues durably without approval and ordinary local workers cannot execute it", async () => { const run = await handoff(); expect(run.current.state).toBe("held"); expect(jobs.claim("synthetic-worker")).toBeNull(); expect(called).toBe(0); revoked = true; await expect(guard.execute(run.runRef)).rejects.toThrow("APPROVAL_REVOKED"); expect(called).toBe(0); });
     it("executes exact approved local artifact once and returns actual receipt on replay", async () => { const run = await handoff(); const done = await guard.execute(run.runRef); expect(done.executionCertainty).toBe("applied"); expect(done.run.items[0]?.result).toMatchObject({ sourceEffect: "localArtifact", kind: "dispatch-receipt" }); expect((await guard.execute(run.runRef)).receipt).toEqual(done.receipt); expect(called).toBe(1); expect((await handoff()).runRef).toBe(run.runRef); });
+    it.each(["approval","worker"] as const)("refuses an asynchronous %s authority fence before any effect",async kind=>{
+        const run=await handoff();
+        if(kind==="approval")authority.assertCurrentProof=async()=>{await Promise.resolve();throw new Error("Synthetic late authority refusal");};
+        await expect(guard.execute(run.runRef,kind==="worker"?{workerRef:"synthetic-async-worker",assertCurrent:async()=>{await Promise.resolve();throw new Error("Synthetic late worker refusal");}}:undefined)).rejects.toThrow(kind==="approval"?"SOURCE_UNAVAILABLE":"synchronous void");
+        expect(called).toBe(0);
+        expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_attempts").get()?.n).toBe(0);
+    });
     it("rejects changed scope, request body, or immutable item identity", async () => { await handoff(); await expect(handoff({ ...intent(), payloadRef: "synthetic-other" })).rejects.toThrow("DISPATCH_IDEMPOTENCY_KEY_REUSED"); await expect(handoff({ ...intent(), payloadRef: "synthetic-other" }, guard, "new-request")).rejects.toThrow("DISPATCH_ITEM_REUSED"); const foreign = intent(); foreign.approval.scope = { ...scope, accountId: "other" }; await expect(handoff(foreign)).rejects.toThrow("DISPATCH_SCOPE_DENIED"); });
     it("holds a missing authoritative resource instead of treating it as unlimited", async () => { approvedSpendMinor=50;handler.resources = () => ({ budget: { state: "required", resourceRef: "synthetic-budget", quantity: 50, unit: "minor", currency: "USD" }, stock: na, quota: na }); const run = await handoff(); await expect(guard.execute(run.runRef)).rejects.toThrow("DISPATCH_RESOURCE_AUTHORITY_UNAVAILABLE"); expect(called).toBe(0); });
     it("rechecks approval after awaited grant allocation before any worker claim", async () => { approvedSpendMinor=50;handler.resources = () => ({ budget: { state: "required", resourceRef: "synthetic-budget", quantity: 50, unit: "minor", currency: "USD" }, stock: na, quota: na }); const resources: ResourceAuthority = { resolveGrants: async (request) => { revoked = true; return [{ grantRef: "synthetic-grant", issuerRef: "synthetic-budget-owner", allocationVersion: "v1", scope, dispatchKey: request.dispatchKey, dimension: "budget", resourceRef: "synthetic-budget", quantity: 50, unit: "minor", currency: "USD", exclusive: true, observedAt: new Date(now).toISOString(), validUntil: new Date(now + 10000).toISOString() }]; }, assertCurrent: () => { } }; ({ guard } = build(db, resources)); const run = await handoff(); await expect(guard.execute(run.runRef)).rejects.toThrow("APPROVAL_REVOKED"); expect(called).toBe(0); expect(guard.read(run.runRef).run.items[0]?.attempts).toBe(0); });
@@ -213,5 +220,20 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
    expect(db.prepare("SELECT COUNT(*) AS n FROM job_dispatch_effect_fences").get()?.n).toBe(1);
    expect(guard.read(run.runRef).run.items[0]?.state).toBe("reconcile");
  });
+
+    it("projects no provider attempt before native start without using a job counter", async()=>{
+        const run=await handoff();expect(guard.readAttemptOutcomes(run.runRef).get(run.dispatchKey)).toEqual({state:"unstarted",attemptNumber:null,receiptRef:null,observedAt:null});
+    });
+    it("keeps original closure separate from a newer open provider attempt", async()=>{
+        handler.execute=async()=>({state:"unknown",reasonCode:"TIMEOUT"});const run=await handoff();await guard.execute(run.runRef);
+        expect(guard.readAttemptOutcomes(run.runRef).get(run.dispatchKey)).toMatchObject({state:"open",attemptNumber:1,receiptRef:null});
+        handler.reconcile=async c=>closed(c);await guard.reconcile(run.runRef);
+        expect(guard.readAttemptOutcomes(run.runRef).get(run.dispatchKey)).toMatchObject({state:"closedNotApplied",attemptNumber:1,receiptRef:"synthetic-terminal-closure"});
+        await guard.execute(run.runRef);expect(guard.readAttemptOutcomes(run.runRef).get(run.dispatchKey)).toMatchObject({state:"open",attemptNumber:2,receiptRef:null});
+    });
+    it("preserves confirmed native receipts without inventing a legacy exact-attempt association", async()=>{
+        const run=await handoff();const applied=await guard.execute(run.runRef);expect(applied.receipt).not.toBeNull();
+        expect(guard.readAttemptOutcomes(run.runRef).get(run.dispatchKey)).toEqual({state:"unknown",attemptNumber:null,receiptRef:null,observedAt:null});
+    });
 
 });

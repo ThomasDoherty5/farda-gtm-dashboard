@@ -3,6 +3,7 @@ import { ApprovalError, type ApprovalRegistry } from "./approvals/contract.ts";
 import type { RegisteredAction } from "./actions/service.ts";
 import { copyRegisteredAction, registeredHandlerRefs } from "./actions/registration.ts";
 import type { DispatchHandler } from "./jobs/dispatchSchema.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 
 export type ActionDomain = {
   registry: ApprovalRegistry;
@@ -37,7 +38,7 @@ export function composeActionDomains(base: ActionFoundationBindings | undefined,
     assertCurrentDraft: (manifest, observed, now) => {
       const source = owner(manifest.draft.actionKind);
       if (!source.assertCurrentDraft) throw new ApprovalError("APPROVAL_CURRENT_SOURCE_UNVERIFIED");
-      source.assertCurrentDraft(manifest, observed, now);
+      assertSynchronousVoid(()=>source.assertCurrentDraft!(manifest, observed, now));
     },
   };
   return { ...base, approvals: { ...base?.approvals, registry: combined }, registry, handlers };

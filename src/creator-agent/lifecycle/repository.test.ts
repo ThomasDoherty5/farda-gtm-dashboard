@@ -98,6 +98,62 @@ describe("scoped lifecycle reads and truthful evidence", () => {
     const denied = setup(async () => { throw new LifecycleError("SOURCE_AUTHORITY_DENIED", 403); });
     await expect(flowView(denied.service)).rejects.toMatchObject({ status: 403 });
   });
+  it("caps a long source lease at the server observation deadline and holds a draft at that exact boundary", async () => {
+    const w = setup(), input = await request(w.service);
+    const before = await flowView(w.service);
+    const effectiveDeadline = new Date(lifecycleTestTime + 15 * 60_000).toISOString();
+    expect(before.validUntil).toBe(effectiveDeadline);
+    expect(before.sourceConfig!.evidence[0]!.validUntil).toBe(effectiveDeadline);
+    w.setTime(lifecycleTestTime + 15 * 60_000);
+    const stale = await w.service.read("emailFlow", { flow: "early-access" }, "agent-reviewer");
+    expect(stale).toMatchObject({ stale: true, partial: true, capabilities: [{ state: "held", reasonCodes: ["SOURCE_STALE"] }, { state: "held" }],
+      data: { sourceState: "expired", freshness: "stale", currentSourceMatch: false, sourceConfig: { evidence: [{ state: "unknown" }] } } });
+    await expect(w.service.saveDraft(input, "agent-reviewer")).rejects.toMatchObject({ code: "SOURCE_STALE" });
+    expect(revisionCount(w)).toBe(0);
+  });
+  it("keeps a 300-day-old snapshot historical despite a source-issued year-long lease", async () => {
+    const old = lifecycleSourceFixture(scope, lifecycleTestTime - 300 * 86400_000);
+    old.validUntil = new Date(lifecycleTestTime + 65 * 86400_000).toISOString();
+    for (const flow of old.flows) for (const evidence of flow.evidence) evidence.validUntil = old.validUntil;
+    const w = setup(async () => structuredClone(old));
+    const view = await flowView(w.service);
+    expect(view).toMatchObject({ sourceState: "expired", freshness: "stale", saveHoldReasons: ["SOURCE_STALE"] });
+    expect(view.sourceConfig!.evidence[0]!.state).toBe("unknown");
+    expect(view.sourceConfig!.outcomes!.rows[0]!.count.value).toBe(2);
+    await expect(w.service.saveDraft(await request(w.service), "agent-reviewer")).rejects.toMatchObject({ code: "SOURCE_STALE" });
+    expect(revisionCount(w)).toBe(0);
+  });
+  it("does not renew old readiness evidence merely because its enclosing snapshot is freshly observed", async () => {
+    const w = setup();
+    const evidence = w.source.flows[1]!.evidence[0]!;
+    evidence.observedAt = new Date(lifecycleTestTime - 15 * 60_000).toISOString();
+    evidence.validUntil = new Date(lifecycleTestTime + 365 * 86400_000).toISOString();
+    const view = await flowView(w.service);
+    expect(view.sourceState).toBe("current");
+    expect(view.sourceConfig!.evidence[0]).toMatchObject({ state: "unknown", validUntil: new Date(lifecycleTestTime).toISOString() });
+  });
+  it("rechecks the age at read publication and draft commit after the source promise has completed", async () => {
+    let expire = false;
+    const source = lifecycleSourceFixture();
+    const w = setup(async () => {
+      if (expire) queueMicrotask(() => queueMicrotask(() => w.setTime(lifecycleTestTime + 15 * 60_000)));
+      return structuredClone(source);
+    });
+    const input = await request(w.service); expire = true;
+    const result = await w.service.read("emailFlow", { flow: "early-access" }, "agent-reviewer");
+    expect(result).toMatchObject({ stale: true, data: { sourceState: "expired", freshness: "stale", saveHoldReasons: ["SOURCE_STALE"] } });
+    w.setTime(lifecycleTestTime);
+    await expect(w.service.saveDraft(input, "agent-reviewer")).rejects.toMatchObject({ code: "SOURCE_STALE" });
+    expect(revisionCount(w)).toBe(0);
+  });
+  it("honors a source's shorter expiry without extending it to the server maximum", async () => {
+    const w = setup(); w.source.validUntil = new Date(lifecycleTestTime + 60_000).toISOString();
+    const before = await flowView(w.service);
+    expect(before.validUntil).toBe(w.source.validUntil);
+    expect(before.sourceConfig!.evidence[0]!.validUntil).toBe(w.source.validUntil);
+    w.setTime(lifecycleTestTime + 60_000);
+    expect(await flowView(w.service)).toMatchObject({ freshness: "stale", sourceState: "expired" });
+  });
   it("keeps renewed evidence distinct from a conflicting reused source version or regressed observation", async () => {
     const w = setup(); await flowView(w.service);
     w.setTime(w.time() + 1); w.source.observedAt = new Date(w.time()).toISOString(); w.source.validUntil = new Date(w.time() + 3600_000).toISOString();
@@ -206,7 +262,7 @@ describe("immutable local flow draft persistence and recovery", () => {
     await expect(deniedPromise).rejects.toMatchObject({ status: 403 }); expect(revisionCount(w)).toBe(0);
     denied = false;
     const expired = w.service.saveDraft({ ...input, idempotencyKey: "expired-wait" }, "agent-reviewer");
-    w.setTime(lifecycleTestTime + 3600_001); gate!();
+    w.setTime(lifecycleTestTime + 15 * 60_000); gate!();
     await expect(expired).rejects.toMatchObject({ code: "SOURCE_STALE" }); expect(revisionCount(w)).toBe(0);
   });
   it("rejects a delayed older source read after a newer policy observation has been accepted", async () => {
