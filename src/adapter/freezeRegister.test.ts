@@ -8,12 +8,12 @@ import { describe, expect, it } from "vitest";
  * Drift check for docs/adapter-freeze-register.md. The extractor reads the source (see scripts/adapter-freeze-extract.mjs);
  * this test fails when the source names a view key, action kind, operation, resource kind, error code or next-action kind
  * that the register does not list, and when the register lists one the source no longer names.
- * The "Pending in open PRs" section is deliberately not read, so an open PR cannot make this test fail.
+ * The "Merged PRs outside the drift check" section (names the extractor cannot see) is deliberately not read.
  */
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const extracted = JSON.parse(execFileSync(process.execPath, ["scripts/adapter-freeze-extract.mjs", "--json"], { cwd: root, encoding: "utf8" })) as Record<string, Record<string, unknown>>;
 const register = readFileSync(`${root}docs/adapter-freeze-register.md`, "utf8");
-const main = register.split(/^## Pending in open PRs/m)[0]!;
+const main = register.split(/^## Merged PRs outside the drift check/m)[0]!;
 
 /** First-column names (in backticks) of the table rows between two headings. */
 function listed(from: string, to: string): string[] {

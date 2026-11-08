@@ -135,7 +135,7 @@ test("the workspace menu dialog works at 390px, 1024px and 1440px", async ({ pag
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/overview");
     await settle(page, "/overview");
-    const opener = page.getByRole("button", { name: width === 390 ? "Menu" : width === 1024 ? "More" : "Open workspace menu" });
+    const opener = page.getByRole("button", { name: width === 390 ? "Menu" : width === 1024 ? "More" : "TD, open workspace menu" });
     await opener.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("dialog", { name: "Explore the Farda workspace." })).toBeVisible();

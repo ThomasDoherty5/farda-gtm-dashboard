@@ -19,10 +19,9 @@ import {
   SCHEMA_VERSION,
   actionResponseSchema,
   actionStateSchema,
-  executionCertaintySchema,
   provenanceValueSchema,
   readResponseSchema,
-  verifiedScopeSchema,
+  saveResourceResponseSchema,
   type ActionRequest,
   type ActionResponse,
   type Environment,
@@ -147,19 +146,8 @@ async function rejection(p: Promise<unknown>): Promise<AdapterError> {
 
 const sameAccounts = (a: string[], b: string[]) => [...a].sort().join(",") === [...b].sort().join(",");
 
-/** Mirrors `SaveResourceResponse`; contract.ts exports only the type for it. */
-const saveResponseSchema = z.object({
-  schemaVersion: z.string(),
-  requestId: z.string(),
-  scope: verifiedScopeSchema,
-  resourceRef: z.string(),
-  resourceVersion: z.string(),
-  persistedAt: z.string(),
-  persistedByRef: z.string(),
-  record: z.unknown(),
-  reasonCodes: z.array(z.string()),
-  executionCertainty: executionCertaintySchema,
-});
+/** The contract's save response schema (D-14). */
+const saveResponseSchema = saveResourceResponseSchema;
 
 /**
  * The contract's schemas strip unknown keys. A response from a real backend must not carry any, so conformance parses
