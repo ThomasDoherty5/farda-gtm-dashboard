@@ -120,7 +120,7 @@ function MessageDetails({event}:{event:Message}){
 }
 function HistoryDetails({row}:{row:WatchRow}){
   const r=row.review;
-  return <section><h3>{row.handle??row.profile??row.creator}</h3>
+  return <section className={m.reviewEvidence}><h3>{row.handle??row.profile??row.creator}</h3>
     {r?.state==="current"?<><p>{r.historyComplete?"Complete supplied history":"Partial supplied history"} · observed {stamp(r.observedAt)} · {r.receipt}</p>
       {r.history.length?<DataTable caption={"Intake history for "+(row.profile??row.creator)} columns={[{label:"Event / time"},{label:"Decision"},{label:"Identity evidence"},{label:"Original / decision receipts"}]}
         rows={r.history.map(h=>[h.id+" · "+stamp(h.at),h.kind+" · "+h.decision,h.identityEvidence.join(" · "),h.receipt+" · "+h.decisionReceipt])}/>:<p>No intake history entries were supplied. Current profile checks are not historical intake events.</p>}</>:
@@ -146,8 +146,8 @@ function WatchlistEvidence({rows,latest,onReview}:{rows:WatchRow[];latest:Native
         selection?.kind==="message"?event?<MessageDetails event={event}/>:<p role="status">This exact message is no longer available in the current authorized source snapshot.</p>:
           row?<><DetailRow label="Creator / profile" value={row.creator+" · "+(row.profile??"Unknown")}/><DetailRow label="Account / network" value={(row.account??"Unknown")+" · "+(row.network??"Unknown")}/>
             <DetailRow label="Current reason" value={row.reason}/><HistoryDetails row={row}/>
-            {review?.state==="current"&&<>{review.candidates.length?<DataTable caption="Competing identity evidence" columns={[{label:"Creator / profile"},{label:"Account / network"},{label:"Receipt"}]}
-              rows={review.candidates.map(c=>[c.creatorId+" · "+c.profileId,c.account+" · "+c.network,c.receipt])}/>:<p>No competing identity evidence was supplied.</p>}
+            {review?.state==="current"&&<>{review.candidates.length?<div className={m.reviewEvidence}><DataTable caption="Competing identity evidence" columns={[{label:"Creator / profile"},{label:"Account / network"},{label:"Receipt"}]}
+              rows={review.candidates.map(c=>[c.creatorId+" · "+c.profileId,c.account+" · "+c.network,c.receipt])}/></div>:<p>No competing identity evidence was supplied.</p>}
               {review.exclusion?<><DetailRow label="Exclusion reason" value={review.exclusion.reasonCode}/><DetailRow label="Effective" value={stamp(review.exclusion.at)}/><DetailRow label="Owner" value={review.exclusion.owner}/><DetailRow label="Exclusion receipt" value={review.exclusion.receipt}/></>:<p>No dated exclusion decision was supplied.</p>}</>}
             <p>Ambiguous identities stay quarantined. Reviewing does not merge identities, enroll a profile or remove an exclusion.</p></>:<p role="status">This profile is no longer available in the current authorized scope.</p>}
       <Button variant="secondary" onClick={()=>setSelection(null)}>Return to watchlist</Button>

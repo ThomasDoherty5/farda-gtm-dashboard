@@ -57,6 +57,8 @@
 .status { margin: 0; font: var(--text-small); }
 .footer { margin: 0; font: var(--text-small); color: var(--color-muted); }
 .gap20 { gap: var(--space-20); }
+/* Keep provenance inside the dialog; only the labeled table region scrolls horizontally. */
+.reviewEvidence { width: 100%; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 1179px) {
   .signals { grid-template-columns: minmax(0, 1fr); }
 }

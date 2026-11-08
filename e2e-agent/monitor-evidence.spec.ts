@@ -92,10 +92,27 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
       const modal=page.getByRole("dialog");
       for(const width of [1440,390]){
         await page.setViewportSize({width,height:900});await modal.evaluate(e=>{e.scrollTop=0;});
+        const tables=modal.getByRole("region").filter({has:page.getByRole("table")});
+        for(const region of await tables.all())await region.evaluate(e=>{e.scrollLeft=0;});
         const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
         expect(result.violations.map(v=>v.id)).toEqual([]);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+        expect(await modal.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+        for(const paragraph of await modal.locator("p").all())expect(await paragraph.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
         await page.screenshot({path:`${dir}/native-${name}-${width}-top.png`,fullPage:true});
+        for(const [i,region] of (await tables.all()).entries()){
+          if(await region.evaluate(e=>e.scrollWidth>e.clientWidth+1)){
+            await region.scrollIntoViewIfNeeded();await region.focus();await page.keyboard.press("ArrowRight");
+            await expect.poll(()=>region.evaluate(e=>e.scrollLeft)).toBeGreaterThan(0);
+            await region.evaluate(e=>{e.scrollLeft=e.scrollWidth;});
+            const bounds=await region.boundingBox(),last=await region.getByRole("columnheader").last().boundingBox();
+            expect(bounds).not.toBeNull();expect(last).not.toBeNull();
+            expect(last!.x).toBeGreaterThanOrEqual(bounds!.x-1);
+            expect(last!.x+last!.width).toBeLessThanOrEqual(bounds!.x+bounds!.width+1);
+            await page.screenshot({path:`${dir}/native-${name}-${width}-table-${i}-right.png`,fullPage:true});
+            await region.evaluate(e=>{e.scrollLeft=0;});
+          }
+        }
         // The return button may already retain focus across viewport changes;
         // focus() alone does not undo the deliberate top-of-dialog scroll.
         await modal.getByRole("button",{name:/Return to (watchlist|run)/}).scrollIntoViewIfNeeded();
