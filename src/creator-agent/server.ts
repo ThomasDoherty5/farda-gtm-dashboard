@@ -59,6 +59,9 @@ import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.t
 import { createFinanceReader, FinanceError } from "./finance/reader.ts";
 import { financeViewKeys, financeFilters, isFinanceViewKey } from "./finance/contract.ts";
 import type { FinanceSourceReader } from "./finance/source.ts";
+import { createOperationsReadReader, OperationsReadError } from "./operationsReads/reader.ts";
+import { operationsReadViewKeys, operationsReadFilters, isOperationsReadViewKey } from "./operationsReads/contract.ts";
+import type { OperationsReadSourceReader } from "./operationsReads/source.ts";
 import { createOperationsControls, OperationsControlError, type OperationsControlSource } from "./operationsControls.ts";
 import { operationsControlAction, operationsControlFilters, operationsHealthAction, operationsCanonicalAction } from "./operationsControlsSchema.ts";
 import { createOperationsControlAuthority, OperationsAuthorityError, type OperationsControlAuthoritySource } from "./operationsControlAuthority.ts";
@@ -98,6 +101,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   lifecycleSource?: LifecycleSourceReader;
   /** Server-only accounting/provider reader for finance and payable views. Unset means every finance read is INTEGRATION_PENDING. */
   financeSource?: FinanceSourceReader;
+  /** Server-only order, shipping and returns reader for the THO-301 operations views. Unset means every such read is INTEGRATION_PENDING. */
+  operationsReadSource?: OperationsReadSourceReader;
   operationsControlSource?: OperationsControlSource;
   operationsControlAuthority?: OperationsControlAuthoritySource;
   operationsCanonical?: {source:OperationsCanonicalSource;owners:ReadonlyMap<OperationsCanonicalKind,OperationsOwnerRegistration>};
@@ -145,6 +150,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
   let finance: ReturnType<typeof createFinanceReader>;
+  let operationsReads: ReturnType<typeof createOperationsReadReader>;
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
@@ -192,6 +198,8 @@ export function createAgentServer(options: AgentServerOptions) {
       source: options.lifecycleSource, now: options.operations?.now });
     finance = createFinanceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, source: options.financeSource, now: options.operations?.now });
+    operationsReads = createOperationsReadReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, source: options.operationsReadSource, now: options.operations?.now });
     const controlAuthority=options.operationsControlAuthority?createOperationsControlAuthority({
       scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},
       sources:options.actionFoundation?.approvals?.sources??{},source:options.operationsControlAuthority,now:options.operations?.now}):undefined;
@@ -364,6 +372,8 @@ export function createAgentServer(options: AgentServerOptions) {
     ...lifecycleViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: lifecycleFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
     ...financeViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: financeFilters[viewKey],
+      period: z.null(), sort: z.array(z.never()).max(0) })),
+    ...operationsReadViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: operationsReadFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
     ...monitorViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: monitorFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
@@ -660,6 +670,7 @@ export function createAgentServer(options: AgentServerOptions) {
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
         contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
         financeReads: { sourceAuthority: options.financeSource ? "injected" : "notConnected", views: "read-only-projections", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" },
+        operationsReads: { sourceAuthority: options.operationsReadSource ? "injected" : "notConnected", views: "read-only-projections", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
@@ -973,6 +984,18 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.dataState, data: result.data, sourceFreshness: result.sourceFreshness, coverage: result.coverage,
             capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
+        if (isOperationsReadViewKey(input.viewKey)) {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const cancel = new AbortController();
+          res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const result = await operationsReads.read(input.viewKey, input.filters, auth.role, cancel.signal);
+          const currentAuth = authorize(req);
+          if (!currentAuth || currentAuth.role !== auth.role) return reply(res, currentAuth ? 403 : 401, { code: currentAuth ? "SOURCE_ROLE_CHANGED" : "UNAUTHENTICATED", executionCertainty: "notApplied" });
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.dataState, data: result.data, sourceFreshness: result.sourceFreshness, coverage: result.coverage,
+            capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
         if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
@@ -1074,6 +1097,8 @@ export function createAgentServer(options: AgentServerOptions) {
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if(error instanceof OperationsAuthorityError)return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof FinanceError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
+      if (error instanceof OperationsReadError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
