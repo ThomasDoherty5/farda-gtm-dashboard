@@ -46,9 +46,11 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
       await expect(page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Template preview" }) })).toContainText("Synthetic preview");
       await page.keyboard.press("Escape"); await expect(page.getByRole("button", { name: "Preview template", exact: true })).toBeFocused();
       await screenReaderCheckpoint(page,flow+"-dialog-focus-return",page.getByRole("button",{name:"Preview template",exact:true}),["Preview template","button"]);
-      await page.getByLabel("Local draft title").fill("ab"); await page.getByRole("button", { name: "Save draft", exact: true }).click();
-      await expect(page.getByLabel("Local draft title")).toHaveAttribute("aria-invalid", "true");
-      await screenReaderCheckpoint(page,flow+"-validation",page.getByLabel("Local draft title"),["Local draft title","invalid"]);
+      await page.getByLabel("Local draft title").fill("ab");
+      await screenReaderCheckpoint(page,flow+"-validation",page.getByLabel("Local draft title"),["Local draft title","invalid","String must contain at least 3"],"KP_Enter",async()=>{
+        await page.getByRole("button", { name: "Save draft", exact: true }).click();
+        await expect(page.getByLabel("Local draft title")).toHaveAttribute("aria-invalid", "true");
+      });
       await page.getByLabel("Local draft title").fill(`Reviewed ${flow} draft`); await page.getByRole("button", { name: "Save draft", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Draft persistence confirmed" })).toBeVisible();
       await screenReaderCheckpoint(page,flow+"-save-announcement",page.getByRole("button",{name:"Continue editing",exact:true}),["Draft persistence confirmed","Continue editing"]);

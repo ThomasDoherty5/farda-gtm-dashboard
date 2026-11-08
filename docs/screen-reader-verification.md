@@ -10,6 +10,8 @@ The runner records the actual synthesized audio to its ephemeral PulseAudio sink
 
 The headed Linux browser hides its scrollbar gutter to retain the existing headless capture geometry. The original exact-width, overflow, keyboard scrolling and axe assertions remain unchanged.
 
+Native Orca diagnostics are line-buffered so the observation process sees each real utterance immediately; speech generation and AT-SPI behavior are untouched. Validation capture starts before the actual invalid submission, retaining its automatic error announcement as well as the explicit Where Am I response. [Orca’s diagnostic writer](https://raw.githubusercontent.com/GNOME/orca/gnome-46/src/orca/debug.py) writes without an explicit flush; buffered file visibility must not be confused with absent speech.
+
 Evidence contains the browser log, Orca spoken-output transcript, checkpoint intervals, software versions and WAV recording. Review these actual observations alongside the existing keyboard/focus, axe, full-source visual comparisons and service tests. This is a scripted real-screen-reader journey with reviewed output, not a claim of a human participant usability study or real provider qualification. The exact CI revision and findings belong in the owning issue's release evidence.
 
 Run only in the existing ephemeral Linux CI environment with:

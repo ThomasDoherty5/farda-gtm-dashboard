@@ -5,9 +5,9 @@ import {promisify} from "node:util";
 
 const run=promisify(execFile);
 /** Actual Linux AT-SPI/Orca only. Normal native tests retain their existing assertions. */
-export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator,words:string[],key="KP_Enter"){
+export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator,words:string[],key="KP_Enter",transition?:()=>Promise<void>){
  const log=process.env.FARDA_SCREEN_READER_LOG,proof=process.env.FARDA_SCREEN_READER_PROOF;
- if(!log&&!proof)return;
+ if(!log&&!proof){await transition?.();return;}
  if(process.platform!=="linux"||!log||!proof)throw new Error("An actual configured Linux screen-reader session is required.");
  const start=Date.now(),offset=statSync(log).size;
  await page.bringToFront();
@@ -17,6 +17,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  const windows=(await run("xdotool",["search","--onlyvisible","--name",title])).stdout.trim().split(/\s+/);
  const window=windows.at(-1);if(!window)throw new Error("No visible Chromium AT window");
  await run("xdotool",["windowactivate","--sync",window]);
+ await transition?.();
  await focus.focus();
  await expect(focus).toBeFocused();
  // DOM focus resolves before Chromium publishes its AT-SPI focus event.

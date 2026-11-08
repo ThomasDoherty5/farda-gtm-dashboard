@@ -27,6 +27,9 @@ JSON
 cat > "$prefs/orca-customizations.py" <<'PY'
 import orca.debug
 orca.debug.debugLevel = orca.debug.LEVEL_INFO
+if orca.debug.debugFile is not None:
+    orca.debug.debugFile.reconfigure(line_buffering=True, write_through=True)
+    orca.debug.println(orca.debug.LEVEL_INFO, "CI diagnostics: native log line buffering enabled")
 PY
 orca --replace --user-prefs="$prefs" --enable=speech --disable=braille --debug-file="$FARDA_SCREEN_READER_LOG" > "$out/orca-process.log" 2>&1 &
 orca_pid=$!
@@ -44,6 +47,7 @@ for attempt in $(seq 1 30); do
   sleep 1
 done
 grep -q 'SPEECH: Using speech server factory:' "$FARDA_SCREEN_READER_LOG"
+grep -q 'CI diagnostics: native log line buffering enabled' "$FARDA_SCREEN_READER_LOG"
 orca --version > "$out/versions.txt"
 speech-dispatcher --version >> "$out/versions.txt"
 node --version >> "$out/versions.txt"
