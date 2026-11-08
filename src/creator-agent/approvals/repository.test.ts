@@ -31,7 +31,7 @@ describe("J04 exact source authority and immutable decision readback", () => {
     await expect(f.repo.preparePreview({ ...f.command, entityVersion: "changed" }, { principalRef: "synthetic:requester" }, "same")).rejects.toThrow("IDEMPOTENCY_KEY_REUSED");
   });
   it("allows only one Linear decision write across concurrent duplicate source events and preserves its receipt", async () => {
-    const f = make(), requested = await f.requested(), event = f.event(requested);
+    const f = make(), requested = await f.requested(), event = f.event(requested, "approved", "synthetic:founder");
     const results = await Promise.allSettled([f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" }), f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })]);
     expect(results.some(result => result.status === "fulfilled")).toBe(true); expect(f.state.writes).toBe(2);
     const read = f.repo.readApproval(requested.manifest.approvalRef)!; expect(read.decisionHistory).toHaveLength(1);
@@ -58,7 +58,7 @@ describe("J04 exact source authority and immutable decision readback", () => {
     event.personRef = "synthetic:forged-founder"; await expect(f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })).rejects.toThrow("SLACK_ACTOR_MISMATCH");
   });
   it.each([49_999, 50_000, 50_001])("applies the strictly-over-$500 founder threshold at %i cents", async amount => {
-    const f = make(); f.draft.effects.spendsMoney = true; f.draft.items[0]!.spendMinor = amount; f.draft.bounds.maxSpendMinor = amount; f.draft.exposure = { state: "known", minor: amount, currency: "USD" };
+    const f = make(); f.draft.phase = "other"; f.draft.acquisitionTerms = null; f.draft.effects.sendsCreator = false; f.draft.effects.spendsMoney = true; f.draft.items[0]!.spendMinor = amount; f.draft.bounds.maxSpendMinor = amount; f.draft.exposure = { state: "known", minor: amount, currency: "USD" };
     const requested = await f.requested(), event = f.event(requested);
     if (amount > 50_000) await expect(f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })).rejects.toThrow("FOUNDER_REQUIRED");
     else expect((await f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })).current.state).toBe("approved");
@@ -76,7 +76,7 @@ describe("J04 exact source authority and immutable decision readback", () => {
     if (proof.state === "verified") expect(() => f.repo.assertCurrentProof(proof.proof, f.state.now)).toThrow();
   });
   it("holds a revoked source on the final awaited Slack read, and edited/deleted/ambiguous events never approve", async () => {
-    const f = make(), requested = await f.requested(), event = f.event(requested);
+    const f = make(), requested = await f.requested(), event = f.event(requested, "approved", "synthetic:founder");
     f.state.readHook = async intent => { if (intent.kind === "decision") event.state = "revoked"; };
     const read = await f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" }); expect(read.decisionReceipt).toBeNull(); expect(read.current.state).toBe("held");
     for (const state of ["edited", "deleted", "ambiguous"] as const) { event.state = state; await expect(f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })).rejects.toThrow("SLACK_DECISION_UNVERIFIED"); }

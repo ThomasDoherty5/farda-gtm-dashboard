@@ -85,7 +85,7 @@ async function world(connected = true) {
     const repo = app.actionFoundation.approvals, principal = { principalRef: "agent-reviewer" };
     const preview = await repo.preparePreview(a.command, principal, "synthetic-preview");
     const requested = await repo.requestDecision({ approvalRef: preview.manifest.approvalRef, expectedVersion: 1 }, principal, "synthetic-request");
-    const event = a.event(requested); const approved = await repo.observeDecision(event.locator, { ingressRef: "synthetic-verified-relay" });
+    const event = a.event(requested, "approved", "synthetic:founder"); const approved = await repo.observeDecision(event.locator, { ingressRef: "synthetic-verified-relay" });
     const manifest = approved.manifest;
     const run = await app.actionFoundation.dispatch.handoff({ handlerRef: "synthetic-commercial-read.v1", payloadRef: d.payloadRef,
       approval: approvalDispatchBinding(manifest, manifest.items[0]!.itemRef) }, { principalRef: principal.principalRef, idempotencyKey: "synthetic-read-run" });

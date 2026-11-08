@@ -1,0 +1,17 @@
+/* Native data, original Figma presentation; missing evidence keeps its section visible. */
+.notice { display:flex; flex-direction:column; gap:var(--space-8); padding:var(--space-20); border:1px solid var(--color-border); border-radius:var(--space-24); background:var(--color-violetSoft); }
+.notice p { margin:0; }
+.contentSplit { display:grid; grid-template-columns:832fr 444fr; gap:var(--space-20); align-items:start; }
+.detailSplit { display:grid; grid-template-columns:832fr 440fr; gap:var(--space-24); align-items:start; }
+.halves { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-24); align-items:start; }
+.contentSplit > *, .detailSplit > *, .halves > * { min-width:0; }
+.emptyPlot { min-height:252px; display:flex; align-items:center; justify-content:center; padding:var(--space-24); color:var(--color-muted); font:var(--text-small); text-align:center; }
+.actions { display:flex; flex-direction:column; align-items:flex-start; gap:var(--space-8); }
+.history { max-width:100%; min-width:0; }
+@media(max-width:1179px) { .contentSplit,.detailSplit,.halves { grid-template-columns:minmax(0,1fr); } }
+
+
+.loadingTitle { margin:0; font:var(--text-h1); }
+
+.snapshot { flex:0 1 280px; min-width:0; }
+.runContext { flex:1 1 500px; min-width:0; }

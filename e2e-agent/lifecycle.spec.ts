@@ -63,8 +63,9 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
     await page.goto("/customers/consent"); await capture("consent", "A clear view of who is eligible.");
     await page.getByRole("button", { name: "Review exclusions" }).focus(); await page.keyboard.press("Enter"); await expect(page.locator("#exclusions")).toBeFocused();
     const scroll = page.locator('[role="region"][aria-label="Why an enrollment stops"]'); await scroll.focus(); await page.keyboard.press("ArrowRight");
-    await screenReaderCheckpoint(page,"consent-table-alternative",scroll,["Why an enrollment stops"]);
     await expect.poll(() => scroll.evaluate(e => e.scrollLeft)).toBeGreaterThan(0);
+    // Orca's first-cell navigation subsequently resets horizontal position.
+    await screenReaderCheckpoint(page,"consent-table-alternative",scroll,["Why an enrollment stops"]);
     await page.goto("/customers/activation"); await capture("activation", "Measure setup, then sustained use.");
     await expect(page.getByRole("region", { name: "First-week cohort" })).toContainText("do not prove ingestion");
     if(process.env.FARDA_SCREEN_READER_LOG){

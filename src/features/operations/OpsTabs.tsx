@@ -14,12 +14,12 @@ const TABS: { key: OpsSection; label: string; to: string }[] = [
 ];
 
 /** Section navigation shared by the Operations screens (Figma "Section navigation", e.g. 4:32). The current one is aria-current. */
-export function OpsTabs({ current, hrefs = {} }: { current: OpsSection; hrefs?: Partial<Record<OpsSection, string>> }) {
+export function OpsTabs({ current, hrefs = {}, includeHub = true }: { current: OpsSection; hrefs?: Partial<Record<OpsSection, string>>; includeHub?: boolean }) {
   const location = useLocation();
   const native = useScope().scope.environment !== "demo";
   return (
     <nav aria-label="Operations sections" className={styles.tabs}>
-      {TABS.map((t) => (
+      {TABS.filter(t => includeHub || t.key !== "hub").map((t) => (
         <LinkButton key={t.key} to={t.key === current ? location.pathname + location.search + location.hash : hrefs[t.key] ?? (native && t.key === "support" ? "/support/cases/queue" : t.to)} onClick={t.key === current ? event => event.preventDefault() : undefined} variant={t.key === current ? "primary" : "ghost"} aria-current={t.key === current ? "page" : undefined}>{t.label}</LinkButton>
       ))}
     </nav>

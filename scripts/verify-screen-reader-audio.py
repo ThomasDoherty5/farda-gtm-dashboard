@@ -8,7 +8,21 @@ import wave
 
 root = pathlib.Path(sys.argv[1])
 rows = [json.loads(line) for line in (root / "checkpoints.jsonl").read_text().splitlines()]
-assert len(rows) >= 18, f"Expected the actual approval/recovery and lifecycle checkpoints, got {len(rows)}"
+expected = {
+    "approval-exact-source-review", "canonical-receipt-navigation",
+    "immutable-history-navigation", "original-outcome-recovery-control",
+    "consent-table-alternative", "activation-cohort-dialog",
+    "monitor-table-headers", "monitor-held-retry", "watchlist-table-headers",
+    "post-publication-alternative", "monitor-partial-recovery",
+    "stock-table-headers", "stock-evidence-focus-return", "stock-form-error",
+    "stock-proposal-status", "support-table-headers", "support-cohort-focus-return",
+}
+for flow in ("early-access", "abandoned-checkout", "review-request"):
+    for checkpoint in ("locked-policy", "dialog-focus-return", "validation", "save-announcement"):
+        expected.add(f"{flow}-{checkpoint}")
+names = [row["name"] for row in rows]
+assert len(names) == len(set(names)), "Duplicate speech checkpoints cannot replace missing journeys"
+assert expected <= set(names), f"Missing actual screen-reader checkpoints: {sorted(expected - set(names))}"
 started = int((root / "recording-start-ms.txt").read_text())
 with wave.open(str(root / "speech.wav"), "rb") as recording:
     assert recording.getsampwidth() == 2 and recording.getnchannels() == 1

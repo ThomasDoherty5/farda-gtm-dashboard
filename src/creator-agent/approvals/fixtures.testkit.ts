@@ -55,6 +55,6 @@ export function approvalFixture(path = ":memory:") {
       decision, proposedEditRef: decision === "editRequired" ? "synthetic:edited-draft" : null, sourceVersion: "slack-v1", decidedAt: at(), observedAt: at(), validUntil: until(), state: "current" };
     events.set(eventRef, value); return value;
   }
-  async function approved() { const request = await requested(); const e = event(request); return repo.observeDecision(e.locator, { ingressRef: "synthetic:authenticated-ingress" }); }
+  async function approved() { const request = await requested(); const actor = ["invitation", "activation"].includes(draft.phase) || draft.effects.changesPolicy ? "synthetic:founder" : "synthetic:reviewer"; const e = event(request, "approved", actor); return repo.observeDecision(e.locator, { ingressRef: "synthetic:authenticated-ingress" }); }
   return { db, repo, options, state, draft, policy, humans, sources, linear, intents, events, outcomes, command, requested, event, approved, at, until };
 }
