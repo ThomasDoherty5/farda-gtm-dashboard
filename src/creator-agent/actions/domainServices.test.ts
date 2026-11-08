@@ -86,7 +86,53 @@ describe("authorized full snapshot exports", () => {
   });
 });
 
+describe("canonical export recovery reads",()=>{
+  it("looks up absent and completed original requests without generating or reading pages again",async()=>{
+    const w=setup(),intent={requestKey:"original-lookup",expectedVersion:"ledger-v1",payload};
+    expect((await w.service.readExportRequest(intent,actor)).data.state).toBe("absent");expect(w.state.pageReads).toBe(0);
+    const receipt=await w.service.exportLedger(payload,"ledger-v1",actor,intent.requestKey);
+    const result=await w.service.readExportRequest(intent,actor);expect(result.data).toMatchObject({state:"succeeded",receipt});expect(w.state.pageReads).toBe(3);
+    await expect(w.service.readExportRequest({...intent,expectedVersion:"other"},actor)).rejects.toMatchObject({code:"MANIFEST_CHANGED"});
+    w.state.denySource=true;expect(()=>result.assertCurrent()).toThrow();
+  });
+  it("does not restart an in-flight export when its status is read",async()=>{
+    const w=setup(),read=w.ledger.page;let release!:()=>void;const gate=new Promise<void>(resolve=>{release=resolve;});
+    w.ledger.page=async(s,c)=>{await gate;return read(s,c);};
+    const task=w.service.exportLedger(payload,"ledger-v1",actor,"in-flight");await new Promise(resolve=>setTimeout(resolve,5));
+    expect((await w.service.readExportRequest({requestKey:"in-flight",expectedVersion:"ledger-v1",payload},actor)).data).toMatchObject({state:"pending",receipt:null,progress:{processedRows:null}});
+    expect(w.state.pageReads).toBe(0);release();await task;expect(w.state.pageReads).toBe(3);
+  });
+  it("fences an absent lookup when the original request completes during its source await",async()=>{
+    const w=setup(),open=w.ledger.open;let release!:()=>void,started!:()=>void,calls=0;
+    const gate=new Promise<void>(resolve=>{release=resolve;}),entered=new Promise<void>(resolve=>{started=resolve;});
+    w.ledger.open=async(...args)=>{if(++calls===1){started();await gate;}return open(...args);};
+    const input={requestKey:"lookup-race",expectedVersion:"ledger-v1",payload};
+    const lookup=w.service.readExportRequest(input,actor);await entered;
+    await w.service.exportLedger(payload,"ledger-v1",actor,input.requestKey);release();
+    await expect(lookup).rejects.toMatchObject({code:"EXPORT_REQUEST_CHANGED"});
+    expect((await w.service.readExportRequest(input,actor)).data.state).toBe("succeeded");expect(w.state.pageReads).toBe(3);
+  });
+  it("refuses corrupt artifact bytes and nonvoid source fences",async()=>{
+    const w=setup(),receipt=await w.service.exportLedger(payload,"ledger-v1",actor,"bytes");
+    w.store.database.prepare("UPDATE action_export_artifacts SET body='altered'").run();
+    await expect(w.service.downloadExport(receipt.artifactRef,actor)).rejects.toMatchObject({code:"EXPORT_ARTIFACT_CORRUPT"});
+    const invalid=setup();invalid.ledger.assertCurrent=async()=>undefined;
+    await expect(invalid.service.exportLedger(payload,"ledger-v1",actor,"async-source")).rejects.toBeDefined();
+    expect(invalid.store.database.prepare("SELECT count(*) n FROM action_export_artifacts").get()?.n).toBe(0);
+  });
+});
+
 describe("final named authority fences", () => {
+  it.each(["async", "nonvoid"] as const)("rejects a %s authority assertion before generating or recording an effect", async kind => {
+    const fixture = actionDomainFixture();
+    // TypeScript permits value-returning functions in a void callback; the runtime fence must not.
+    fixture.assertAuthority = kind === "async" ? async () => undefined : () => true;
+    const w = setup(":memory:", fixture);
+    await expect(w.service.exportLedger(payload, "ledger-v1", actor, "invalid-authority-fence")).rejects.toMatchObject({ code: "AUTHORITY_REQUIRED", status: 403, executionCertainty: "notApplied" });
+    expect(w.state.pageReads).toBe(0);
+    expect(w.store.database.prepare("SELECT count(*) n FROM action_export_artifacts").get()?.n).toBe(0);
+    expect(w.store.database.prepare("SELECT count(*) n FROM action_domain_requests").get()?.n).toBe(0);
+  });
   it("rejects founder withdrawal during the final readiness read before the source writer is called", async () => {
     const w = setup(), read = w.readiness.read; let calls = 0;
     w.readiness.read = async (...args) => { const source = await read(...args); if (++calls === 2) w.state.denyActor = true; return source; };

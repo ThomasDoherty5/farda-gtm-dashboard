@@ -1,16 +1,22 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { teamInvitationReadViewKeys, teamInvitationReasonPrefix } from "./contract";
+import type { TeamInvitationReadViewKey } from "./contract";
 import { createTeamInvitationReadReader, TeamInvitationReadError } from "./reader";
 import type { TeamInvitationReadSourceReader } from "./source";
 import { teamInvitationRecord, teamInvitationSnapshot, teamInvitationTestScope, teamInvitationTestTime } from "./fixtures.testkit";
+import { teamInvitationTestSource } from "./fixtures.testkit";
 import { teamPermissionsSchema } from "../../adapter/viewSchemas/settings";
 import { recruitmentViewSchemas } from "../../adapter/viewSchemas/recruitment";
 
 const secret = "synthetic-team-invitation-reference-key-not-secret-1";
 const now = () => Date.parse(teamInvitationTestTime);
-const reader = (source?: TeamInvitationReadSourceReader, extra: { timeoutMs?: number; clock?: () => number } = {}) =>
-  createTeamInvitationReadReader({ scope: teamInvitationTestScope, secret, source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+const reader = (source?: TeamInvitationReadSourceReader | TeamInvitationReadSourceReader["read"], extra: { timeoutMs?: number; clock?: () => number } = {}) =>
+{
+  const native = createTeamInvitationReadReader({ scope: teamInvitationTestScope, secret, source: typeof source === "function" ? teamInvitationTestSource(source) : source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+  return { read: (viewKey: TeamInvitationReadViewKey, filters: unknown, role: "reader" | "reviewer", signal?: AbortSignal) =>
+    native.read(viewKey, filters, { principalRef: `agent-${role}`, role }, signal) };
+};
 const failure = async (promise: Promise<unknown>) => { try { await promise; } catch (error) { return error as TeamInvitationReadError; } throw new Error("Expected a team/invitation read failure"); };
 const counted = { state: "complete", expectedCount: 0, observedCount: 0, reasonCodes: [] };
 const schemas = { teamPermissions: teamPermissionsSchema, invitationDraft: recruitmentViewSchemas.invitationDraft! };
@@ -40,7 +46,7 @@ describe("team permissions and invitation draft reader", () => {
   });
 
   it("denies sendInvitation to a reader and holds it, not connected, for a reviewer; the team view carries no grant or assignment", async () => {
-    const source: TeamInvitationReadSourceReader = async (_scope, request) => teamInvitationSnapshot(request.viewKey);
+    const source: TeamInvitationReadSourceReader["read"] = async (_scope, request) => teamInvitationSnapshot(request.viewKey);
     expect((await reader(source).read("invitationDraft", {}, "reader")).capabilities).toEqual([{ actionKind: "sendInvitation", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] }]);
     expect((await reader(source).read("invitationDraft", {}, "reviewer")).capabilities).toEqual([{ actionKind: "sendInvitation", state: "held", reasonCodes: ["INVITATION_ACTIONS_NOT_CONNECTED"] }]);
     for (const role of ["reader", "reviewer"] as const) expect((await reader(source).read("teamPermissions", {}, role)).capabilities).toEqual([]);
@@ -50,12 +56,10 @@ describe("team permissions and invitation draft reader", () => {
     // A source cannot add capabilities: the snapshot is strict.
     expect(await failure(reader(async () => teamInvitationSnapshot("teamPermissions", { capabilities: [{ actionKind: "changeSourceRole", state: "available", reasonCodes: [] }] }))
       .read("teamPermissions", {}, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["TEAM_PERMISSIONS_SOURCE_INVALID"] });
-    // Extra keys a role record might carry (a granted flag, a provider grant token) are dropped by the frontend schema, never forwarded.
+    // Extra keys a role record might carry (a granted flag, a provider grant token) are refused by the strict native schema, never forwarded.
     const record = { ...(teamInvitationRecord("teamPermissions") as object), granted: true, grantToken: "synthetic-grant-token", recordedEvidence: { access: "granted" } };
-    const result = await reader(async () => teamInvitationSnapshot("teamPermissions", { record })).read("teamPermissions", {}, "reviewer");
-    expect(Object.keys(result.data as object).sort()).toEqual(["gaps", "launch", "matrix", "owners", "sourceRoles", "steps"]);
-    expect(JSON.stringify(result)).not.toMatch(/synthetic-grant-token|granted/);
-    expect(result.capabilities).toEqual([]);
+    expect(await failure(reader(async () => teamInvitationSnapshot("teamPermissions", { record })).read("teamPermissions", {}, "reviewer")))
+      .toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["TEAM_PERMISSIONS_RECORD_INVALID"] });
   });
 
   it("keeps an unread quota unknown and refuses a numeric quota or automatic invitations", async () => {
@@ -125,7 +129,7 @@ describe("team permissions and invitation draft reader", () => {
   it("refuses demo-only and unknown filters before any source access", async () => {
     let reads = 0;
     for (const viewKey of teamInvitationReadViewKeys) {
-      const source: TeamInvitationReadSourceReader = async () => { reads++; return teamInvitationSnapshot(viewKey); };
+      const source: TeamInvitationReadSourceReader["read"] = async () => { reads++; return teamInvitationSnapshot(viewKey); };
       for (const filters of [{ scenario: "stale" }, { fixture: "x" }, { q: "x" }, { creator: "@studio.rae" }, null, "x"])
         expect(await failure(reader(source).read(viewKey, filters, "reader")), JSON.stringify(filters)).toMatchObject({ code: "INVALID_INPUT", status: 400 });
     }
@@ -141,7 +145,7 @@ describe("team permissions and invitation draft reader", () => {
     expect(JSON.stringify({ ...unavailable, message: unavailable.message })).not.toContain("credential");
     expect(await failure(reader(async () => null).read("teamPermissions", {}, "reader"))).toMatchObject({ code: "SOURCE_UNAVAILABLE", reasonCodes: ["TEAM_PERMISSIONS_SOURCE_UNAVAILABLE"] });
     let observedSignal: AbortSignal | undefined;
-    const hung: TeamInvitationReadSourceReader = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
+    const hung: TeamInvitationReadSourceReader["read"] = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
     expect(await failure(reader(hung, { timeoutMs: 20 }).read("invitationDraft", {}, "reader"))).toMatchObject({ code: "TIMEOUT", status: 504, reasonCodes: ["INVITATION_SOURCE_TIMEOUT"] });
     expect(observedSignal?.aborted).toBe(true);
     const controller = new AbortController();
@@ -153,7 +157,7 @@ describe("team permissions and invitation draft reader", () => {
 
   it("does not cache between reads, so a changed source or a later denial is always observed", async () => {
     let calls = 0, deny = false;
-    const source: TeamInvitationReadSourceReader = async () => { calls++; if (deny) throw new TeamInvitationReadError("DENIED", 403); return teamInvitationSnapshot("teamPermissions"); };
+    const source: TeamInvitationReadSourceReader["read"] = async () => { calls++; if (deny) throw new TeamInvitationReadError("DENIED", 403); return teamInvitationSnapshot("teamPermissions"); };
     const r = reader(source);
     await r.read("teamPermissions", {}, "reader");
     deny = true;

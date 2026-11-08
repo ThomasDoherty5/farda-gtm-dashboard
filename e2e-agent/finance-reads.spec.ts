@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { FinanceError } from "../src/creator-agent/finance/source.ts";
-import { financeSnapshot } from "../src/creator-agent/finance/fixtures.testkit.ts";
+import { financeTestSource, financeSnapshot } from "../src/creator-agent/finance/fixtures.testkit.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "../src/creator-agent/testFixtures.ts";
 
 const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, environment: "sandbox" as const };
@@ -15,10 +15,10 @@ test.beforeEach(async () => {
   mode = "unconfigured";
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
     operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
-    financeSource: async (_scope, request) => {
+    financeSource: financeTestSource(async (_scope, request) => {
       if (mode === "denied") throw new FinanceError("DENIED", 403);
       return { ...financeSnapshot(request.viewKey), scope: { ...scope } };
-    } });
+    }) });
   await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT), "127.0.0.1", resolve); });
 });
 test.afterEach(async () => { await app.close(); });

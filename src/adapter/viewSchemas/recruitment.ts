@@ -47,8 +47,8 @@ const recruitmentQueue = z.object({
 
 /* ---------- invitationDraft ---------- */
 
-const invitationDraft = z.object({
-  datasetKey: text,
+const demoInvitationDraft = z.object({
+  datasetKey: z.literal("invitation-demo"),
   creators: z.array(z.object({ handle: text, suppression: z.enum(["clear", "suppressed"]), identity: z.literal("resolved") })),
   products: z.array(z.object({ name: text, listing: z.literal("unverified") })),
   program: z.object({ maxCommissionPct: percent, maxValidityDays: z.number().int().positive(), label: text }),
@@ -59,7 +59,24 @@ const invitationDraft = z.object({
   draftVersion: text,
   automateInvitations: z.literal("off"),
   sampleRequest: z.object({ id: text, handle: text, nativeDeadline: text, lastRead: text }),
-});
+}).strict();
+
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    if (value.synthetic !== (value.provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (value.provenance.eventAt && Date.parse(value.provenance.eventAt) > Date.parse(value.provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeInvitationDraftSchema = nativeRecord(demoInvitationDraft, "invitation-native");
+const invitationDraft = z.union([nativeInvitationDraftSchema, demoInvitationDraft]);
 
 /* ---------- batchDetail ---------- */
 

@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativeCommissionLedgerPage } from "./NativeCommissionLedgerPage";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -30,6 +32,11 @@ const FOOTNOTE = "Synthetic workspace · source access unverified · no outreach
  * awaiting-provider and paid are separate facts, and every total is derived from the group rows.
  */
 export function CommissionLedgerPage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoCommissionLedgerPage /> : <NativeCommissionLedgerPage />;
+}
+
+function DemoCommissionLedgerPage() {
   const [search] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;
   const query = useView<{ scenario?: string }, CommissionLedger>("commissionLedger", scenario ? { scenario } : {});

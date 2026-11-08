@@ -1,5 +1,5 @@
 import type { OperationsScope } from "../operations.ts";
-import type { TeamInvitationReadViewKey } from "./contract.ts";
+import type { TeamInvitationReadViewKey, TeamInvitationSnapshot } from "./contract.ts";
 
 /**
  * Freshness ceiling for provider roles and invitation/quota facts. D-13 names no class for them, so this uses the same
@@ -16,7 +16,14 @@ export type TeamInvitationReadSourceRequest = { viewKey: TeamInvitationReadViewK
  * (invitation draft). Nothing is configured by default. Throw `TeamInvitationReadError` with 401/403 for a source denial;
  * anything else counts as the source being unavailable. The reader only reads: it never grants, assigns or sends.
  */
-export type TeamInvitationReadSourceReader = (scope: OperationsScope, request: TeamInvitationReadSourceRequest, options: { signal: AbortSignal }) => Promise<unknown | null>;
+export type TeamInvitationReadPrincipal = { principalRef: string; role: "reader" | "reviewer" };
+export type TeamInvitationReadBinding = { scope: OperationsScope; principal: TeamInvitationReadPrincipal; request: TeamInvitationReadSourceRequest };
+export type TeamInvitationReadSourceReader = {
+  read(scope: OperationsScope, request: TeamInvitationReadSourceRequest, options: { signal: AbortSignal; principal: TeamInvitationReadPrincipal }): Promise<unknown | null>;
+  /** Synchronously verify the exact principal, scope, request, source version and permission version against current authority.
+   * Returning a promise or any non-void value is a refusal. Coarse roles never authorize customer disclosure. */
+  assertCurrent(snapshot: TeamInvitationSnapshot, binding: TeamInvitationReadBinding, now: number): void;
+};
 
 /** Public error metadata only: a code, a status and bounded reason codes. Source exception text is never carried. */
 export class TeamInvitationReadError extends Error {

@@ -9,14 +9,17 @@ import { createLiveAdapter } from "../adapter/liveAdapter";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { financeViewKeys, type FinanceViewKey } from "./finance/contract";
 import { FinanceError } from "./finance/source";
-import { financeSnapshot, financeTestFilters, financeTestScope, financeTestTime } from "./finance/fixtures.testkit";
+import type { FinanceSourceReader } from "./finance/source";
+import { financeTestSource, financeSnapshot, financeTestFilters, financeTestScope, financeTestTime } from "./finance/fixtures.testkit";
+import { financeRecord } from "./finance/fixtures.testkit";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
 const requestedScope = { workspaceId: financeTestScope.workspaceId, accountIds: [financeTestScope.accountId], environment: "sandbox" as const };
 const PROVIDER_SECRET = "synthetic-provider-session-credential-not-real-0001";
-async function start(extra: Partial<AgentServerOptions> = {}) {
+type TestOptions = Omit<Partial<AgentServerOptions>, "financeSource"> & { financeSource?: FinanceSourceReader | FinanceSourceReader["read"] };
+async function start(extra: TestOptions = {}) {
   const app = createAgentServer({ databasePath: ":memory:", workspaceId: financeTestScope.workspaceId, accountId: financeTestScope.accountId,
-    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(financeTestTime) }, ...extra });
+    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(financeTestTime) }, ...extra, financeSource: typeof extra.financeSource === "function" ? financeTestSource(extra.financeSource) : extra.financeSource });
   apps.push(app);
   await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
   const address = app.server.address();
@@ -218,4 +221,34 @@ describe("authenticated finance and payable reads (THO-303, THO-300)", () => {
     expect([...financeViewKeys].sort()).toEqual(registered.sort());
     for (const viewKey of financeViewKeys) expect(viewSchemas[viewKey], viewKey).toBeDefined();
   });
+  it.each(financeViewKeys)("%s refuses a demo identity at the authenticated native boundary", async viewKey => {
+    const record = { ...financeRecord(viewKey) as object, datasetKey: "demo-only-record" };
+    const { read } = await start({ financeSource: async () => financeSnapshot(viewKey, { record }) });
+    const result = await read(viewKey, financeTestFilters[viewKey]);
+    expect(result.status).toBe(502); expect(result.body).not.toHaveProperty("data");
+  });
+
+  it.each([403, 409] as const)("rejects a source authority change (%s) before the HTTP read publishes", async status => {
+    let entered!: () => void, release!: () => void, changed = false;
+    const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    const source: FinanceSourceReader = {
+      async read(_scope, request, options) { const captured = financeSnapshot(request.viewKey, { principalRef: options.principal.principalRef }); entered(); await gate; return captured; },
+      assertCurrent() { if (changed) throw new FinanceError("private-revoked-proof", status); },
+    };
+    const { read } = await start({ financeSource: source });
+    const pending = read("commissionLedger", {}); await started; changed = true; release();
+    const result = await pending;
+    expect(result.status).toBe(status); expect(result.body).not.toHaveProperty("data"); expect(result.text).not.toContain("private-revoked-proof");
+  });
+
+  it.each(["payableDetail", "periodClose"] as const)("%s preserves partial and expired absence through HTTP", async viewKey => {
+    let stale = false;
+    const { read } = await start({ financeSource: async () => financeSnapshot(viewKey, { record: null,
+      ...(stale ? { validUntil: "2026-11-06T11:59:59.000Z" } : {}),
+      coverage: stale ? { state: "complete", expectedCount: 0, observedCount: 0, reasonCodes: [] } : { state: "partial", expectedCount: null, observedCount: null, reasonCodes: ["SOURCE_DEFERRED"] } }) });
+    expect((await read(viewKey, financeTestFilters[viewKey])).body).toMatchObject({ dataState: "partial", data: null, coverage: { complete: false } });
+    stale = true;
+    expect((await read(viewKey, financeTestFilters[viewKey])).body).toMatchObject({ dataState: "stale", data: null, coverage: { complete: false } });
+  });
+
 });

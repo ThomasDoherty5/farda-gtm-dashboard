@@ -38,6 +38,18 @@ function View() {
 const scope = (accountIds: string[]): RequestedScope => ({ workspaceId: "w", accountIds, environment: "demo" });
 
 describe("useView", () => {
+  it("isolates page cursor and limit in both the source request and cache identity",async()=>{
+    const requests:ReadRequest<unknown>[]=[];
+    const adapter=scriptedAdapter(async request=>{requests.push(request);return response(request,`${request.page.cursor??"first"}/${request.page.limit}`);});
+    const client=testClient();
+    function Paged({cursor,limit}:{cursor:string|null;limit:number}){const query=useView<object,string>("ledger",{},null,{page:{cursor,limit}});return <p>{query.data?.data}</p>;}
+    const tree=(cursor:string|null,limit:number)=><QueryClientProvider client={client}><ScopeProvider adapter={adapter} scope={scope(["a"])} principal="p"><Paged cursor={cursor} limit={limit}/></ScopeProvider></QueryClientProvider>;
+    const {rerender}=render(tree(null,25));await screen.findByText("first/25");
+    rerender(tree("next",25));await screen.findByText("next/25");
+    rerender(tree("next",50));await screen.findByText("next/50");
+    expect(requests.map(request=>request.page)).toEqual([{cursor:null,limit:25},{cursor:"next",limit:25},{cursor:"next",limit:50}]);
+    expect(client.getQueryCache().getAll()).toHaveLength(3);
+  });
   it("cannot publish a 200 when scope authorization is lost between resolving the read and committing the cache", async () => {
     const client = testClient(), root = ["protected","synthetic-scope"], key = [...root,"page"];
     const commits: string[] = [];

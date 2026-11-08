@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { OperationsReadError } from "../src/creator-agent/operationsReads/source.ts";
-import { operationsSnapshot, syntheticCustomer } from "../src/creator-agent/operationsReads/fixtures.testkit.ts";
+import { operationsTestSource, operationsSnapshot, syntheticCustomer, syntheticAuditReason } from "../src/creator-agent/operationsReads/fixtures.testkit.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "../src/creator-agent/testFixtures.ts";
 
 const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, environment: "sandbox" as const };
@@ -16,10 +16,10 @@ test.beforeEach(async () => {
   mode = "configured";
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
     operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
-    operationsReadSource: async (_scope, request) => {
+    operationsReadSource: operationsTestSource(async (_scope, request) => {
       if (mode === "denied") throw new OperationsReadError("DENIED", 403);
       return { ...operationsSnapshot(request.viewKey), scope: { ...scope } };
-    } });
+    }) });
   await listen();
 });
 test.afterEach(async () => { await app.close(); });
@@ -60,4 +60,15 @@ test("a configured source renders a validated order without customer details for
   await page.reload();
   await expect(page.getByRole("alert").filter({ hasText: "No access to this account" })).toBeVisible();
   await expect(page.getByText("Waiting for shipment · 2.4 days")).toHaveCount(0);
+});
+
+test("a reviewer cannot disclose customer details or prior private audit text while reveal authority is held", async ({ page }) => {
+  await login(page, true);
+  await page.goto("/orders/TEST-SH-1042");
+  await page.getByRole("button", { name: "Customer details (restricted)" }).click();
+  await expect(page.getByTestId("customer-denied")).toBeVisible();
+  await expect(page.getByTestId("customer-revealed")).toHaveCount(0);
+  await expect(page.getByTestId("customer-audit")).toHaveCount(0);
+  for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason])
+    await expect(page.getByText(value, { exact: false })).toHaveCount(0);
 });

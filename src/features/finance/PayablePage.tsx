@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativePayablePage } from "./NativePayablePage";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -16,6 +18,11 @@ import styles from "./Finance.module.css";
  * not a new acquisition offer. Approval, execution, settlement, posting and reconciliation are separate steps, and nothing here pays.
  */
 export function PayablePage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoPayablePage /> : <NativePayablePage />;
+}
+
+function DemoPayablePage() {
   const { payableId = "" } = useParams();
   const query = useView<{ payableId: string }, PayableDetail>("payableDetail", { payableId });
   const [source, setSource] = useState<string | null>(null);

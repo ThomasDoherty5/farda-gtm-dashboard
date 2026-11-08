@@ -1,0 +1,14 @@
+.content { display: flex; flex-direction: column; gap: var(--space-24); min-width: 0; overflow-wrap: anywhere; }
+.source { display: flex; flex-wrap: wrap; gap: var(--space-12); align-items: center; font: var(--text-small); color: var(--color-muted); }
+.external { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: var(--space-12) var(--space-20); border: 1px solid var(--color-border); border-radius: var(--space-999); color: var(--color-ink); background: var(--color-surface); font: var(--text-label); text-decoration: none; }
+.external:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 3px; }
+.evidence { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; padding-left: var(--space-20); overflow-wrap: anywhere; }
+.unknownPlot { min-height: 320px; display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--color-border); padding: var(--space-24); background: var(--color-subtle); border-radius: var(--space-16); }
+.filters { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-16); }
+.reference { overflow-wrap: anywhere; }
+
+.contribution { list-style: none; padding: 0; display: grid; gap: 18px; }
+.contribution li { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(80px, 2fr) minmax(100px, 1fr); gap: 16px; align-items: center; }
+.barTrack { background: var(--color-surface-subtle, #f4f4f4); height: 24px; }
+.bar { display: block; height: 100%; background: var(--color-primary, #7362d1); }
+@media (max-width: 600px) { .contribution li { grid-template-columns: 1fr; gap: 8px; } }

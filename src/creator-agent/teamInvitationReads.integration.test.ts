@@ -11,14 +11,17 @@ import { createLiveAdapter } from "../adapter/liveAdapter";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { teamInvitationReadViewKeys, teamInvitationReasonPrefix, type TeamInvitationReadViewKey } from "./teamInvitationReads/contract";
 import { TeamInvitationReadError } from "./teamInvitationReads/source";
+import type { TeamInvitationReadSourceReader } from "./teamInvitationReads/source";
 import { teamInvitationRecord, teamInvitationSnapshot, teamInvitationTestScope, teamInvitationTestTime } from "./teamInvitationReads/fixtures.testkit";
+import { teamInvitationTestSource } from "./teamInvitationReads/fixtures.testkit";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
 const requestedScope = { workspaceId: teamInvitationTestScope.workspaceId, accountIds: [teamInvitationTestScope.accountId], environment: "sandbox" as const };
 const PROVIDER_SECRET = "synthetic-provider-session-credential-not-real-0003";
-async function start(extra: Partial<AgentServerOptions> = {}) {
+type TestOptions = Omit<Partial<AgentServerOptions>, "teamInvitationReadSource"> & { teamInvitationReadSource?: TeamInvitationReadSourceReader | TeamInvitationReadSourceReader["read"] };
+async function start(extra: TestOptions = {}) {
   const app = createAgentServer({ databasePath: ":memory:", workspaceId: teamInvitationTestScope.workspaceId, accountId: teamInvitationTestScope.accountId,
-    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(teamInvitationTestTime) }, ...extra });
+    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(teamInvitationTestTime) }, ...extra, teamInvitationReadSource: typeof extra.teamInvitationReadSource === "function" ? teamInvitationTestSource(extra.teamInvitationReadSource) : extra.teamInvitationReadSource });
   apps.push(app);
   await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
   const address = app.server.address();
@@ -101,10 +104,10 @@ describe("authenticated team permission and invitation draft reads (THO-305, THO
     const record = { ...(teamInvitationRecord("teamPermissions") as object), granted: true, grantToken: "synthetic-grant-token-0003" };
     const { read } = await start({ teamInvitationReadSource: async () => teamInvitationSnapshot("teamPermissions", { record }) });
     const result = await read("teamPermissions", {}, { token: SYNTHETIC_REVIEW_TOKEN });
-    expect(result.status).toBe(200);
-    expect(Object.keys(result.body.data).sort()).toEqual(["gaps", "launch", "matrix", "owners", "sourceRoles", "steps"]);
+    expect(result.status).toBe(502);
+    expect(result.body).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["TEAM_PERMISSIONS_RECORD_INVALID"] });
     expect(result.text).not.toContain("synthetic-grant-token-0003");
-    expect(result.body.capabilities).toEqual([]);
+    expect(result.body).not.toHaveProperty("data");
     const { read: readClaim } = await start({ teamInvitationReadSource: async () => ({ ...teamInvitationSnapshot("teamPermissions"),
       capabilities: [{ actionKind: "changeSourceRole", state: "available", reasonCodes: [] }] }) });
     const claimed = await readClaim("teamPermissions", {}, { token: SYNTHETIC_REVIEW_TOKEN });
@@ -264,4 +267,24 @@ describe("authenticated team permission and invitation draft reads (THO-305, THO
     expect(viewSchemas.teamPermissions).toBe(settingsViewSchemas.teamPermissions);
     expect(viewSchemas.invitationDraft).toBe(recruitmentViewSchemas.invitationDraft);
   });
+  it.each(teamInvitationReadViewKeys)("%s refuses a demo identity at the authenticated native boundary", async viewKey => {
+    const record = { ...teamInvitationRecord(viewKey) as object, datasetKey: "demo-only-record" };
+    const { read } = await start({ teamInvitationReadSource: async () => teamInvitationSnapshot(viewKey, { record }) });
+    const result = await read(viewKey, {});
+    expect(result.status).toBe(502); expect(result.body).not.toHaveProperty("data");
+  });
+
+  it.each([403, 409] as const)("rejects a source authority change (%s) before the HTTP read publishes", async status => {
+    let entered!: () => void, release!: () => void, changed = false;
+    const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    const source: TeamInvitationReadSourceReader = {
+      async read(_scope, request, options) { const captured = teamInvitationSnapshot(request.viewKey, { principalRef: options.principal.principalRef }); entered(); await gate; return captured; },
+      assertCurrent() { if (changed) throw new TeamInvitationReadError("private-revoked-proof", status); },
+    };
+    const { read } = await start({ teamInvitationReadSource: source });
+    const pending = read("invitationDraft", {}); await started; changed = true; release();
+    const result = await pending;
+    expect(result.status).toBe(status); expect(result.body).not.toHaveProperty("data"); expect(result.text).not.toContain("private-revoked-proof");
+  });
+
 });

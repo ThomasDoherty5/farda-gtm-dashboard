@@ -3,14 +3,19 @@ import { describe, expect, it } from "vitest";
 import { operationsReadViewKeys, type OperationsReadViewKey } from "./contract";
 import { createOperationsReadReader, OperationsReadError } from "./reader";
 import type { OperationsReadSourceReader } from "./source";
-import { operationsReadTestFilters, operationsReadTestScope, operationsReadTestTime, operationsRecord, operationsSnapshot, syntheticCustomer } from "./fixtures.testkit";
+import { operationsReadTestFilters, operationsReadTestScope, operationsReadTestTime, operationsRecord, operationsSnapshot, syntheticCustomer, syntheticAuditReason } from "./fixtures.testkit";
+import { operationsTestSource } from "./fixtures.testkit";
 import { opsViewSchemas } from "../../adapter/viewSchemas/ops";
-import { orderDemo } from "../../fixtures/operations";
+import { nativeOrderRecord } from "./fixtures.testkit";
 
 const secret = "synthetic-operations-reference-key-not-a-secret-01";
 const now = () => Date.parse(operationsReadTestTime);
-const reader = (source?: OperationsReadSourceReader, extra: { timeoutMs?: number; clock?: () => number } = {}) =>
-  createOperationsReadReader({ scope: operationsReadTestScope, secret, source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+const reader = (source?: OperationsReadSourceReader | OperationsReadSourceReader["read"], extra: { timeoutMs?: number; clock?: () => number } = {}) =>
+{
+  const native = createOperationsReadReader({ scope: operationsReadTestScope, secret, source: typeof source === "function" ? operationsTestSource(source) : source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+  return { read: (viewKey: OperationsReadViewKey, filters: unknown, role: "reader" | "reviewer", signal?: AbortSignal) =>
+    native.read(viewKey, filters, { principalRef: `agent-${role}`, role }, signal) };
+};
 const failure = async (promise: Promise<unknown>) => { try { await promise; } catch (error) { return error as OperationsReadError; } throw new Error("Expected an operations read failure"); };
 const counted = { state: "complete", expectedCount: 0, observedCount: 0, reasonCodes: [] };
 
@@ -37,13 +42,13 @@ describe("operations reader", () => {
   });
 
   it("keeps unknown provenance values unknown instead of zero", async () => {
-    const result = await reader(async () => operationsSnapshot("orderDetail", { record: orderDemo("TEST-SH-1044") })).read("orderDetail", { orderId: "TEST-SH-1044" }, "reader");
+    const result = await reader(async () => operationsSnapshot("orderDetail", { record: nativeOrderRecord("TEST-SH-1044") })).read("orderDetail", { orderId: "TEST-SH-1044" }, "reader");
     expect((result.data as { total: unknown }).total).toMatchObject({ state: "unknown", value: null, reasonCode: "PAYMENT_RECEIPT_UNAVAILABLE" });
   });
 
   it("denies every intent to a reader and holds them for a reviewer; nothing is executable", async () => {
     for (const viewKey of ["shippingException", "returnDetail", "orderCustomer"] as const) {
-      const source: OperationsReadSourceReader = async () => operationsSnapshot(viewKey);
+      const source: OperationsReadSourceReader["read"] = async () => operationsSnapshot(viewKey);
       const asReader = await reader(source).read(viewKey, operationsReadTestFilters[viewKey], "reader");
       const asReviewer = await reader(source).read(viewKey, operationsReadTestFilters[viewKey], "reviewer");
       expect(asReader.capabilities.length).toBeGreaterThan(0);
@@ -52,16 +57,18 @@ describe("operations reader", () => {
     }
   });
 
-  it("never gives restricted customer details to a reader, and drops fields the frontend schema does not declare", async () => {
-    const record = { ...(operationsRecord("orderCustomer") as object), phone: "+1-555-0100", address: "1 Synthetic Way", sourceToken: "synthetic-private-token" };
-    const source: OperationsReadSourceReader = async () => operationsSnapshot("orderCustomer", { record });
+  it("withholds customer details and prior audit text from both coarse roles, and rejects unknown record keys", async () => {
+    const record = operationsRecord("orderCustomer");
+    const source: OperationsReadSourceReader["read"] = async () => operationsSnapshot("orderCustomer", { record });
     const asReader = await reader(source).read("orderCustomer", { orderId: "TEST-SH-1042" }, "reader");
-    expect(asReader.data).toMatchObject({ access: { state: "denied", reason: "REVIEWER_REQUIRED" }, revealed: null });
+    expect(asReader.data).toMatchObject({ access: { state: "denied", reason: "CUSTOMER_REVEAL_AUTHORITY_NOT_CONNECTED" }, revealed: null, audit: [] });
     const readerText = JSON.stringify(asReader);
-    for (const value of [...Object.values(syntheticCustomer), "+1-555-0100", "1 Synthetic Way", "synthetic-private-token"]) expect(readerText).not.toContain(value);
+    for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason, "+1-555-0100", "1 Synthetic Way", "synthetic-private-token"]) expect(readerText).not.toContain(value);
     const asReviewer = await reader(source).read("orderCustomer", { orderId: "TEST-SH-1042" }, "reviewer");
-    expect(Object.keys(asReviewer.data as object).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "revealed"]);
-    expect(JSON.stringify(asReviewer)).not.toMatch(/555-0100|Synthetic Way|synthetic-private-token/);
+    expect(Object.keys(asReviewer.data as object).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "provenance", "revealed", "synthetic"]);
+    expect(asReviewer.data).toMatchObject({ revealed: null, audit: [], access: { state: "denied" } });
+    for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason]) expect(JSON.stringify(asReviewer)).not.toContain(value);
+    expect(await failure(reader(async () => operationsSnapshot("orderCustomer", { record: { ...record as object, sourceToken: "synthetic-private-token" } })).read("orderCustomer", { orderId: "TEST-SH-1042" }, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID" });
     // A reveal without allowed access and an audit entry is refused by the frontend schema, so it never leaves the service.
     expect(await failure(reader(async () => operationsSnapshot("orderCustomer", { record: { ...(operationsRecord("orderCustomer") as object), audit: [] } }))
       .read("orderCustomer", { orderId: "TEST-SH-1042" }, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["OPERATIONS_RECORD_INVALID"] });
@@ -133,7 +140,7 @@ describe("operations reader", () => {
 
   it("refuses demo-only and unknown filters before any source access", async () => {
     let reads = 0;
-    const source: OperationsReadSourceReader = async () => { reads++; return operationsSnapshot("operationsOverview"); };
+    const source: OperationsReadSourceReader["read"] = async () => { reads++; return operationsSnapshot("operationsOverview"); };
     for (const filters of [{ scenario: "stale" }, { fixture: "x" }, { q: "x" }, { home: "H1" }])
       expect(await failure(reader(source).read("operationsOverview", filters, "reader"))).toMatchObject({ code: "INVALID_INPUT", status: 400 });
     expect(await failure(reader(source).read("returnDetail", { returnId: "TEST-RET-028", scenario: "resolved" }, "reader"))).toMatchObject({ code: "INVALID_INPUT" });
@@ -153,7 +160,7 @@ describe("operations reader", () => {
     expect(JSON.stringify({ ...unavailable, message: unavailable.message })).not.toContain("credential");
     expect(await failure(reader(async () => null).read("operationsOverview", {}, "reader"))).toMatchObject({ code: "SOURCE_UNAVAILABLE" });
     let observedSignal: AbortSignal | undefined;
-    const hung: OperationsReadSourceReader = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
+    const hung: OperationsReadSourceReader["read"] = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
     expect(await failure(reader(hung, { timeoutMs: 20 }).read("operationsOverview", {}, "reader"))).toMatchObject({ code: "TIMEOUT", status: 504 });
     expect(observedSignal?.aborted).toBe(true);
     const controller = new AbortController();
@@ -165,7 +172,7 @@ describe("operations reader", () => {
 
   it("does not cache between reads, so a changed source or a later denial is always observed", async () => {
     let calls = 0, deny = false;
-    const source: OperationsReadSourceReader = async () => { calls++; if (deny) throw new OperationsReadError("DENIED", 403); return operationsSnapshot("operationsOverview"); };
+    const source: OperationsReadSourceReader["read"] = async () => { calls++; if (deny) throw new OperationsReadError("DENIED", 403); return operationsSnapshot("operationsOverview"); };
     const r = reader(source);
     await r.read("operationsOverview", {}, "reader");
     deny = true;

@@ -6,19 +6,22 @@ import { SCHEMA_VERSION, readResponseSchema } from "../adapter/contract";
 import { adapterErrorBodySchema } from "../adapter/wire";
 import { viewSchemas } from "../adapter/viewSchemas";
 import { opsViewSchemas } from "../adapter/viewSchemas/ops";
-import { orderDemo } from "../fixtures/operations";
+import { nativeOrderRecord } from "./operationsReads/fixtures.testkit";
 import { createLiveAdapter } from "../adapter/liveAdapter";
 import { createHttpTransport } from "../adapter/httpTransport";
 import { operationsReadViewKeys, type OperationsReadViewKey } from "./operationsReads/contract";
 import { OperationsReadError } from "./operationsReads/source";
-import { operationsReadTestFilters, operationsReadTestScope, operationsReadTestTime, operationsRecord, operationsSnapshot, syntheticCustomer } from "./operationsReads/fixtures.testkit";
+import type { OperationsReadSourceReader } from "./operationsReads/source";
+import { operationsReadTestFilters, operationsReadTestScope, operationsReadTestTime, operationsRecord, operationsSnapshot, syntheticCustomer, syntheticAuditReason } from "./operationsReads/fixtures.testkit";
+import { operationsTestSource } from "./operationsReads/fixtures.testkit";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
 const requestedScope = { workspaceId: operationsReadTestScope.workspaceId, accountIds: [operationsReadTestScope.accountId], environment: "sandbox" as const };
 const PROVIDER_SECRET = "synthetic-provider-session-credential-not-real-0002";
-async function start(extra: Partial<AgentServerOptions> = {}) {
+type TestOptions = Omit<Partial<AgentServerOptions>, "operationsReadSource"> & { operationsReadSource?: OperationsReadSourceReader | OperationsReadSourceReader["read"] };
+async function start(extra: TestOptions = {}) {
   const app = createAgentServer({ databasePath: ":memory:", workspaceId: operationsReadTestScope.workspaceId, accountId: operationsReadTestScope.accountId,
-    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(operationsReadTestTime) }, ...extra });
+    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => Date.parse(operationsReadTestTime) }, ...extra, operationsReadSource: typeof extra.operationsReadSource === "function" ? operationsTestSource(extra.operationsReadSource) : extra.operationsReadSource });
   apps.push(app);
   await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
   const address = app.server.address();
@@ -126,7 +129,7 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     const { read } = await start({ operations: { now: () => clock }, operationsReadSource: async (_scope, request) => {
       if (request.viewKey === "operationsShipping") return operationsSnapshot("operationsShipping", { coverage: { state: "partial", expectedCount: 9, observedCount: 7, reasonCodes: ["CARRIER_SCANS_DEFERRED"] } });
       if (request.viewKey === "opsHealth") return operationsSnapshot("opsHealth", { record: null, coverage: { state: "complete", expectedCount: 0, observedCount: 0, reasonCodes: [] } });
-      if (request.viewKey === "orderDetail") return operationsSnapshot("orderDetail", { record: orderDemo("TEST-SH-1044") });
+      if (request.viewKey === "orderDetail") return operationsSnapshot("orderDetail", { record: nativeOrderRecord("TEST-SH-1044") });
       return operationsSnapshot(request.viewKey);
     } });
     const partial = await read("operationsShipping", {});
@@ -181,17 +184,18 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
   }, 20_000);
 
   it("orderCustomer carries only what the frontend schema allows, and no customer data for a reader (AD-02, personal data)", async () => {
-    const record = { ...(operationsRecord("orderCustomer") as object), phone: "+1-555-0100", address: "1 Synthetic Way", providerCustomerId: "synthetic-provider-customer-7" };
+    const record = operationsRecord("orderCustomer");
     const { read } = await start({ operationsReadSource: async () => operationsSnapshot("orderCustomer", { version: "synthetic-private-source-version", record }) });
     const asReader = await read("orderCustomer", { orderId: "TEST-SH-1042" });
     expect(asReader.status).toBe(200);
-    expect(asReader.body.data).toMatchObject({ access: { state: "denied", reason: "REVIEWER_REQUIRED" }, revealed: null });
+    expect(asReader.body.data).toMatchObject({ access: { state: "denied", reason: "CUSTOMER_REVEAL_AUTHORITY_NOT_CONNECTED" }, revealed: null, audit: [] });
     for (const value of [...Object.values(syntheticCustomer), "555-0100", "Synthetic Way", "synthetic-provider-customer-7", "synthetic-private-source-version", SYNTHETIC_READ_TOKEN])
       expect(asReader.text).not.toContain(value);
     const asReviewer = await read("orderCustomer", { orderId: "TEST-SH-1042" }, { token: SYNTHETIC_REVIEW_TOKEN });
     const parsed = readResponseSchema(opsViewSchemas.orderCustomer!).parse(asReviewer.body);
-    expect(Object.keys(asReviewer.body.data).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "revealed"]);
-    expect(Object.keys(asReviewer.body.data.revealed).sort()).toEqual(["city", "email", "name"]);
+    expect(Object.keys(asReviewer.body.data).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "provenance", "revealed", "synthetic"]);
+    expect(asReviewer.body.data).toMatchObject({ revealed: null, audit: [], access: { state: "denied" } });
+    for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason]) expect(asReviewer.text).not.toContain(value);
     expect(parsed.capabilities).toEqual([{ actionKind: "revealCustomerDetails", state: "held", reasonCodes: ["OPERATIONS_ACTIONS_NOT_CONNECTED"] }]);
     for (const value of ["555-0100", "Synthetic Way", "synthetic-provider-customer-7", "synthetic-private-source-version", SYNTHETIC_REVIEW_TOKEN]) expect(asReviewer.text).not.toContain(value);
     expect(asReader.body.dataVersion).not.toBe(asReviewer.body.dataVersion);
@@ -279,4 +283,34 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     expect((await read("shippingHub", {})).body).toMatchObject({ code: "INTEGRATION_PENDING" });
     expect(reads).toBe(0);
   });
+  it.each(operationsReadViewKeys)("%s refuses a demo identity at the authenticated native boundary", async viewKey => {
+    const record = { ...operationsRecord(viewKey) as object, datasetKey: "demo-only-record" };
+    const { read } = await start({ operationsReadSource: async () => operationsSnapshot(viewKey, { record }) });
+    const result = await read(viewKey, operationsReadTestFilters[viewKey]);
+    expect(result.status).toBe(502); expect(result.body).not.toHaveProperty("data");
+  });
+
+  it.each([403, 409] as const)("rejects a source authority change (%s) before the HTTP read publishes", async status => {
+    let entered!: () => void, release!: () => void, changed = false;
+    const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    const source: OperationsReadSourceReader = {
+      async read(_scope, request, options) { const captured = operationsSnapshot(request.viewKey, { principalRef: options.principal.principalRef }); entered(); await gate; return captured; },
+      assertCurrent() { if (changed) throw new OperationsReadError("private-revoked-proof", status); },
+    };
+    const { read } = await start({ operationsReadSource: source });
+    const pending = read("operationsOverview", {}); await started; changed = true; release();
+    const result = await pending;
+    expect(result.status).toBe(status); expect(result.body).not.toHaveProperty("data"); expect(result.text).not.toContain("private-revoked-proof");
+  });
+
+  it.each(["orderDetail", "returnDetail"] as const)("%s preserves partial and expired absence through HTTP", async viewKey => {
+    let stale = false;
+    const { read } = await start({ operationsReadSource: async () => operationsSnapshot(viewKey, { record: null,
+      ...(stale ? { validUntil: "2026-11-06T11:59:59.000Z" } : {}),
+      coverage: stale ? { state: "complete", expectedCount: 0, observedCount: 0, reasonCodes: [] } : { state: "partial", expectedCount: null, observedCount: null, reasonCodes: ["SOURCE_DEFERRED"] } }) });
+    expect((await read(viewKey, operationsReadTestFilters[viewKey])).body).toMatchObject({ dataState: "partial", data: null, coverage: { complete: false } });
+    stale = true;
+    expect((await read(viewKey, operationsReadTestFilters[viewKey])).body).toMatchObject({ dataState: "stale", data: null, coverage: { complete: false } });
+  });
+
 });

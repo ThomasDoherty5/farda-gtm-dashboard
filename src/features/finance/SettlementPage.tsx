@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativeSettlementPage } from "./NativeSettlementPage";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -31,6 +33,11 @@ type DialogState = null | { kind: "source"; title: string } | { kind: "match" } 
  * and a paid receipt is immutable.
  */
 export function SettlementPage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoSettlementPage /> : <NativeSettlementPage />;
+}
+
+function DemoSettlementPage() {
   const { settlementId = "" } = useParams();
   const query = useView<{ settlementId: string }, SettlementRecord>("settlementDetail", { settlementId });
   return (

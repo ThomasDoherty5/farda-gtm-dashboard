@@ -3,13 +3,17 @@ import { describe, expect, it } from "vitest";
 import { financeViewKeys, type FinanceViewKey } from "./contract";
 import { createFinanceReader, FinanceError } from "./reader";
 import type { FinanceSourceReader } from "./source";
-import { financeSnapshot, financeTestFilters, financeTestScope, financeTestTime } from "./fixtures.testkit";
+import { financeTestSource, financeSnapshot, financeTestFilters, financeTestScope, financeTestTime } from "./fixtures.testkit";
 import { financeViewSchemas } from "../../adapter/viewSchemas/finance";
 
 const secret = "synthetic-finance-reference-key-not-a-secret-0001";
 const now = () => Date.parse(financeTestTime);
-const reader = (source?: FinanceSourceReader, extra: { timeoutMs?: number; clock?: () => number } = {}) =>
-  createFinanceReader({ scope: financeTestScope, secret, source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+const reader = (source?: FinanceSourceReader | FinanceSourceReader["read"], extra: { timeoutMs?: number; clock?: () => number } = {}) =>
+{
+  const native = createFinanceReader({ scope: financeTestScope, secret, source: typeof source === "function" ? financeTestSource(source) : source, now: extra.clock ?? now, timeoutMs: extra.timeoutMs });
+  return { read: (viewKey: FinanceViewKey, filters: unknown, role: "reader" | "reviewer", signal?: AbortSignal) =>
+    native.read(viewKey, filters, { principalRef: `agent-${role}`, role }, signal) };
+};
 const failure = async (promise: Promise<unknown>) => { try { await promise; } catch (error) { return error as FinanceError; } throw new Error("Expected a finance failure"); };
 
 describe("finance reader", () => {
@@ -41,7 +45,7 @@ describe("finance reader", () => {
 
   it("denies every intent to a reader and holds them for a reviewer; nothing is executable", async () => {
     for (const viewKey of ["settlementDetail", "payableDetail", "periodClose", "closePackage"] as const) {
-      const source: FinanceSourceReader = async () => financeSnapshot(viewKey);
+      const source: FinanceSourceReader["read"] = async () => financeSnapshot(viewKey);
       const asReader = await reader(source).read(viewKey, financeTestFilters[viewKey], "reader");
       const asReviewer = await reader(source).read(viewKey, financeTestFilters[viewKey], "reviewer");
       expect(asReader.capabilities.length).toBeGreaterThan(0);
@@ -97,7 +101,7 @@ describe("finance reader", () => {
 
   it("refuses demo-only and unknown filters before any source access", async () => {
     let reads = 0;
-    const source: FinanceSourceReader = async () => { reads++; return financeSnapshot("commissionLedger"); };
+    const source: FinanceSourceReader["read"] = async () => { reads++; return financeSnapshot("commissionLedger"); };
     for (const filters of [{ scenario: "partial" }, { fixture: "x" }, { q: "x" }])
       expect(await failure(reader(source).read("commissionLedger", filters, "reader"))).toMatchObject({ code: "INVALID_INPUT", status: 400 });
     expect(await failure(reader(source).read("periodClose", { period: "2026-13" }, "reader"))).toMatchObject({ code: "INVALID_INPUT" });
@@ -114,7 +118,7 @@ describe("finance reader", () => {
     expect(JSON.stringify({ ...unavailable, message: unavailable.message })).not.toContain("credential");
     expect(await failure(reader(async () => null).read("commissionLedger", {}, "reader"))).toMatchObject({ code: "SOURCE_UNAVAILABLE" });
     let observedSignal: AbortSignal | undefined;
-    const hung: FinanceSourceReader = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
+    const hung: FinanceSourceReader["read"] = (_scope, _request, { signal }) => { observedSignal = signal; return new Promise(() => {}); };
     expect(await failure(reader(hung, { timeoutMs: 20 }).read("commissionLedger", {}, "reader"))).toMatchObject({ code: "TIMEOUT", status: 504 });
     expect(observedSignal?.aborted).toBe(true);
     const controller = new AbortController();
@@ -126,7 +130,7 @@ describe("finance reader", () => {
 
   it("does not cache between reads, so a changed source or a later denial is always observed", async () => {
     let calls = 0, deny = false;
-    const source: FinanceSourceReader = async () => { calls++; if (deny) throw new FinanceError("DENIED", 403); return financeSnapshot("commissionLedger"); };
+    const source: FinanceSourceReader["read"] = async () => { calls++; if (deny) throw new FinanceError("DENIED", 403); return financeSnapshot("commissionLedger"); };
     const r = reader(source);
     await r.read("commissionLedger", {}, "reader");
     deny = true;

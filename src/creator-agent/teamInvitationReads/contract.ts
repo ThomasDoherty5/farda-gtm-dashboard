@@ -33,6 +33,8 @@ export const teamInvitationSnapshotSchema = z.object({
   scope: z.object({ workspaceId: z.string().min(1), accountId: z.string().min(1), environment: z.literal("sandbox") }).strict(),
   viewKey: z.enum(teamInvitationReadViewKeys),
   version: ref,
+  principalRef: ref,
+  permissionVersion: ref,
   observedAt: instant,
   validUntil: instant,
   coverage: z.object({ state: z.enum(["complete", "partial"]), expectedCount: count.nullable(), observedCount: count.nullable(),

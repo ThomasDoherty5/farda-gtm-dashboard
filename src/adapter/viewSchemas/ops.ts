@@ -16,8 +16,7 @@
  * Money is the contract's `moneySchema` narrowed to non-negative minor units: every money field in this area is a price,
  * a cost or a refund amount, and a negative one is a server bug, not a credit.
  *
- * `datasetKey` is the in-band demo label. It is a plain non-empty string, not a literal, so live data can carry its own key.
- * A live adapter in sandbox or production should refuse a key that names a demo dataset; that is an adapter decision.
+ * Demo and native records have distinct dataset discriminants. Native evidence separately declares whether its source is synthetic.
  */
 import { z } from "zod";
 import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
@@ -34,7 +33,7 @@ export const nonNegativeMoneySchema = moneySchema.extend({
 
 const count = z.number().int().nonnegative();
 const nonBlank = z.string().trim().min(1);
-const datasetKey = z.string().min(1);
+const datasetKey = z.literal("operations-demo");
 const iso = z.string().datetime({ offset: true });
 
 const pvCount = provenanceValueSchema(count);
@@ -301,17 +300,53 @@ export const opsHealthSchema = z.object({
   integrity: z.object({ shipments: count, duplicatesIgnored: count, outOfOrder: count, stockDecrements: count }),
 });
 
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+  validUntil:z.string().datetime({offset:true}).optional(), version:z.string().min(1).optional(),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    if (value.synthetic !== (value.provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (value.provenance.eventAt && Date.parse(value.provenance.eventAt) > Date.parse(value.provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeOpsReadViewSchemas: Record<string, z.ZodTypeAny> = {
+  operationsOverview: nativeRecord(operationsOverviewSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+    if (v.queue.rows.length > v.queue.total) ctx.addIssue({ code: "custom", path: ["queue", "total"], message: "Queue total is smaller than the rows returned" });
+  }),
+  orderDetail: nativeRecord(orderDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+    if (v.kind === "sample") for (const field of ["total", "refunded"] as const)
+      if (v[field].state === "known") ctx.addIssue({ code: "custom", path: [field], message: "A sample has no revenue or refund" });
+  }),
+  shippingException: nativeRecord(shippingExceptionSchema, "operations-native"),
+  returnDetail: nativeRecord(returnDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+    if ((v.state === "resolved") !== (v.resolved !== null)) ctx.addIssue({ code: "custom", path: ["resolved"], message: "A resolved return carries its receipt chain; an active one does not" });
+    if (v.selected.disposition === "restock" && !v.inspection.resellable) ctx.addIssue({ code: "custom", path: ["selected", "disposition"], message: "Restock needs a resellable inspection" });
+  }),
+  fulfillmentAnalytics: nativeRecord(fulfillmentAnalyticsSchema, "operations-native"),
+  operationsShipping: nativeRecord(operationsShippingSchema, "operations-native"),
+  orderCustomer: nativeRecord(orderCustomerSchema.innerType(), "operations-native").refine(d => d.revealed === null || (d.access.state === "allowed" && d.audit.length > 0), {
+    message: "Details are never shown without allowed access and an audit entry",
+  }),
+  opsHealth: nativeRecord(opsHealthSchema, "operations-native"),
+};
+
 export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
-  operationsOverview: operationsOverviewSchema,
-  orderDetail: orderDetailSchema,
-  shippingException: shippingExceptionSchema,
+  operationsOverview: z.union([operationsOverviewSchema, nativeOpsReadViewSchemas.operationsOverview!]),
+  orderDetail: z.union([orderDetailSchema, nativeOpsReadViewSchemas.orderDetail!]),
+  shippingException: z.union([shippingExceptionSchema, nativeOpsReadViewSchemas.shippingException!]),
   inventoryOverview: z.union([nativeInventorySchema,inventoryOverviewSchema]),
   supportWorkspace: z.union([nativeSupportSchema,supportWorkspaceSchema]),
-  returnDetail: returnDetailSchema,
-  fulfillmentAnalytics: fulfillmentAnalyticsSchema,
-  operationsShipping: operationsShippingSchema,
-  orderCustomer: orderCustomerSchema,
-  opsHealth: opsHealthSchema,
+  returnDetail: z.union([returnDetailSchema, nativeOpsReadViewSchemas.returnDetail!]),
+  fulfillmentAnalytics: z.union([fulfillmentAnalyticsSchema, nativeOpsReadViewSchemas.fulfillmentAnalytics!]),
+  operationsShipping: z.union([operationsShippingSchema, nativeOpsReadViewSchemas.operationsShipping!]),
+  orderCustomer: z.union([orderCustomerSchema, nativeOpsReadViewSchemas.orderCustomer!]),
+  opsHealth: z.union([opsHealthSchema, nativeOpsReadViewSchemas.opsHealth!]),
 };
 
 /* ---------- actions ---------- */

@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { TeamInvitationReadError } from "../src/creator-agent/teamInvitationReads/source.ts";
-import { teamInvitationSnapshot } from "../src/creator-agent/teamInvitationReads/fixtures.testkit.ts";
+import { teamInvitationTestSource, teamInvitationSnapshot } from "../src/creator-agent/teamInvitationReads/fixtures.testkit.ts";
 import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "../src/creator-agent/testFixtures.ts";
 
@@ -17,10 +17,10 @@ test.beforeEach(async () => {
   mode = "configured";
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
     operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
-    teamInvitationReadSource: async (_scope, request) => {
+    teamInvitationReadSource: teamInvitationTestSource(async (_scope, request) => {
       if (mode === "denied") throw new TeamInvitationReadError("DENIED", 403);
       return { ...teamInvitationSnapshot(request.viewKey), scope: { ...scope } };
-    } });
+    }) });
   await listen();
 });
 test.afterEach(async () => { await app.close(); });

@@ -183,14 +183,39 @@ export const reportManifestSchema = z.object({
   rows: z.array(z.object({ report: z.string(), period: z.string(), basis: z.string(), source: z.string(), expectedFiles: z.array(z.string()), state: z.literal("Not generated"), generatedAt: z.null(), checksum: z.null(), policyRef: cpaPolicy })),
 });
 
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    if (value.synthetic !== (value.provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (value.provenance.eventAt && Date.parse(value.provenance.eventAt) > Date.parse(value.provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeFinanceViewSchemas: Record<string, z.ZodTypeAny> = {
+  commissionLedger: nativeRecord(commissionLedgerSchema, "finance-native"),
+  settlementDetail: nativeRecord(settlementDetailSchema, "finance-native"),
+  payableDetail: nativeRecord(payableDetailSchema, "finance-native"),
+  financeDashboard: nativeRecord(financeDashboardSchema, "finance-native"),
+  periodClose: nativeRecord(periodCloseSchema, "finance-native"),
+  closePackage: nativeRecord(closePackageSchema, "finance-native"),
+  monthsHistory: nativeRecord(monthsHistorySchema, "finance-native"),
+  reportManifest: nativeRecord(reportManifestSchema, "finance-native"),
+};
+
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const financeViewSchemas: Record<string, z.ZodTypeAny> = {
-  commissionLedger: commissionLedgerSchema,
-  settlementDetail: settlementDetailSchema,
-  payableDetail: payableDetailSchema,
-  financeDashboard: financeDashboardSchema,
-  periodClose: periodCloseSchema,
-  closePackage: closePackageSchema,
-  monthsHistory: monthsHistorySchema,
-  reportManifest: reportManifestSchema,
+  commissionLedger: z.union([commissionLedgerSchema, nativeFinanceViewSchemas.commissionLedger!]),
+  settlementDetail: z.union([settlementDetailSchema, nativeFinanceViewSchemas.settlementDetail!]),
+  payableDetail: z.union([payableDetailSchema, nativeFinanceViewSchemas.payableDetail!]),
+  financeDashboard: z.union([financeDashboardSchema, nativeFinanceViewSchemas.financeDashboard!]),
+  periodClose: z.union([periodCloseSchema, nativeFinanceViewSchemas.periodClose!]),
+  closePackage: z.union([closePackageSchema, nativeFinanceViewSchemas.closePackage!]),
+  monthsHistory: z.union([monthsHistorySchema, nativeFinanceViewSchemas.monthsHistory!]),
+  reportManifest: z.union([reportManifestSchema, nativeFinanceViewSchemas.reportManifest!]),
 };
