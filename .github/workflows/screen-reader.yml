@@ -1,0 +1,46 @@
+name: Actual screen-reader verification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: screen-reader-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  orca-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Install screen reader in the ephemeral runner
+        run: sudo apt-get update && sudo apt-get install -y orca speech-dispatcher speech-dispatcher-espeak-ng espeak-ng dbus-x11 xdotool openbox pulseaudio pulseaudio-utils
+      - name: Exercise actual Orca, native controls and synthesized audio
+        run: dbus-run-session -- xvfb-run -a -s '-screen 0 1600x1200x24' bash scripts/run-screen-reader-ci.sh
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-screen-reader-evidence
+          path: |
+            test-results/screen-reader/browser.log
+            test-results/screen-reader/orca-process.log
+            test-results/screen-reader/spoken-output.txt
+            test-results/screen-reader/checkpoints.jsonl
+            test-results/screen-reader/verified-screen-reader.json
+            test-results/screen-reader/versions.txt
+            test-results/screen-reader/speech.wav
+            test-results/screen-reader/recording-start-ms.txt
+          if-no-files-found: ignore
+          retention-days: 7

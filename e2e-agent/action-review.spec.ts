@@ -15,6 +15,7 @@ import { digest } from "../src/creator-agent/config.ts";
 import type { DispatchHandler } from "../src/creator-agent/jobs/dispatchSchema.ts";
 import type { RunItemRecovery } from "../src/creator-agent/actions/reviewViews.ts";
 import { assertNativeTableReadability, scrollNativeTableToEnd } from "./support/native-table-readability";
+import {screenReaderCheckpoint} from "./support/screen-reader";
 
 // Actual authenticated HTTP/SQLite/J04/worker with fictional source boundaries.
 // No real provider, person, message, session, financial commitment or payout is used.
@@ -81,20 +82,24 @@ async function capture(page:Page,info:TestInfo,name:string,kind:"approval"|"run"
 test("source-granted exact approval proceeds to a receipt and real historical versions remain read-only",async({page},info)=>{
   const w=await world(page);await page.goto(`/approvals/${w.preview.approvalRef}`);await expect(page.getByTestId("native-review-payload")).toHaveText("Fictional exact source payload v1. No real outreach.");
   await expect(page.getByRole("button",{name:"Approve this version"})).toBeDisabled();await capture(page,info,"approval-source-current","approval",true);
+  await screenReaderCheckpoint(page,"approval-exact-source-review",page.getByRole("button",{name:"Open approval channel",exact:true}),["Open approval channel","button"]);
   await page.getByRole("button",{name:"Open approval channel",exact:true}).focus();await page.keyboard.press("Enter");await expect(page.getByRole("dialog")).toBeVisible();await expect(page.getByRole("dialog").getByRole("link",{name:"Open in a new tab",exact:true})).toHaveAttribute("href",/review.example.test/);await page.keyboard.press("Escape");await expect(page.getByRole("button",{name:"Open approval channel",exact:true})).toBeFocused();
   await page.getByRole("button",{name:"Request source approval"}).click();await expect(page.getByText("Command acknowledged.",{exact:false})).toBeVisible();await w.approve();await page.getByRole("button",{name:"Refresh approval evidence"}).click();
   await page.getByRole("button",{name:"Queue selected approved items"}).click();await page.getByRole("link",{name:"Open recorded run"}).click();const runRef=new URL(page.url()).pathname.split("/").at(-1)!;
   expect((await w.worker(runRef)).status).toBe(200);await page.getByRole("button",{name:"Refresh run evidence"}).click();await expect(page.getByText("Local artifact confirmed",{exact:true})).toBeVisible();expect(w.state.calls).toBe(1);await capture(page,info,"run-source-receipt","run",true);
   await page.goto(`/approvals/${w.preview.approvalRef}`);await expect(page.getByRole("link",{name:"Open recorded execution",exact:true})).toHaveAttribute("href",`/runs/${runRef}?tab=approval`);await expect(page.getByText("Item receipts recorded",{exact:true})).toBeVisible();await expect(page.getByTestId("native-approval-status")).toHaveText("Approval recorded");await expect(page.getByRole("button",{name:"Queue selected approved items"})).toBeDisabled();await capture(page,info,"approval-reopened-receipt","approval");
   const previous=w.app.actionFoundation.approvals.readApproval(w.preview.approvalRef!)!;w.a.draft.payloadHash=digest("synthetic changed review v2");w.a.draft.items[0]!.payloadHash=w.a.draft.payloadHash;w.a.draft.sourceBasisVersion="synthetic-review-basis-v2";
+  await screenReaderCheckpoint(page,"canonical-receipt-navigation",page.getByRole("link",{name:"Open recorded execution",exact:true}),["Open recorded execution","link"]);
   await w.app.actionFoundation.execute({...w.base,operation:"previewAction",actionKind:w.a.draft.actionKind,approvalRef:previous.manifest.approvalRef,manifestRef:w.app.actionFoundation.service.manifestRef(previous),expectedVersion:w.app.actionFoundation.service.approvalVersion(previous),idempotencyKey:"synthetic-review-v2",payload:{entityRef:w.a.command.entityRef,entityVersion:w.a.command.entityVersion,selectionRefs:w.a.command.selectionRefs}},"agent-reviewer");
   await page.goto(`/approvals/${w.preview.approvalRef}?version=v1`);await expect(page.getByText(/Selected immutable version 1 of 2/)).toBeVisible();await expect(page.getByTestId("native-review-payload")).toHaveText("Fictional exact source payload v1. No real outreach.");await expect(page.getByRole("button",{name:"Queue selected approved items"})).toHaveCount(0);await capture(page,info,"approval-history-v1","approval");
+  await screenReaderCheckpoint(page,"immutable-history-navigation",page.getByRole("link",{name:"Return to current approval",exact:true}),["Return to current approval","link"]);
   await page.getByRole("link",{name:"Return to current approval"}).click();await expect(page.getByTestId("native-review-payload")).toHaveText("Fictional exact source payload v2. No real outreach.");expect(w.state.calls).toBe(1);
 });
 
 test("typed source recovery reconciles the original attempt before guarded continuation",async({page},info)=>{
   const w=await world(page);await w.request();const queued=await w.handoff();w.state.unknown=true;expect((await w.worker(queued.runRef!)).status).toBe(502);expect(w.state.calls).toBe(1);
   await page.goto(`/runs/${queued.runRef}?tab=recovery`);await expect(page.getByRole("button",{name:"Continue guarded original work"})).toBeDisabled();await expect(page.getByText("Original attempt remains open",{exact:true})).toBeVisible();await capture(page,info,"run-login-recovery","run",true);
+  await screenReaderCheckpoint(page,"original-outcome-recovery-control",page.getByRole("button",{name:"Request human takeover",exact:true}),["Request human takeover","button"]);
   for(const kind of ["mfa","denied","throttled","failed","uncertain"] as const){w.state.recovery=kind;w.source.state.version="synthetic-review-"+kind;await page.getByRole("button",{name:"Refresh run evidence"}).click();await expect(page.getByText("Source recovery",{exact:true}).locator("..")).toContainText(kind);await capture(page,info,`run-${kind}-recovery`,"run");}
   await page.getByRole("button",{name:"Request human takeover"}).click();await expect(page.getByRole("dialog").getByRole("link",{name:"Open permitted source handoff"})).toHaveAttribute("href","https://review.example.test/handoff/synthetic");await page.keyboard.press("Escape");
   w.state.closed=true;await page.getByRole("button",{name:"Verify and record source result"}).click();await expect(page.getByText("Exact original attempt closed as not applied",{exact:true})).toBeVisible();expect(w.state.calls).toBe(1);await capture(page,info,"run-original-closed","run");

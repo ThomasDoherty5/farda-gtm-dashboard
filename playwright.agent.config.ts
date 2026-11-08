@@ -30,7 +30,9 @@ export default defineConfig({
   timeout: 90_000,
   outputDir: "test-results/agent",
   reporter: [["list"]],
-  use: { baseURL: origin, locale: "en-US", timezoneId: "America/Los_Angeles", colorScheme: "light", reducedMotion: "reduce", trace: "off" },
+  use: { baseURL: origin, locale: "en-US", timezoneId: "America/Los_Angeles", colorScheme: "light", reducedMotion: "reduce", trace: "off",
+    // Match the existing headless capture geometry without a headed Linux scrollbar gutter.
+    ...(process.env.FARDA_SCREEN_READER_LOG?{launchOptions:{args:["--force-renderer-accessibility","--hide-scrollbars"]}}:{}) },
   // A local installed Chromium channel can be selected without downloading another browser; CI defaults to managed Chromium.
   projects: [{ name: "agent-desktop-1440", use: { ...devices["Desktop Chrome"], channel: process.env.E2E_AGENT_BROWSER_CHANNEL, viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1 } }],
   webServer: {
