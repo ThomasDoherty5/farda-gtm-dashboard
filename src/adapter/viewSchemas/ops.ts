@@ -20,9 +20,9 @@
  * A live adapter in sandbox or production should refuse a key that names a demo dataset; that is an adapter decision.
  */
 import { z } from "zod";
-import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema";
-import { moneySchema, provenanceValueSchema } from "../contract";
-import { receiptBackedResponse } from "./approvals";
+import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
+import { moneySchema, provenanceValueSchema } from "../contract.ts";
+import { receiptBackedResponse } from "./approvals.ts";
 
 const HOMES = ["H1", "H2", "H3"] as const;
 export const homeSchema = z.enum(HOMES);

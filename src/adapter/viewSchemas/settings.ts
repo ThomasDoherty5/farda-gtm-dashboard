@@ -12,9 +12,9 @@
  * - These views hold no money, so the minor-unit rules do not apply; counts reject negatives and fractions.
  */
 import { z } from "zod";
-import { nativeOperationsControlSchema, operationsReviewPayload, operationsHealthPayload } from "@/creator-agent/operationsControlsSchema";
-import { nativeScheduleDetailSchema } from "@/creator-agent/scheduleCadence";
-import { savedBindingsSchema, savedRunsSchema } from "@/creator-agent/operationsView";
+import { nativeOperationsControlSchema, operationsReviewPayload, operationsHealthPayload } from "../../creator-agent/operationsControlsSchema.ts";
+import { nativeScheduleDetailSchema } from "../../creator-agent/scheduleCadence.ts";
+import { savedBindingsSchema, savedRunsSchema } from "../../creator-agent/operationsView.ts";
 
 const count = z.number().int().nonnegative();
 const tone = z.enum(["neutral", "violet", "success", "warning", "danger"]);

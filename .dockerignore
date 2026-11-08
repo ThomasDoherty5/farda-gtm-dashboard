@@ -18,6 +18,13 @@
 !src/adapter/
 !src/adapter/contract.ts
 !src/adapter/commissionPolicy.ts
+!src/adapter/viewSchemas/
+!src/adapter/viewSchemas/finance.ts
+!src/adapter/viewSchemas/ops.ts
+!src/adapter/viewSchemas/approvals.ts
+!src/adapter/viewSchemas/settings.ts
+!src/adapter/viewSchemas/recruitment.ts
+!src/adapter/viewSchemas/acquisitionPrimitives.ts
 !src/features/
 !src/features/scorecards/
 !src/features/scorecards/scorecardMath.ts

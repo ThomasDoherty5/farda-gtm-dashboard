@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY src/creator-agent/ ./src/creator-agent/
 COPY src/adapter/contract.ts src/adapter/commissionPolicy.ts ./src/adapter/
+COPY src/adapter/viewSchemas/finance.ts src/adapter/viewSchemas/ops.ts src/adapter/viewSchemas/approvals.ts src/adapter/viewSchemas/settings.ts src/adapter/viewSchemas/recruitment.ts src/adapter/viewSchemas/acquisitionPrimitives.ts ./src/adapter/viewSchemas/
 COPY src/features/scorecards/scorecardMath.ts ./src/features/scorecards/scorecardMath.ts
 COPY tools/creator-agent/*.mjs ./tools/creator-agent/
 RUN mkdir -p /var/lib/farda-agent && chown node:node /var/lib/farda-agent && chmod 700 /var/lib/farda-agent

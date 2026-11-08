@@ -15,11 +15,11 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
-import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
-import { livePipelineSchema } from "@/creator-agent/funnelContract";
-import { agentSourcingSchema, nativeRecruitmentViewSchema } from "@/creator-agent/readViews";
-import { provenanceValueSchema } from "../contract";
-import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
+import { scorecardPreviewSchema } from "../../creator-agent/scorecardPreview.ts";
+import { livePipelineSchema } from "../../creator-agent/funnelContract.ts";
+import { agentSourcingSchema, nativeRecruitmentViewSchema } from "../../creator-agent/readViews.ts";
+import { provenanceValueSchema } from "../contract.ts";
+import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives.ts";
 
 /* ---------- recruitmentQueue ---------- */
 
