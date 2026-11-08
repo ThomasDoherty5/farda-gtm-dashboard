@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { digest } from "../config.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
-import type { DispatchSourceFacts, OperationsReportingScope, NativeFulfillmentEvent, NativeOperationsLink } from "../../adapter/viewSchemas/nativeOperations.ts";
+import type { DispatchSourceFacts, OperationsReportingScope, NativeFulfillmentEvent, NativeOperationsLink, NativeOperationsShipment } from "../../adapter/viewSchemas/nativeOperations.ts";
 import type { OperationsScope } from "../operations.ts";
 import { nativeOpsReadViewSchemas } from "../../adapter/viewSchemas/ops.ts";
 import { operationsDetailViews, operationsReadFilters, operationsSnapshotSchema, type OperationsReadViewKey, type OperationsSnapshot } from "./contract.ts";
@@ -127,6 +127,20 @@ export function createOperationsReadReader(options: Options) {
         (record.selected.disposition!=="restock"||record.resolved.restockedUnits===record.resolved.returnedUnits)&&
         (record.selected.disposition!=="quarantine"||record.resolved.restockedUnits===0)&&
         (record.selected.resolution!=="replacement"||record.resolved.refunded.minorUnits===0)&&required.every(kind=>confirmed.has(kind)));
+    }
+    if(viewKey==="operationsShipping") {
+      const rows=(data as {shipments:NativeOperationsShipment[]}).shipments;
+      for(const row of rows) {
+        if(Date.parse(row.requestedAt)>Date.parse(context.provenance.observedAt)||row.eventAt!==null&&Date.parse(row.eventAt)>Date.parse(context.provenance.observedAt))
+          throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_SHIPMENT_TIME_INVALID"]);
+        if(context.reportingScope?.home&&context.reportingScope.home!=="all"&&row.home!==context.reportingScope.home)
+          throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_SHIPMENT_HOME_MISMATCH"]);
+        if(context.reportingScope) {
+          const cohortAt=context.reportingScope.basis==="requestedAt"?row.requestedAt:row.eventAt;
+          if(cohortAt===null||Date.parse(cohortAt)<Date.parse(context.reportingScope.startAt)||Date.parse(cohortAt)>=Date.parse(context.reportingScope.endAt))
+            throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_SHIPMENT_PERIOD_MISMATCH"]);
+        }
+      }
     }
     if(viewKey==="operationsOverview") {
       if(context.reportingScope && context.reportingScope.basis!=="requestedAt")throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_PERIOD_BASIS_INVALID"]);

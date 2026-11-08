@@ -1,3 +1,4 @@
+import { useRegisterOperationsCohort } from "./OperationsCohortContext";
 import { OperationsPeriodControl } from "./OperationsPeriodControl";
 import { NativeOperationsGrant } from "./NativeOperationsGrant";
 import { useState } from "react";
@@ -101,6 +102,7 @@ function OperationsOverviewPage() {
 }
 
 function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabel: string | null; res: ReadResponse<OperationsOverviewRead>; data: OperationsOverviewRead; layout: Layout; home: Home | "all"; demo: boolean }) {
+  useRegisterOperationsCohort(demo ? null : data.reportingScope);
   const [urlSearch] = useSearchParams();
   const search = operationsContext(urlSearch, data);
   const view = parseView(search.get("view"));
@@ -129,7 +131,12 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
 
   if (layout !== "desktop") {
     const Compact = layout === "mobile" ? MobileOperations : TabletOperations;
-    return <>{reportingLabel && <p className={styles.meta}>Source period: {reportingLabel}</p>}<Compact data={data} demo={demo} home={home} view={view} overviewTo={tabTo("overview")} ordersTo={tabTo("orders")} ready={ready} held={held} syncedMinutesAgo={behind} stale={staleSource} /></>;
+    return <>
+      {reportingLabel && <p className={styles.meta}>Source period: {reportingLabel}</p>}
+      {view === "shipping" ? <><nav aria-label="Operations sections" className={styles.compactTabs}><LinkButton variant="ghost" to={tabTo("overview")}>Overview</LinkButton><LinkButton variant="ghost" to={tabTo("orders")}>To ship</LinkButton><LinkButton to={tabTo("shipping")} aria-current="page">Shipping</LinkButton></nav><ShippingPanels reportingContext={search} /></> : <>
+        <Compact data={data} demo={demo} home={home} view={view} overviewTo={tabTo("overview")} ordersTo={tabTo("orders")} ready={ready} held={held} syncedMinutesAgo={behind} stale={staleSource} complete={demo || res.coverage.complete === true && res.dataState !== "stale" && res.dataState !== "partial"} />
+      </>}
+    </>;
   }
 
   return (
@@ -209,7 +216,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
           ]} />
         </Panel>
       </HalfColumns>
-      {view === "shipping" && <ShippingPanels />}
+      {view === "shipping" && <ShippingPanels reportingContext={search} />}
     </>
   );
 }

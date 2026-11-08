@@ -86,9 +86,29 @@ it("holds native support navigation instead of opening the demo Intercom dialog"
     return respondWith(request.envelope, data, { dataVersion: "native-v1" });
   } } });
   renderRoute("/shipments/TEST-SP-0093/exceptions/TEST-EVT-129", adapter);
-  const support = await screen.findByRole("button", { name: "Open source support case", exact: true });
+  const support = await screen.findByRole("button", { name: "Open source support case" });
   expect(support).toHaveAttribute("aria-disabled", "true");
   await userEvent.setup().click(support);
   expect(screen.queryByRole("button", { name: "Open case in Intercom" })).not.toBeInTheDocument();
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("binds a native health read to the requested cohort and preserves it on source-order navigation", async () => {
+  const filters = { home: "H1", startAt: "2026-11-01T00:00:00Z", endAt: "2026-11-07T00:00:00Z", timezone: "UTC" };
+  const reads: unknown[] = [];
+  const data = operationsRecord("opsHealth");
+  data.provenance = { ...(data.provenance as object), validUntil: "2099-01-01T00:00:00Z", version: "native-v1" };
+  data.reportingScope = { ...filters, basis: "eventAt" };
+  data.orders = [{ orderRef: "source-order", state: "Lost", reservationRef: "source-reservation", shipmentRef: "source-shipment", home: "H1", unitsOrdered: 1, unitsShipped: 0, note: "Source receipt pending" }];
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read") throw new Error("Read-only health");
+    reads.push(request.envelope.filters);
+    return respondWith(request.envelope, data, { dataVersion: "native-v1" });
+  } } });
+  renderRoute(`/analytics/fulfillment?view=health&${new URLSearchParams(filters)}`, adapter);
+  const link = await screen.findByRole("link", { name: "source-order" });
+  expect(reads).toContainEqual(filters);
+  const target = new URL(link.getAttribute("href")!, "https://example.test");
+  expect(target.pathname).toBe("/orders/source-order");
+  for (const [key, value] of Object.entries(filters)) expect(target.searchParams.get(key)).toBe(value);
 });

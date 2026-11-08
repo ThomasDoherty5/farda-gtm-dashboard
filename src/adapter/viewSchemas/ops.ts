@@ -20,7 +20,7 @@
  */
 import { z } from "zod";
 import { approvalRefSchema } from "../../creator-agent/approvals/contract.ts";
-import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema } from "./nativeOperations.ts";
+import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema,nativeOperationsShipmentSchema } from "./nativeOperations.ts";
 import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
 import { moneySchema, provenanceValueSchema } from "../contract.ts";
 import { receiptBackedResponse } from "./approvals.ts";
@@ -337,7 +337,9 @@ export const nativeOpsReadViewSchemas: Record<string, z.ZodTypeAny> = {
     if(v.inspection.units>v.units || v.resolved && (v.resolved.returnedUnits>v.units || v.resolved.restockedUnits>v.resolved.returnedUnits || v.resolved.restockedUnits>v.inspection.units || v.resolved.restockedUnits>0&&!v.inspection.resellable))ctx.addIssue({code:"custom",message:"Return quantities require consistent received and inspected source evidence."});
   }),
   fulfillmentAnalytics: nativeRecord(fulfillmentAnalyticsSchema, "operations-native"),
-  operationsShipping: nativeRecord(operationsShippingSchema, "operations-native"),
+  operationsShipping: nativeRecord(operationsShippingSchema.extend({shipments:z.array(nativeOperationsShipmentSchema)}), "operations-native").superRefine((v,ctx)=>{
+    if(new Set(v.shipments.map(row=>row.ref)).size!==v.shipments.length)ctx.addIssue({code:"custom",path:["shipments"],message:"Canonical shipment references must be unique."});
+  }),
   orderCustomer: nativeRecord(orderCustomerSchema.innerType(), "operations-native").refine(d => d.revealed === null || (d.access.state === "allowed" && d.audit.length > 0), {
     message: "Details are never shown without allowed access and an audit entry",
   }),

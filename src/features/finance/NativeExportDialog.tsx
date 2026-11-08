@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { z } from "zod";
 import type { ReadResponse } from "@/adapter/contract";
 import { scopeKey, useScope } from "@/adapter/scope";
 import { useAction } from "@/adapter/useAction";
@@ -10,7 +11,7 @@ import { Dialog } from "@/components/Dialog";
 import { FactList } from "@/components/Panels";
 import { useSourceLease } from "@/features/commercial/useSourceLease";
 
-type Marker = { requestKey: string; expectedVersion: string; payload: { format: "csv"; filters: NonNullable<NativeCommissionLedger["export"]>["filters"] } };
+type Marker = z.infer<typeof ledgerExportRequestFilters>;
 export function NativeExportDialog({ open, data, response, onClose }: { open: boolean; data: NativeCommissionLedger; response: ReadResponse<NativeCommissionLedger>; onClose: () => void }) {
   const ctx = useScope();
   const storageKey = JSON.stringify(["native-ledger-export-v1", ...scopeKey(ctx)]);

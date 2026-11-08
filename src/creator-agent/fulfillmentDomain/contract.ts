@@ -56,5 +56,10 @@ export const fulfillmentProposalSchema=z.object({kind:z.literal("native-fulfillm
 }).strict();
 export type FulfillmentProposal=z.infer<typeof fulfillmentProposalSchema>;
 export class FulfillmentError extends Error {
-  constructor(readonly code:string,readonly status=409,readonly executionCertainty:"notApplied"|"applied"|"uncertain"="notApplied"){super(code);this.name="FulfillmentError";}
+  readonly code:string;
+  readonly status:number;
+  readonly executionCertainty:"notApplied"|"applied"|"uncertain";
+  constructor(code:string,status=409,executionCertainty:"notApplied"|"applied"|"uncertain"="notApplied"){
+    super(code);this.name="FulfillmentError";this.code=code;this.status=status;this.executionCertainty=executionCertainty;
+  }
 }

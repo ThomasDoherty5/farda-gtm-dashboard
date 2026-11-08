@@ -47,7 +47,8 @@ export function operationsRecord(viewKey: OperationsReadViewKey): Record<string,
     case "fulfillmentAnalytics": return { ...common(), periodDays: 14, source: "Synthetic source", syncedMinutesAgo: 5, homes: 3, daily: [{ label: "Nov 6", shipped: 0, backlog: 1 }],
       shippedPrior: known(0), onTimePct: unknown("NO_HANDOFF"), awaitingHandoff: known(1), overdue: 1, stock: [{ home: "H1", available: 4, reserved: 1, threshold: 2 }],
       scaleUnits: 1, avgTransitDays: unknown("NO_DELIVERIES"), transit: null, exceptions: { lost: 1, returned: 0 } };
-    case "operationsShipping": return { ...common(), shipments: [{ ref: "TEST-SP-0093", orderRef: "TEST-SH-1042", carrierState: "lost", lastScan: observedAt }],
+    case "operationsShipping": return { ...common(), shipments: [{ ref: "TEST-SP-0093", orderRef: "TEST-SH-1042", sampleRef: null, home: "H1", requestedAt: "2026-11-04T12:00:00.000Z", eventAt: observedAt,
+      carrierState: "lost", lastScan: observedAt, shipmentDetail: { kind: "exception", shipmentRef: "TEST-SP-0093", exceptionRef: "TEST-EVT-129" }, originDetail: { kind: "order", ref: "TEST-SH-1042" } }],
       exceptions: [{ id: "synthetic-exception", kind: "failedScan", ref: "TEST-SP-0093", ageHours: 12, detail: "Synthetic scan missing", next: "Inspect source", to: "/orders/TEST-SH-1042" }], chain: [] };
     case "opsHealth": return { ...common(), issues: { tags: [], refunds: { total: money(0), orders: 0, pending: [] }, fin: { periodLabel: "Synthetic fortnight", resolutions: 0, cost: money(0), cap: money(1000) } },
       fulfillment: { all: health, byHome: [{ ...health, key: "H1" }], byCarrier: [] }, orders: [], integrity: { shipments: 0, duplicatesIgnored: 0, outOfOrder: 0, stockDecrements: 0 } };

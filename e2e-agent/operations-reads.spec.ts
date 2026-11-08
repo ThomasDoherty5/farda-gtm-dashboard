@@ -97,7 +97,15 @@ test("native operations captures every original frame and preserves privacy and 
   await login(page);
   await page.goto("/operations");
   await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
-  await expect(page.getByRole("link", { name: "TEST-SH-1042", exact: true }).first()).toBeVisible();
+  const readyOrder = page.getByRole("region", { name: "Ready to leave home", exact: true }).getByRole("row").filter({ hasText: "TEST-SH-1042" });
+  const orderLink = readyOrder.getByRole("link", { name: "View order", exact: true });
+  await expect(orderLink).toBeVisible();
+  const orderTarget = new URL((await orderLink.getAttribute("href"))!, "https://example.test");
+  expect(orderTarget.pathname).toBe("/orders/TEST-SH-1042");
+  expect(orderTarget.searchParams.get("home")).toBe("all");
+  expect(orderTarget.searchParams.get("startAt")).toBe("2026-11-01T00:00:00.000Z");
+  expect(orderTarget.searchParams.get("endAt")).toBe("2026-11-07T00:00:00.000Z");
+  expect(orderTarget.searchParams.get("timezone")).toBe("UTC");
   for (const node of ["4:6", "12:653", "12:708"] as const) await captureFinanceOperations(page, node);
   await page.setViewportSize({ width: 1440, height: 1452 });
   const queue = page.getByRole("region", { name: "Ready to leave home", exact: true });

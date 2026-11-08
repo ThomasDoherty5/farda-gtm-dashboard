@@ -90,7 +90,8 @@ for(const kind of ["shippingDecision","returnTask"] as const){
     const manifest=JSON.parse(String(saved.body)) as {approvalRef:string;draft:{sourceBasisRef:string;payloadRef:string;bounds:{maxSpendMinor:number;maxUnits:number};actionKind:string}};
     expect(manifest.draft.actionKind).toBe(kind==="returnTask"?"fulfillment.returnTask":"fulfillment.shippingDecision");
     expect(manifest.draft.payloadRef).toBe(manifest.draft.sourceBasisRef);expect(manifest.draft.bounds).toMatchObject({maxSpendMinor:3499,maxUnits:0});
-    const repeated=await page.request.post("/v1/action",{data:{...sent[0]!,requestId:"fresh-key-negative",idempotencyKey:"another-browser-key"}});
+    // A test-only authenticated reviewer request must reach the duplicate-plan fence, not fail the browser CSRF boundary first.
+    const repeated=await page.request.post("/v1/action",{headers:{authorization:"Bearer "+SYNTHETIC_REVIEW_TOKEN},data:{...sent[0]!,requestId:"fresh-key-negative",idempotencyKey:"another-browser-key"}});
     expect(repeated.status()).toBe(409);expect((await repeated.json()).code).toBe("FULFILLMENT_PLAN_ALREADY_PROPOSED");expect(w.count()).toBe(1);
     await approval.click();await expect(page.getByRole("table",{name:"Exact approved manifest",exact:true})).toBeVisible();
     await expect(page.getByRole("button",{name:"Queue selected approved items",exact:true})).toBeDisabled();

@@ -18,7 +18,7 @@ const validWindow=(value:{startAt?:string;endAt?:string;timezone?:string})=>(val
 export const operationsReadFilters = {
   operationsOverview: z.object(scopeFilters).strict().refine(validWindow,"A period needs exact start, end and timezone."),
   operationsShipping: z.object(scopeFilters).strict().refine(validWindow,"A period needs exact start, end and timezone."),
-  opsHealth: z.object({}).strict(),
+  opsHealth: z.object(scopeFilters).strict().refine(validWindow,"A period needs exact start, end and timezone."),
   fulfillmentAnalytics: z.object({ ...scopeFilters,days: z.union([z.literal(7), z.literal(14)]) }).strict().refine(validWindow,"A period needs exact start, end and timezone."),
   orderDetail: z.object({ orderId: ref }).strict(),
   orderCustomer: z.object({ orderId: ref }).strict(),

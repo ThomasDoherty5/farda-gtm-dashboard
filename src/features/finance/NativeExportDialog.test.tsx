@@ -24,11 +24,11 @@ function setup(denyArtifact=false){
   const adapter=createLiveAdapter("sandbox",{transport:{async send(request){
     if(request.kind!=="read"){writes.push(request);throw Error("Recovery must never generate another export");}
     reads.push({viewKey:request.envelope.viewKey,filters:request.envelope.filters});
-    if(request.envelope.viewKey==="ledgerExportRequest")return respondWith(request.envelope,{kind:"native-ledger-export-request",requestKey:marker.requestKey,state:"succeeded",receipt,progress:{processedRows:110,totalRows:110},reasonCodes:[]});
+    if(request.envelope.viewKey==="ledgerExportRequest")return respondWith(request.envelope,{kind:"native-ledger-export-request",requestKey:marker.requestKey,state:"succeeded",receipt,progress:{processedRows:110,totalRows:110},reasonCodes:[]},{dataVersion:"original-export-v1"});
     if(denyArtifact)throw new TransportFailure("http",{status:403,body:{code:"FORBIDDEN",executionCertainty:"notApplied"}});
-    return respondWith(request.envelope,{kind:"native-ledger-export-artifact",receipt,body:"record,amount\r\nfictional,100\r\n"});
+    return {...respondWith(request.envelope,{kind:"native-ledger-export-artifact",receipt,body:"record,amount\r\nfictional,100\r\n"},{dataVersion:"original-artifact-v1"}),coverage:{expectedCount:110,observedCount:110,missingCount:0,complete:true,reasonCodes:[]}};
   }}});
-  const response=respondWith({schemaVersion:SCHEMA_VERSION,operation:"readView",requestId:"current-ledger",requestedScope:{workspaceId:"w",accountIds:["a"],environment:"sandbox"},viewKey:"commissionLedger",filters:{},period:null,sort:[],page:{cursor:null,limit:50}},data);
+  const response=respondWith({schemaVersion:SCHEMA_VERSION,operation:"readView",requestId:"current-ledger",requestedScope:{workspaceId:"w",accountIds:["a"],environment:"sandbox"},viewKey:"commissionLedger",filters:{},period:null,sort:[],page:{cursor:null,limit:50}},data,{dataVersion:"current-ledger-v2"});
   renderWithAdapter(<NativeExportDialog open data={data} response={response} onClose={()=>{}} />,adapter);
   return {reads,writes,marker};
 }

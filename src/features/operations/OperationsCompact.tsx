@@ -21,6 +21,7 @@ export type CompactProps = {
   /** Whole minutes since the source last synced, or null when it never did. */
   syncedMinutesAgo: number | null;
   stale: boolean;
+  complete: boolean;
 };
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five"];
@@ -34,7 +35,7 @@ const scopeText = (home: Home | "all") => (home === "all" ? "All homes" : home);
 const syncText = (minutes: number | null) => (minutes === null ? "No successful sync recorded" : `Synced ${minutesAgoLabel(minutes)}`);
 
 /** Operations at 1024 (Figma 12:708). A shorter composition than 1440: three figures, three queue rows, stock and exceptions. */
-export function TabletOperations({ data, demo, home, ready, held, syncedMinutesAgo, stale }: CompactProps) {
+export function TabletOperations({ data, demo, home, ready, held, syncedMinutesAgo, stale, complete }: CompactProps) {
   const [urlSearch] = useSearchParams();
   const search = operationsContext(urlSearch, data);
   const summary = home === "all" ? data.all : data.byHome[home];
@@ -62,7 +63,7 @@ export function TabletOperations({ data, demo, home, ready, held, syncedMinutesA
             testId="queue-table"
           />
         ) : (
-          <p className={styles.panelText}>Nothing is waiting to leave this home.</p>
+          <p className={styles.panelText}>{complete ? "No eligible dispatch rows were returned for this home." : "Dispatch evidence is incomplete. It is unknown whether more orders or samples are waiting."}</p>
         )}
       </Panel>
       <CompactHolds held={held} demo={demo} search={search} />
@@ -80,7 +81,7 @@ export function TabletOperations({ data, demo, home, ready, held, syncedMinutesA
 }
 
 /** Operations at 390 (Figma 12:653): one column, queue as cards, low stock as a warning card. */
-export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo, ready, held, syncedMinutesAgo, stale }: CompactProps) {
+export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo, ready, held, syncedMinutesAgo, stale, complete }: CompactProps) {
   const [urlSearch] = useSearchParams();
   const search = operationsContext(urlSearch, data);
   const summary = home === "all" ? data.all : data.byHome[home];
@@ -106,6 +107,7 @@ export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo,
         <div className={styles.miniKpi}><dt>Available</dt><dd data-testid="metric-Available">{available ?? "Unknown"}</dd></div>
       </dl>
       <h2 className={styles.h3}>Ship next</h2>
+      {!ready.length && <p className={styles.panelText}>{complete ? "No eligible dispatch rows were returned for this home." : "Dispatch evidence is incomplete. It is unknown whether more orders or samples are waiting."}</p>}
       <ul className={styles.cards} aria-label="Ship next">
         {ready.map((r) => {
           const over = r.waitingHours > data.warnAfterHours;

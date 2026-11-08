@@ -40,7 +40,7 @@
 .stageNote { font: var(--text-small); color: var(--color-muted); }
 .payGrid { display: grid; grid-template-columns: minmax(0, 760fr) minmax(0, 516fr); gap: var(--space-20); align-items: start; }
 .payGrid > * { min-width: 0; }
-.dark { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-ink); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-onDark); }
+.dark { --color-muted: var(--color-onDark); display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-ink); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-onDark); }
 .dark h2 { margin: 0; font: var(--text-h2); }
 .dark p { margin: 0; }
 .dark .bodyText { font: var(--text-body); }

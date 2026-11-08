@@ -1,3 +1,5 @@
+import { OperationsCohortProvider, useOperationsCohort } from "@/features/operations/OperationsCohortContext";
+import { operationsHref } from "@/features/operations/nativeRead";
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useScope } from "@/adapter/scope";
@@ -61,7 +63,10 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
 }
 
 /** Application shell (Figma 10:218): skip link, horizontal navigation, workspace menu and main landmark. */
-export function Shell() {
+export function Shell() { return <OperationsCohortProvider><ShellBody /></OperationsCohortProvider>; }
+
+function ShellBody() {
+  const { cohort } = useOperationsCohort();
   const { adapter, scope, principal } = useScope();
   const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -73,6 +78,8 @@ export function Shell() {
   const demo = adapter.environment === "demo";
   const principalMark=principal.split(/[^a-zA-Z0-9]+/).filter(Boolean).slice(0,2).map(part=>part[0]!.toUpperCase()).join("") || "?";
   const crumbs = breadcrumbsFor(pathname, search);
+  const operationsSearch = new URLSearchParams(search);
+  if (!demo && cohort) for (const name of ["home", "startAt", "endAt", "timezone"] as const) operationsSearch.set(name, cohort[name]);
 
   return (
     <div className={styles.canvas}>
@@ -129,14 +136,15 @@ export function Shell() {
         </nav>
         {compactOperations && <nav aria-label="Operations home and health" className={styles.operationsControls}>
           {["all", ...HOMES].map(home => {
-            const filters = new URLSearchParams(search);
+            if (!demo && !cohort) return <Button key={home} variant="secondary" disabledReason="A current source-bound home and reporting period are unavailable.">{home === "all" ? "All homes" : "Home " + home}</Button>;
+            const filters = new URLSearchParams(operationsSearch);
             const current = (filters.get("home") ?? "all") === home;
-            if (home === "all") filters.delete("home"); else filters.set("home", home);
+            if (home === "all" && demo) filters.delete("home"); else filters.set("home", home);
             const query = filters.toString();
             return <LinkButton key={home} to={pathname + (query ? "?" + query : "")} variant={current ? "primary" : "secondary"}
               aria-current={current ? "true" : undefined} onClick={() => setMenuOpen(false)}>{home === "all" ? "All homes" : "Home " + home}</LinkButton>;
           })}
-          <LinkButton to="/analytics/fulfillment?view=health" onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton>
+          {demo || cohort ? <><LinkButton to={operationsHref("/analytics/fulfillment?view=health", operationsSearch)} onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton><LinkButton to={operationsHref("/operations?view=shipping", operationsSearch)} onClick={() => setMenuOpen(false)}>Review shipping</LinkButton></> : <><Button disabledReason="Current source reporting context is unavailable.">Issues and fulfillment health</Button><Button disabledReason="Current source reporting context is unavailable.">Review shipping</Button></>}
         </nav>}
         {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}
         <Button variant="secondary" onClick={() => setMenuOpen(false)}>Close menu</Button>

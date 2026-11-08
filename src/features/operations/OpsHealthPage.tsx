@@ -1,6 +1,7 @@
 import { NativeOperationsGrant } from "./NativeOperationsGrant";
 import { operationsEvidenceLabel, operationsHref, operationsContext } from "./nativeRead";
 import { Link, useSearchParams } from "react-router-dom";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import type { HealthGroup, OpsHealth } from "@/adapter/opsHealth";
 import { Kpi, KpiRow } from "@/components/Kpi";
@@ -36,12 +37,15 @@ const COLUMNS = [{ label: "Group", width: 180 }, { label: "Order to shipped", wi
  */
 export function OpsHealthPage() {
   const [search] = useSearchParams();
-  const query = useView<Record<string, never>, OpsHealth>("opsHealth", {});
+  const { adapter } = useScope();
+  const filters: Record<string, string> = {};
+  if (adapter.kind !== "demo") for (const name of ["home", "startAt", "endAt", "timezone"]) { const value = search.get(name); if (value !== null) filters[name] = value; }
+  const query = useView<Record<string, string>, OpsHealth>("opsHealth", filters);
   const d = query.data?.data ?? null;
   return (
     <Page aria-labelledby="health-title">
       <PageHeader id="health-title" title="Issues and fulfillment health" subtitle="Support handoffs, refunds, and how fast orders ship and arrive.">
-        <LinkButton to={operationsHref("/analytics/fulfillment", search)} variant="secondary" style={{ minWidth: 200 }}>Fulfillment overview</LinkButton>
+        <LinkButton to={operationsHref("/analytics/fulfillment", operationsContext(search, d))} variant="secondary" style={{ minWidth: 200 }}>Fulfillment overview</LinkButton>
       </PageHeader>
       {query.isPending && <SkeletonCard label="Loading health figures…" />}
       {query.isError && <ViewError error={query.error} subject="Health figures" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
