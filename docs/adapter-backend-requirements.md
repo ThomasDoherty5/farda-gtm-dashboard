@@ -351,7 +351,7 @@ The numbers are referred to above.
 11. **D-11 Filters, period, sort and search.** Shared names and values (register C-05, C-16), and whether `scenario` is rejected or ignored outside demo (register C-06).
 12. **D-12 HTTP and body for holds and uncertain results.** Whether holds use 409 or 422, and whether an uncertain write is a 2xx `outcomeUncertain` response or an `OUTCOME_UNCERTAIN` error.
 13. **D-13 Freshness.** Allowed age per source, and whether the four states in 6.2 become an explicit field.
-14. **D-14 Exports and the missing shapes.** The CSV export envelope; a schema for the save response (the suite mirrors it locally); a reason-code catalogue; the required fields of the error body per category (register C-11); and whether the contract schemas become strict (the suite notes they currently strip unknown fields, see its SCHEMA-3).
+14. **D-14 Exports and the missing shapes.** The CSV export envelope; a schema for the save response (now `saveResourceResponseSchema` in `contract.ts`, live-adapter T-02); a reason-code catalogue; the required fields of the error body per category (register C-11); and whether the contract schemas become strict (the suite notes they currently strip unknown fields, see its SCHEMA-3).
 15. **D-15 Limits.** Rate limits per principal and per source, quota pool definitions (THO-285 RT-04), and lease durations.
 16. **D-16 Audit and retention.** What is stored immutably for request, action and receipt (THO-283 build scope 5), for how long, and with what redaction (THO-285 RT-09).
 17. **D-17 Environment separation.** How sandbox and production are separated, and who may enable production for a source account.
