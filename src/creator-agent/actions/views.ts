@@ -75,7 +75,7 @@ export const readinessRequestRecoverySchema = z.object({ requestKey: ref, state:
   terminalProof: z.object({ receiptRef: ref, observedAt: instant }).strict().nullable(), reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]*$/)),
 }).strict().superRefine((value, ctx) => {
   const { intent, receipt, terminalProof, state } = value;
-  let valid = true;
+  let valid: boolean;
   if (state === "notFound" || state === "unverified") valid = intent === null && receipt === null && terminalProof === null;
   else {
     valid = intent !== null && intent.requestKey === value.requestKey && intent.entityRefs[0].canonicalId === intent.targetRef && intent.entityRefs[0].provenanceRef === intent.expectedVersion;
