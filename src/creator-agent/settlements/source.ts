@@ -2,8 +2,7 @@ import { z } from "zod";
 import type { ApprovalRegistry } from "../approvals/contract.ts";
 import type { DispatchHandler } from "../jobs/dispatchSchema.ts";
 import type { ActionPrincipalAuthority, ActionAuthorityFence, LedgerSource } from "../actions/contract.ts";
-import { settlementScopeSchema, settlementRef, settlementInstant, settlementRecordSchema, moneyFactSchema, settlementEconomicsSchema,
-  type SettlementScope, type SettlementViewKey } from "./contract.ts";
+import { settlementScopeSchema, settlementRef, settlementInstant, settlementRecordSchema, moneyFactSchema, settlementEconomicsSchema } from "./contract.ts";
 
 export const settlementSourceRequestSchema=z.object({scope:settlementScopeSchema,principal:z.object({principalRef:settlementRef,role:z.enum(["reader","reviewer"])}).strict(),
   viewKey:z.enum(["commissionLedger","settlementDetail","payableDetail"]),targetRef:settlementRef.nullable(),provider:z.enum(["all","collabs","tiktok","externalManual"]),currency:z.string().regex(/^[A-Z]{3}$/).nullable(),

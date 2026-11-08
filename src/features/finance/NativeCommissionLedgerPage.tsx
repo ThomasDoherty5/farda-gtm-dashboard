@@ -24,7 +24,7 @@ export function NativeCommissionLedgerPage() {
   const filterKey = JSON.stringify([...scopeKey(ctx), provider, currency]);
   const [paging, setPaging] = useState<{ filterKey: string; cursors: (string | null)[] }>({ filterKey, cursors: [null] });
   const cursors = paging.filterKey === filterKey ? paging.cursors : [null];
-  const cursor = cursors[cursors.length - 1];
+  const cursor = cursors[cursors.length - 1] ?? null;
   const query = useView<{ provider?: "all" | "collabs" | "tiktok" | "externalManual"; currency?: string }, NativeCommissionLedger>("commissionLedger", { provider, ...(currency ? { currency } : {}) }, null, { page: { cursor, limit: 50 } });
   const refresh = () => { void query.refetch(); };
   return <RecordShell query={query} id="ledger-title" title="Every commission, accounted for." subject="commission ledger" figma="65:1037">{(response, data) =>

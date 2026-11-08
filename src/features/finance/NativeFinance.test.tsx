@@ -105,3 +105,16 @@ it("renders source execution only from its independent event", async () => {
   harness(payable, "/finance/payables/payable-one");
   expect(await screen.findByTestId("native-payment-lifecycle")).toHaveTextContent("Source execution observed");
 });
+it("holds export when its persisted original marker is malformed instead of minting a new request key", async () => {
+  sessionStorage.setItem(JSON.stringify(["native-ledger-export-v1", "farda", "tester", "sandbox", "w", "a"]), "{damaged");
+  const { ledger } = fixture();
+  ledger.capabilities.export = true;
+  ledger.export = { sourceVersion: "snapshot-v1", filters: { state: "all", startAt: "2026-11-01T00:00:00Z", endAt: "2026-11-08T00:00:00Z", timezone: "UTC", currency: "USD" } };
+  const h = harness(ledger), user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Export ledger" }));
+  const dialog = screen.getByRole("dialog", { name: "Export the commission ledger" });
+  await user.click(within(dialog).getByRole("button", { name: "Request CSV export" }));
+  expect(within(dialog).getByRole("button", { name: "Request CSV export" })).toHaveAttribute("aria-disabled", "true");
+  expect(h.requests).toHaveLength(0);
+  expect(sessionStorage.getItem(JSON.stringify(["native-ledger-export-v1", "farda", "tester", "sandbox", "w", "a"]))).toBe("{damaged");
+});

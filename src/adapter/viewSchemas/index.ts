@@ -37,7 +37,7 @@ export function mergeSchemas<T>(label: string, parts: Readonly<Record<string, T>
 }
 
 export const viewSchemas: ViewSchemas = mergeSchemas<z.ZodTypeAny>("view key", [
-  exportViewSchemas, analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, {...financeViewSchemas,commissionLedger:z.union([nativeCommissionLedgerSchema,financeViewSchemas.commissionLedger]),settlementDetail:z.union([nativeSettlementSchema,financeViewSchemas.settlementDetail]),payableDetail:z.union([nativePayableSchema,financeViewSchemas.payableDetail])},
+  exportViewSchemas, analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, {...financeViewSchemas,commissionLedger:z.union([nativeCommissionLedgerSchema,financeViewSchemas.commissionLedger!]),settlementDetail:z.union([nativeSettlementSchema,financeViewSchemas.settlementDetail!]),payableDetail:z.union([nativePayableSchema,financeViewSchemas.payableDetail!])},
   lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas,
 ]);
 

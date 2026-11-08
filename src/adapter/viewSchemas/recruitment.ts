@@ -68,9 +68,14 @@ const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.
 }).strict();
 function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
   return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
-    if (value.synthetic !== (value.provenance.evidenceStage === "synthetic"))
+    const provenance = value.provenance;
+    if (!provenance) {
+      ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
+      return;
+    }
+    if (value.synthetic !== (provenance.evidenceStage === "synthetic"))
       ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
-    if (value.provenance.eventAt && Date.parse(value.provenance.eventAt) > Date.parse(value.provenance.observedAt))
+    if (provenance.eventAt && Date.parse(provenance.eventAt) > Date.parse(provenance.observedAt))
       ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
   });
 }

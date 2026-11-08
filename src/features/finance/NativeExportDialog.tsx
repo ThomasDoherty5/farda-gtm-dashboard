@@ -15,10 +15,10 @@ export function NativeExportDialog({ open, data, response, onClose }: { open: bo
   const ctx = useScope();
   const storageKey = JSON.stringify(["native-ledger-export-v1", ...scopeKey(ctx)]);
   const [marker, setMarker] = useState<Marker | null>(() => { try { const raw = sessionStorage.getItem(storageKey); if (!raw) return null; const parsed = ledgerExportRequestFilters.safeParse(JSON.parse(raw)); return parsed.success ? parsed.data : null; } catch { return null; } });
-  const [storageError, setStorageError] = useState(false);
+  const [storageError, setStorageError] = useState(() => { try { const raw = sessionStorage.getItem(storageKey); return raw !== null && !ledgerExportRequestFilters.safeParse(JSON.parse(raw)).success; } catch { return true; } });
   const action = useAction<Marker["payload"]>();
   const leased = useSourceLease(data.source.validUntil);
-  const hold = !data.capabilities.export ? "This source has not granted export authority." : !data.export ? "No authorized export snapshot was returned." : !leased || data.source.state !== "current" || response.dataState === "stale" ? "Refresh current source evidence before requesting an export." : undefined;
+  const hold = storageError ? "The original export request could not be safely recovered. Do not start another request." : !data.capabilities.export ? "This source has not granted export authority." : !data.export ? "No authorized export snapshot was returned." : !leased || data.source.state !== "current" || response.dataState === "stale" ? "Refresh current source evidence before requesting an export." : undefined;
   const send = (original: Marker) => {
     if (hold || action.isPending || original.expectedVersion !== data.export?.sourceVersion || Date.parse(data.source.validUntil ?? "") <= Date.now()) return;
     action.mutate({ operation: "exportSnapshot", actionKind: "exportLedger", expectedVersion: original.expectedVersion, entityRefs: [], approvalRef: null, manifestRef: null, payload: original.payload, idempotencyKey: original.requestKey });
@@ -32,7 +32,7 @@ export function NativeExportDialog({ open, data, response, onClose }: { open: bo
   return <Dialog open={open} title="Export the commission ledger" onClose={onClose}>
     <p>Export covers the entire authorized filtered source snapshot, including rows beyond the visible page. It contains permitted financial references and no customer personal data.</p>
     <FactList label="Export scope" rows={[["Visible rows", String(data.coverage.returned)], ["Source total", data.coverage.total === null ? "Unknown" : String(data.coverage.total)], ["Currency", data.export?.filters.currency ?? data.currency ?? "Unknown"], ["Period", data.export ? `${data.export.filters.startAt} to ${data.export.filters.endAt}` : "Unknown"], ["Timezone", data.export?.filters.timezone ?? "Unknown"], ["Snapshot version", data.export?.sourceVersion ?? "Not supplied"]]} />
-    {storageError && <p role="alert">The original request could not be retained in this browser. Nothing was sent. Enable session storage before requesting an export.</p>}
+    {storageError && <p role="alert">The original request could not be safely retained or recovered. No new request was sent. Keep the original request key and contact the source owner before starting another export.</p>}
     {!marker ? <Button disabledReason={hold} onClick={start}>Request CSV export</Button> : <ExportRecovery key={marker.requestKey} marker={marker} pending={action.isPending} hold={hold ?? (marker.expectedVersion !== data.export?.sourceVersion ? "The source version changed. Inspect the original export; do not rebase its request." : undefined)} retry={() => send(marker)} />}
     {action.isError && <p role="alert">The request did not return a confirmed artifact. Check the original request below before retrying.</p>}
     <Button variant="secondary" onClick={onClose}>Close export</Button>

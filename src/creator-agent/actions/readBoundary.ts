@@ -12,7 +12,7 @@ export async function boundedSourceRead<T>(read:()=>Promise<T>, signal?:AbortSig
       if(signal?.aborted)return cancel();
       signal?.addEventListener("abort",cancel,{once:true});
       timer=setTimeout(()=>finish(()=>reject(new ActionServiceError("SOURCE_READ_TIMEOUT",504,"notApplied"))),timeoutMs);
-      Promise.resolve().then(read).then(value=>finish(()=>resolve(value)),error=>finish(()=>reject(error)));
+      Promise.resolve().then(()=>{if(!settled)return read();}).then(value=>finish(()=>resolve(value as T)),error=>finish(()=>reject(error)));
     });
   } finally {if(timer)clearTimeout(timer);signal?.removeEventListener("abort",cancel);}
 }

@@ -1008,7 +1008,7 @@ export function createAgentServer(options: AgentServerOptions) {
           if(input.page.cursor!==null)return reply(res,400,{code:"INVALID_CURSOR",executionCertainty:"notApplied"});
           const actor={principalRef:`agent-${auth.role}`};
           const cancel=new AbortController();res.once("close",()=>{if(!res.writableEnded)cancel.abort();});
-          const result=await boundedSourceRead(()=>input.viewKey==="ledgerExportRequest"?actionFoundation.domains.readExportRequest(input.filters,actor):(async()=>{
+          const result=await boundedSourceRead<{data:unknown;assertCurrent:()=>void}>(()=>input.viewKey==="ledgerExportRequest"?actionFoundation.domains.readExportRequest(input.filters,actor):(async()=>{
             const artifact=await actionFoundation.domains.downloadExport((input.filters as {artifactRef:string}).artifactRef,actor);
             return {data:ledgerExportArtifactViewSchema.parse({kind:"native-ledger-export-artifact",receipt:artifact.receipt,body:artifact.body}),assertCurrent:artifact.assertCurrent};
           })(),cancel.signal);

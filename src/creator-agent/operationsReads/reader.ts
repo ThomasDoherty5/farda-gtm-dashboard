@@ -133,7 +133,7 @@ export function createOperationsReadReader(options: Options) {
     }
     const deadline = Math.min(Date.parse(s.validUntil), Date.parse(s.observedAt) + operationsMaxObservationAgeMs);
     const projection = s.record === null ? null : project(viewKey, s.record, f);
-    const data = projection===null?null:{...(projection as Record<string,unknown>),provenance:{...(projection as {provenance:Record<string,unknown>}).provenance,
+    const data = projection===null?null:{...(projection as Record<string,unknown>),provenance:{...(projection as {provenance:Record<string,unknown>&{observedAt:string}}).provenance,
       validUntil:new Date(deadline).toISOString(),version:alias("version",s.version)}};
     if (data && (data as { provenance: { observedAt: string } }).provenance.observedAt !== s.observedAt) throw new OperationsReadError("SOURCE_RESPONSE_INVALID", 502, ["OPERATIONS_PROVENANCE_MISMATCH"]);
     const stale = deadline <= now();
