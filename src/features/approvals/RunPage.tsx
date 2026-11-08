@@ -227,7 +227,7 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
           {uncertain && (
             <>
               <div className={styles.evidence}>
-                <Button variant="secondary" loading={pending("lookup")} disabledReason={blockedReason(res, "lookupSource")} onClick={() => send("lookup")}>Check the source</Button>
+                <Button variant="secondary" loading={pending("lookup")} disabledReason={blockedReason(res, "lookup")} onClick={() => send("lookup")}>Check the source</Button>
                 <div data-testid="reconciliation" className={styles.small}>
                   {result === "notChecked" && <p>Not checked yet.</p>}
                   {result === "stillUnknown" && <p>The source shows no evidence either way. Keep this paused and escalate to the account owner.</p>}
@@ -237,7 +237,7 @@ function RecoveryTab({ res, data, onPause, pausing }: { res: Res; data: RunDetai
               </div>
               <div className={styles.controls}>
                 <div className={styles.controlRecord}><Button loading={pending("recordConfirmedSent")} disabledReason={blockedReason(res, "recordConfirmedSent")} onClick={() => send("recordConfirmedSent")}>Record confirmed sent</Button></div>
-                <div className={styles.controlFresh}><Button variant="secondary" loading={pending("freshAttempt")} disabledReason={blockedReason(res, "requestFreshAttempt")} onClick={() => send("freshAttempt")}>Request a fresh attempt</Button></div>
+                <div className={styles.controlFresh}><Button variant="secondary" loading={pending("freshAttempt")} disabledReason={blockedReason(res, "freshAttempt")} onClick={() => send("freshAttempt")}>Request a fresh attempt</Button></div>
                 <div className={styles.controlPaused}><Button variant="ghost" loading={pausing} disabledReason={data.pausedAt ? "Already paused." : blockedReason(res, "pauseRun")} onClick={onPause}>Keep paused</Button></div>
               </div>
               {reconcile.error && <ActionError error={reconcile.error} />}

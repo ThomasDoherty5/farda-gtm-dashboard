@@ -31,9 +31,12 @@ import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey 
  * Deterministic demo adapter. Frozen clock, environment "demo", no network, no provider dispatch.
  * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
  * Overview capabilities report "unverified" so nothing can look sent or paid.
+ * `writes: "unavailable"` is the unavailable-backend scenario for actions and saves (conformance PENDING-4): every write is
+ * refused as `SOURCE_UNAVAILABLE` before any demo service sees it, so nothing is applied and the answer says `notApplied`.
  */
-export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string } = {}): FardaAdapter {
+export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string; writes?: "available" | "unavailable" } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
+  const writesUnavailable = opts.writes === "unavailable";
   const latencyMs = opts.latencyMs ?? 0;
   /**
    * The policy guard runs inside the approval service, after its stored-result replay, so a retry of a dispatch that
@@ -116,6 +119,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (writesUnavailable) writeUnavailable(request.requestId);
       if (reconciliation.handles(request)) return reconciliation.submit(request as ActionRequest<never>);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
@@ -135,6 +139,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (writesUnavailable) writeUnavailable(request.requestId);
       if (settings.handlesSave(request)) return settings.save(request) as Promise<SaveResourceResponse<T>>;
       if (lifecycle.handlesSave(request)) return lifecycle.save(request) as Promise<SaveResourceResponse<T>>;
       if (request.resourceKind === "actionDraft") return offers.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
@@ -170,6 +175,11 @@ function readDemoOperationsControl(request:ReadRequest<unknown>):ReadResponse<Na
 function requireIdempotencyKey(request: { idempotencyKey: string; requestId: string }) {
   if (typeof request.idempotencyKey === "string" && request.idempotencyKey.trim() !== "") return;
   throw new AdapterError({ code: "VALIDATION_FAILED", message: "A write needs an idempotency key. Nothing was applied.", requestId: request.requestId, correlationId: `demo-${request.requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", fieldErrors: { idempotencyKey: "An idempotency key is required." } });
+}
+
+/** Refused before any demo service runs, so the server can prove nothing was applied. */
+function writeUnavailable(requestId: string): never {
+  throw new AdapterError({ code: "SOURCE_UNAVAILABLE", message: "The data service could not be reached. Nothing was applied.", requestId, correlationId: `demo-${requestId}`, retryable: true, retryAfterMs: null, executionCertainty: "notApplied" });
 }
 
 function wait(ms: number, signal?: AbortSignal) {

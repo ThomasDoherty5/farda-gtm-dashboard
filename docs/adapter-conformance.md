@@ -43,9 +43,9 @@ The stub rejects every call with `INTEGRATION_PENDING`. It passes the `PENDING-*
 ## Notes for the THO-283 freeze
 
 - The contract's zod schemas are plain `z.object`, so they strip unknown fields instead of rejecting them. The suite parses responses with `deepStrict`, a strict copy of the same schemas, so a backend that adds fields fails. `SCHEMA-3` is an expected failure that records this. Decide whether the contract itself becomes strict, then remove it.
-- The contract has no zod schema for the save response. The suite carries a local mirror of `SaveResourceResponse`. Move it into `contract.ts` when the freeze lands.
+- The save response schema is frozen in `contract.ts` (`saveResourceResponseSchema`, D-14), and the suite parses saves with it rather than a local mirror.
 - The demo adapter now refuses an empty idempotency key with `VALIDATION_FAILED`, which `IDEM-1` and `IDEM-4` required.
-- `PENDING-4` is pending for the demo: its offline fixture fails reads only.
+- `PENDING-4` has a demo scenario: `createDemoAdapter({ writes: "unavailable" })` refuses every action and save as `SOURCE_UNAVAILABLE` with `executionCertainty: notApplied`, before any demo service runs.
 
 ## The reference server target
 
