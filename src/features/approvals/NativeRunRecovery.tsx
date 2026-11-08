@@ -1,5 +1,5 @@
 import type { NativeRunView } from "@/creator-agent/actions/views";
-import { useSourceLease } from "@/features/commercial/useSourceLease";
+import { useClockCheck, useSourceLease } from "@/features/commercial/useSourceLease";
 import { Details, dateTime } from "./shared";
 import { reviewValue } from "./NativeReview";
 import styles from "./Approvals.module.css";
@@ -21,7 +21,7 @@ export function NativeRunRecovery({data,current}:{data:Pick<NativeRunView,"items
 }
 function RecoveryItem({item,index,current}:{item:NativeRunView["items"][number];index:number;current:boolean}) {
   const execution=item.execution, recovery=execution?.recovery;
-  const leased=useSourceLease(recovery?.validUntil), permitted=Boolean(current && leased && recovery?.observedAt && Date.parse(recovery.observedAt)<=Date.now());
+  const leased=useSourceLease(recovery?.validUntil), observed=useClockCheck(now=>Boolean(recovery?.observedAt && Date.parse(recovery.observedAt)<=now)), permitted=Boolean(current && leased && observed);
   return <li><h3 className={styles.h3}>Item {index+1}</h3><p className={native.ref}>{item.itemRef}</p><Details columns={2} rows={[
     ["Runner state",execution ? `${execution.state}${current ? "" : " · retained snapshot"}` : "Unknown · state not returned"],
     ["Runner attempts",execution ? String(execution.attempts) : "Unknown"],

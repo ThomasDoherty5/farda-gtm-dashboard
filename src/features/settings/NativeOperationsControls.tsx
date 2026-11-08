@@ -1,4 +1,5 @@
 import { useEffect,useRef,useState } from "react";
+import { useClockCheck } from "@/features/commercial/useSourceLease";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { z } from "zod";
@@ -69,16 +70,18 @@ export function NativeOperationsControls({section,taskOpen=false,onTaskClose,pla
  const data=query.data?.data;
  const validUntil=data?.namedActor?.validUntil;
  const rootKey=canonical(scopeKey(ctx));
+ // Newly returned source data (or a new scope) clears a prior expiry notice; its own lease is then timed below.
+ const [expiryBasis,setExpiryBasis]=useState({data,rootKey});
+ if(expiryBasis.data!==data||expiryBasis.rootKey!==rootKey){setExpiryBasis({data,rootKey});if(data)setExpired(false);}
  useEffect(()=>{
-  if(!data)return;
-  setExpired(false);
-  if(!validUntil)return;
+  if(!data||!validUntil)return;
   const expire=()=>{setExpired(true);dropProtectedData(client,JSON.parse(rootKey));};
   const remaining=Date.parse(validUntil)-Date.now();
   if(remaining<=0){expire();return;}
   const timer=setTimeout(expire,remaining);return ()=>clearTimeout(timer);
  },[data,validUntil,client,rootKey]);
- const namedVerified=data?.namedActor?.state==="verified"&&!!data.namedActor.personRef&&!!validUntil&&Date.parse(validUntil)>Date.now();
+ const leaseCurrent=useClockCheck(now=>!!validUntil&&Date.parse(validUntil)>now);
+ const namedVerified=data?.namedActor?.state==="verified"&&!!data.namedActor.personRef&&leaseCurrent;
  const refetch=query.refetch;
  useEffect(()=>{
   onRefreshReady?.(async()=>{const result=await refetch();return result.isError?null:result.data?.data??null;});
@@ -105,7 +108,8 @@ function ControlsBody({data,res,refresh,taskOpen,onTaskClose,planOpen,onPlanClos
  const [detail,setDetail]=useState<NativeOperationsControl["records"][number]|null>(null);
  const [selection,setSelection]=useState<CanonicalAction|null>(null);
  const selectedKind=params.get("controlDraft");
- useEffect(()=>{setDetail(null);},[data.section]);
+ const [detailSection,setDetailSection]=useState(data.section);
+ if(detailSection!==data.section){setDetailSection(data.section);setDetail(null);}
  const actions=data.canonicalActions??[];
  const visible=actions.filter(a=>!selectedKind||a.kind===selectedKind);
  const closeKind=()=>setParams(p=>{const n=new URLSearchParams(p);n.delete("controlDraft");return n;},{replace:true});

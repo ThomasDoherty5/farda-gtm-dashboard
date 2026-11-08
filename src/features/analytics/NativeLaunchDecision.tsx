@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { onlineManager, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
@@ -15,6 +15,7 @@ import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { TextField } from "@/components/Field";
 import { ActionError, blockedReason } from "@/features/approvals/shared";
+import { useClockCheck } from "@/features/commercial/useSourceLease";
 import { isCalendarDate } from "./launchRules";
 import { Card, dateTime } from "./parts";
 import styles from "./Analytics.module.css";
@@ -58,12 +59,15 @@ export function NativeLaunchDecision({ data, response, requestKey: urlRequestKey
   const [, tick] = useState(0), mounted = useRef(true);
   const action = useAction<ReadinessPayload>(), recovery = data.requestRecovery;
   const latest = useRef({ data, response, readCurrent, invalidKey, scope: scopeKey(ctx), base, rationale, verdict, requestKey, urlRequestKey });
-  latest.current = { data, response, readCurrent, invalidKey, scope: scopeKey(ctx), base, rationale, verdict, requestKey, urlRequestKey };
+  useLayoutEffect(() => { latest.current = { data, response, readCurrent, invalidKey, scope: scopeKey(ctx), base, rationale, verdict, requestKey, urlRequestKey }; });
+  // An unmarked remembered request gets safe recovery metadata as soon as it is seen; storage is written after commit.
+  const [markerToStore, setMarkerToStore] = useState<{ key: string; marker: Marker } | null>(null);
+  if (requestKey && !invalidStoredMarker && !marker) { const m: Marker = cache.data ? { requestKey, actorRef: data.actorRef, targetRef: data.targetRef, expectedVersion: cache.data.expectedVersion, payloadDigest: cache.data.payloadDigest } : { requestKey, actorRef: data.actorRef, targetRef: data.targetRef, expectedVersion: null, payloadDigest: null }; setMarker(m); setMarkerToStore({ key: markerKey, marker: m }); }
+  useEffect(() => { if (markerToStore) saveMarker(markerToStore.key, markerToStore.marker); }, [markerToStore]);
   useEffect(() => {
     if (!requestKey || invalidStoredMarker) return;
-    if (!marker) { const m: Marker = cache.data ? { requestKey, actorRef: data.actorRef, targetRef: data.targetRef, expectedVersion: cache.data.expectedVersion, payloadDigest: cache.data.payloadDigest } : { requestKey, actorRef: data.actorRef, targetRef: data.targetRef, expectedVersion: null, payloadDigest: null }; saveMarker(markerKey, m); setMarker(m); }
     if (urlRequestKey !== requestKey) setParams(old => { const next = new URLSearchParams(old); next.set("readinessRequestKey", requestKey); return next; }, { replace: true });
-  }, [requestKey, invalidStoredMarker, marker, markerKey, cache.data, data.actorRef, data.targetRef, urlRequestKey, setParams]);
+  }, [requestKey, invalidStoredMarker, urlRequestKey, setParams]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { const delay = Math.max(0, Date.parse(data.validUntil) - Date.now() + 1); const id = setTimeout(() => tick(v => v + 1), Math.min(delay, 2_147_483_647)); return () => clearTimeout(id); }, [data.validUntil]);
   useEffect(() => { onDirty?.(!!rationale && !requestKey); return () => onDirty?.(false); }, [rationale, requestKey, onDirty]);
@@ -71,8 +75,12 @@ export function NativeLaunchDecision({ data, response, requestKey: urlRequestKey
   const recoveryMatchesMarker = !marker || !recovery?.intent || marker.actorRef === recovery.intent.actorRef && marker.targetRef === recovery.intent.targetRef && (marker.expectedVersion === null || marker.expectedVersion === recovery.intent.expectedVersion) && (marker.payloadDigest === null || marker.payloadDigest === recovery.intent.payloadDigest);
   const recoveryMatchesOriginal = recoveryMatchesMarker && (!original || !recovery?.intent || ["requestKey", "actorRef", "targetRef", "expectedVersion", "payload", "payloadDigest"].every(k => canonical(original[k as keyof Pending]) === canonical(recovery.intent![k as keyof Pending])));
   const effective: Pending | null = recoveryMatchesOriginal && recovery?.intent && recovery.requestKey === requestKey && recovery.intent.actorRef === data.actorRef && recovery.intent.targetRef === data.targetRef ? recovery.intent : cache.data?.requestKey === requestKey ? cache.data : null;
+  // Any change to the checked request, recovery or scope withdraws a prior verification until it is re-checked.
+  const verifyBasis = [client, ctx, requestKey, recovery, effective, data.actorRef, data.targetRef, recoveryMatchesOriginal, invalidStoredMarker];
+  const [verifiedBasis, setVerifiedBasis] = useState(verifyBasis);
+  if (verifyBasis.some((v, i) => !Object.is(v, verifiedBasis[i]))) { setVerifiedBasis(verifyBasis); setVerified(null); }
   useEffect(() => {
-    let active = true; setVerified(null);
+    let active = true;
     if (invalidStoredMarker || !recoveryMatchesOriginal || !requestKey || !recovery || recovery.requestKey !== requestKey || !effective || effective.actorRef !== data.actorRef || effective.targetRef !== data.targetRef) return;
     void protectedRead(client, scopeKey(ctx), "launch-receipt-check", () => launchPayloadDigest(effective.payload)).then(digest => {
       if (!active || digest !== effective.payloadDigest) return;
@@ -82,7 +90,8 @@ export function NativeLaunchDecision({ data, response, requestKey: urlRequestKey
     }).catch(() => { /* A permission loss fences this asynchronous check. */ });
     return () => { active = false; };
   }, [client, ctx, requestKey, recovery, effective, data.actorRef, data.targetRef, recoveryMatchesOriginal, invalidStoredMarker]);
-  const goHold = nativeGoHold(data), freshnessHold = !online ? OFFLINE_ACTION_REASON : !readCurrent || !["ready", "partial"].includes(response.dataState) || Date.parse(data.validUntil) <= Date.now() ? "Refresh current source evidence before recording." : null;
+  const goHold = useClockCheck(now => nativeGoHold(data, now)), readExpired = useClockCheck(now => Date.parse(data.validUntil) <= now);
+  const freshnessHold = !online ? OFFLINE_ACTION_REASON : !readCurrent || !["ready", "partial"].includes(response.dataState) || readExpired ? "Refresh current source evidence before recording." : null;
   const hold = invalidStoredMarker ? "Stored recovery metadata is invalid. Ask the source owner to reconcile the unresolved request; a new key is held." : response.scope.environment !== "sandbox" || response.scope.accountIds.length !== 1 ? "One verified sandbox account is required." : invalidKey ? "Invalid recovery key. No new request can be created." : requestKey ? "Reconcile the original request before creating another decision." : blockedReason(response, "recordLaunchReadiness") ?? freshnessHold ?? (!data.phaseAllowed ? "The current source phase does not permit recording." : null);
   const changed = base !== data.version, dirty = !!rationale;
   const close = () => { if (dirty && !requestKey) setDiscard(true); else setOpen(false); };
