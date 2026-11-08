@@ -19,6 +19,10 @@ The snapshot reader has no browser ingestion endpoint. Configuration, scheduling
 
 Membership joins use creator revision, network, publishing account and native profile ID. Active monitoring requires current canonical identity, an open relationship, current suppression eligibility, complete coverage and matching Notion-to-Sheets evidence. The trusted source owner may supply an independent scoped J01 receipt set. Duplicate owners, unmatched rows, stale receipts and missing identity remain visible for reconciliation.
 
+Optional bounded review evidence uses that same exact creator/revision/profile/account join. It carries original intake evidence and decision receipts, competing identity claims, and dated exclusion reasons/owners. A missing or mismatched source cannot manufacture history from a last-check time. The pending-review navigation count describes its actual source/cohort destination independently of the currently selected monitoring state. History dialogs explicitly describe the loaded page rather than claiming an unbounded archive.
+
+Observed message context carries the exact network/account, conversation/message references, source version and observation time. Status suggestions retain the status at observation, proposed value and expected version. All raw identity, owner and receipt references are projected to scoped aliases; message bodies, source URLs and credentials are excluded. Repeated identical events deduplicate by network/account/native-event identity; contradictory duplicates fail validation. Review dialogs permit no outbound message, identity merge, enrollment, exclusion removal or source-status write. Schedule configuration remains held when its exact authorized configuration reference is unavailable.
+
 ## Metrics and history
 
 Every confirmed campaign publication remains eligible for display, including zero and low engagement. Publication identity uses network, publishing account and native post ID. Recruitment source is a separate field. Native publication, visibility history, campaign assignment, creative/deliverable lineage, attribution level, publication-age checkpoint and original receipt references remain inspectable.
@@ -33,6 +37,8 @@ Continuation tokens bind scope, role, view, filters, page size, frozen read time
 
 Page counts describe the returned page. A final page remains partial when it represents only part of the finite universe. Empty results expose the saved count and keep provider-wide coverage unknown. Expired source evidence is labeled. Permission failures clear protected client data through the shared adapter hooks.
 
+The source lease cannot exceed the server's ninety-minute monitoring age ceiling, even if the supplied expiry is longer. It is checked after awaited reads and bounds continuation expiry. Review/message detail observations have their own ninety-minute ceiling; refreshing an outer snapshot does not refresh older detail. Denied or expired details are withheld, while known ambiguous claims retain their identity-review hold. Changes to source facts or detail expiry invalidate continuation. Open dialogs retain selection keys, not private copied rows, so revalidation removes revoked details.
+
 Native screens use tables for sparse source measurements. The original fixture charts remain in the explicitly labeled demo route. This prevents a missing timeseries from becoming a fabricated curve. Long evidence references wrap within horizontally scrollable, labeled table regions on narrow screens.
 
 ## Verification
@@ -40,5 +46,6 @@ Native screens use tables for sparse source measurements. The original fixture c
 - `src/creator-agent/monitor/reader.test.ts` covers identity ambiguity, suppression, source expiry, cursor binding/renewal, checked/failed distinctions, native publication provenance, financial reconciliation, first-observed removal, timestamp conflicts and exact signed accumulation.
 - `src/features/monitor/monitor.test.tsx`, `postEvidence.test.tsx` and `src/adapter/viewSchemas/monitor.test.ts` preserve the existing typed fixture and interaction coverage.
 - `e2e-agent/monitor-evidence.spec.ts` uses the actual local HTTP service and SQLite with fictional server-owned J01/J08 authorities. It covers all four screens, desktop/mobile accessibility, source failure/recovery, identity receipt joins and distinct post/creator attribution.
+- The same native journey exercises read-only identity, intake-history, message and status-suggestion dialogs, denied detail, real Escape/focus return, and desktop/mobile captures of both ends of scrollable dialogs. `nativeMonitor.test.tsx` separately verifies scoped adapter reads and removal of denied details. Isolated Linux CI uses actual Orca/AT-SPI speech and recorded audio; a jsdom dialog shim is never counted as native keyboard or screen-reader proof.
 
 The verified software stage is sandbox integration. Live hourly monitoring depends on the source owner's authorized J08 implementation and current provider access.

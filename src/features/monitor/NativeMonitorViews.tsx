@@ -1,10 +1,11 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link,useParams,useSearchParams } from "react-router-dom";
 import { usePagedView } from "@/adapter/usePagedView";
 import { SCHEMA_VERSION } from "@/adapter/contract";
 import { scopeKey,useScope } from "@/adapter/scope";
 import { Button,LinkButton } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
 import { DataTable } from "@/components/DataTable";
 import { SelectField,TextField } from "@/components/Field";
 import { SkeletonCard } from "@/components/EmptyState";
@@ -100,12 +101,64 @@ export function NativeWatchlistPage(){
       const latest=pages.at(-1)!,rows=pages.flatMap(d=>d.profiles);
       return <><KpiGrid><KpiCard label="Tracked profiles" context="Saved profile rows">{latest.total}</KpiCard><KpiCard label="Active monitoring" context="Current matching enrollment">{latest.active}</KpiCard>
         <KpiCard label="Identity review" context={`${latest.unverified} additional eligibility states unverified`}>{latest.pending}</KpiCard><KpiCard label="Excluded" context="Suppression or closed intake">{latest.excluded}</KpiCard></KpiGrid>
-        <Card labelledBy="registry-heading"><SectionHeading id="registry-heading" title="The sheet is the tracking registry." note={`Showing ${rows.length} of ${latest.total} saved rows. A profile is not a distinct person.`}/>
-          {rows.length?<DataTable caption="Canonical creator and profile evidence" variant="ledger" columns={[{label:"Creator / profile"},{label:"Intake / network"},{label:"Monitoring"},{label:"Source receipts"},{label:"Last check"}]}
-            rows={rows.map(r=>[r.creator+" · "+(r.handle??r.profile??"Profile unknown"),(r.source??"Unknown")+" · "+(r.network??"Unknown"),r.state+" · "+r.reason,
-              "Notion "+(r.notionReceipt??"unverified")+" · Sheets "+(r.sheetsReceipt??"unverified"),stamp(r.lastCheck)])}/>:<p>No matching local intake records. Provider enrollment is unknown.</p>}</Card></>;
+        <WatchlistEvidence rows={rows} latest={latest} onReview={()=>change("state","identity-review")}/></>;
     }}/>
   </section>;
+}
+
+type WatchRow=NativeWatchlist["profiles"][number];
+type Message=NativeRun["observations"][number];
+function MessageDetails({event}:{event:Message}){
+  const d=event.detail;
+  return <><DetailRow label="Profile" value={event.profile}/><DetailRow label="Network / account" value={event.network+" · "+event.account}/><DetailRow label="Observed" value={stamp(event.at)}/>
+    <DetailRow label="Original event receipt" value={event.receipt}/><DetailRow label="Interpretation" value={event.interpretation}/>
+    {d?.state==="current"?<><DetailRow label="Source context observed" value={stamp(d.observedAt)}/><DetailRow label="Exact conversation" value={d.conversationId??"Unavailable"}/>
+      <DetailRow label="Exact message" value={d.messageId??"Unavailable"}/><DetailRow label="Source version" value={d.sourceVersion??"Unavailable"}/>
+      <DetailRow label="Status at observation" value={d.currentStatus??"Unavailable"}/><DetailRow label="Suggested status at observation" value={d.proposedStatus??"Unavailable"}/>
+      <DetailRow label="Expected source version" value={d.expectedVersion??"Unavailable"}/></>:<p role="status">Message context {d?.state??"unavailable"}. Refresh authorized source evidence before reviewing this message.</p>}
+    <p>Read-only context from the dated authorized source observation, not a live permission grant. Message contents remain in the source. Reviewing does not send a reply or apply a status change.</p></>;
+}
+function HistoryDetails({row}:{row:WatchRow}){
+  const r=row.review;
+  return <section><h3>{row.handle??row.profile??row.creator}</h3>
+    {r?.state==="current"?<><p>{r.historyComplete?"Complete supplied history":"Partial supplied history"} · observed {stamp(r.observedAt)} · {r.receipt}</p>
+      {r.history.length?<DataTable caption={"Intake history for "+(row.profile??row.creator)} columns={[{label:"Event / time"},{label:"Decision"},{label:"Identity evidence"},{label:"Original / decision receipts"}]}
+        rows={r.history.map(h=>[h.id+" · "+stamp(h.at),h.kind+" · "+h.decision,h.identityEvidence.join(" · "),h.receipt+" · "+h.decisionReceipt])}/>:<p>No intake history entries were supplied. Current profile checks are not historical intake events.</p>}</>:
+      <p role="status">Intake evidence {r?.state??"unavailable"}. Original identity history has not been verified for this exact profile and revision.</p>}</section>;
+}
+function WatchlistEvidence({rows,latest,onReview}:{rows:WatchRow[];latest:NativeWatchlist;onReview:()=>void}){
+  const [selection,setSelection]=useState<{kind:"history"}|{kind:"identity"|"message";creator:string;profile:string|null;event?:string}|null>(null);
+  // Keep only selection keys: access revocation or a changed source packet cannot leave a copied private row in an open dialog.
+  const row=selection&&selection.kind!=="history"?rows.find(r=>r.creator===selection.creator&&r.profile===selection.profile):null;
+  const event=selection&&selection.kind==="message"?row?.messages?.find(e=>e.id===selection.event):null;
+  const review=row?.review;
+  return <Card labelledBy="registry-heading"><SectionHeading id="registry-heading" title="The sheet is the tracking registry." note={`Showing ${rows.length} of ${latest.total} saved rows. A profile is not a distinct person.`}/>
+    <div className={a.actions}><Button variant="secondary" onClick={onReview}>{latest.pendingReviewTotal===undefined?"Review matches":`Review ${latest.pendingReviewTotal} matches`}</Button>
+      <Button variant="secondary" aria-haspopup="dialog" onClick={()=>setSelection({kind:"history"})}>Open intake history</Button></div>
+    {rows.length?<DataTable caption="Canonical creator and profile evidence" variant="ledger" columns={[{label:"Creator / profile"},{label:"Intake / network"},{label:"Monitoring"},{label:"Source receipts"},{label:"Last check"},{label:"Review evidence"}]}
+      rows={rows.map(r=>[r.creator+" · "+(r.handle??r.profile??"Profile unknown"),(r.source??"Unknown")+" · "+(r.network??"Unknown"),r.state+" · "+r.reason,
+        "Notion "+(r.notionReceipt??"unverified")+" · Sheets "+(r.sheetsReceipt??"unverified"),stamp(r.lastCheck),<div key={r.profile??r.creator}>
+          <Button variant="secondary" aria-haspopup="dialog" onClick={()=>setSelection({kind:"identity",creator:r.creator,profile:r.profile})}>{r.state==="excluded"?"View exclusion reason":"Match the correct profile"}</Button>
+          {r.messages?.length?r.messages.map(e=><Button key={e.id} variant="secondary" aria-haspopup="dialog" onClick={()=>setSelection({kind:"message",creator:r.creator,profile:r.profile,event:e.id})}>Review new message · {stamp(e.at)}</Button>):
+            <Button variant="secondary" disabledReason="No exact source conversation and message observation was supplied.">Review new message</Button>}</div>])}/>:<p>No matching local intake records. Provider enrollment is unknown.</p>}
+    <Dialog open={selection!==null} title={selection?.kind==="history"?"Intake history":selection?.kind==="message"?"New message evidence":row?.state==="excluded"?"Exclusion reason":"Match the correct profile"} onClose={()=>setSelection(null)}>
+      {selection?.kind==="history"?<><p>History for {rows.length} loaded profiles in the current source, state and cohort filters; {latest.total} profiles match. Load more saved records to include later pages.</p>{rows.map(r=><HistoryDetails key={r.profile??r.creator} row={r}/>)}</>:
+        selection?.kind==="message"?event?<MessageDetails event={event}/>:<p role="status">This exact message is no longer available in the current authorized source snapshot.</p>:
+          row?<><DetailRow label="Creator / profile" value={row.creator+" · "+(row.profile??"Unknown")}/><DetailRow label="Account / network" value={(row.account??"Unknown")+" · "+(row.network??"Unknown")}/>
+            <DetailRow label="Current reason" value={row.reason}/><HistoryDetails row={row}/>
+            {review?.state==="current"&&<>{review.candidates.length?<DataTable caption="Competing identity evidence" columns={[{label:"Creator / profile"},{label:"Account / network"},{label:"Receipt"}]}
+              rows={review.candidates.map(c=>[c.creatorId+" · "+c.profileId,c.account+" · "+c.network,c.receipt])}/>:<p>No competing identity evidence was supplied.</p>}
+              {review.exclusion?<><DetailRow label="Exclusion reason" value={review.exclusion.reasonCode}/><DetailRow label="Effective" value={stamp(review.exclusion.at)}/><DetailRow label="Owner" value={review.exclusion.owner}/><DetailRow label="Exclusion receipt" value={review.exclusion.receipt}/></>:<p>No dated exclusion decision was supplied.</p>}</>}
+            <p>Ambiguous identities stay quarantined. Reviewing does not merge identities, enroll a profile or remove an exclusion.</p></>:<p role="status">This profile is no longer available in the current authorized scope.</p>}
+      <Button variant="secondary" onClick={()=>setSelection(null)}>Return to watchlist</Button>
+    </Dialog>
+  </Card>;
+}
+function RunObservations({events}:{events:Message[]}){
+  const [selected,setSelected]=useState<string|null>(null),event=events.find(e=>e.id===selected);
+  return <>{events.length?<DataTable caption="Observed source changes" columns={[{label:"Event"},{label:"Profile"},{label:"Observation"},{label:"Receipt"},{label:"Review"}]}
+    rows={events.map(e=>[e.kind+" · "+e.interpretation,e.profile,stamp(e.at),e.receipt,<Button key={e.id} variant="secondary" aria-haspopup="dialog" onClick={()=>setSelected(e.id)}>{e.interpretation==="suggestion"?"Review status suggestion":"Review source observation"}</Button>])}/>:<p>No source events returned in this snapshot.</p>}
+    <Dialog open={selected!==null} title="Source observation evidence" onClose={()=>setSelected(null)}>{event?<MessageDetails event={event}/>:<p role="status">This observation is no longer available.</p>}<Button onClick={()=>setSelected(null)}>Return to run</Button></Dialog></>;
 }
 
 export function NativeHourlyPage(){
@@ -126,10 +179,10 @@ export function NativeHourlyPage(){
           <DetailRow label="Recorded schedule" value={r.schedule}/><DetailRow label="Timezone" value={r.timezone??"Unknown"}/>
           <DetailRow label="Next run in snapshot" value={stamp(r.nextRun)}/><DetailRow label="Retry policy" value={r.retryPolicy??"Unverified"}/>
           <Link to="/settings/connections">Inspect source connections</Link>
+          <Button disabledReason="An exact authorized schedule configuration reference was not supplied. Schedule changes remain with the source owner.">Manage schedule</Button>
           <Button disabledReason="A verified J08 retry authority for this exact profile is unavailable.">Retry failed profile</Button></Card>
         <Card labelledBy="run-events"><SectionHeading id="run-events" title="Observed events stay separate from inferred status."/>
-          {r.observations.length?<DataTable caption="Observed source changes" columns={[{label:"Event"},{label:"Profile"},{label:"Observation"},{label:"Receipt"}]}
-            rows={r.observations.map(e=>[e.kind+" · "+e.interpretation,e.profile,stamp(e.at),e.receipt])}/>:<p>No source events returned in this snapshot.</p>}</Card></>;
+          <RunObservations events={r.observations}/></Card></>;
     }}/>
   </section>;
 }

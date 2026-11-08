@@ -13,9 +13,15 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  await page.bringToFront();
  // Axe may create another Chromium page. Activate this page's actual titled
  // window, rather than choosing whichever Chromium window was created last.
- const title=(await page.title()).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
- const windows=(await run("xdotool",["search","--onlyvisible","--name",title])).stdout.trim().split(/\s+/);
- const window=windows.at(-1);if(!window)throw new Error("No visible Chromium AT window");
+ let window:string|undefined;
+ // The document title can update before the window manager publishes it.
+ await expect.poll(async()=>{
+   const title=(await page.title()).replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+   try { window=(await run("xdotool",["search","--onlyvisible","--name",title])).stdout.trim().split(/\s+/).filter(Boolean).at(-1); }
+   catch { window=undefined; }
+   return Boolean(window);
+ },{timeout:5000,message:"Visible Chromium window with the current page title"}).toBe(true);
+ if(!window)throw new Error("No visible Chromium AT window");
  await run("xdotool",["windowactivate","--sync",window]);
  await transition?.();
  await focus.focus();

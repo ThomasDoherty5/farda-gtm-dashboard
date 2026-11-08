@@ -9,7 +9,7 @@ import { evt, fixtureRef } from "../funnelFixtures.testkit.ts";
 import type { FunnelEvent } from "../funnelContract.ts";
 import { createMonitorReader } from "./reader.ts";
 import { nativeContentSchema,nativePostSchema,nativeWatchlistSchema,nativeRunSchema,monitorSnapshotSchema } from "./contract.ts";
-import { intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
+import { addMonitorReviewEvidence,intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
 let now=monitorTime,store:AgentStore,ops:ReturnType<typeof createOperations>,funnel:FunnelRepository,secret:string,snapshot=monitorFixture(),members=intakeFixture();
 const proofs=new Map<string,string>();
 beforeEach(()=>{now=monitorTime;snapshot=monitorFixture();members=intakeFixture();proofs.clear();store=new AgentStore(":memory:",scope);
@@ -197,4 +197,84 @@ describe("source-backed monitoring views",()=>{
     snapshot.posts.push(second);
     expect(nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data)).toMatchObject({views:null,rate:null,metricBasis:null});
   });
+});
+
+describe("bounded native monitor control evidence",()=>{
+  it("projects exact history, competing identity and message/status context without raw identifiers",async()=>{
+    addMonitorReviewEvidence(snapshot);
+    const reader=open(),w=nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r.state).toBe("identity-review");expect(w.active).toBe(0);
+    expect(r.review).toMatchObject({state:"current",historyComplete:true,history:[{decision:"quarantined",at:snapshot.reviewEvidence![0]!.history[0]!.at,identityEvidence:[expect.stringMatching(/^identity-evidence-/)],decisionReceipt:expect.stringMatching(/^receipt-/)}]});
+    expect(r.review?.candidates).toHaveLength(2);
+    expect(r.messages).toHaveLength(1);expect(r.messages?.[0]).toMatchObject({network:"instagram",account:expect.stringMatching(/^account-/),detail:{state:"current",currentStatus:"draft",proposedStatus:"ready",expectedVersion:expect.stringMatching(/^version-/)}});
+    const run=nativeRunSchema.parse((await reader.read("hourlyRun",{runId:w.latestRunRef},page)).data);
+    expect(run.observations[0]).toEqual(r.messages![0]);
+    for(const raw of ["synthetic-conversation","synthetic-message-event","synthetic-original-profile-proof","synthetic-competing-creator","publishing-a"])
+      expect(JSON.stringify(w)).not.toContain(raw);
+  });
+  it("keeps optional evidence backward compatible and does not invent intake history",async()=>{
+    const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data);
+    expect(w.profiles[0]?.review).toMatchObject({state:"unavailable",history:[]});
+  });
+  it.each(["creatorId","revision","profileId"] as const)("rejects foreign %s review joins",async key=>{
+    addMonitorReviewEvidence(snapshot);const r=snapshot.reviewEvidence![0]!;
+    if(key==="revision")r.revision++;else r[key]="foreign-identity";
+    expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    await expect(open().read("watchlist",{},page)).rejects.toThrow("MONITOR_SOURCE_INVALID");
+  });
+  it("rejects duplicate evidence, foreign candidate context and future event/history evidence",()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.reviewEvidence!.push(structuredClone(snapshot.reviewEvidence![0]!));expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.reviewEvidence!.pop();snapshot.reviewEvidence![0]!.candidates[0]!.account="foreign-account";expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.reviewEvidence![0]!.candidates[0]!.account="publishing-a";
+    snapshot.reviewEvidence![0]!.history[0]!.at=new Date(now+1).toISOString();expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot=addMonitorReviewEvidence(monitorFixture());snapshot.runs[0]!.inbox[0]!.context!.observedAt=new Date(now+1).toISOString();expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+  });
+  it("withholds denied and independently expired evidence even when the outer snapshot is fresh",async()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.reviewEvidence![0]!.access="denied";snapshot.runs[0]!.inbox[0]!.context!.access="denied";
+    let w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r.review).toMatchObject({state:"denied",history:[],candidates:[],receipt:null});expect(r.messages![0]!.detail).toMatchObject({state:"denied",conversationId:null,currentStatus:null});
+    snapshot.reviewEvidence![0]!.access="authorized";snapshot.runs[0]!.inbox[0]!.context!.access="authorized";
+    now+=91*60_000;snapshot.observedAt=new Date(now).toISOString();snapshot.validUntil=new Date(now+3600_000).toISOString();
+    w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data);r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(w.sourceState).toBe("current");expect(r.review).toMatchObject({state:"expired",history:[]});expect(r.messages![0]!.detail).toMatchObject({state:"expired",messageId:null});
+  });
+  it("quarantines conflicting canonical owners without selecting another creator's history",async()=>{
+    addMonitorReviewEvidence(snapshot);members.records.push({...structuredClone(members.records[0]!),creatorId:"competing-owner"});members.total++;
+    const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r).toMatchObject({state:"identity-review",review:{state:"quarantined",history:[],candidates:[]},messages:[]});
+  });
+  it("deduplicates repeated exact source events across runs and invalidates cursors on review changes",async()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.runs.push({...structuredClone(snapshot.runs[0]!),id:"another-run"});
+    const reader=open(),w=nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data);
+    expect(w.profiles.find(p=>p.network==="instagram")!.messages).toHaveLength(1);
+    const first=await reader.read("watchlist",{}, {limit:1,cursor:null});snapshot.reviewEvidence![0]!.historyComplete=false;
+    await expect(reader.read("watchlist",{}, {limit:1,cursor:first.nextCursor})).rejects.toThrow("MONITOR_SNAPSHOT_CHANGED");
+  });
+});
+
+it("counts the destination review set independently of current monitoring-state filter",async()=>{
+  addMonitorReviewEvidence(snapshot);
+  const data=nativeWatchlistSchema.parse((await open().read("watchlist",{state:"active"},page)).data);
+  expect(data).toMatchObject({total:0,pending:0,pendingReviewTotal:1});
+});
+it("rejects conflicting repeated message facts rather than selecting an arbitrary run",()=>{
+  addMonitorReviewEvidence(snapshot);snapshot.runs.push({...structuredClone(snapshot.runs[0]!),id:"conflicting-run"});
+  snapshot.runs[1]!.inbox[0]!.context!.proposedStatus="closed";
+  expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+});
+it("preserves dated exclusion reason and owner receipts without treating last check as the decision time",async()=>{
+  addMonitorReviewEvidence(snapshot);members.records[0]!.suppressed=true;
+  const at=new Date(now-3600_000).toISOString();snapshot.reviewEvidence![0]!.exclusion={at,reasonCode:"suppressed",owner:"private-source-owner",receipt:"private-exclusion-receipt"};
+  const data=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=data.profiles.find(p=>p.network==="instagram")!;
+  expect(r).toMatchObject({state:"excluded",review:{exclusion:{at,reasonCode:"suppressed",owner:expect.stringMatching(/^owner-/),receipt:expect.stringMatching(/^receipt-/)}}});
+  expect(r.lastCheck).not.toBe(at);expect(JSON.stringify(r)).not.toContain("private-source-owner");
+});
+
+it.each(["denied","expired"] as const)("does not resolve a known ambiguous identity when its evidence becomes %s",async state=>{
+  addMonitorReviewEvidence(snapshot);
+  if(state==="denied")snapshot.reviewEvidence![0]!.access="denied";
+  else {now+=91*60_000;snapshot.observedAt=new Date(now).toISOString();snapshot.validUntil=new Date(now+3600_000).toISOString();}
+  const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+  expect(w).toMatchObject({sourceState:"current",active:0,pendingReviewTotal:1});
+  expect(r).toMatchObject({state:"identity-review",review:{state,candidates:[],history:[],receipt:null}});
 });
