@@ -1,3 +1,4 @@
+import { screenReaderCheckpoint } from "./support/screen-reader";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync,writeFileSync } from "node:fs";
 import { expect,test,type Page } from "@playwright/test";
@@ -32,7 +33,7 @@ async function seedIntake(page:Page){
   expect(answer.ok(),JSON.stringify(body)).toBe(true);return body;
 }
 test("all four real monitor reads preserve source scope, zero, identity, restart and attribution without contacting a provider",async({page},testInfo)=>{
-  test.setTimeout(95_000);
+  test.setTimeout(180_000);
   const s=monitorFixture(Date.now()),dir=process.env.FARDA_MONITOR_PROOF_DIR??testInfo.outputPath("monitor-evidence");mkdirSync(dir,{recursive:true});
   let denied=false;
   const app=createAgentServer({databasePath:":memory:",workspaceId:monitorScope.workspaceId,accountId:monitorScope.accountId,
@@ -71,27 +72,34 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toContainText("inaccessible");
     await capture("content","Creator content, without the blind spots.");
+    await screenReaderCheckpoint(page,"monitor-table-headers",page.getByRole("region",{name:"Saved campaign posts"}),["Saved campaign posts","Post","Network","Views"],"KP_Add");
     await page.getByLabel("Post network").selectOption("instagram");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).not.toContainText("inaccessible");
     await page.getByRole("link",{name:"View latest hourly run"}).focus();await page.keyboard.press("Enter");
     await expect(page.getByRole("region",{name:"Read-only run trace"})).toContainText("loginRequired");
     await expect(page.getByRole("button",{name:"Retry failed profile"})).toHaveAttribute("aria-disabled","true");
     await capture("hourly","Every hourly check leaves evidence.");
+    await screenReaderCheckpoint(page,"monitor-held-retry",page.getByRole("button",{name:"Retry failed profile"}),["Retry failed profile","unavailable"]);
     await page.goto("/creators/watchlist");
     await expect(page.getByRole("region",{name:"Canonical creator and profile evidence"})).toContainText("test.maker");
     await expect(page.getByRole("region",{name:"Canonical creator and profile evidence"})).toContainText("Current Sheets enrollment matches");
     await capture("watchlist","Know who the agent is watching.");
+    await screenReaderCheckpoint(page,"watchlist-table-headers",page.getByRole("region",{name:"Canonical creator and profile evidence"}),["Canonical creator and profile evidence","Creator","Monitoring"],"KP_Add");
     await page.goto("/content?network=tiktok");const table=page.getByRole("region",{name:"Saved campaign posts"});
     await table.getByRole("link").first().click();
     await expect(page.getByText("creator-level outcomes",{exact:true})).toBeVisible();
     await expect(page.getByText(/No share is assigned/)).toBeVisible();
     await expect(page.getByRole("button",{name:"Open source post"})).toHaveAttribute("aria-disabled","true");
     await capture("post","One post. Its evidence and impact.");
+    await screenReaderCheckpoint(page,"post-publication-alternative",page.getByRole("region",{name:"Publication observation history"}),["Publication observation history","State","Observation time","Native receipt"],"KP_Add");
     await page.reload();await expect(page.getByText(/No share is assigned/)).toBeVisible();
     denied=true;await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toHaveCount(0);
     await expect(page.getByRole("alert").first()).toBeVisible();
-    denied=false;s.coverage="partial";await page.reload();
+    denied=false;s.coverage="partial";
+    await screenReaderCheckpoint(page,"monitor-partial-recovery",page.getByLabel("Post network"),["Partial source coverage"],"KP_Enter",async()=>{
+      await page.reload();await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
+    });
     await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toContainText("inaccessible");
     s.coverage="complete";s.posts=[];await page.reload();

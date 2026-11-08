@@ -1,3 +1,4 @@
+import { screenReaderCheckpoint } from "./support/screen-reader";
 import { expect,test,type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync,writeFileSync } from "node:fs";
@@ -22,8 +23,10 @@ async function fill(page:Page){
   await form.getByLabel("Units").fill("8");await form.getByLabel("Reason").selectOption("rebalance");return form;
 }
 test("bounded stock drilldown, report filters and exact approval-only receipt through the native adapter",async({page})=>{
+  test.setTimeout(120_000);
   await login(page);await page.goto("/inventory");const table=page.getByRole("table",{name:"Inventory by location"});
   await expect(table).toContainText("FARDA-GRAPHITE");await expect(page.getByText("Destination receipt is overdue.",{exact:false})).toBeVisible();
+  await screenReaderCheckpoint(page,"stock-table-headers",page.getByRole("region",{name:"Inventory by location"}),["Inventory by location","On hand","Reserved","Available"],"KP_Add");
   const nav=page.getByRole("navigation",{name:"Operations sections"});await expect(nav.getByRole("link",{name:"Stock",exact:true})).toHaveAttribute("aria-current","page");
   await expect(nav.getByRole("link",{name:"Support",exact:true})).toHaveAttribute("href","/support/cases/queue");await expect(nav.getByRole("link",{name:"Shipping hub"})).toHaveAttribute("href","/operations?view=hub");
   await page.getByRole("button",{name:"Filter stock"}).focus();await page.keyboard.press("Enter");
@@ -33,15 +36,29 @@ test("bounded stock drilldown, report filters and exact approval-only receipt th
   expect(page.url()).toBe(filtered);expect(await page.evaluate(()=>window.history.length)).toBe(history);
   await page.getByRole("button",{name:"Inspect H1 / FARDA-GRAPHITE"}).click();dlg=page.getByRole("dialog",{name:"Position evidence"});
   await expect(dlg).toContainText("TEST-SH-1042");await expect(dlg).toContainText("TEST-BAL-H1");await page.keyboard.press("Escape");
-  const f=await fill(page);await f.getByRole("button",{name:"Save proposal for review"}).focus();await page.keyboard.press("Enter");
+  const inspect=page.getByRole("button",{name:"Inspect H1 / FARDA-GRAPHITE"});await expect(inspect).toBeFocused();
+  await screenReaderCheckpoint(page,"stock-evidence-focus-return",inspect,["Inspect H1","button"]);
+  const f=await fill(page);await f.getByLabel("Units").fill("999");
+  await screenReaderCheckpoint(page,"stock-form-error",f.getByRole("button",{name:"Save proposal for review"}),["Units exceed available stock"],"KP_Enter",async()=>{
+    await f.getByRole("button",{name:"Save proposal for review"}).click();await expect(f.getByRole("alert")).toHaveText("Units exceed available stock.");
+  });
+  await f.getByLabel("Units").fill("8");
+  await screenReaderCheckpoint(page,"stock-proposal-status",page.getByRole("button",{name:"Request transfer",exact:true}),["recorded for human review","No source action was executed"],"KP_Enter",async()=>{
+    await f.getByRole("button",{name:"Save proposal for review"}).focus();await page.keyboard.press("Enter");
+    await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();
+  });
   await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();await expect(page.getByText("Transfer proposals awaiting review")).toBeVisible();
   await expect(table).toContainText("100");expect(app.store.database.prepare("SELECT count(*) n FROM stock_support_reviews WHERE status='recorded'").get()?.n).toBe(1);
   await page.getByRole("button",{name:"Filter stock"}).click();dlg=page.getByRole("dialog",{name:"Stock filters"});await dlg.getByLabel("Reporting period").selectOption("prior");await dlg.getByRole("button",{name:"Apply filters"}).click();await expect(table).toContainText("FARDA-GRAPHITE-2");await expect(table).toContainText("Unknown");
 });
 test("safe support case, cohort denominator, reader hold and reviewer handoff without a refund or source write",async({page})=>{
+  test.setTimeout(90_000);
   await login(page,false);await page.goto("/support/cases/TEST-ISS-021");await expect(page.getByRole("button",{name:"Request human handoff"})).toBeDisabled();
   await expect(page.getByText("60.0%",{exact:true})).toBeVisible();await expect(page.getByText("6.0%",{exact:true})).toBeVisible();
+  await screenReaderCheckpoint(page,"support-table-headers",page.getByRole("region",{name:"Handoffs that need an owner"}),["Handoffs that need an owner","Issue","Type","State","Owner"],"KP_Add");
   await page.getByRole("button",{name:"14-day cohort"}).click();await expect(page.getByRole("dialog")).toContainText("TEST-COHORT-1");await page.keyboard.press("Escape");
+  await expect(page.getByRole("button",{name:"14-day cohort"})).toBeFocused();
+  await screenReaderCheckpoint(page,"support-cohort-focus-return",page.getByRole("button",{name:"14-day cohort"}),["14","cohort","button"]);
   await login(page);await page.reload();await page.getByRole("button",{name:"Request human handoff"}).click();const f=page.getByRole("dialog",{name:"Request human handoff"});await f.getByLabel("Reason").selectOption("refund-review");await f.getByRole("button",{name:"Save proposal for review"}).click();
   await expect(page.getByRole("status").filter({hasText:"No source action was executed"})).toBeVisible();
   await expect(page.getByText("Local handoff proposals")).toBeVisible();expect(support.cases[0]!.state).toBe("Open");
