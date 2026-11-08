@@ -30,14 +30,14 @@ test("bounded stock drilldown, report filters and exact approval-only receipt th
   await expect(table).toContainText("FARDA-GRAPHITE");await expect(page.getByText("Destination receipt is overdue.",{exact:false})).toBeVisible();
   await screenReaderCheckpoint(page,"stock-table-headers",page.getByRole("region",{name:"Inventory by location"}),["Inventory by location","On hand","Reserved","Available"],"KP_Enter");
   const nav=page.getByRole("navigation",{name:"Operations sections"});await expect(nav.getByRole("link",{name:"Stock",exact:true})).toHaveAttribute("aria-current","page");
-  await expect(nav.getByRole("link",{name:"Support",exact:true})).toHaveAttribute("href","/support/cases/queue");await expect(nav.getByRole("link",{name:"Shipping hub"})).toHaveAttribute("href","/operations?view=hub");
+  await expect(nav.getByRole("link",{name:"Support",exact:true})).toHaveAttribute("href","/support/cases/queue");await expect(nav.getByRole("link")).toHaveCount(5);
   await stockFilter(page).focus();await page.keyboard.press("Enter");
   let dlg=page.getByRole("dialog",{name:"Stock filters"});await dlg.getByLabel("Home").selectOption("H1");await dlg.getByLabel("SKU").selectOption("FARDA-GRAPHITE");await dlg.getByRole("button",{name:"Apply filters"}).click();
   await expect(table.getByRole("row")).toHaveCount(2);
   const filtered=page.url(),history=await page.evaluate(()=>window.history.length);await nav.getByRole("link",{name:"Stock",exact:true}).click();
   expect(page.url()).toBe(filtered);expect(await page.evaluate(()=>window.history.length)).toBe(history);
   await page.getByRole("button",{name:"Open source for Home H1 / FARDA-GRAPHITE"}).click();dlg=page.getByRole("dialog",{name:"Position evidence"});
-  await expect(dlg).toContainText("TEST-SH-1042");await expect(dlg).toContainText("TEST-BAL-H1");await page.keyboard.press("Escape");
+  await expect(dlg).toContainText("TEST-SH-1042");await expect(dlg).toContainText("TEST-BAL-H1");await expect(dlg.getByRole("link",{name:"Shipping hub",exact:true})).toHaveAttribute("href","/operations?view=hub");await page.keyboard.press("Escape");
   const inspect=page.getByRole("button",{name:"Open source for Home H1 / FARDA-GRAPHITE"});await expect(inspect).toBeFocused();
   await screenReaderCheckpoint(page,"stock-evidence-focus-return",inspect,["Open source","H1","button"]);
   const f=await fill(page);await f.getByLabel("Units").fill("999");
@@ -113,13 +113,29 @@ test("dropped before service: verified absence unlocks only an exact retry and s
   const f=await fill(page);const dropped=page.waitForResponse(r=>r.request().method()==="POST"&&new URL(r.url()).pathname==="/v1/action"&&r.status()===502);
   await f.getByRole("button",{name:"Save proposal for review"}).click();await dropped;await expect(page.getByText("Proposal outcome unverified. Reconcile the exact request before continuing.")).toBeVisible();
   expect(app.store.database.prepare("SELECT count(*) n FROM stock_support_reviews").get()?.n).toBe(0);
-  await page.reload();stock.coverage="partial";await page.getByRole("button",{name:"Reconcile exact request"}).click();await expect(page.getByText("The exact request receipt could not be verified. Further proposals are held.")).toBeVisible();
+  await page.reload();
+  // A new display filter must not hide or rebase the uncertain request's original parameters.
+  await stockFilter(page).click();const changedScope=page.getByRole("dialog",{name:"Stock filters"});
+  await changedScope.getByLabel("Home").selectOption("H2");await changedScope.getByRole("button",{name:"Apply filters"}).click();
+  await expect(stockFilter(page)).toHaveText("Home H2");await expect(page.getByRole("table",{name:"Inventory by location"}).getByRole("row")).toHaveCount(2);
+  await openInventory(page);await expect(page.getByRole("button",{name:"Request transfer",exact:true})).toBeDisabled();
+  await page.getByRole("button",{name:"Close evidence",exact:true}).click();await expect(page.getByRole("button",{name:"Reconcile exact request",exact:true})).toBeVisible();expect(writes).toHaveLength(1);
+  stock.coverage="partial";await page.getByRole("button",{name:"Reconcile exact request"}).click();await expect(page.getByText("The exact request receipt could not be verified. Further proposals are held.")).toBeVisible();
   stock.coverage="complete";await page.getByRole("button",{name:"Reconcile exact request"}).click();await page.getByRole("button",{name:"Review original request"}).click();
-  const retry=page.getByRole("dialog",{name:"Request transfer"});await retry.getByLabel("From",{exact:true}).selectOption("H1");await retry.getByLabel("To",{exact:true}).selectOption("H2");await retry.getByLabel("Units").fill("7");await retry.getByLabel("Reason").selectOption("rebalance");
+  const retry=page.getByRole("dialog",{name:"Request transfer"});
+  await expect(retry.getByLabel("From",{exact:true})).toHaveValue("H1");
+  await expect(retry.getByLabel("From",{exact:true}).locator('option[value="H1"]')).toHaveText("H1");
+  await expect(retry.getByLabel("Units")).toHaveValue("8");await expect(retry.getByLabel("To",{exact:true})).toHaveValue("H2");
+  expect(writes).toHaveLength(1);
+  await retry.getByLabel("From",{exact:true}).selectOption("H1");await retry.getByLabel("To",{exact:true}).selectOption("H2");await retry.getByLabel("Units").fill("7");await retry.getByLabel("Reason").selectOption("rebalance");
   await retry.getByRole("button",{name:"Save proposal for review"}).click();await expect(retry.getByRole("alert")).toContainText("original request parameters");expect(writes).toHaveLength(1);
   await retry.getByLabel("Units").fill("8");await retry.getByRole("button",{name:"Save proposal for review"}).click();await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();
   expect(writes).toHaveLength(2);expect(writes[1]?.idempotencyKey).toBe(writes[0]?.idempotencyKey);expect(writes[1]?.expectedVersion).toBe(writes[0]?.expectedVersion);expect(writes[1]?.payload).toEqual(writes[0]?.payload);
-  stock.scope={...scope,accountId:"elsewhere"};await page.reload();await expect(page.getByRole("table",{name:"Inventory by location"})).toHaveCount(0);await expect(page.getByRole("alert").first()).toBeVisible();
+  // Once the original request is resolved, a new proposal remains restricted to the current home.
+  await openInventory(page);await page.getByRole("button",{name:"Request transfer",exact:true}).click();
+  const fresh=page.getByRole("dialog",{name:"Request transfer",exact:true});await expect(fresh.getByLabel("From",{exact:true})).toHaveValue("H2");
+  await expect(fresh.getByLabel("From",{exact:true}).locator('option[value="H1"]')).toHaveCount(0);expect(writes).toHaveLength(2);
+  stock.scope={...scope,accountId:"elsewhere"};await page.reload();await expect(page.getByRole("table",{name:"Inventory by location"})).toHaveCount(0);await expect(page.getByRole("dialog",{name:"Request transfer",exact:true})).toHaveCount(0);await expect(page.getByRole("button",{name:"Reconcile exact request",exact:true})).toHaveCount(0);await expect(page.getByRole("alert").first()).toBeVisible();
 });
 
 test("a lost request for a now-historical period gets a sealed stale no-op before an intentional rebase",async({page})=>{

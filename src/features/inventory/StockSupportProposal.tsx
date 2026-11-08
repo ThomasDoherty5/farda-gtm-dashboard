@@ -117,7 +117,7 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
       {pending&&<p>Original source version {pending.base}. {"windowRef" in pending.payload?"Reporting period "+pending.payload.windowRef+".":""} Only this original request can be retried.</p>}
       <form className={styles.form} onSubmit={e=>{e.preventDefault();void submit();}}>
         {stock&&<><SelectField label="SKU" value={sku} onChange={setSku} options={options([...new Set([...(data.selected.sku?[data.selected.sku]:data.skus),...(sku?[sku]:[])])])} />
-        <SelectField label="From" value={from} onChange={setFrom} options={options(data.selected.home?[data.selected.home]:["H1","H2","H3"])} />
+        <SelectField label="From" value={from} onChange={setFrom} options={options([...new Set([...(data.selected.home?[data.selected.home]:["H1","H2","H3"]),...(pending&&"from" in pending.payload?[pending.payload.from]:[])])])} />
         <SelectField label="To" value={to} onChange={setTo} options={options(["H1","H2","H3"])} /><TextField label="Units" value={units} onChange={setUnits}/></>}
         <SelectField label="Reason" value={reason} onChange={setReason} options={options(stock?reasons.transfer:reasons.support)} />
         {invalid&&<p role="alert">{invalid}</p>}{action.error&&<ActionError error={action.error}/>}

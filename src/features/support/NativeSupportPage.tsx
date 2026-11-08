@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link,useParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
-import { Button } from "@/components/Button";
+import { Button,LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { Kpi,KpiRow } from "@/components/Kpi";
 import { BarRows,Divider,FactList,FlatTable,HalfColumns,Notice,PageHeader,Panel,TwoColumns } from "@/components/Panels";
@@ -27,7 +27,7 @@ export function NativeSupportPage(){
       <PageHeader id="support-title" title="Support & returns" subtitle="Keep the handoff clear. Keep customer details in the owning support system.">
         <Button variant="secondary" style={{minWidth:160}} aria-haspopup="dialog" onClick={()=>setDialog("cohort")}>14-day cohort</Button>
         <Button style={{minWidth:190}} aria-haspopup="dialog" onClick={()=>setDialog("case")}>Open source case</Button>
-      </PageHeader><OpsTabs current="support"/>
+      </PageHeader><OpsTabs current="support" includeHub={false}/>
       <Notice tone={d.coverage==="partial"||d.stale?"warning":"violet"} label="Source" title="Only safe operational fields are mirrored">Case and order references, issue category, owner and outcome. Observed {d.observedAt}.</Notice>
       {d.pending.total>0&&<Panel title="Local handoff proposals" subtitle={d.pending.rows.length+" of "+d.pending.total+" recorded for review"}>{d.pending.rows.map(r=><p key={r.id}>{r.id} · {r.reasonCode}</p>)}</Panel>}
       <KpiRow><Kpi label="All-time open queue" context={(co?.open??"Unknown")+" open in the 14-day cohort"}>{d.allTimeOpen??"Unknown"}</Kpi>
@@ -41,14 +41,14 @@ export function NativeSupportPage(){
           {c?<><FactList label="Case" rows={[["Status",c.state],["Linked shipment",c.shipmentRef??"Unknown"],["Owner",c.owner],["Last updated",c.updatedAt]]}/><Divider/><p className={styles.label}>Next step</p><p className={styles.body}>Confirm any reply, refund or replacement in the source support workspace. A decision is complete only after its source receipt is recorded.</p><Button style={{minWidth:222,alignSelf:"flex-start"}} aria-haspopup="dialog" onClick={()=>setDialog("case")}>View conversation</Button><p className={styles.small}>Conversation access is resolved from the exact source case; this mirror does not contain message text or reply authority.</p></>:<p>Select an issue to inspect its assignment, source and permitted handoff.</p>}
         </Panel></TwoColumns>
       <HalfColumns><Panel title="What people need help with" subtitle={n===null?"Cohort ticket breakdown unavailable":"14-day cohort · "+n+" tickets"}>
-        {co?.tickets?<BarRows label="Tickets by type" max={Math.max(1,...Object.values(co.tickets))} rows={Object.entries(co.tickets).map(([label,value])=>({label:({setup:"Setup / pairing",shipping:"Shipping",returns:"Returns",hardware:"Hardware"} as Record<string,string>)[label]??label,value}))}/>:<p>Category counts are unknown.</p>}</Panel>
-        <Panel title="After a handoff" subtitle="Source-confirmed subsets in the same cohort"><FactList label="After a handoff" rows={[["Refunded",co?.refundedOrders==null?"Unknown":"Amount unknown · "+co.refundedOrders+" orders"],["Replacement sent",co?.replacements==null?"Unknown":co.replacements+" shipments"],["Reviews received","Unknown · no review receipt supplied"],["Support load",n===null||co?.delivered==null?"Unknown":co.delivered===0?"N/A":Math.round(100*n/co.delivered)+" tickets / 100 delivered"]]}/></Panel></HalfColumns>
+        {co?.tickets?<BarRows label="Tickets by type" max={Math.max(20,...Object.values(co.tickets))} rows={Object.entries(co.tickets).map(([label,value])=>({label:({setup:"Setup / pairing",shipping:"Shipping",returns:"Returns",hardware:"Hardware"} as Record<string,string>)[label]??label,value}))}/>:<p>Category counts are unknown.</p>}</Panel>
+        <Panel title="After a handoff" subtitle="Source-confirmed subsets in the same cohort"><FactList wide label="After a handoff" rows={[["Refunded",co?.refundedOrders==null?"Unknown":"Amount unknown · "+co.refundedOrders+" orders"],["Replacement sent",co?.replacements==null?"Unknown":co.replacements+" shipments"],["Reviews received","Unknown · no review receipt supplied"],["Support load",n===null||co?.delivered==null?"Unknown":co.delivered===0?"N/A":Math.round(100*n/co.delivered)+" tickets / 100 delivered"]]}/></Panel></HalfColumns>
       <Dialog open={dialog==="cohort"} title="The 14-day cohort" onClose={()=>setDialog(null)}>
         <p>{co?co.start+" through "+co.end+" · "+co.timezone+" · receipt "+co.receipt:"No matched support and delivery cohort has been verified."}</p>
         <p>All-time open includes cases outside the 14-day period.</p><Button onClick={()=>setDialog(null)}>Close cohort</Button></Dialog>
       <Dialog open={dialog==="case"} title="Support source handoff" onClose={()=>setDialog(null)}>
         <p>{c?"Use the source case reference "+c.sourceRef+" in the authorized support workspace.":"Select a case in the queue first."}</p>
-        <p>No verified external conversation link was supplied. Replies, refunds and replacements remain with their source owners.</p>{c&&<><FactList label="Source case evidence" rows={[["Source case",c.sourceRef],["Order",c.orderRef??"Unknown"],["Shipment",c.shipmentRef??"Unknown"],["Return",c.returnRef??"Unknown"]]}/><div ref={setProposalTarget}/></>}
+        <p>No verified external conversation link was supplied. Replies, refunds and replacements remain with their source owners.</p>{c&&<><FactList label="Source case evidence" rows={[["Source case",c.sourceRef],["Order",c.orderRef??"Unknown"],["Shipment",c.shipmentRef??"Unknown"],["Return",c.returnRef??"Unknown"]]}/><LinkButton variant="secondary" to="/operations?view=hub">Shipping hub</LinkButton><div ref={setProposalTarget}/></>}
         <Button onClick={()=>setDialog(null)}>Close handoff</Button></Dialog>
       <StockSupportProposal key={caseId} data={d} res={res} portalTarget={proposalTarget} hideTrigger={true}/>
     </>;

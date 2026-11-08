@@ -223,26 +223,28 @@ export function HandoffDialog({ open, onClose, title, rows, children, action }: 
 
 /**
  * A filter that lives in the URL. The button shows the current choice, only allowed values are offered, and choosing
- * applies at once so Back restores the previous choice. It never writes to a source.
+ * applies at once by default. Native remote lists opt into committing on Done so changing the query cannot unmount
+ * an open choice dialog; Escape discards that draft. The owner retains URL history. It never writes to a source.
  */
-export function ChoiceButton({ legend, title, options, value, onChange, width, buttonLabel }: { legend: string; title: string; options: { value: string; label: string }[]; value: string; onChange: (value: string) => void; width?: number; buttonLabel: (current: { value: string; label: string }) => string }) {
+export function ChoiceButton({ legend, title, options, value, onChange, width, buttonLabel, applyOnDone = false }: { legend: string; title: string; options: { value: string; label: string }[]; value: string; onChange: (value: string) => void; width?: number; buttonLabel: (current: { value: string; label: string }) => string; applyOnDone?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
   const group = useId();
   const current = options.find((o) => o.value === value) ?? options[0]!;
   return (
     <>
-      <Button variant="secondary" aria-haspopup="dialog" style={width ? { minWidth: width } : undefined} onClick={() => setOpen(true)}>{buttonLabel(current)}</Button>
+      <Button variant="secondary" aria-haspopup="dialog" style={width ? { minWidth: width } : undefined} onClick={() => { setDraft(value); setOpen(true); }}>{buttonLabel(current)}</Button>
       <Dialog open={open} title={title} onClose={() => setOpen(false)}>
         <fieldset className={styles.options}>
           <legend>{legend}</legend>
           {options.map((o) => (
             <label key={o.value} className={styles.option} htmlFor={`${group}-${o.value}`}>
-              <input id={`${group}-${o.value}`} type="radio" name={group} checked={o.value === current.value} onChange={() => onChange(o.value)} />
+              <input id={`${group}-${o.value}`} type="radio" name={group} checked={o.value === (applyOnDone ? draft : current.value)} onChange={() => applyOnDone ? setDraft(o.value) : onChange(o.value)} />
               {o.label}
             </label>
           ))}
         </fieldset>
-        <Button onClick={() => setOpen(false)}>Done</Button>
+        <Button onClick={() => { setOpen(false); if (applyOnDone && draft !== value) onChange(draft); }}>Done</Button>
       </Dialog>
     </>
   );

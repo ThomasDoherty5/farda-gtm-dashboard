@@ -19,6 +19,7 @@
 .sections li > a { width: 100%; }
 .profile { min-width: 44px; min-height: 44px; padding: 0; text-align: left; background: none; border: 0; border-radius: var(--space-999); font: var(--text-label); color: var(--color-onDark); cursor: pointer; }
 .sourceWorkspace, .sourceProfile { display: none; }
+.sourceWorkspace { width: 132px; flex: 0 0 132px; }
 /* These original source frames reserve the desktop environment chip and profile slots.
    Native values come from the authenticated scope; the design's demo identity is never reused. */
 @media (min-width: 1180px) {
