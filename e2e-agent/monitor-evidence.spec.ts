@@ -185,8 +185,8 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
       {...basis,receipt:"synthetic-metric-latest",views:150}
     ];
     await page.goto("/content?network=instagram");await page.getByRole("region",{name:"Saved campaign posts"}).getByRole("link").first().click();
-    const chart=page.getByRole("region",{name:"Views gained since publication",exact:true});
-    await expect(chart.getByRole("img")).toHaveAttribute("aria-label",/100 views;.*50 views/);
+    const chart=page.getByRole("img",{name:/100 views;.*50 views/});
+    await expect(chart).toBeVisible();await expect(chart).toHaveAttribute("aria-label",/100 views;.*50 views/);
     await expect(chart).toContainText("100");await expect(chart).toContainText("50");
     await expect(page.getByRole("link",{name:"Open source post",exact:true})).toHaveAttribute("href",measured.originalUrl!);
     await capture("post-measured","One post. Its evidence and impact.");
