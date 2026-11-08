@@ -99,7 +99,8 @@ export function Shell() {
           <span className={styles.spacer} />
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
           {!demo && <span className={styles.sourceWorkspace}><Badge tone="violet" width={132} testId="source-workspace">{scope.environment === "sandbox" ? "Sandbox" : "Production"}</Badge></span>}
-          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : <><span className={styles.nativeMenuText}>Menu</span><span className={styles.sourceProfile}>{principalMark}</span></>}</button>
+          {/* The accessible name starts with the visible initials (WCAG 2.5.3, axe label-content-name-mismatch). Where the native "Menu" text shows instead, the name still contains it. */}
+          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label={`${demo ? "TD" : principalMark}, open workspace menu`} onClick={() => setMenuOpen(true)}>{demo ? "TD" : <><span className={styles.nativeMenuText}>Menu</span><span className={styles.sourceProfile}>{principalMark}</span></>}</button>
           <nav aria-label="Breadcrumb" className={styles.crumbs}>
             <ol>
               {crumbs.map((c, i) => (
