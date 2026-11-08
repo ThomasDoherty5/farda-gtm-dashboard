@@ -46,13 +46,13 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    // https://help.gnome.org/orca/howto_forms.html
    expect(tableOrdinal).toBeGreaterThan(0);
    let mode="";
-   for(let attempt=0;attempt<2&&mode!=="Browse mode";attempt++){
+   for(let attempt=0;attempt<3&&mode!=="Browse mode";attempt++){
      const modeOffset=statSync(log).size;
      await press("KP_Insert+a");
      // Orca treats a rapid second press as sticky mode, not another toggle.
      await new Promise(resolve=>setTimeout(resolve,1000));
      await expect.poll(()=>{
-       mode=[...readFileSync(log).subarray(modeOffset).toString("utf8").matchAll(/SPEECH OUTPUT: '(Browse mode|Focus mode)'/g)].at(-1)?.[1]??"";
+       mode=[...readFileSync(log).subarray(modeOffset).toString("utf8").matchAll(/SPEECH OUTPUT: '(Browse mode|Focus mode)(?: is sticky\.)?'/g)].at(-1)?.[1]??"";
        return mode;
      },{timeout:5000,message:"Actual Orca browse/focus mode announcement"}).toMatch(/^(Browse|Focus) mode$/);
    }
