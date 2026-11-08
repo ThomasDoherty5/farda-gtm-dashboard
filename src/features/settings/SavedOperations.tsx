@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { scopeKey, useScope } from "@/adapter/scope";
 import { useSearchParams } from "react-router-dom";
 import type { SavedBinding, SavedBindings, SavedRuns } from "@/creator-agent/operationsView";
@@ -20,14 +20,15 @@ function useSelection(key: string) {
   const [params, setParams] = useSearchParams();
   const ctx = useScope();
   const context = JSON.stringify([scopeKey(ctx), params.get("tab"), params.get("savedSearch"), params.get("savedState")]);
-  const previous = useRef(context);
-  const changed = previous.current !== context;
+  // A selection carried across a tab, search, state or scope change is withheld until the URL drops it.
+  const [previous, setPrevious] = useState(context);
+  const [carried, setCarried] = useState(false);
+  if (previous !== context) { setPrevious(context); setCarried(params.has(key)); }
+  else if (carried && !params.has(key)) setCarried(false);
   useEffect(() => {
-    if (previous.current === context) return;
-    previous.current = context;
-    if (params.has(key)) setParams(p => { const next = new URLSearchParams(p); next.delete(key); return next; }, {replace:true});
-  }, [context, key, params, setParams]);
-  return { id: changed ? null : params.get(key), select: (id: string | null) => {
+    if (carried) setParams(p => { const next = new URLSearchParams(p); next.delete(key); return next; }, {replace:true});
+  }, [carried, key, setParams]);
+  return { id: carried || previous !== context ? null : params.get(key), select: (id: string | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set(key, id); else next.delete(key);
     setParams(next, { replace: id === null });
