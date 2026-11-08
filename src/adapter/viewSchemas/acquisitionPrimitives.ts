@@ -8,7 +8,7 @@
  * coerced to 0 here, and 0 is never accepted as a stand-in for a missing value.
  */
 import { z } from "zod";
-import { moneySchema } from "../contract";
+import { moneySchema } from "../contract.ts";
 
 /** A count of things: a whole number, zero or more. */
 export const count = z.number().int().nonnegative();
