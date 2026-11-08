@@ -41,7 +41,7 @@ Page counts describe the returned page. A final page remains partial when it rep
 
 The source lease cannot exceed the server's ninety-minute monitoring age ceiling, even if the supplied expiry is longer. It is checked after awaited reads and bounds continuation expiry. Review/message detail observations have their own ninety-minute ceiling; refreshing an outer snapshot does not refresh older detail. Denied or expired details are withheld, while known ambiguous claims retain their identity-review hold. Changes to source facts or detail expiry invalidate continuation. Open dialogs retain selection keys, not private copied rows, so revalidation removes revoked details.
 
-Native screens use tables for sparse source measurements. The original fixture charts remain in the explicitly labeled demo route. This prevents a missing timeseries from becoming a fabricated curve. Long evidence references wrap within horizontally scrollable, labeled table regions on narrow screens.
+Native screens retain the original source layout, shared tabs, filters, cards and chart slots. A missing aggregate timeseries stays explicitly unknown. Post detail renders growth bars only for consecutive, comparable cumulative measurements; missing or revised counters never become zero growth. Source observations remain available in a labeled table alongside the chart alternative. Demo illustrations stay separate from native data. Long evidence references wrap within horizontally scrollable, labeled table regions on narrow screens.
 
 ## Verification
 
