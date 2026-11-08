@@ -13,6 +13,27 @@ function setup(edit?:(snapshot:SettlementSnapshot)=>void){const db=new DatabaseS
   const source:SettlementSource={...fixture.source,async read(request){const s=await fixture.source.read(request) as SettlementSnapshot;edit?.(s);return s;}};
   const reader=createSettlementReader({db,scope,secret:"fictional-private-reference-key",bindings:{source},now:fixture.now});return{db,...fixture,source,reader};}
 describe("native settlement source projection",()=>{
+  it("withdraws a shorter permissioned source-link lease before publication even when the snapshot is still current",async()=>{
+    const w=setup(snapshot=>{snapshot.synthetic=false;const record=snapshot.records[0]!;record.links=[{kind:"order",targetRef:record.orderRef,state:"verified",url:"https://commerce.example.test/orders/fictional",observedAt:snapshot.observedAt,validUntil:new Date(Date.parse(snapshot.observedAt)+1000).toISOString()}];});
+    const reader=createSettlementReader({db:w.db,scope,secret:"fictional-private-reference-key",bindings:{source:w.source,permittedLinkOrigins:["https://commerce.example.test"]},now:w.now});
+    const result=await reader.read("commissionLedger",{},actor);if(result.data.kind!=="native-commission-ledger")throw Error();
+    expect(result.data.records[0]!.links[0]!.state).toBe("verified");expect(Date.parse(result.data.source.validUntil!)).toBe(w.now()+1000);
+    w.state.now+=1001;expect(()=>result.assertCurrent()).toThrow("SETTLEMENT_SOURCE_LINK_EXPIRED");
+  });
+  it("preserves whole-snapshot state balances on a one-record page instead of aggregating its rows",async()=>{
+    const w=setup(snapshot=>{const fact=(minorUnits:number)=>({state:"known" as const,value:{minorUnits,currency:"USD" as const},evidenceRef:"fictional-whole-snapshot-balance",observedAt:snapshot.observedAt,reasonCode:null});
+      snapshot.stateTotals={held:fact(10000),disputed:fact(2000),awaitingProvider:fact(3000),paid:fact(7000)};});
+    const result=await w.reader.read("commissionLedger",{},actor,{cursor:null,limit:1});
+    if(result.data.kind!=="native-commission-ledger")throw Error();
+    expect(result.data.records).toHaveLength(1);expect(result.data.stateTotals?.held.value?.minorUnits).toBe(10000);
+    expect(result.data.stateTotals?.paid.value?.minorUnits).toBe(7000);expect(result.data.records[0]!.balances.creatorPaid.value?.minorUnits).toBe(9000);
+    expect(JSON.stringify(result.data.stateTotals)).not.toContain("fictional-whole-snapshot-balance");
+  });
+  it.each(["partial","negative","future"] as const)("rejects %s whole-snapshot state balances",async invalid=>{
+    const w=setup(snapshot=>{const fact={state:"known" as const,value:{minorUnits:invalid==="negative"?-1:100,currency:"USD" as const},evidenceRef:"fictional-balance",observedAt:invalid==="future"?new Date(Date.parse(snapshot.observedAt)+1).toISOString():snapshot.observedAt,reasonCode:null};
+      snapshot.stateTotals={held:fact,disputed:fact,awaitingProvider:fact,paid:fact};if(invalid==="partial"){snapshot.complete=false;snapshot.state="partial";}});
+    await expect(w.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_STATE_TOTALS_UNVERIFIED"});
+  });
   it("retains a final publication fence after the read and refuses a changed principal",async()=>{
     const w=setup(),result=await w.reader.read("commissionLedger",{},actor);w.state.denied=true;expect(()=>result.assertCurrent()).toThrow();
     const other=setup(s=>{s.principalRef="another-principal";});await expect(other.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({status:403});

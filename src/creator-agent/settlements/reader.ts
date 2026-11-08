@@ -73,8 +73,8 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       if (s.currency && r.currency !== s.currency) fail("SETTLEMENT_CURRENCY_MISMATCH", 502);
       if (s.viewKey === "payableDetail" && (r.provider !== "externalManual" || !r.historical || r.historical.payoutOwner !== "externalManual") ||
         s.viewKey === "settlementDetail" && r.provider === "externalManual") fail("SETTLEMENT_OWNER_MISMATCH", 502);
-      const monies = [r.eligibleBase, r.grossSales, r.fee, ...Object.values(r.balances)];
-      for (const fact of monies) if (fact.state === "known" && (fact.value.currency !== r.currency || Date.parse(fact.observedAt) > observed)) fail("SETTLEMENT_FACT_INVALID", 502);
+      const monies = [r.grossEarned,r.reversed,r.netAccrued, r.eligibleBase, r.grossSales, r.fee, ...Object.values(r.balances)];
+      for (const fact of monies) if (fact?.state === "known" && (fact.value.currency !== r.currency || Date.parse(fact.observedAt) > observed)) fail("SETTLEMENT_FACT_INVALID", 502);
       for (const key of balanceKeys.filter(k => k !== "adjusted")) if (r.balances[key].state === "known" && r.balances[key].value!.minorUnits < 0) fail("SETTLEMENT_BALANCE_INVALID", 502);
       for (const rate of [r.commissionRatePct, r.feeRatePct, ...r.rates.flatMap(v => [v.activePct, v.proposedPct])])
         if (rate.state === "known" && (rate.value < 0 || rate.value > 100 || Date.parse(rate.observedAt) > observed)) fail("SETTLEMENT_RATE_INVALID", 502);
@@ -94,10 +94,11 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       if(r.accounting.state!=="unknown" && r.accounting.state!=="unposted" && (!r.accounting.evidenceRef || !r.accounting.qboRef)) fail("SETTLEMENT_ACCOUNTING_INVALID",502);
     }
     for(const fact of Object.values(s.totals)) if(fact.state==="known" && (!s.complete || !s.currency || fact.value.currency!==s.currency || Date.parse(fact.observedAt)>observed || s.total===0 && fact.value.minorUnits!==0)) fail("SETTLEMENT_TOTALS_UNVERIFIED",502);
+    if(s.stateTotals)for(const value of Object.values(s.stateTotals))if(value.state==="known" && (!s.complete || !s.currency || value.value.currency!==s.currency || value.value.minorUnits<0 || Date.parse(value.observedAt)>observed || s.total===0&&value.value.minorUnits!==0))fail("SETTLEMENT_STATE_TOTALS_UNVERIFIED",502);
     if(s.economics) {
       const e=s.economics;
       if(!s.complete || !s.currency || Date.parse(e.periodStart)>=Date.parse(e.periodEnd))fail("SETTLEMENT_ECONOMICS_UNVERIFIED",502);
-      for(const value of [e.grossSales,e.refunds,e.netRevenue,e.creatorCommissions,e.providerFees,e.fulfillmentCost,e.sampleCost,e.contribution])
+      for(const value of [...Object.values(e.waterfall??{}),e.grossSales,e.refunds,e.netRevenue,e.creatorCommissions,e.providerFees,e.fulfillmentCost,e.sampleCost,e.contribution])
         if(value.state==="known" && (value.value.currency!==s.currency || Date.parse(value.observedAt)>observed))fail("SETTLEMENT_ECONOMICS_UNVERIFIED",502);
       if(e.eligibleOrders.state==="known" && (!Number.isSafeInteger(e.eligibleOrders.value) || e.eligibleOrders.value<0 || Date.parse(e.eligibleOrders.observedAt)>observed))fail("SETTLEMENT_ECONOMICS_UNVERIFIED",502);
     }
@@ -115,6 +116,7 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       collaborationRef: a("collaboration",r.collaborationRef), budgetCategory:r.budgetCategory?fact(r.budgetCategory):null,
       accountRef: alias("account", r.accountRef), creatorRef: alias("creator", r.creatorRef), programmeRef: alias("programme", r.programmeRef), programmeVersion: alias("version", r.programmeVersion),
       componentRef: alias("component", r.componentRef), orderRef: a("order", r.orderRef), nativeRef: a("native", r.nativeRef),
+      grossEarned:r.grossEarned?fact(r.grossEarned):null,reversed:r.reversed?fact(r.reversed):null,netAccrued:r.netAccrued?fact(r.netAccrued):null,
       eligibleBase: fact(r.eligibleBase), grossSales: fact(r.grossSales), fee: fact(r.fee), commissionRatePct: fact(r.commissionRatePct), feeRatePct: fact(r.feeRatePct),
       balances: Object.fromEntries(balanceKeys.map(k => [k, fact(r.balances[k])])) as SettlementRecord["balances"],
       facts: r.facts.map(v => ({...v,ref:alias("event",v.ref),evidenceRef:alias("evidence",v.evidenceRef),nativeRef:a("native",v.nativeRef)})),
@@ -168,20 +170,21 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       const parsed=principalGrantSchema.safeParse(await bounded(()=>bindings.authority!.resolve(principal.principalRef,scope),signal));
       if(parsed.success){try{assertGrant(parsed.data,principal);grant=freeze(parsed.data);}catch{ /* Read access does not confer named action authority. */ }}
     }
+    const records=s?.records.map(r=>project(r,loaded.suppliedRef,s?.synthetic))??[];
+    const linkDeadlines=records.flatMap(record=>record.links.filter(link=>link.state==="verified"&&link.url&&link.validUntil).map(link=>Date.parse(link.validUntil!)));
     const sourceExpired=Boolean(s && (Date.parse(s.validUntil)<=now() || now()-Date.parse(s.observedAt)>maxAge));
-    const assertCurrent=()=>{if(!sourceExpired && s && (Date.parse(s.validUntil)<=now() || now()-Date.parse(s.observedAt)>maxAge))fail("SETTLEMENT_SNAPSHOT_CHANGED");if(signal?.aborted)fail("REQUEST_CANCELLED",499);if(s)assert(s,principal);if(grant)assertGrant(grant,principal);};
+    const assertCurrent=()=>{if(linkDeadlines.some(deadline=>deadline<=now()))fail("SETTLEMENT_SOURCE_LINK_EXPIRED");if(!sourceExpired && s && (Date.parse(s.validUntil)<=now() || now()-Date.parse(s.observedAt)>maxAge))fail("SETTLEMENT_SNAPSHOT_CHANGED");if(signal?.aborted)fail("REQUEST_CANCELLED",499);if(s)assert(s,principal);if(grant)assertGrant(grant,principal);};
     const canAct=Boolean(grant && (grant.roles.includes("founder") || grant.roles.includes("finance")));
     const stale=Boolean(s && (s.state==="stale" || Date.parse(s.validUntil)<=now() || now()-Date.parse(s.observedAt)>maxAge)),partial=!s || !s.complete || s.state==="partial";
     const version=s?alias("snapshot",s.version):"settlement-unconfigured",observedAt=new Date(now()).toISOString();
     const common={version,source:{state:!s?"unconfigured" as const:stale?"stale" as const:partial?"partial" as const:"current" as const,
-      observedAt:s?.observedAt??null,sourceUpdatedAt:s?.sourceUpdatedAt??null,validUntil:s?.validUntil??null,revision:s?alias("revision",s.version):null,
+      observedAt:s?.observedAt??null,sourceUpdatedAt:s?.sourceUpdatedAt??null,validUntil:s?new Date(Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+maxAge,...linkDeadlines)).toISOString():null,revision:s?alias("revision",s.version):null,
       reasonCodes:!s?["SOURCE_UNCONFIGURED" as const]:stale?["SOURCE_STALE" as const]:partial?["SOURCE_PARTIAL" as const]:[],synthetic:s?.synthetic??false},
       accountingPolicy:s?{...s.accountingPolicy,reference:s.accountingPolicy.reference?alias("policy",s.accountingPolicy.reference):null}:{state:"unknown" as const,reference:null},
       capabilities:{match:Boolean(s && !stale && !partial && canAct && bindings.matching),export:Boolean(s && !stale && !partial && canAct && bindings.ledger && s.export && (!(("provider" in loaded.filters)&&loaded.filters.provider&&loaded.filters.provider!=="all")) && s.currency===s.export.filters.currency),pay:false as const}};
-    const records=s?.records.map(r=>project(r,loaded.suppliedRef,s?.synthetic))??[];
     let data:SettlementRead["data"];
-    if(viewKey==="commissionLedger")data=nativeCommissionLedgerSchema.parse({...common,kind:"native-commission-ledger",currency:s?.currency??null,records,
-      coverage:{returned:records.length,total:s?.total??null,complete:Boolean(s?.complete)},economics:s?.economics?{...s.economics,cohortRef:alias("cohort",s.economics.cohortRef),...Object.fromEntries(Object.entries(s.economics).filter(([,v])=>v && typeof v==="object").map(([k,v])=>[k,fact(v as {evidenceRef:string|null})]))}:null,totals:s?Object.fromEntries(Object.entries(s.totals).map(([k,v])=>[k,fact(v)])):unknownTotals,
+    if(viewKey==="commissionLedger")data=nativeCommissionLedgerSchema.parse({...common,kind:"native-commission-ledger",currency:s?.currency??null,records,stateTotals:s?.stateTotals?Object.fromEntries(Object.entries(s.stateTotals).map(([k,v])=>[k,fact(v)])):null,
+      coverage:{returned:records.length,total:s?.total??null,complete:Boolean(s?.complete)},economics:s?.economics?{...s.economics,cohortRef:alias("cohort",s.economics.cohortRef),waterfall:s.economics.waterfall?Object.fromEntries(Object.entries(s.economics.waterfall).map(([k,v])=>[k,fact(v)])):null,...Object.fromEntries(Object.entries(s.economics).filter(([k,v])=>v && typeof v==="object" && k!=="waterfall").map(([k,v])=>[k,fact(v as {evidenceRef:string|null})]))}:null,totals:s?Object.fromEntries(Object.entries(s.totals).map(([k,v])=>[k,fact(v)])):unknownTotals,
       export:s?.export && (!("provider" in loaded.filters)||!loaded.filters.provider||loaded.filters.provider==="all") && s.currency===s.export.filters.currency?{...s.export,sourceVersion:alias("export-version",s.export.sourceVersion)}:null});
     else data=(viewKey==="payableDetail"?nativePayableSchema:nativeSettlementSchema).parse({...common,kind:viewKey==="payableDetail"?"native-payable":"native-settlement",record:records[0]??null});
     const nextCursor=s?.nextCursor?sealOperationsToken(scope,secret,"settlement-cursor.v1",{context:loaded.context,cursor:s.nextCursor,snapshot:s.snapshotRef,version:s.version,total:s.total,offset:s.offset+s.records.length,expires:Math.min(Date.parse(s.validUntil),now()+900_000)}):null;

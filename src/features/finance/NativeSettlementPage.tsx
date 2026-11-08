@@ -10,7 +10,7 @@ import { Dialog } from "@/components/Dialog";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { ContextCard, FactList, PageHeader, Panel } from "@/components/Panels";
 import { RecordShell } from "@/features/operations/RecordShell";
-import { FinanceGrant, FinancialEvidenceDialog, FinanceSourceLink, moneyFact, NativeFinanceTabs, observed, reasonText, stateText } from "./NativeFinance";
+import { displayReference, FinanceGrant, FinancialEvidenceDialog, NativeMoneyKpi, FinanceSourceLink, moneyFact, NativeFinanceTabs, observed, reasonText, stateText } from "./NativeFinance";
 import { SettlementMatchDialog } from "./NativeStatementMatch";
 import { NativeTikTokSettlement } from "./NativeTikTokSettlement";
 import styles from "./Finance.module.css";
@@ -33,14 +33,14 @@ function NativeSettlementBody({ data, record }: { data: NativeSettlement; record
 function NativeCollabsSettlement({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
   const [dialog, setDialog] = useState<"match" | "evidence" | "identity" | "crosswalk" | "exceptions" | null>(null);
   return <>
-    <PageHeader id="settlement-title" title="Follow the money." subtitle={<span className={native.reference}>{record.ref} · {record.provider} · {record.accountRef}</span>}>
+    <PageHeader id="settlement-title" title="Follow the money." subtitle={<span className={native.reference}>{displayReference(record.ref)} · {record.provider} · {record.accountRef}</span>}>
       <FinanceSourceLink record={record} kind="payout" label="Open native payout" /><Button aria-haspopup="dialog" onClick={() => setDialog("match")}>Match statement</Button>
     </PageHeader>
     <NativeFinanceTabs current="payouts" payout={record} />
     <ContextCard title="Existing provider obligations" actions={<LinkButton variant="secondary" to="/creators/pipeline">Full acquisition funnel</LinkButton>}>Honor earned amounts, preserve original paid receipts and record later reversals as adjustments. Existing accepted obligations remain with their source owner.</ContextCard>
     <ContextCard title="Settlement is not a second payment">The provider owns billing and creator payout. Farda reviews the exact source evidence and accounting match; this lane cannot create a duplicate manual Pay task.</ContextCard>
     <Panel large spacious title={`${stateText[record.state]}. Accounting ${record.accounting.state}.`} subtitle="Financial events and accounting status are separate source facts." testId="native-settlement-facts">
-      <KpiRow><Kpi label="Creator cash paid" context="Independent source balance">{moneyFact(record.balances.creatorPaid)}</Kpi><Kpi label="Merchant invoice" context="Billed does not mean creator paid">{moneyFact(record.balances.billed)}</Kpi><Kpi label="Processing fee" context="Source amount; no assumed percentage">{moneyFact(record.fee)}</Kpi><Kpi label="Ledger reconciliation" context="No second commission expense or payment">{record.accounting.state}</Kpi></KpiRow>
+      <KpiRow><NativeMoneyKpi label="Creator cash paid" context="Independent source balance" fact={record.balances.creatorPaid} /><NativeMoneyKpi label="Merchant invoice" context="Billed does not mean creator paid" fact={record.balances.billed} /><NativeMoneyKpi label="Processing fee" context="Source amount; no assumed percentage" fact={record.fee} /><Kpi label="Ledger reconciliation" context="No second commission expense or payment">{record.accounting.state}</Kpi></KpiRow>
       <div className={styles.lanes}>
         <section className={styles.lane} data-tone="violet" aria-labelledby="native-provider-lane"><h3 id="native-provider-lane">Provider-owned lane</h3><FactList wide labelWidth={232} gap={12} rows={[["Earned", moneyFact(record.balances.earned)], ["Held", moneyFact(record.balances.held)], ["Disputed", moneyFact(record.balances.disputed)], ["Merchant paid", moneyFact(record.balances.merchantPaid)], ["Creator paid", moneyFact(record.balances.creatorPaid)]]} /><FinanceSourceLink record={record} kind="evidence" label="Inspect source receipt" /></section>
         <section className={styles.lane} data-tone="subtle" aria-labelledby="native-accounting-lane"><h3 id="native-accounting-lane">Farda accounting lane</h3><FactList wide labelWidth={237} gap={12} rows={[["Accounting policy", data.accountingPolicy.state === "verified" ? data.accountingPolicy.reference ?? "Reference not supplied" : "Unknown"], ["Cash event", moneyFact(record.balances.creatorPaid)], ["Processing fee", moneyFact(record.fee)], ["QBO posting", record.accounting.qboRef ?? "Unknown"]]} /><Button aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Review matching evidence</Button></section>

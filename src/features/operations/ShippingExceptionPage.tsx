@@ -1,3 +1,9 @@
+import { operationsEvidenceLabel } from "./nativeRead";
+import { NativeFulfillmentControl } from "./NativeFulfillmentControl";
+import { NativeEventTimeline } from "./NativeEventTimeline";
+import { OperationsSourceLink } from "./OperationsSourceLink";
+import type { NativeFulfillmentEvent } from "@/adapter/viewSchemas/nativeOperations";
+import { useScope } from "@/adapter/scope";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { AdapterError } from "@/adapter/errors";
@@ -24,17 +30,19 @@ type Choice = "refund" | "replacement";
  * path the operator chose, with an actor, a reason and the expected version. A recorded choice is queued, never an executed refund or shipment.
  */
 export function ShippingExceptionPage() {
+  const { adapter } = useScope();
+  const demo = adapter.kind === "demo";
   const { shipmentId = "", exceptionId = "" } = useParams();
-  const query = useView<{ shipmentId: string; exceptionId: string }, ShippingExceptionDetail>("shippingException", { shipmentId, exceptionId });
+  const query = useView<{ shipmentId: string; exceptionId: string }, ShippingExceptionDetail & { nativeEvents?: NativeFulfillmentEvent[]; proposalTargetRef?: string | null }>("shippingException", { shipmentId, exceptionId });
   const [source, setSource] = useState<string | null>(null);
   return (
     <RecordShell query={query} id="shipment-title" title={`Shipment ${shipmentId}`} subject="shipment exception" figma="4:317">
       {(res, e) => (
         <>
-          <PageHeader id="shipment-title" title={`Shipment ${e.shipmentRef}`} subtitle="Shipping / Exception review · Source: Shippo + warehouse">
-            <DecisionButton res={res} exception={e} />
-            <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 168 }} onClick={() => setSource("Open Shippo")}>Open Shippo</Button>
-            <Button aria-haspopup="dialog" style={{ minWidth: 210 }} onClick={() => setSource("Open the support case")}>Open support case</Button>
+          <PageHeader id="shipment-title" title={`Shipment ${e.shipmentRef}`} subtitle={demo ? "Shipping / Exception review · Source: Shippo + warehouse" : `Shipping / Exception review · ${operationsEvidenceLabel(e)}`}>
+            {demo ? <DecisionButton res={res} exception={e} /> : <NativeFulfillmentControl kind="shippingDecision" targetRef={e.proposalTargetRef ?? null} label="Record next step" />}
+            {demo ? <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 168 }} onClick={() => setSource("Open Shippo")}>Open Shippo</Button> : <OperationsSourceLink data={e} kind="shipment" targetRef={e.shipmentRef} label="Open carrier source" />}
+            {demo ? <Button aria-haspopup="dialog" style={{ minWidth: 210 }} onClick={() => setSource("Open the support case")}>Open support case</Button> : <OperationsSourceLink data={e} kind="support" targetRef={e.supportCase} label="Open support case" />}
           </PageHeader>
           <Notice tone={e.notice.tone} label={e.notice.label} title={e.notice.title} role="alert">{e.notice.text}</Notice>
           {e.decision && (
@@ -51,7 +59,7 @@ export function ShippingExceptionPage() {
           </KpiRow>
           <TwoColumns>
             <Panel title="Carrier timeline" subtitle="Event time and sync time are different" roomy>
-              <Steps label="Carrier timeline" steps={e.events} />
+              {demo ? <Steps label="Carrier timeline" steps={e.events} /> : <NativeEventTimeline events={e.nativeEvents} expected={["labelCreated", "carrierAccepted", "shipped", "delivered"]} />}
               <Divider />
               <Note>{e.postingClockNote}</Note>
             </Panel>
@@ -59,11 +67,11 @@ export function ShippingExceptionPage() {
               <FactList label="Exception ownership" rows={[["Owner", e.owner], ["Order key", e.orderKey], ["Alert", e.alert], ["Support case", e.supportCase]]} />
               <Divider />
               <ol className={styles.checklist}>{e.steps.map((step, i) => <li key={step}>{i + 1}. {step}</li>)}</ol>
-              <Button aria-haspopup="dialog" style={{ minWidth: 238, alignSelf: "flex-start" }} onClick={() => setSource("Open the case in Intercom")}>Open case in Intercom</Button>
+              {demo ? <Button aria-haspopup="dialog" style={{ minWidth: 238, alignSelf: "flex-start" }} onClick={() => setSource("Open the case in Intercom")}>Open case in Intercom</Button> : <OperationsSourceLink data={e} kind="support" targetRef={e.supportCase} label="Open source support case" />}
             </Panel>
           </TwoColumns>
           <Notice tone="violet" label="Source" title="Safe recovery">Duplicate tracking events are ignored by event key. A replacement is a new shipment, not a replay of the original label purchase.</Notice>
-          <SourceDialog open={source !== null} title={source ?? ""} url={null} onClose={() => setSource(null)} />
+          {demo && <SourceDialog open={source !== null} title={source ?? ""} url={null} onClose={() => setSource(null)} />}
         </>
       )}
     </RecordShell>
@@ -71,19 +79,22 @@ export function ShippingExceptionPage() {
 }
 
 function DecisionButton({ res, exception }: { res: ReadResponse<ShippingExceptionDetail>; exception: ShippingExceptionDetail }) {
+  const { adapter } = useScope();
   const [open, setOpen] = useState(false);
   const [choice, setChoice] = useState<Choice | null>(null);
   const [reason, setReason] = useState("");
   const action = useAction<{ shipmentRef: string; exceptionId: string; decision: Choice | null; reason: string }>();
-  const blocked = blockedReason(res, "recordShippingDecision");
+  const blocked = adapter.kind === "demo" ? blockedReason(res, "recordShippingDecision") : "An exact source-bound approval preview is not connected. No refund or replacement request can be sent.";
   const fieldErrors = action.error instanceof AdapterError ? (action.error.body.fieldErrors ?? {}) : {};
   const conflict = action.error instanceof AdapterError && action.error.category === "conflict";
 
-  const submit = () =>
+  const submit = () => {
+    if (blocked || action.isPending) return;
     action.mutate(
       { operation: "requestApproval", actionKind: "recordShippingDecision", entityRefs: [], expectedVersion: exception.version, approvalRef: null, manifestRef: null, payload: { shipmentRef: exception.shipmentRef, exceptionId: exception.exceptionId, decision: choice, reason } },
       { onSuccess: () => { setOpen(false); setChoice(null); setReason(""); } },
     );
+  };
 
   return (
     <>

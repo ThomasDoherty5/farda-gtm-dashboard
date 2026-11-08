@@ -19,6 +19,8 @@
  * Demo and native records have distinct dataset discriminants. Native evidence separately declares whether its source is synthetic.
  */
 import { z } from "zod";
+import { approvalRefSchema } from "../../creator-agent/approvals/contract.ts";
+import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema } from "./nativeOperations.ts";
 import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
 import { moneySchema, provenanceValueSchema } from "../contract.ts";
 import { receiptBackedResponse } from "./approvals.ts";
@@ -307,7 +309,7 @@ const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.
   validUntil:z.string().datetime({offset:true}).optional(), version:z.string().min(1).optional(),
 }).strict();
 function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
-  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+  return schema.extend({ ...nativeOperationsExtensions, datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
     const provenance = value.provenance;
     if (!provenance) {
       ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
@@ -321,17 +323,18 @@ function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(sch
 }
 
 export const nativeOpsReadViewSchemas: Record<string, z.ZodTypeAny> = {
-  operationsOverview: nativeRecord(operationsOverviewSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+  operationsOverview: nativeRecord(operationsOverviewSchema.innerType().extend({queue:z.object({rows:z.array(queueRow.extend({sourceFacts:nativeQueueSourceSchema})),total:count}),stock:z.array(nativeStockSummarySchema)}), "operations-native").superRefine((v, ctx) => {
     if (v.queue.rows.length > v.queue.total) ctx.addIssue({ code: "custom", path: ["queue", "total"], message: "Queue total is smaller than the rows returned" });
   }),
   orderDetail: nativeRecord(orderDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {
     if (v.kind === "sample") for (const field of ["total", "refunded"] as const)
       if (v[field].state === "known") ctx.addIssue({ code: "custom", path: [field], message: "A sample has no revenue or refund" });
   }),
-  shippingException: nativeRecord(shippingExceptionSchema, "operations-native"),
-  returnDetail: nativeRecord(returnDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+  shippingException: nativeRecord(shippingExceptionSchema.extend({proposalTargetRef:approvalRefSchema.nullable().default(null)}), "operations-native"),
+  returnDetail: nativeRecord(returnDetailSchema.innerType().extend({proposalTargetRef:approvalRefSchema.nullable().default(null),completionVerified:z.boolean().default(false)}), "operations-native").superRefine((v, ctx) => {
     if ((v.state === "resolved") !== (v.resolved !== null)) ctx.addIssue({ code: "custom", path: ["resolved"], message: "A resolved return carries its receipt chain; an active one does not" });
     if (v.selected.disposition === "restock" && !v.inspection.resellable) ctx.addIssue({ code: "custom", path: ["selected", "disposition"], message: "Restock needs a resellable inspection" });
+    if(v.inspection.units>v.units || v.resolved && (v.resolved.returnedUnits>v.units || v.resolved.restockedUnits>v.resolved.returnedUnits || v.resolved.restockedUnits>v.inspection.units || v.resolved.restockedUnits>0&&!v.inspection.resellable))ctx.addIssue({code:"custom",message:"Return quantities require consistent received and inspected source evidence."});
   }),
   fulfillmentAnalytics: nativeRecord(fulfillmentAnalyticsSchema, "operations-native"),
   operationsShipping: nativeRecord(operationsShippingSchema, "operations-native"),

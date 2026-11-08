@@ -1,3 +1,4 @@
+import { NativeOperationsGrant } from "./NativeOperationsGrant";
 import type { ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReadResponse } from "@/adapter/contract";
@@ -19,8 +20,8 @@ export function RecordShell<T>({ query, id, title, subject, figma, children }: {
       <ReadState res={query.data} subject={`This ${subject}`} only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label={`Loading ${subject}…`} />}
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
-      {res && !data && <EmptyState state="Empty" title={`No ${subject} yet`}><p>The source responded, but holds no record for this address.</p></EmptyState>}
-      {res && data && children(res, data)}
+      {res && !data && (res.dataState === "empty" && res.coverage.complete ? <EmptyState state="Empty" title={`No ${subject} yet`}><p>The source responded, but holds no record for this address.</p></EmptyState> : <EmptyState state="Error" title={`${subject} unavailable`} alert><p>The source has not confirmed a complete current record. Missing evidence does not prove that no record exists.</p></EmptyState>)}
+      {res && data && <NativeOperationsGrant title={title} titleId={id} data={data} refresh={() => { void query.refetch(); }}>{children(res, data)}</NativeOperationsGrant>}
     </Page>
   );
 }

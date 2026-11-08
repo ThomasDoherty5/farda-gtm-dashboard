@@ -56,6 +56,9 @@ import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, typ
 import { createLifecycleService } from "./lifecycle/repository.ts";
 import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifecycle/contract.ts";
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
+import { createFulfillmentDomain } from "./fulfillmentDomain/service.ts";
+import { fulfillmentFilters, fulfillmentPreviewAction, FulfillmentError } from "./fulfillmentDomain/contract.ts";
+import type { FulfillmentBindings } from "./fulfillmentDomain/source.ts";
 import { createSettlementReader } from "./settlements/reader.ts";
 import { settlementViews, settlementFilters, SettlementError } from "./settlements/contract.ts";
 import type { SettlementBindings } from "./settlements/source.ts";
@@ -108,11 +111,14 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
-  /** Server-only accounting/provider reader for finance and payable views. Unset means every finance read is INTEGRATION_PENDING. */
+  /** Source-owned fulfillment plans and canonical owners; unset grants no proposal or provider authority. */
+  fulfillment?: Omit<FulfillmentBindings,"authority">;
+  /** Server-only accounting/provider readers. Unset means finance reads remain unavailable, never fixture-backed. */
   settlements?: Omit<SettlementBindings,"authority">;
   financeSource?: FinanceSourceReader;
   /** Server-only order, shipping and returns reader for the THO-301 operations views. Unset means every such read is INTEGRATION_PENDING. */
   operationsReadSource?: OperationsReadSourceReader;
+  operationsReadPermittedLinkOrigins?: readonly string[];
   /** Server-only provider role register and TikTok invitation draft reader for teamPermissions and invitationDraft. Unset means both are INTEGRATION_PENDING. */
   teamInvitationReadSource?: TeamInvitationReadSourceReader;
   operationsControlSource?: OperationsControlSource;
@@ -161,6 +167,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
+  let fulfillment: ReturnType<typeof createFulfillmentDomain>;
   let settlements: ReturnType<typeof createSettlementReader>;
   let finance: ReturnType<typeof createFinanceReader>;
   let operationsReads: ReturnType<typeof createOperationsReadReader>;
@@ -211,6 +218,8 @@ export function createAgentServer(options: AgentServerOptions) {
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       source: options.lifecycleSource, now: options.operations?.now });
     const actorSources=options.actionFoundation?.approvals?.sources;
+    fulfillment=createFulfillmentDomain({db:store.database,scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},secret:operationsSecret,
+      bindings:{...options.fulfillment,authority:actorSources},now:options.operations?.now,actions:()=>actionFoundation.service,approvals:()=>actionFoundation.approvals});
     const settlementBindings: SettlementBindings={...options.settlements,
       authority:actorSources?.resolveActor&&actorSources.assertCurrent?{resolve:actorSources.resolveActor,assertCurrent:actorSources.assertCurrent}:undefined};
     settlements=createSettlementReader({db:store.database,scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},secret:operationsSecret,bindings:settlementBindings,now:options.operations?.now});
@@ -219,7 +228,7 @@ export function createAgentServer(options: AgentServerOptions) {
     finance = createFinanceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, source: options.financeSource, now: options.operations?.now });
     operationsReads = createOperationsReadReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
-      secret: operationsSecret, source: options.operationsReadSource, now: options.operations?.now });
+      secret: operationsSecret, source: options.operationsReadSource, permittedLinkOrigins:options.operationsReadPermittedLinkOrigins, now: options.operations?.now });
     teamInvitationReads = createTeamInvitationReadReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, source: options.teamInvitationReadSource, now: options.operations?.now });
     const controlAuthority=options.operationsControlAuthority?createOperationsControlAuthority({
@@ -246,7 +255,7 @@ export function createAgentServer(options: AgentServerOptions) {
       bindings: options.mediaDomain, now: options.operations?.now,
       stageApprovals: { resolveCurrentProof: binding => actionFoundation.approvals.resolveCurrentProof(binding),
         assertCurrentProof: (proof, timestamp) => actionFoundation.approvals.assertCurrentProof(proof, timestamp) } });
-    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[])]);
+    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[]),...(options.fulfillment?[fulfillment.domain]:[])]);
     if(settlementLedger)actionBindings={...actionBindings,ledger:settlementLedger};
     if (mediaDomain && actionBindings) actionBindings = { ...actionBindings, resources: createMediaResources(actionBindings.resources, mediaDomain) };
     if (actionBindings?.approvals?.registry) actionBindings = { ...actionBindings, approvals: { ...actionBindings.approvals,
@@ -385,6 +394,7 @@ export function createAgentServer(options: AgentServerOptions) {
     collaborationActionSchema.extend({ actionKind: z.literal("requestSupportHandoff"), expectedVersion: z.string().regex(/^ss1-[a-f0-9]{64}$/), payload: handoffIntent }),
   ]);
   const readSchema = z.discriminatedUnion("viewKey", [
+    readBase.extend({viewKey:z.literal("fulfillmentProposal"),filters:fulfillmentFilters,period:z.null(),sort:z.array(z.never()).max(0)}),
     readBase.extend({viewKey:z.literal("ledgerExportRequest"),filters:ledgerExportRequestFilters,period:z.null(),sort:z.array(z.never()).max(0)}),
     readBase.extend({viewKey:z.literal("ledgerExportArtifact"),filters:ledgerExportArtifactFilters,period:z.null(),sort:z.array(z.never()).max(0)}),
     readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -396,7 +406,7 @@ export function createAgentServer(options: AgentServerOptions) {
       period: z.null(), sort: z.array(z.never()).max(0) }),
     ...lifecycleViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: lifecycleFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
-    ...financeViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: options.settlements && (settlementViews as readonly string[]).includes(viewKey) ? settlementFilters[viewKey as keyof typeof settlementFilters] : financeFilters[viewKey],
+    ...financeViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: (settlementViews as readonly string[]).includes(viewKey) ? settlementFilters[viewKey as keyof typeof settlementFilters] : financeFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
     ...operationsReadViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: operationsReadFilters[viewKey],
       period: z.null(), sort: z.array(z.never()).max(0) })),
@@ -655,6 +665,14 @@ export function createAgentServer(options: AgentServerOptions) {
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
         if (new URL(req.url!, "http://localhost").search) throw new SyntaxError("Unexpected query");
         const raw = await bodyOf(req);
+        if(raw && typeof raw === "object" && "actionKind" in raw && raw.actionKind === "previewFulfillmentDecision") {
+          const input=fulfillmentPreviewAction.extend({requestedScope:readBase.shape.requestedScope}).parse(raw);
+          const cancel=new AbortController();res.once("close",()=>{if(!res.writableEnded)cancel.abort();});
+          const result=await fulfillment.preview(input,{principalRef:`agent-${auth.role}`},cancel.signal);
+          const currentAuth=authorize(req);
+          if(!currentAuth || currentAuth.role!==auth.role)return reply(res,currentAuth?403:401,{code:"FULFILLMENT_AUTHORITY_CHANGED",executionCertainty:"uncertain"});
+          result.assertCurrent();return reply(res,200,result.response);
+        }
         const native = foundationActionSchema.safeParse(raw), domain = domainActionSchema.safeParse(raw);
         // The controls command is an exact finite intent, not a caller-selected domain handler.
         if(raw&&typeof raw==="object"&&"actionKind"in raw&&raw.actionKind==="previewOperationsControl"){
@@ -1004,6 +1022,18 @@ export function createAgentServer(options: AgentServerOptions) {
             capabilities: result.capabilities.map(capability => auth.role === "reviewer" ? capability : { ...capability, state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] }),
             page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
+        if(input.viewKey==="fulfillmentProposal") {
+          if(input.page.cursor!==null)return reply(res,400,{code:"INVALID_CURSOR",executionCertainty:"notApplied"});
+          const cancel=new AbortController();res.once("close",()=>{if(!res.writableEnded)cancel.abort();});
+          const result=await fulfillment.read(input.filters,{principalRef:`agent-${auth.role}`},cancel.signal);
+          const currentAuth=authorize(req);
+          if(!currentAuth || currentAuth.role!==auth.role)return reply(res,currentAuth?403:401,{code:"FULFILLMENT_AUTHORITY_CHANGED",executionCertainty:"notApplied"});
+          result.assertCurrent();
+          return reply(res,200,{schemaVersion:ADAPTER_SCHEMA,requestId:input.requestId,scope:{...input.requestedScope,authorizationScopeVersion:"creator-agent.scope.v1"},
+            dataVersion:result.data.version,dataState:"ready",data:result.data,sourceFreshness:[],coverage:{complete:true,expectedCount:1,observedCount:1,missingCount:0,reasonCodes:[]},
+            capabilities:[{actionKind:"previewFulfillmentDecision",state:auth.role==="reviewer"?result.data.capability.state:"denied",reasonCodes:auth.role==="reviewer"?result.data.capability.reasonCodes:["REVIEWER_REQUIRED"]}],
+            page:{nextCursor:null,hasMore:false},refresh:{nextPollAfterMs:null}});
+        }
         if(input.viewKey==="ledgerExportRequest" || input.viewKey==="ledgerExportArtifact") {
           if(input.page.cursor!==null)return reply(res,400,{code:"INVALID_CURSOR",executionCertainty:"notApplied"});
           const actor={principalRef:`agent-${auth.role}`};
@@ -1019,7 +1049,8 @@ export function createAgentServer(options: AgentServerOptions) {
             dataVersion:versionOfData(result.data),dataState:"ready",data:result.data,sourceFreshness:[],coverage:{expectedCount:1,observedCount:1,missingCount:0,complete:true,reasonCodes:[]},
             capabilities:[],page:{nextCursor:null,hasMore:false},refresh:{nextPollAfterMs:null}});
         }
-        if(options.settlements && (settlementViews as readonly string[]).includes(input.viewKey)) {
+        if((options.settlements || !options.financeSource) && (settlementViews as readonly string[]).includes(input.viewKey)) {
+          if(!options.settlements?.source)return reply(res,503,{code:"INTEGRATION_PENDING",reasonCodes:["SETTLEMENT_SOURCE_UNCONFIGURED"],executionCertainty:"notApplied"});
           const cancel=new AbortController();res.once("close",()=>{if(!res.writableEnded)cancel.abort();});
           const result=await settlements.read(input.viewKey as typeof settlementViews[number],input.filters,{principalRef:`agent-${auth.role}`,role:auth.role},input.page,cancel.signal);
           const currentAuth=authorize(req);
@@ -1174,6 +1205,7 @@ export function createAgentServer(options: AgentServerOptions) {
       if (error instanceof OperationsControlError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty ?? "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if(error instanceof OperationsAuthorityError)return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty});
+      if (error instanceof FulfillmentError) return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof SettlementError) return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof FinanceError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });

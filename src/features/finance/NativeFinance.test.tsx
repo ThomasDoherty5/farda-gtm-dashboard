@@ -16,7 +16,7 @@ beforeAll(() => {
 const fixture = () => {
   const source = settlementSourceFixture({ workspaceId: "w", accountId: "a", environment: "sandbox" });
   const common = { version: "native-ledger-v1", source: { state: "current" as const, observedAt: "2026-11-07T12:00:00Z", sourceUpdatedAt: "2026-11-07T12:00:00Z", validUntil: "2099-01-01T00:00:00Z", revision: "source-v1", reasonCodes: [], synthetic: true }, accountingPolicy: { state: "unknown" as const, reference: null }, capabilities: { match: false, export: false, pay: false as const } };
-  const ledger: NativeCommissionLedger = { kind: "native-commission-ledger", economics: null, ...common, currency: "USD", records: source.records, coverage: { returned: 3, total: 3, complete: true }, totals: { eligible: source.money(120000), accrued: source.money(33000), creatorPaid: source.money(18000), contribution: source.unknown }, export: null };
+  const ledger: NativeCommissionLedger = { kind: "native-commission-ledger", economics: null, stateTotals: null, ...common, currency: "USD", records: source.records, coverage: { returned: 3, total: 3, complete: true }, totals: { eligible: source.money(120000), accrued: source.money(33000), creatorPaid: source.money(18000), contribution: source.unknown }, export: null };
   const payable: NativePayable = { kind: "native-payable", ...common, record: source.records.find(record => record.provider === "externalManual")! };
   return { source, ledger, payable };
 };
@@ -57,10 +57,10 @@ it("keeps native provider filters and record navigation free of fixture scenario
   expect(screen.getByText(/source-backed cost breakdown was not supplied/)).toBeInTheDocument();
 });
 it("retains the historical accepted amount and shows absent execution evidence as unknown", async () => {
-  const { payable } = fixture(); payable.record!.historical!.acceptedAmount = { minorUnits: 27500, currency: "EUR" };
+  const { payable } = fixture(); payable.record!.historical!.acceptedAmount = { minorUnits: 27500, currency: "USD" };
   const h = harness(payable, "/finance/payables/payable-one");
   await screen.findByTestId("native-payment-request");
-  expect(screen.getByTestId("native-payment-request")).toHaveTextContent("EUR 275.00");
+  expect(screen.getByTestId("native-payment-request")).toHaveTextContent("USD 275.00");
   expect(screen.getByTestId("native-payment-lifecycle")).toHaveTextContent("Unknown · execution evidence not supplied");
   expect(document.querySelector('a[href*="demo-offer"]')).toBeNull();
   expect(h.requests).toHaveLength(0);

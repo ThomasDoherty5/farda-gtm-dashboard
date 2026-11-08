@@ -37,7 +37,7 @@ jobs:
 
   agent-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -57,5 +57,6 @@ jobs:
             test-results/agent/**/*.png
             test-results/agent/**/monitor-evidence/native-browser-proof.json
             test-results/agent/**/stock-support-evidence/accessibility.json
+            test-results/agent/finance-operations/capture-manifest.json
           if-no-files-found: ignore
           retention-days: 7

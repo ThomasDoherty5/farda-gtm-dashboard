@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operationsTimezoneSchema } from "../../adapter/viewSchemas/nativeOperations.ts";
 
 /** Operations read models (THO-301) served at the authenticated `/v1/read` boundary. Read only: no shipping, return or reveal action runs here. */
 export const operationsReadViewKeys = ["operationsOverview", "orderDetail", "orderCustomer", "shippingException", "returnDetail",
@@ -12,11 +13,13 @@ const ref = z.string().trim().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-
  * Exact filters per view, matching what each THO-301 screen sends through `useView`. D-11: `scenario` and `fixture` are
  * demo-only and are refused here, so a demo selector can never pick what the service answers. No view accepts a free-form query.
  */
+const scopeFilters={home:z.enum(["all","H1","H2","H3"]).optional(),startAt:z.string().datetime({offset:true}).optional(),endAt:z.string().datetime({offset:true}).optional(),timezone:operationsTimezoneSchema.optional()};
+const validWindow=(value:{startAt?:string;endAt?:string;timezone?:string})=>(value.startAt===undefined&&value.endAt===undefined&&value.timezone===undefined)||Boolean(value.startAt&&value.endAt&&value.timezone&&Date.parse(value.startAt)<Date.parse(value.endAt));
 export const operationsReadFilters = {
-  operationsOverview: z.object({}).strict(),
-  operationsShipping: z.object({}).strict(),
+  operationsOverview: z.object(scopeFilters).strict().refine(validWindow,"A period needs exact start, end and timezone."),
+  operationsShipping: z.object(scopeFilters).strict().refine(validWindow,"A period needs exact start, end and timezone."),
   opsHealth: z.object({}).strict(),
-  fulfillmentAnalytics: z.object({ days: z.union([z.literal(7), z.literal(14)]) }).strict(),
+  fulfillmentAnalytics: z.object({ ...scopeFilters,days: z.union([z.literal(7), z.literal(14)]) }).strict().refine(validWindow,"A period needs exact start, end and timezone."),
   orderDetail: z.object({ orderId: ref }).strict(),
   orderCustomer: z.object({ orderId: ref }).strict(),
   shippingException: z.object({ shipmentId: ref, exceptionId: ref }).strict(),

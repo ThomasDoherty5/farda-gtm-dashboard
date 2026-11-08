@@ -9,6 +9,8 @@ import wave
 root = pathlib.Path(sys.argv[1])
 rows = [json.loads(line) for line in (root / "checkpoints.jsonl").read_text().splitlines()]
 expected = {
+    "native-ledger-table-headers", "native-ledger-export-focus-return", "native-payable-evidence-focus-return",
+    "native-dispatch-table-headers", "native-customer-denial-focus-return",
     "approval-exact-source-review", "canonical-receipt-navigation",
     "immutable-history-navigation", "original-outcome-recovery-control",
     "consent-table-alternative", "activation-cohort-dialog",

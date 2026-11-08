@@ -9,11 +9,11 @@ import type { NativeCommissionLedger } from "@/creator-agent/settlements/contrac
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
-import { Kpi, KpiRow } from "@/components/Kpi";
+import { KpiRow } from "@/components/Kpi";
 import { ContextCard, PageHeader, Panel } from "@/components/Panels";
 import { RecordShell } from "@/features/operations/RecordShell";
 import { FilterButton } from "@/features/acquisition/FilterButton";
-import { FinanceGrant, FinancialEvidenceDialog, moneyFact, NativeFinanceTabs, RecordNavigation, stateText } from "./NativeFinance";
+import { displayReference, exactMoney, FinanceGrant, FinancialEvidenceDialog, NativeMoneyKpi, moneyFact, NativeFinanceTabs, RecordNavigation, stateText } from "./NativeFinance";
 import styles from "./Finance.module.css";
 import native from "./NativeFinance.module.css";
 
@@ -38,7 +38,8 @@ function LedgerBody({ data, response, provider, changeProvider, pageNumber, prev
   const [selected, setSelected] = useState<string | null>(null), [exportOpen, setExportOpen] = useState(false);
   const record = data.records.find(row => row.ref === selected) ?? null;
   const payout = data.records.find(row => row.provider !== "externalManual");
-  const stateGroups = [...new Set(data.records.map(row => row.state))];
+  const segments = [{ key: "held", label: "Held" }, { key: "disputed", label: "Disputed" }, { key: "awaitingProvider", label: "Awaiting provider" }, { key: "paid", label: "Paid" }] as const;
+  const quantitative = data.coverage.complete && segments.every(({ key }) => data.stateTotals?.[key].state === "known") && segments.some(({ key }) => { const fact = data.stateTotals?.[key]; return fact?.state === "known" && fact.value.minorUnits > 0; });
   return <>
     <PageHeader id="ledger-title" title="Every commission, accounted for." subtitle={`${data.currency ?? "Multiple or unknown currencies"} · source ledger · ${data.coverage.returned} of ${data.coverage.total ?? "unknown"} records`}>
       <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 198 }} onClick={() => setExportOpen(true)}>Export ledger</Button>
@@ -51,15 +52,16 @@ function LedgerBody({ data, response, provider, changeProvider, pageNumber, prev
     <ContextCard title="Provider-owned commission settlement">Recruitment, publishing and checkout are separate from the provider that owns this entitlement. Imported order records never create another commission or a manual Pay task.</ContextCard>
     <div className={native.filters}><FilterButton name="Provider" title="Choose a settlement provider" value={provider} onChange={changeProvider} options={[{ value: "all", label: "All providers" }, { value: "collabs", label: "Collabs" }, { value: "tiktok", label: "TikTok Shop" }, { value: "externalManual", label: "Historical manual fees" }]} /></div>
     <KpiRow>
-      <Kpi label="Net eligible sales" context="Source-reported eligible basis">{moneyFact(data.totals.eligible)}</Kpi>
-      <Kpi label="Net accrued commission" context="Source balance; adjustments remain separate">{moneyFact(data.totals.accrued)}</Kpi>
-      <Kpi label="Cash commission paid" context="Cash is not deducted again from contribution">{moneyFact(data.totals.creatorPaid)}</Kpi>
-      <Kpi label="Estimated contribution" context={data.accountingPolicy.state === "verified" ? "Source accounting policy supplied" : "Accounting policy unknown"}>{moneyFact(data.totals.contribution)}</Kpi>
+      <NativeMoneyKpi label="Net eligible sales" context="Source-reported eligible basis" fact={data.totals.eligible} />
+      <NativeMoneyKpi label="Net accrued commission" context="Source balance; adjustments remain separate" fact={data.totals.accrued} />
+      <NativeMoneyKpi label="Cash commission paid" context="Cash is not deducted again from contribution" fact={data.totals.creatorPaid} />
+      <NativeMoneyKpi label="Estimated contribution" context={data.accountingPolicy.state === "verified" ? "Source accounting policy supplied" : "Accounting policy unknown"} fact={data.totals.contribution} />
     </KpiRow>
     <Panel id="native-ledger-records" title="Accrued expense and cash are different." large roomy subtitle={`Showing ${data.coverage.returned} of ${data.coverage.total ?? "unknown"} source records. ${data.coverage.complete && response.coverage.complete ? "Complete returned scope." : "Partial coverage; visible rows are not the whole ledger."}`}>
-      <ul className={styles.chips} aria-label="Source states in these records">{stateGroups.map(state => <li key={state}><Badge>{stateText[state]}</Badge></li>)}</ul>
-      <DataTable caption="Commission and historical obligation records" columns={[{ label: "Record / provider" }, { label: "Eligible basis" }, { label: "Earned" }, { label: "Adjustments" }, { label: "Creator paid" }, { label: "Current source state" }, { label: "Evidence" }]} rows={data.records.map(row => [
-        <span key="identity" className={native.reference}>{row.ref}<br />{row.provider}</span>, moneyFact(row.eligibleBase), moneyFact(row.balances.earned), moneyFact(row.balances.adjusted), moneyFact(row.balances.creatorPaid), <Badge key="state">{stateText[row.state]}</Badge>, <Button key="evidence" variant="secondary" aria-haspopup="dialog" onClick={() => setSelected(row.ref)}>Inspect evidence<span className="visually-hidden"> for {row.ref}</span></Button>,
+      <ul className={styles.statusBar} aria-label="Whole-snapshot source balances by state">{segments.map(segment => { const fact = data.stateTotals?.[segment.key]; return <li key={segment.key} data-state={segment.key} style={{ flex: `${quantitative && fact?.state === "known" ? fact.value.minorUnits : 1} 1 0px` }}>{segment.label} {fact?.state === "known" ? exactMoney(fact.value) : fact?.state === "notApplicable" ? "N/A" : "Unknown"}</li>; })}</ul>
+      {!quantitative && <p className={styles.footnote}>Segment widths are not quantitative: complete source balances are unavailable or all balances are zero. Visible page rows are never used to calculate this distribution.</p>}
+      <DataTable caption="Commission and historical obligation records" minWidth={1248} columns={[{ label: "Record / provider", width: "180px" }, { label: "Gross → eligible basis", width: "180px" }, { label: "Gross earned", width: "150px" }, { label: "Reversed", width: "140px" }, { label: "Net accrued", width: "160px" }, { label: "Current source state", width: "230px" }, { label: "Next action", width: "208px" }]} rows={data.records.map(row => [
+        <span key="identity" className={native.reference} title={row.ref}>{displayReference(row.ref)}<br />{row.provider}</span>, `${moneyFact(row.grossSales)} → ${moneyFact(row.eligibleBase)}`, row.grossEarned ? moneyFact(row.grossEarned) : "Unknown · gross earned not supplied", row.reversed ? moneyFact(row.reversed) : "Unknown · reversal total not supplied", row.netAccrued ? moneyFact(row.netAccrued) : "Unknown · source accrual not supplied", <Badge key="state">{stateText[row.state]}</Badge>, <Button key="evidence" variant="secondary" aria-haspopup="dialog" onClick={() => setSelected(row.ref)}>Inspect evidence<span className="visually-hidden"> for {row.ref}</span></Button>,
       ])} />
       <nav className={native.filters} aria-label="Ledger pages"><Button variant="secondary" disabledReason={pageNumber === 1 ? "This is the first page." : undefined} onClick={previousPage}>Previous page</Button><span role="status">Page {pageNumber}</span><Button variant="secondary" disabledReason={!response.page.hasMore || !response.page.nextCursor ? "No next page was returned." : undefined} onClick={nextPage}>Next page</Button></nav>
       {!data.records.length && <p>No financial records were returned for this provider and currency scope. Unknown amounts are not zero owed.</p>}

@@ -115,6 +115,10 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `tiktokDashboard` | none | TikTokDashboardData | `creators/TikTokPage` | `demoCreators` | proposed |  |
 | `watchlist` | `source`, `state`, `cohort` | WatchlistData | `monitor/WatchlistPage` | `demoMonitor` | proposed + conflict | C-05. The page maps its `only-launch-a` choice to `launch-a`, otherwise `all`. |
 
+| `ledgerExportRequest` | exact original key/version/export payload | NativeLedgerExportRequest | `finance/NativeExportDialog` | none | native only | Pure authorized lookup; no regeneration. |
+| `ledgerExportArtifact` | artifact reference | NativeLedgerExportArtifact | `finance/NativeExportDialog` | none | native only | Whole source CSV with protected receipt, expiry and integrity. |
+| `fulfillmentProposal` | kind, source-owned target, optional original key | FulfillmentProposal | `operations/NativeFulfillmentControl` | none | native only | Exact plans and original request lookup; no source effect. |
+
 ## Action kinds
 
 Sent by a screen through `useAction`. Payload shapes are the TypeScript types at the call site. "Errors" lists the error codes the demo raises for that kind; codes common to every kind (`MANIFEST_CHANGED` when one idempotency key is reused with a changed payload) are noted once under [Error codes](#error-codes).
@@ -199,6 +203,8 @@ Native sandbox action added in the review-completion increment:
 | `resumeRun` | `controlRun` | `{ control: "resume" }` plus top-level run reference/version | original run-control receipt | current owner/version/lease holds | native run | native |
 | `exportLedger` | `exportSnapshot` | exact snapshot filters and CSV format; null approval/manifest/run input | actual artifact/job receipt | source permission, completeness, expiry | typed ledger export | native source-bound |
 | `recordLaunchReadiness` | `recordSourceDecision` | exact scoped source reference/version, verdict/date/rationale/evidence | verified Notion record receipt; no release | named founder, phase, source and Go gates | native launch control | native source-bound |
+
+| `previewFulfillmentDecision` | `previewAction` | exact source kind/target/plan/reason with version and original key | canonical approval preview | named actor, exact source plan, prior uncertainty and duplicate-plan holds | `operations/NativeFulfillmentControl` | native source-bound |
 
 ## Resource kinds
 
@@ -647,3 +653,15 @@ Outcomes (error bodies use the D-14 envelope with `executionCertainty: "notAppli
 Checked: operations, view keys, action kinds (sent and capability-only), resource kinds, error codes, and `nextAction.kind` values. Not checked: reason codes, filters, payloads, data types and the narrative rows; those are reviewed by hand. The extractor reads `src/adapter/*.ts`, `src/features/**` and `src/fixtures/**` (not tests) and the catalogues in `errors.ts` and `contract.ts`. It works on string literals: a view key or action kind built at run time is not seen, so keep them literal at the call site.
 
 To add one: add the row to the matching table (first column in backticks), then run `npm run test`.
+
+
+## Native ledger export recovery and artifact reads
+
+| View key | Scope and behavior |
+| -- | -- |
+| `ledgerExportRequest` | Authenticated named-actor original-request lookup with exact key, expected version and frozen export payload; never starts generation. Returns absent/pending/failed/succeeded and confirmed artifact receipt. |
+| `ledgerExportArtifact` | Authenticated actor-owned whole-snapshot CSV and receipt. Source/actor authority, expiry, byte length and digest are checked at retrieval and final publication. No demo fallback. |
+
+These reads use the existing canonical export service and do not release a payment, message or media action.
+
+| `fulfillmentProposal` | Native-only exact source plan and original-key recovery | `fulfillmentDomain/contract.ts` | No demo approval or provider effect |

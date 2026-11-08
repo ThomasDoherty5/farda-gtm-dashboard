@@ -1,3 +1,4 @@
+import { useScope } from "@/adapter/scope";
 import { useState } from "react";
 import type { OrderCustomerData } from "@/adapter/demoOps";
 import { useAction } from "@/adapter/useAction";
@@ -13,6 +14,25 @@ import styles from "./Operations.module.css";
  * a reason is required, the reveal is logged, and the values are synthetic placeholders in the demo.
  */
 export function CustomerReveal({ orderRef }: { orderRef: string }) {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoCustomerReveal key={orderRef} orderRef={orderRef} /> : <NativeCustomerPrivacy key={orderRef} orderRef={orderRef} />;
+}
+
+/** Disclosure requires its own purpose-bound source authority; a coarse read role is never enough. */
+function NativeCustomerPrivacy({ orderRef }: { orderRef: string }) {
+  const query = useView<{ orderId: string }, { datasetKey: "operations-native"; synthetic: boolean; access: { state: string; reason: string | null } }>("orderCustomer", { orderId: orderRef });
+  const [open, setOpen] = useState(false);
+  return <>
+    <span>No customer details are mirrored</span>{" · "}<button type="button" className={styles.link} style={{ font: "inherit", padding: 0, background: "none", border: 0, cursor: "pointer", textDecoration: "underline" }} aria-haspopup="dialog" onClick={() => setOpen(true)}>Customer details (restricted)</button>
+    <Dialog open={open} title="Customer details" badge={query.data?.data?.synthetic ? "Synthetic source evidence" : "Restricted"} onClose={() => setOpen(false)}>
+      <p data-testid="customer-denied">Customer details are withheld. A current, purpose-bound disclosure permission and source audit are required; this screen has no authorized reveal action.</p>
+      <p role="status">{query.isPending ? "Checking source access…" : query.isError ? "Source access could not be verified. No customer values are displayed." : "Opening this review has not revealed customer details or submitted a disclosure request."}</p>
+      <Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh source access</Button><Button variant="secondary" onClick={() => setOpen(false)}>Close</Button>
+    </Dialog>
+  </>;
+}
+
+function DemoCustomerReveal({ orderRef }: { orderRef: string }) {
   const query = useView<{ orderId: string }, OrderCustomerData>("orderCustomer", { orderId: orderRef });
   const action = useAction<{ orderRef: string; reason: string }>();
   const [open, setOpen] = useState(false);

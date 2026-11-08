@@ -3,7 +3,8 @@ import { z } from "zod";
 export const settlementRef = z.string().min(1).max(4096);
 export const settlementInstant = z.string().datetime({ offset: true }).refine(v => Number.isFinite(Date.parse(v)));
 const count = z.number().int().nonnegative().safe();
-const currency = z.string().regex(/^[A-Z]{3}$/);
+// Native settlement actions currently qualify USD only; other currencies must not silently assume a minor-unit exponent.
+const currency = z.literal("USD");
 export const settlementScopeSchema = z.object({ workspaceId: z.string().min(1), accountId: z.string().min(1), environment: z.literal("sandbox") }).strict();
 export type SettlementScope = z.infer<typeof settlementScopeSchema>;
 export const settlementMoneySchema = z.object({ minorUnits: z.number().int().safe(), currency }).strict();
@@ -15,6 +16,7 @@ export function settlementFact<T extends z.ZodTypeAny>(value: T) {
   ]);
 }
 export const moneyFactSchema = settlementFact(settlementMoneySchema);
+export const settlementStateTotalsSchema=z.object({held:moneyFactSchema,disputed:moneyFactSchema,awaitingProvider:moneyFactSchema,paid:moneyFactSchema}).strict();
 export const numberFactSchema = settlementFact(z.number().finite());
 export const textFactSchema = settlementFact(settlementRef);
 export const settlementStateSchema = z.enum(["estimated", "earned", "held", "disputed", "approved", "billed", "awaitingCreator", "merchantPaid", "creatorPaid", "failed", "adjusted", "reconciled", "requested", "executed", "reversed", "unknown"]);
@@ -28,6 +30,8 @@ export const settlementReceiptSchema = z.object({ ref: settlementRef, componentR
 export const settlementAdjustmentSchema = z.object({ ref: settlementRef, receiptRef: settlementRef, amount: settlementMoneySchema,
   effectiveAt: settlementInstant, observedAt: settlementInstant, reason: z.enum(["refund", "reversal", "correction", "chargeback"]), evidenceRef: settlementRef }).strict();
 export const settlementEconomicsSchema = z.object({
+  waterfall:z.object({netSales:moneyFactSchema,commerceCosts:moneyFactSchema,fixedFees:moneyFactSchema,samples:moneyFactSchema,
+    netCommission:moneyFactSchema,feeEstimate:moneyFactSchema,contribution:moneyFactSchema}).strict().nullable().default(null),
   cohortRef: settlementRef, periodStart: settlementInstant, periodEnd: settlementInstant,
   eligibleOrders: numberFactSchema, grossSales: moneyFactSchema, refunds: moneyFactSchema,
   netRevenue: moneyFactSchema, creatorCommissions: moneyFactSchema, providerFees: moneyFactSchema,
@@ -37,6 +41,7 @@ export const settlementRecordSchema = z.object({
   ref: settlementRef, version: settlementRef, provider: z.enum(["collabs", "tiktok", "externalManual"]), accountRef: settlementRef, creatorRef: settlementRef,
   programmeRef: settlementRef, programmeVersion: settlementRef, componentRef: settlementRef, orderRef: settlementRef.nullable(), nativeRef: settlementRef.nullable(),
   currency, state: settlementStateSchema, collaborationRef: settlementRef.nullable().default(null), budgetCategory: textFactSchema.nullable().default(null), eligibleBase: moneyFactSchema, grossSales: moneyFactSchema, balances: balancesSchema,
+  grossEarned:moneyFactSchema.nullable().default(null),reversed:moneyFactSchema.nullable().default(null),netAccrued:moneyFactSchema.nullable().default(null),
   commissionRatePct: numberFactSchema, fee: moneyFactSchema, feeRatePct: numberFactSchema,
   facts: z.array(z.object({ ref: settlementRef, state: settlementStateSchema, amount: settlementMoneySchema.nullable(), eventAt: settlementInstant.nullable(),
     observedAt: settlementInstant, evidenceRef: settlementRef, nativeRef: settlementRef.nullable() }).strict()).max(200),
@@ -67,6 +72,7 @@ const common = { source: nativeSettlementSourceSchema, version: settlementRef,
   capabilities: z.object({ match: z.boolean(), export: z.boolean(), pay: z.literal(false) }).strict() };
 export const nativeCommissionLedgerSchema = z.object({ kind: z.literal("native-commission-ledger"), ...common, currency: currency.nullable(),
   records: z.array(settlementRecordSchema).max(100), coverage: z.object({ returned: count, total: count.nullable(), complete: z.boolean() }).strict(),
+  stateTotals:settlementStateTotalsSchema.nullable().default(null),
   economics: settlementEconomicsSchema.nullable().default(null),
   totals: z.object({ eligible: moneyFactSchema, accrued: moneyFactSchema, creatorPaid: moneyFactSchema, contribution: moneyFactSchema }).strict(),
   export: z.object({ sourceVersion: settlementRef, filters: z.object({ state: z.enum(["all", "pending", "earned", "reversed", "settled"]),

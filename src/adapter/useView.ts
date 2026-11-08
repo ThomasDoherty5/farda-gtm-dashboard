@@ -36,7 +36,7 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
   const ctx = useScope();
   const client = useQueryClient();
   const page = options.page ?? {cursor:null,limit:50};
-  const queryKey = [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period, page];
+  const queryKey = [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period, ...(options.page ? [page] : [])];
   return useQuery<ReadResponse<T>, Error>({
     ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     queryKey,

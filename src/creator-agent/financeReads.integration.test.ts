@@ -46,7 +46,7 @@ describe("authenticated finance and payable reads (THO-303, THO-300)", () => {
       expect(result.status).toBe(503);
       expect(result.headers.get("cache-control")).toBe("no-store");
       const body = adapterErrorBodySchema.parse(result.body);
-      expect(body).toMatchObject({ code: "INTEGRATION_PENDING", requestId: "synthetic-finance-read", executionCertainty: "notApplied", reasonCodes: ["FINANCE_SOURCE_UNCONFIGURED"] });
+      expect(body).toMatchObject({ code: "INTEGRATION_PENDING", requestId: "synthetic-finance-read", executionCertainty: "notApplied", reasonCodes: [["commissionLedger","settlementDetail","payableDetail"].includes(viewKey)?"SETTLEMENT_SOURCE_UNCONFIGURED":"FINANCE_SOURCE_UNCONFIGURED"] });
       expect(result.body).not.toHaveProperty("data");
       expect(result.text).not.toMatch(/minorUnits|grossSales|finance-demo/);
     }

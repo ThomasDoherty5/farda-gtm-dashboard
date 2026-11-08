@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from "react";
 const SyntheticSource = createContext(true);
 import type { ReadResponse } from "@/adapter/contract";
 import type { NativeCommissionLedger, NativePayable, NativeSettlement, SettlementRecord } from "@/creator-agent/settlements/contract";
+import { Kpi } from "@/components/Kpi";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
@@ -50,7 +51,7 @@ export function FinanceSourceLink({ record, kind, label, current = true, targetR
   const link = matches.length === 1 ? matches[0] : undefined;
   const leased = useSourceLease(link?.validUntil);
   const safe = !synthetic && current && leased && link?.state === "verified" && link.url && /^https:\/\//i.test(link.url);
-  return safe ? <a className={styles.external} href={link.url!} target="_blank" rel="noopener noreferrer">{label}<span className="visually-hidden"> (external source, opens in a new tab)</span></a>
+  return safe ? <LinkButton variant="secondary" to={link.url!} target="_blank" rel="noopener noreferrer">{label}<span className="visually-hidden"> (external source, opens in a new tab)</span></LinkButton>
     : <Button variant="secondary" disabledReason={matches.length > 1 ? "More than one source destination was returned. Ask the source owner to identify the exact record." : "A current verified source link is unavailable. Refresh source evidence or contact the source owner."}>{label}</Button>;
 }
 
@@ -72,3 +73,9 @@ export function FinancialEvidenceDialog({ record, onClose }: { record: Settlemen
 }
 
 export function RecordNavigation({ record, children }: { record: SettlementRecord; children: ReactNode }) { return <LinkButton variant="secondary" to={recordPath(record)}>{children}</LinkButton>; }
+
+export function NativeMoneyKpi({ label, fact, context }: { label: string; fact: MoneyFact; context: string }) {
+  return <Kpi label={label} context={fact.state === "known" ? context : `${reasonText(fact.reasonCode)}. ${context}`}>{fact.state === "known" ? exactMoney(fact.value) : fact.state === "unknown" ? "Unknown" : "N/A"}</Kpi>;
+}
+/** Short display reference only; full source identifiers remain in the evidence dialog and exact links. */
+export const displayReference = (ref: string) => ref.length > 32 ? `…${ref.slice(-12)}` : ref;

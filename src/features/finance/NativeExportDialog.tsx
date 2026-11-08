@@ -19,6 +19,8 @@ export function NativeExportDialog({ open, data, response, onClose }: { open: bo
   const action = useAction<Marker["payload"]>();
   const leased = useSourceLease(data.source.validUntil);
   const hold = storageError ? "The original export request could not be safely recovered. Do not start another request." : !data.capabilities.export ? "This source has not granted export authority." : !data.export ? "No authorized export snapshot was returned." : !leased || data.source.state !== "current" || response.dataState === "stale" ? "Refresh current source evidence before requesting an export." : undefined;
+  // Retrieval has its own current server authorization; a newer ledger version cannot rewrite an existing artifact.
+  const retrievalHold=storageError?"The original request marker could not be recovered.":!leased?"Refresh current source access before retrieving an artifact.":undefined;
   const send = (original: Marker) => {
     if (hold || action.isPending || original.expectedVersion !== data.export?.sourceVersion || Date.parse(data.source.validUntil ?? "") <= Date.now()) return;
     action.mutate({ operation: "exportSnapshot", actionKind: "exportLedger", expectedVersion: original.expectedVersion, entityRefs: [], approvalRef: null, manifestRef: null, payload: original.payload, idempotencyKey: original.requestKey });
@@ -33,29 +35,29 @@ export function NativeExportDialog({ open, data, response, onClose }: { open: bo
     <p>Export covers the entire authorized filtered source snapshot, including rows beyond the visible page. It contains permitted financial references and no customer personal data.</p>
     <FactList label="Export scope" rows={[["Visible rows", String(data.coverage.returned)], ["Source total", data.coverage.total === null ? "Unknown" : String(data.coverage.total)], ["Currency", data.export?.filters.currency ?? data.currency ?? "Unknown"], ["Period", data.export ? `${data.export.filters.startAt} to ${data.export.filters.endAt}` : "Unknown"], ["Timezone", data.export?.filters.timezone ?? "Unknown"], ["Snapshot version", data.export?.sourceVersion ?? "Not supplied"]]} />
     {storageError && <p role="alert">The original request could not be safely retained or recovered. No new request was sent. Keep the original request key and contact the source owner before starting another export.</p>}
-    {!marker ? <Button disabledReason={hold} onClick={start}>Request CSV export</Button> : <ExportRecovery key={marker.requestKey} marker={marker} pending={action.isPending} hold={hold ?? (marker.expectedVersion !== data.export?.sourceVersion ? "The source version changed. Inspect the original export; do not rebase its request." : undefined)} retry={() => send(marker)} />}
+    {!marker ? <Button disabledReason={hold} onClick={start}>Request CSV export</Button> : <ExportRecovery key={marker.requestKey} marker={marker} pending={action.isPending} retrievalHold={retrievalHold} hold={hold ?? (marker.expectedVersion !== data.export?.sourceVersion ? "The source version changed. Inspect the original export; do not rebase its request." : undefined)} retry={() => send(marker)} />}
     {action.isError && <p role="alert">The request did not return a confirmed artifact. Check the original request below before retrying.</p>}
     <Button variant="secondary" onClick={onClose}>Close export</Button>
   </Dialog>;
 }
-function ExportRecovery({ marker, pending, hold, retry }: { marker: Marker; pending: boolean; hold?: string; retry: () => void }) {
+function ExportRecovery({ marker, pending, hold, retrievalHold, retry }: { marker: Marker; pending: boolean; hold?: string; retrievalHold?:string; retry: () => void }) {
   const query = useView<Marker, LedgerExportRequestView>("ledgerExportRequest", marker);
   const [download, setDownload] = useState(false);
-  const result = query.data?.data;
+  const result = !query.isError&&query.data?.dataState==="ready"&&query.data.data?.requestKey===marker.requestKey?query.data.data:null;
   return <section aria-label="Original export request">
     <p>Original snapshot {marker.expectedVersion} · {marker.payload.filters.currency} · {marker.payload.filters.startAt} to {marker.payload.filters.endAt}</p>
     <p role="status">{query.isPending ? "Checking original request…" : query.isError ? "Original request is unavailable. No new export was started." : `Original request: ${result?.state ?? "unknown"}.`}</p>
     {result && <p>Progress: {result.progress.processedRows ?? "Unknown"} of {result.progress.totalRows ?? "unknown"} source rows. {result.reasonCodes.join(" · ")}</p>}
     <Button variant="secondary" disabledReason={query.isFetching ? "Checking original request." : undefined} onClick={() => { void query.refetch(); }}>Check original request</Button>
     {result && (result.state === "absent" || result.state === "failed") && <Button disabledReason={pending ? "The original request is in progress." : hold} onClick={retry}>Retry original export request</Button>}
-    {result?.state === "succeeded" && result.receipt && <><FactList label="Export receipt" rows={[["Rows", String(result.receipt.rowCount)], ["As of", result.receipt.asOf], ["Expires", result.receipt.expiresAt], ["SHA-256", result.receipt.sha256]]} /><Button variant="secondary" disabledReason={hold} onClick={() => setDownload(true)}>Retrieve authorized CSV</Button>{download && <ExportArtifact artifactRef={result.receipt.artifactRef} requestKey={marker.requestKey} allowed={!hold} />}</>}
+    {result?.state === "succeeded" && result.receipt && <><FactList label="Export receipt" rows={[["Rows", String(result.receipt.rowCount)], ["As of", result.receipt.asOf], ["Expires", result.receipt.expiresAt], ["SHA-256", result.receipt.sha256]]} /><Button variant="secondary" disabledReason={retrievalHold} onClick={() => setDownload(true)}>Retrieve authorized CSV</Button>{download && <ExportArtifact artifactRef={result.receipt.artifactRef} requestKey={marker.requestKey} allowed={!retrievalHold} />}</>}
   </section>;
 }
 function ExportArtifact({ artifactRef, requestKey, allowed }: { artifactRef: string; requestKey: string; allowed: boolean }) {
   const query = useView<{ artifactRef: string }, LedgerExportArtifactView>("ledgerExportArtifact", { artifactRef });
   const artifact = query.data?.data;
   const leased = useSourceLease(artifact?.receipt.expiresAt);
-  const ready = allowed && !query.isError && leased && artifact?.receipt.artifactRef === artifactRef && artifact.receipt.requestKey === requestKey;
+  const ready = allowed && !query.isError && query.data?.dataState==="ready" && query.data.coverage.complete && leased && artifact?.receipt.artifactRef === artifactRef && artifact.receipt.requestKey === requestKey;
   const save = () => {
     if (!ready || !artifact || Date.parse(artifact.receipt.expiresAt) <= Date.now()) return;
     const url = URL.createObjectURL(new Blob([artifact.body], { type: artifact.receipt.contentType }));

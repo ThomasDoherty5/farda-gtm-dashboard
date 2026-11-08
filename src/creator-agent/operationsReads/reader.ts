@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { digest } from "../config.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
+import type { DispatchSourceFacts, OperationsReportingScope, NativeFulfillmentEvent, NativeOperationsLink } from "../../adapter/viewSchemas/nativeOperations.ts";
 import type { OperationsScope } from "../operations.ts";
 import { nativeOpsReadViewSchemas } from "../../adapter/viewSchemas/ops.ts";
 import { operationsDetailViews, operationsReadFilters, operationsSnapshotSchema, type OperationsReadViewKey, type OperationsSnapshot } from "./contract.ts";
@@ -14,7 +15,7 @@ function freeze<T>(value: T): T {
 }
 type Filters = Record<string, string | number>;
 type Capability = { actionKind: string; state: "available" | "held" | "denied" | "unsupported"; reasonCodes: string[] };
-type Options = { scope: OperationsScope; secret: string; source?: OperationsReadSourceReader; now?: () => number; timeoutMs?: number };
+type Options = { scope: OperationsScope; secret: string; source?: OperationsReadSourceReader; now?: () => number; timeoutMs?: number; permittedLinkOrigins?: readonly string[] };
 
 /**
  * Intents the screens name. None can execute here: shipping decisions and return tasks stay approval-request-only with their
@@ -106,6 +107,45 @@ export function createOperationsReadReader(options: Options) {
     const checked = nativeOpsReadViewSchemas[viewKey]!.safeParse(record);
     if (!checked.success) throw new OperationsReadError("SOURCE_RESPONSE_INVALID", 502, ["OPERATIONS_RECORD_INVALID"]);
     const data = checked.data as Record<string, unknown>;
+    const context=data as {reportingScope:OperationsReportingScope|null;provenance:{observedAt:string};synthetic:boolean;nativeEvents:NativeFulfillmentEvent[];sourceLinks:NativeOperationsLink[]};
+    for(const key of ["home","startAt","endAt","timezone"] as const)if(f[key]!==undefined && (context.reportingScope?.[key]??(key==="home"?"all":undefined))!==f[key])
+      throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_REPORTING_SCOPE_MISMATCH"]);
+    if(context.nativeEvents.some(event=>Date.parse(event.observedAt)>Date.parse(context.provenance.observedAt)))throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_EVENT_TIME_INVALID"]);
+    data.sourceLinks=context.sourceLinks.map(link=>{
+      if(context.synthetic || link.state!=="verified" || !link.url || !link.observedAt || !link.validUntil || Date.parse(link.observedAt)>now() || Date.parse(link.validUntil)<=now())return {...link,state:link.state==="verified"?"expired":link.state,url:null};
+      const url=new URL(link.url),allowed=url.protocol==="https:"&&!url.username&&!url.password&&!url.search&&!url.hash&&(options.permittedLinkOrigins??[]).includes(url.origin);
+      return allowed?link:{...link,state:"denied",url:null};
+    });
+    if(viewKey==="returnDetail") {
+      const record=data as {state:string;units:number;selected:{resolution:string;disposition:string};inspection:{units:number};resolved:null|{returnedUnits:number;restockedUnits:number;refunded:{minorUnits:number}}};
+      const confirmed=new Set(context.nativeEvents.filter(event=>event.state==="confirmed").map(event=>event.kind));
+      const required:NativeFulfillmentEvent["kind"][]=["returnReceived","accountingPosted","caseClosed",
+        record.selected.disposition==="restock"?"inventoryRestocked":"inventoryQuarantined",
+        record.selected.resolution==="refund"?"refundSettled":"replacementCreated"];
+      if(record.selected.resolution==="replacement")required.push("replacementShipped");
+      data.completionVerified=Boolean(record.state==="resolved"&&record.resolved&&record.resolved.returnedUnits>0&&record.inspection.units>=record.resolved.returnedUnits&&
+        (record.selected.disposition!=="restock"||record.resolved.restockedUnits===record.resolved.returnedUnits)&&
+        (record.selected.disposition!=="quarantine"||record.resolved.restockedUnits===0)&&
+        (record.selected.resolution!=="replacement"||record.resolved.refunded.minorUnits===0)&&required.every(kind=>confirmed.has(kind)));
+    }
+    if(viewKey==="operationsOverview") {
+      if(context.reportingScope && context.reportingScope.basis!=="requestedAt")throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_PERIOD_BASIS_INVALID"]);
+      const queue=data.queue as {rows:Array<{ref:string;kind:"order"|"sample";home:string;waitingHours:number;hold:{reason:string;sourceAction:string}|null;sourceFacts:DispatchSourceFacts|null}>;total:number};
+      queue.rows=queue.rows.map(row=>{
+        const facts=row.sourceFacts;
+        if(context.reportingScope?.home && context.reportingScope.home!=="all" && row.home!==context.reportingScope.home)throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_HOME_MISMATCH"]);
+        if(!facts){if(f.startAt!==undefined)throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_PERIOD_UNVERIFIED"]);return {...row,hold:{reason:"Dispatch eligibility is unknown",sourceAction:"Inspect canonical order, approval, identity and stock evidence"}};}
+        const requested=Date.parse(facts.requestedAt),observed=Date.parse(context.provenance.observedAt);
+        if(requested>Date.parse(facts.observedAt)||Date.parse(facts.observedAt)>observed)throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_TIME_INVALID"]);
+        if(context.reportingScope && (requested<Date.parse(context.reportingScope.startAt)||requested>=Date.parse(context.reportingScope.endAt)))throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_QUEUE_PERIOD_MISMATCH"]);
+        const identity=facts.detailRef && facts.detailRef===(row.kind==="order"?facts.orderRef:facts.sampleRef);
+        const reasons=[facts.canceled!==false?"Cancellation status must be cleared":null,facts.labelCreated!==false?"An unlabeled source item is required":null,
+          facts.identityResolved!==true||!identity?"Canonical identity is unresolved":null,facts.stockAvailable!==true?"Available stock is unverified":null,
+          row.kind==="order"&&facts.orderUnfulfilled!==true?"Unfulfilled order status is unverified":null,row.kind==="sample"&&facts.sampleApproved!==true?"Sample approval is unverified":null].filter(Boolean);
+        return {...row,waitingHours:(observed-requested)/3600000,hold:row.hold??(reasons.length?{reason:reasons.join("; "),sourceAction:"Inspect canonical source eligibility"}:null)};
+      }).sort((a,b)=>b.waitingHours-a.waitingHours||a.ref.localeCompare(b.ref)||a.kind.localeCompare(b.kind));
+    }
+
     for (const [field, filter] of identity[viewKey] ?? [])
       if (data[field] !== f[filter]) throw new OperationsReadError("SOURCE_RESPONSE_INVALID", 502, ["OPERATIONS_RECORD_ADDRESS_MISMATCH"]);
     if (viewKey !== "orderCustomer") return data;
@@ -131,8 +171,11 @@ export function createOperationsReadReader(options: Options) {
       assertCurrent();
       throw new OperationsReadError("RECORD_NOT_FOUND", 404);
     }
-    const deadline = Math.min(Date.parse(s.validUntil), Date.parse(s.observedAt) + operationsMaxObservationAgeMs);
     const projection = s.record === null ? null : project(viewKey, s.record, f);
+    // A published source URL may have a narrower permission lease than the enclosing observation.
+    const linkDeadlines=projection===null?[]:((projection as {sourceLinks:NativeOperationsLink[]}).sourceLinks)
+      .filter(link=>link.state==="verified"&&link.url&&link.validUntil).map(link=>Date.parse(link.validUntil!));
+    const deadline = Math.min(Date.parse(s.validUntil), Date.parse(s.observedAt) + operationsMaxObservationAgeMs,...linkDeadlines);
     const data = projection===null?null:{...(projection as Record<string,unknown>),provenance:{...(projection as {provenance:Record<string,unknown>&{observedAt:string}}).provenance,
       validUntil:new Date(deadline).toISOString(),version:alias("version",s.version)}};
     if (data && (data as { provenance: { observedAt: string } }).provenance.observedAt !== s.observedAt) throw new OperationsReadError("SOURCE_RESPONSE_INVALID", 502, ["OPERATIONS_PROVENANCE_MISMATCH"]);
@@ -142,6 +185,7 @@ export function createOperationsReadReader(options: Options) {
     const reasonCodes = [...new Set([...(stale ? ["OPERATIONS_SOURCE_STALE"] : []), ...s.coverage.reasonCodes])];
     const finalFence = () => {
       assertCurrent();
+      if(linkDeadlines.some(deadline=>deadline<=now()))throw new OperationsReadError("SOURCE_VERSION_CHANGED",409);
       if (!stale && deadline <= now()) throw new OperationsReadError("SOURCE_VERSION_CHANGED", 409);
     };
     const result: OperationsReadResult = {

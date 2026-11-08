@@ -1,20 +1,23 @@
+import { useSearchParams } from "react-router-dom";
+import { operationsContext, operationsEvidenceLabel, operationsHref, queueDetailPath, stockAvailable, stockLow, type NativeQueueRow, type OperationsOverviewRead } from "./nativeRead";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/Badge";
-import { LinkButton } from "@/components/Button";
+import { Button, LinkButton } from "@/components/Button";
 import { Kpi, KpiRow } from "@/components/Kpi";
 import { FactList, FlatTable, HalfColumns, Panel } from "@/components/Panels";
-import { homeLabel, type Home, type OperationsOverview, type QueueRow } from "@/fixtures/operations";
+import { homeLabel, type Home } from "@/fixtures/operations";
 import { figure, minutesAgoLabel, waitingLabel } from "./format";
 import styles from "./Operations.module.css";
 
 export type CompactProps = {
-  data: OperationsOverview;
+  data: OperationsOverviewRead;
   demo: boolean;
   view: "overview" | "orders" | "shipping";
   overviewTo: string;
   ordersTo: string;
   home: Home | "all";
-  ready: QueueRow[];
+  ready: NativeQueueRow[];
+  held: NativeQueueRow[];
   /** Whole minutes since the source last synced, or null when it never did. */
   syncedMinutesAgo: number | null;
   stale: boolean;
@@ -31,14 +34,16 @@ const scopeText = (home: Home | "all") => (home === "all" ? "All homes" : home);
 const syncText = (minutes: number | null) => (minutes === null ? "No successful sync recorded" : `Synced ${minutesAgoLabel(minutes)}`);
 
 /** Operations at 1024 (Figma 12:708). A shorter composition than 1440: three figures, three queue rows, stock and exceptions. */
-export function TabletOperations({ data, demo, home, ready, syncedMinutesAgo, stale }: CompactProps) {
+export function TabletOperations({ data, demo, home, ready, held, syncedMinutesAgo, stale }: CompactProps) {
+  const [urlSearch] = useSearchParams();
+  const search = operationsContext(urlSearch, data);
   const summary = home === "all" ? data.all : data.byHome[home];
   const stock = data.stock.filter((s) => home === "all" || s.home === home);
   const exceptions = data.exceptions.filter((e) => home === "all" || e.home === home);
   return (
     <>
       <p className={styles.scope} data-operations-demo={demo || undefined} data-testid="source-freshness" role={stale ? "status" : undefined}>
-        {scopeText(home)} · {demo ? "Demo workspace" : "Workspace"} · {stale ? "Behind its source · " : ""}{syncText(syncedMinutesAgo)}
+        {scopeText(home)} · {demo ? "Demo workspace" : operationsEvidenceLabel(data)} · {stale ? "Behind its source · " : ""}{syncText(syncedMinutesAgo)}
       </p>
       <KpiRow columns={3} keepColumns>
         <Kpi label="To ship" context={`${figure(summary.waitingOverTwoDays, String)} overdue`} testId="metric-To ship">{figure(summary.toShip, String)}</Kpi>
@@ -52,7 +57,7 @@ export function TabletOperations({ data, demo, home, ready, syncedMinutesAgo, st
             columns={[{ label: "Order / sample", width: 354 }, { label: "Home", width: 170 }, { label: "Waiting", width: 180 }, { label: "Action", width: 158 }]}
             rows={ready.slice(0, 3).map((r) => ({
               key: r.ref,
-              cells: [<span key="r" className={styles.queueRef}>{r.ref}</span>, r.home, waitingLabel(r.waitingHours), <LinkButton key="a" to={`/orders/${r.ref}`} variant={r.waitingHours > data.warnAfterHours ? "secondary" : "ghost"} aria-label={`View ${r.ref}`} style={{ minWidth: 112 }}>View</LinkButton>],
+              cells: [<span key="r" className={styles.queueRef}>{r.ref}</span>, r.home, waitingLabel(r.waitingHours), queueDetailPath(r, !demo) ? <LinkButton key="a" to={operationsHref(queueDetailPath(r, !demo)!, search)} variant={r.waitingHours > data.warnAfterHours ? "secondary" : "ghost"} aria-label={`View ${r.ref}`} style={{ minWidth: 112 }}>View</LinkButton> : <Button key="a" variant="ghost" disabledReason="An exact source detail reference was not supplied.">View</Button>],
             }))}
             testId="queue-table"
           />
@@ -60,13 +65,14 @@ export function TabletOperations({ data, demo, home, ready, syncedMinutesAgo, st
           <p className={styles.panelText}>Nothing is waiting to leave this home.</p>
         )}
       </Panel>
+      <CompactHolds held={held} demo={demo} search={search} />
       <HalfColumns keepColumns>
         <Panel title="Stock by home" testId="stock-panel">
-          <FactList label="Stock by home" labelWidth={166} rows={stock.map((s) => { const available = s.onHand - s.reserved; return [s.home, available < s.threshold ? `${available} · low stock` : `${available} available`] as [string, string]; })} />
+          <FactList label="Stock by home" labelWidth={166} rows={stock.map((s) => { const available = stockAvailable(s); return [s.home, available === null ? "Unknown availability" : stockLow(s) ? `${available} · low stock` : `${available} available`] as [string, string]; })} />
         </Panel>
         <Panel title={`${exceptions.length} shipping exception${exceptions.length === 1 ? "" : "s"}`} testId="exceptions-panel">
           <p className={styles.panelText}>{exceptionSummary(exceptions.map((e) => e.state))} Resolve source cases before issuing replacements.</p>
-          {exceptions[0] && <LinkButton to={`/shipments/${exceptions[0].shipmentRef}/exceptions/${exceptions[0].exceptionId}`} style={{ minWidth: 206, alignSelf: "flex-start" }}>Review exceptions</LinkButton>}
+          {exceptions[0] && <LinkButton to={operationsHref(`/shipments/${encodeURIComponent(exceptions[0].shipmentRef)}/exceptions/${encodeURIComponent(exceptions[0].exceptionId)}`, search)} style={{ minWidth: 206, alignSelf: "flex-start" }}>Review exceptions</LinkButton>}
         </Panel>
       </HalfColumns>
     </>
@@ -74,20 +80,22 @@ export function TabletOperations({ data, demo, home, ready, syncedMinutesAgo, st
 }
 
 /** Operations at 390 (Figma 12:653): one column, queue as cards, low stock as a warning card. */
-export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo, ready, syncedMinutesAgo, stale }: CompactProps) {
+export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo, ready, held, syncedMinutesAgo, stale }: CompactProps) {
+  const [urlSearch] = useSearchParams();
+  const search = operationsContext(urlSearch, data);
   const summary = home === "all" ? data.all : data.byHome[home];
   const stock = data.stock.filter((s) => home === "all" || s.home === home);
-  const available = stock.reduce((sum, s) => sum + (s.onHand - s.reserved), 0);
-  const low = stock.filter((s) => s.onHand - s.reserved < s.threshold);
+  const available = stock.length && stock.every(s => stockAvailable(s) !== null) ? stock.reduce((sum, s) => sum + stockAvailable(s)!, 0) : null;
+  const low = stock.filter(stockLow);
   const exceptions = data.exceptions.filter((e) => home === "all" || e.home === home);
   const tab = (label: string, to: string, current = false) => <LinkButton key={label} to={to} variant={current ? "primary" : "ghost"} aria-current={current ? "page" : undefined}>{label}</LinkButton>;
   return (
     <>
-      <p className={styles.scope} data-operations-demo={demo || undefined}>{demo ? "Demo workspace" : "Workspace"} · {scopeText(home)}</p>
+      <p className={styles.scope} data-operations-demo={demo || undefined}>{demo ? "Demo workspace" : operationsEvidenceLabel(data)} · {scopeText(home)}</p>
       <nav aria-label="Operations sections" className={styles.compactTabs}>
         {tab("Overview", overviewTo, view === "overview")}
         {tab("To ship", ordersTo, view === "orders")}
-        {tab("Stock", home === "all" ? "/inventory" : "/inventory?home=" + home)}
+        {tab("Stock", operationsHref("/inventory", search))}
       </nav>
       <div className={styles.strip} data-stale={stale} data-testid="source-freshness" role={stale ? "status" : undefined}>
         <p>{data.source.label.split(" ")[0]} · {stale ? "behind its source, " : ""}{syncedMinutesAgo === null ? "no successful sync" : `synced ${minutesAgoLabel(syncedMinutesAgo).replace(" minutes", " min").replace(" minute", " min")}`}</p>
@@ -95,7 +103,7 @@ export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo,
       </div>
       <dl className={styles.miniKpis}>
         <div className={styles.miniKpi}><dt>To ship</dt><dd data-testid="metric-To ship">{figure(summary.toShip, String)}</dd></div>
-        <div className={styles.miniKpi}><dt>Available</dt><dd data-testid="metric-Available">{available}</dd></div>
+        <div className={styles.miniKpi}><dt>Available</dt><dd data-testid="metric-Available">{available ?? "Unknown"}</dd></div>
       </dl>
       <h2 className={styles.h3}>Ship next</h2>
       <ul className={styles.cards} aria-label="Ship next">
@@ -106,25 +114,31 @@ export function MobileOperations({ data, demo, home, view, overviewTo, ordersTo,
               <p style={{ font: "var(--text-label)" }}>{r.ref}</p>
               <p className={styles.kind}>{r.kind === "sample" ? "Creator sample" : "Order"} · {r.units} unit{r.units === 1 ? "" : "s"}</p>
               <Badge tone={over ? "danger" : "neutral"} width={180}>{waitingLabel(r.waitingHours)} waiting</Badge>
-              <LinkButton to={`/orders/${r.ref}`} variant="secondary">View source record</LinkButton>
+              {queueDetailPath(r, !demo) ? <LinkButton to={operationsHref(queueDetailPath(r, !demo)!, search)} variant="secondary">View source record</LinkButton> : <Button variant="secondary" disabledReason="An exact source detail reference was not supplied.">View source record</Button>}
             </li>
           );
         })}
       </ul>
+      <CompactHolds held={held} demo={demo} search={search} />
       {low.map((s) => (
         <div key={s.home} className={styles.warnCard} data-testid="low-stock">
           <p className={styles.h3}>{s.home} is low on stock</p>
           <div className={styles.lines}>
-            <p>{s.onHand - s.reserved} available · threshold {s.threshold}</p>
+            <p>{stockAvailable(s) ?? "Unknown"} available · threshold {s.threshold}</p>
             {data.transfers.filter((t) => t.toHome === s.home).map((t) => <p key={t.ref}>Transfer {t.ref} is {t.state}.</p>)}
           </div>
-          <LinkButton to={"/inventory?home=" + s.home} variant="secondary" style={{ minWidth: 180 }}>View transfer</LinkButton>
+          <LinkButton to={operationsHref("/inventory", new URLSearchParams({ ...Object.fromEntries(search), home: s.home }))} variant="secondary" style={{ minWidth: 180 }}>View transfer</LinkButton>
         </div>
       ))}
       <p className={styles.micro}>
         Last refreshed {syncedMinutesAgo === null ? "never" : minutesAgoLabel(syncedMinutesAgo)} · {exceptions[0] ?
-          <Link to={`/shipments/${exceptions[0].shipmentRef}/exceptions/${exceptions[0].exceptionId}`}>{exceptions.length} shipping exception{exceptions.length === 1 ? "" : "s"}</Link> : "Operational data only."}
+          <Link to={operationsHref(`/shipments/${encodeURIComponent(exceptions[0].shipmentRef)}/exceptions/${encodeURIComponent(exceptions[0].exceptionId)}`, search)}>{exceptions.length} shipping exception{exceptions.length === 1 ? "" : "s"}</Link> : "Operational data only."}
       </p>
     </>
   );
+}
+
+function CompactHolds({ held, demo, search }: { held: NativeQueueRow[]; demo: boolean; search: URLSearchParams }) {
+  if (!held.length) return null;
+  return <Panel title={`${held.length} held, not ready to leave home`}><ul className={styles.stockList}>{held.map(row => <li key={row.ref}><strong>{row.ref}</strong><p>{row.hold?.reason ?? "Dispatch eligibility is unknown"}. {row.hold?.sourceAction ?? "Refresh source eligibility evidence"}.</p>{queueDetailPath(row, !demo) && <LinkButton variant="secondary" to={operationsHref(queueDetailPath(row, !demo)!, search)}>Inspect held record</LinkButton>}</li>)}</ul></Panel>;
 }

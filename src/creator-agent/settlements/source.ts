@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { ApprovalRegistry } from "../approvals/contract.ts";
 import type { DispatchHandler } from "../jobs/dispatchSchema.ts";
 import type { ActionPrincipalAuthority, ActionAuthorityFence, LedgerSource } from "../actions/contract.ts";
-import { settlementScopeSchema, settlementRef, settlementInstant, settlementRecordSchema, moneyFactSchema, settlementEconomicsSchema } from "./contract.ts";
+import { settlementScopeSchema, settlementRef, settlementInstant, settlementRecordSchema, moneyFactSchema, settlementEconomicsSchema, settlementStateTotalsSchema } from "./contract.ts";
 
 export const settlementSourceRequestSchema=z.object({scope:settlementScopeSchema,principal:z.object({principalRef:settlementRef,role:z.enum(["reader","reviewer"])}).strict(),
   viewKey:z.enum(["commissionLedger","settlementDetail","payableDetail"]),targetRef:settlementRef.nullable(),provider:z.enum(["all","collabs","tiktok","externalManual"]),currency:z.string().regex(/^[A-Z]{3}$/).nullable(),
@@ -14,6 +14,8 @@ export const settlementSnapshotSchema = z.object({ scope: settlementScopeSchema,
   state: z.enum(["current", "partial", "stale"]), synthetic: z.boolean(), currency: z.string().regex(/^[A-Z]{3}$/).nullable(),
   records: z.array(settlementRecordSchema).max(100), total: z.number().int().nonnegative().safe().nullable(),
   offset: z.number().int().nonnegative().safe(), complete: z.boolean(), nextCursor: settlementRef.nullable(),
+  /** Mutually exclusive balances for the whole exact filtered snapshot, never totals of this response page. */
+  stateTotals:settlementStateTotalsSchema.nullable().default(null),
   economics: settlementEconomicsSchema.nullable().default(null),
   totals: z.object({ eligible: moneyFactSchema, accrued: moneyFactSchema, creatorPaid: moneyFactSchema, contribution: moneyFactSchema }).strict(),
   accountingPolicy: z.object({ state: z.enum(["verified", "unknown"]), reference: settlementRef.nullable() }).strict(),

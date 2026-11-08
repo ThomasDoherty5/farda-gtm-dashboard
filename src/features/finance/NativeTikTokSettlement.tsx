@@ -8,13 +8,13 @@ import { Dialog } from "@/components/Dialog";
 import { Kpi } from "@/components/Kpi";
 import { ContextCard, FactList, GateRows, PageHeader, Panel } from "@/components/Panels";
 import { SectionTabs } from "@/components/SectionTabs";
-import { exactMoney, FinancialEvidenceDialog, FinanceSourceLink, moneyFact, observed, reasonText, recordPath, stateText } from "./NativeFinance";
+import { displayReference, exactMoney, FinancialEvidenceDialog, FinanceSourceLink, moneyFact, observed, reasonText, recordPath, stateText } from "./NativeFinance";
 import { SettlementExceptions } from "./NativeSettlementPage";
 import { SettlementMatchDialog } from "./NativeStatementMatch";
 import styles from "./Finance.module.css";
 
 const tabs = [{ key: "rates", label: "Rates & terms", width: 123 }, { key: "samples", label: "Samples", width: 100 }, { key: "settlement", label: "Native settlement", width: 151 }, { key: "exceptions", label: "Exceptions", width: 102 }] as const;
-const rateText = (fact: SettlementRecord["commissionRatePct"] | undefined) => !fact ? "Unknown · not supplied" : fact.state === "known" ? `${fact.value}%` : `${fact.state === "notApplicable" ? "N/A" : "Unknown"} · ${reasonText(fact.reasonCode)}`;
+const rateText = (fact: SettlementRecord["commissionRatePct"] | undefined) => !fact ? "Unknown" : fact.state === "known" ? `${fact.value}%` : fact.state === "notApplicable" ? "N/A" : "Unknown";
 
 export function NativeTikTokSettlement({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
   const [params] = useSearchParams();
@@ -25,12 +25,12 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
   const lane = (key: "standard" | "shopAds", title: string, tone: "violet" | "subtle") => {
     const rate = record.rates.find(item => item.lane === key);
     return <section className={styles.lane} data-tone={tone} aria-labelledby={`native-rate-${key}`}><h3 id={`native-rate-${key}`}>{title}</h3><p className={styles.footnote}>{key === "standard" ? "Organic / native affiliate context" : "Eligible ad-driven order context"}</p>
-      <div className={styles.rateKpis}><Kpi label="Active native rate" context="Exact source component">{rateText(rate?.activePct)}</Kpi><Kpi label="Proposed rate" context="Not active until source-effective">{rateText(rate?.proposedPct)}</Kpi></div>
+      <div className={styles.rateKpis}><Kpi label="Active native rate" context={rate?.activePct.state === "known" ? "Exact source component" : rate ? reasonText(rate.activePct.reasonCode ?? "NOT_OBSERVED") : "Source component not supplied"}>{rateText(rate?.activePct)}</Kpi><Kpi label="Proposed rate" context={rate?.proposedPct.state === "known" ? "Not active until source-effective" : rate ? reasonText(rate.proposedPct.reasonCode ?? "NOT_OBSERVED") : "Source component not supplied"}>{rateText(rate?.proposedPct)}</Kpi></div>
       <FactList wide labelWidth={237} gap={12} label={`${title} facts`} rows={[["Active from", observed(rate?.activeFrom ?? null)], ["Proposed from", observed(rate?.proposedFrom ?? null)], ["Terms version", rate?.termsVersion ?? "Unknown"], ["Rate owner", "TikTok Shop native record"]]} />
     </section>;
   };
   return <>
-    <PageHeader id="settlement-title" title="Native rates. Native settlement." subtitle={`${record.ref} · TikTok Shop · ${record.accountRef}`}>
+    <PageHeader id="settlement-title" title="Native rates. Native settlement." subtitle={`${displayReference(record.ref)} · TikTok Shop · ${record.accountRef}`}>
       <Button variant="secondary" disabledReason="A current target-invite reference was not supplied for this record.">Open target invite</Button><LinkButton to="/settings/capabilities">Validate native access</LinkButton>
     </PageHeader>
     <SectionTabs label="TikTok settlement sections" tabs={tabs.map(item => ({ label: item.label, to: tabTo(item.key), width: item.width, current: item.key === tab }))} />

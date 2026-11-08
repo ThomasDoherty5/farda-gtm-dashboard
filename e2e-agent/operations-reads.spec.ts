@@ -5,20 +5,38 @@ import { OperationsReadError } from "../src/creator-agent/operationsReads/source
 import { operationsTestSource, operationsSnapshot, syntheticCustomer, syntheticAuditReason } from "../src/creator-agent/operationsReads/fixtures.testkit.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "../src/creator-agent/testFixtures.ts";
 
+import { captureFinanceOperations } from "./support/finance-operations-captures.ts";
+import { screenReaderCheckpoint } from "./support/screen-reader.ts";
+
 const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, environment: "sandbox" as const };
 let app: ReturnType<typeof createAgentServer>;
+let returnResolved = false;
 let mode: "configured" | "denied" = "configured";
 const routes = ["/operations", "/orders/TEST-SH-1042", "/shipments/TEST-SP-0093/exceptions/TEST-EVT-129", "/returns/TEST-RET-028",
   "/analytics/fulfillment", "/analytics/fulfillment?view=health"];
 const listen = () => new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT), "127.0.0.1", resolve); });
 
-test.beforeEach(async () => {
+test.beforeEach(async ({ page }) => {
+  await page.clock.install({ time: Date.parse("2026-11-06T12:00:00.000Z") });
+  returnResolved = false;
   mode = "configured";
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
     operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
     operationsReadSource: operationsTestSource(async (_scope, request) => {
       if (mode === "denied") throw new OperationsReadError("DENIED", 403);
-      return { ...operationsSnapshot(request.viewKey), scope: { ...scope } };
+      const snapshot = operationsSnapshot(request.viewKey);
+      if (request.viewKey === "operationsOverview") {
+        snapshot.record.reportingScope = { home: "all", startAt: "2026-11-01T00:00:00.000Z", endAt: "2026-11-07T00:00:00.000Z", timezone: "UTC", basis: "requestedAt" };
+        snapshot.record.queue = { rows: [{ ref: "TEST-SH-1042", kind: "order", home: "H1", waitingHours: 57.6, units: 1, hold: null,
+          sourceFacts: { requestedAt: "2026-11-04T02:24:00.000Z", orderRef: "TEST-SH-1042", sampleRef: null, shipmentRef: null, detailRef: "TEST-SH-1042", orderUnfulfilled: true, sampleApproved: null, labelCreated: false, canceled: false, identityResolved: true, stockAvailable: true, evidenceRef: "synthetic-dispatch-evidence", observedAt: "2026-11-06T11:55:00.000Z" } }], total: 1 };
+      }
+      if (request.viewKey === "returnDetail" && returnResolved) {
+        snapshot.version = "synthetic-resolved-v2";
+        snapshot.record.state = "resolved";
+        snapshot.record.nativeEvents = ["returnReceived", "inventoryQuarantined", "refundSettled", "accountingPosted", "caseClosed"].map(kind => ({ kind, state: "confirmed", eventAt: "2026-11-06T11:50:00.000Z", observedAt: "2026-11-06T11:55:00.000Z", receiptRef: `synthetic-${kind}-receipt`, sourceRef: `synthetic-${kind}-source`, reasonCode: null }));
+        snapshot.record.resolved = { chain: [{ outcome: "Refund settled", receipt: "synthetic-refundSettled-receipt", confirmedAt: "2026-11-06T11:50:00.000Z" }], refunded: { minorUnits: 4000, currency: "USD" }, returnedUnits: 1, restockedUnits: 0, retainedUnits: 1, replacement: "Not requested", caseRef: "synthetic-closed-case" };
+      }
+      return { ...snapshot, scope: { ...scope } };
     }) });
   await listen();
 });
@@ -71,4 +89,49 @@ test("a reviewer cannot disclose customer details or prior private audit text wh
   await expect(page.getByTestId("customer-audit")).toHaveCount(0);
   for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason])
     await expect(page.getByText(value, { exact: false })).toHaveCount(0);
+});
+
+
+test("native operations captures every original frame and preserves privacy and keyboard recovery", async ({ page }) => {
+  test.setTimeout(240_000);
+  await login(page);
+  await page.goto("/operations");
+  await expect(page.getByRole("heading", { name: "Operations", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "TEST-SH-1042", exact: true }).first()).toBeVisible();
+  for (const node of ["4:6", "12:653", "12:708"] as const) await captureFinanceOperations(page, node);
+  await page.setViewportSize({ width: 1440, height: 1452 });
+  const queue = page.getByRole("region", { name: "Ready to leave home", exact: true });
+  await screenReaderCheckpoint(page, "native-dispatch-table-headers", queue, ["Order", "sample", "Home", "Waiting", "Next action"]);
+  await page.goto("/orders/TEST-SH-1042");
+  await expect(page.getByRole("heading", { name: "Order TEST-SH-1042" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Customer details (restricted)", exact: true })).toBeVisible();
+  await captureFinanceOperations(page, "4:171");
+  const customer = page.getByRole("button", { name: "Customer details (restricted)", exact: true });
+  await customer.click();
+  await expect(page.getByTestId("customer-denied")).toBeVisible();
+  await expect(page.getByTestId("customer-revealed")).toHaveCount(0);
+  for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason]) await expect(page.getByText(value, { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(customer).toBeFocused();
+  await screenReaderCheckpoint(page, "native-customer-denial-focus-return", customer, ["Customer details", "restricted"]);
+  for (const [route, node, title] of [
+    ["/shipments/TEST-SP-0093/exceptions/TEST-EVT-129", "4:317", "Shipment TEST-SP-0093"],
+    ["/returns/TEST-RET-028", "12:292", "Return TEST-RET-028"],
+    ["/analytics/fulfillment", "12:808", "Fulfillment"],
+  ] as const) {
+    await page.goto(route);
+    await expect(page.getByRole("heading").filter({ hasText: title }).first()).toBeVisible();
+    await expect(page.getByText("Synthetic source evidence", { exact: false }).first()).toBeVisible();
+    await captureFinanceOperations(page, node);
+    expect((await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze()).violations).toEqual([]);
+  }
+  returnResolved = true;
+  await page.goto("/returns/TEST-RET-028");
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Return resolved", exact: true })).toBeVisible();
+  await captureFinanceOperations(page, "12:431");
+  await expect(page.getByText("synthetic-refundSettled-receipt", { exact: true })).toBeVisible();
+  await page.clock.fastForward(601_000);
+  await expect(page.getByRole("heading", { name: "Return resolved", exact: true })).toHaveCount(0);
+  await expect(page.getByText("synthetic-refundSettled-receipt", { exact: true })).toHaveCount(0);
 });

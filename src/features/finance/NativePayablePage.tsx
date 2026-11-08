@@ -7,7 +7,7 @@ import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { ContextCard, Divider, FactList, Note, PageHeader, Panel } from "@/components/Panels";
 import { RecordShell } from "@/features/operations/RecordShell";
-import { exactMoney, FinanceGrant, FinanceSourceLink, FinancialEvidenceDialog, moneyFact, observed, stateText } from "./NativeFinance";
+import { displayReference, exactMoney, FinanceGrant, FinanceSourceLink, FinancialEvidenceDialog, moneyFact, observed, stateText } from "./NativeFinance";
 import styles from "./Finance.module.css";
 import native from "./NativeFinance.module.css";
 
@@ -39,7 +39,7 @@ function PayableBody({ record, data }: { record: SettlementRecord; data: NativeP
     { title: "Reconciled", note: reconciled ? `Source reconciliation observed ${observed(reconciled.observedAt)}` : "Unknown · reconciliation evidence not supplied" },
   ];
   return <>
-    <PageHeader id="payable-title" title="Direct content fees end with proof." subtitle={<span className={native.reference}>{record.ref} · {record.creatorRef} · {history ? exactMoney(history.acceptedAmount) : "Accepted amount unknown"}</span>}>
+    <PageHeader id="payable-title" title="Direct content fees end with proof." subtitle={<span className={native.reference}>{displayReference(record.ref)} · {displayReference(record.creatorRef)} · {history ? exactMoney(history.acceptedAmount) : "Accepted amount unknown"}</span>}>
       <FinanceSourceLink record={record} kind="ledger" label="Open ledger source" />
       <FinanceSourceLink record={record} kind="approval" label="Founder review" />
     </PageHeader>

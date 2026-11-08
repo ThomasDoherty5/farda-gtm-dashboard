@@ -65,7 +65,8 @@ describe("operations reader", () => {
     const readerText = JSON.stringify(asReader);
     for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason, "+1-555-0100", "1 Synthetic Way", "synthetic-private-token"]) expect(readerText).not.toContain(value);
     const asReviewer = await reader(source).read("orderCustomer", { orderId: "TEST-SH-1042" }, "reviewer");
-    expect(Object.keys(asReviewer.data as object).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "provenance", "revealed", "synthetic"]);
+    expect(Object.keys(asReviewer.data as object).sort()).toEqual(["access", "audit", "datasetKey", "nativeEvents", "orderRef", "provenance", "reportingScope", "revealed", "sourceLinks", "synthetic"]);
+    expect(asReviewer.data).toMatchObject({ nativeEvents: [], reportingScope: null, sourceLinks: [] });
     expect(asReviewer.data).toMatchObject({ revealed: null, audit: [], access: { state: "denied" } });
     for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason]) expect(JSON.stringify(asReviewer)).not.toContain(value);
     expect(await failure(reader(async () => operationsSnapshot("orderCustomer", { record: { ...record as object, sourceToken: "synthetic-private-token" } })).read("orderCustomer", { orderId: "TEST-SH-1042" }, "reviewer"))).toMatchObject({ code: "SOURCE_RESPONSE_INVALID" });
@@ -141,7 +142,7 @@ describe("operations reader", () => {
   it("refuses demo-only and unknown filters before any source access", async () => {
     let reads = 0;
     const source: OperationsReadSourceReader["read"] = async () => { reads++; return operationsSnapshot("operationsOverview"); };
-    for (const filters of [{ scenario: "stale" }, { fixture: "x" }, { q: "x" }, { home: "H1" }])
+    for (const filters of [{ scenario: "stale" }, { fixture: "x" }, { q: "x" }, { home: "H4" }])
       expect(await failure(reader(source).read("operationsOverview", filters, "reader"))).toMatchObject({ code: "INVALID_INPUT", status: 400 });
     expect(await failure(reader(source).read("returnDetail", { returnId: "TEST-RET-028", scenario: "resolved" }, "reader"))).toMatchObject({ code: "INVALID_INPUT" });
     expect(await failure(reader(source).read("fulfillmentAnalytics", { days: 30 }, "reader"))).toMatchObject({ code: "INVALID_INPUT" });
