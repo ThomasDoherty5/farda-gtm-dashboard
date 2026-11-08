@@ -63,7 +63,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `channelCapabilities` | none | CapabilityData | `settings/CapabilitiesPage` | `demoSettings` | proposed |  |
 | `collaborationDetail` | `collaborationId` | CollaborationData | `collaboration/CollaborationPage` | `demoAdapter` | proposed |  |
 | `collaborationEvidence` | `collaborationId`; cursor pages | CollaborationEvidenceData | `collaboration/CollaborationEvidence` | `demoCollaborationEvidence` | scoped saved-record projection | The authenticated service reads exact collaboration links. |
-| `commissionLedger` | `scenario?` | CommissionLedger | `finance/CommissionLedgerPage` | `demoFinance` | proposed + conflict | C-06. |
+| `commissionLedger` | `scenario?` (demo); none (native) | CommissionLedger | `finance/CommissionLedgerPage` | `demoFinance` | native + historical demo + conflict | C-06. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `connectionsOverview` | none | ConnectionsData | `settings/ConnectionsPage` | `demoSettings` | proposed |  |
 | `consentEligibility` | none | ConsentData / NativeConsent | `lifecycle/ConsentPage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Exclusive source-defined consent categories and exact cohort; unknown is distinct from zero. |
 | `contentMonitor` | `source`, `network`, `window`, `q` | ContentMonitorData | `monitor/MonitorPage` | `demoMonitor` | proposed + conflict | C-05, C-16. Uses `keepPrevious`. |
@@ -71,7 +71,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `discoverySummary` | none | DiscoveryData | `acquisition/DiscoveryPage` | `demoAdapter` | proposed |  |
 | `emailFlow` | `flow`, optional reviewer-only `draftRequestKey` | EmailFlowData / NativeEmailFlow | `lifecycle/EmailFlowPage`, `SetupFlowPage`, `NativeEmailFlowPage` | `demoLifecycle` | native + historical demo | Setup is read-only. Three editable flow catalogs, local draft/history and exact-key request proof; absent is not terminal. |
 | `evidenceRecord` | `creatorId`, `evidenceId` | EvidenceRecord | `acquisition/EvidencePage` | `demoAdapter` | proposed + conflict | C-07. Shape in `features/acquisition/evidenceTypes.ts`, marked PROPOSED (THO-283, THO-326). |
-| `financeDashboard` | `scenario?` | FinanceDashboard | `finance/FinanceAnalyticsPage`, `finance/FinanceDashboardPage` | `demoFinance` | proposed + conflict | C-06. Read by two pages. |
+| `financeDashboard` | `scenario?` (demo); none (native) | FinanceDashboard | `finance/FinanceAnalyticsPage`, `finance/FinanceDashboardPage` | `demoFinance` | native + historical demo + conflict | C-06. Read by two pages. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `fulfillmentAnalytics` | `days` (7 or 14) | FulfillmentAnalytics | `operations/FulfillmentAnalyticsPage` | `demoOps` | proposed + conflict | C-05 (period as `days`). Demo answers `VALIDATION_FAILED` for other values. |
 | `hourlyRun` | `runId` | HourlyRunData | `monitor/HourlyRunPage` | `demoMonitor` | proposed |  |
 | `inventoryOverview` | `scenario?` | InventoryOverview | `inventory/InventoryPage` | `demoOps` | proposed + conflict | C-06. |
@@ -92,19 +92,19 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `orderDetail` | `orderId` | OrderDetail | `operations/OrderPage` | `demoOps` | proposed |  |
 | `overviewSummary` | none | OverviewData | `overview/OverviewPage` | `demoAdapter` | proposed | Nine demo fixture switches are chosen by an adapter option, not by the request. |
 | `paidMedia` | `rights`, `platform` | PaidMediaData | `analytics/PaidMediaPage` | `demoAnalytics` | proposed | Uses `keepPrevious`. |
-| `payableDetail` | `payableId` | PayableDetail | `finance/PayablePage` | `demoFinance` | proposed |  |
-| `closePackage` | `period`, `scenario?` | ClosePackage | `finance/ClosePackagePage` | `demoFinance` | proposed + conflict | C-05, C-06. Read from the same fixture evidence as `periodClose`, so the two cannot disagree. An unknown `scenario` is refused with `VALIDATION_FAILED`. |
-| `monthsHistory` | none | months list | `finance/CloseViews` | `demoFinance` | proposed | Synthetic months. October's status is read from the close package. |
-| `periodClose` | `period`, `scenario?` | PeriodClose | `finance/CloseReconciliationPage` | `demoFinance` | proposed + conflict | C-05 (period is a filter, `period` request field is `null`), C-06. |
+| `payableDetail` | `payableId` | PayableDetail | `finance/PayablePage` | `demoFinance` | native + historical demo | `executePayment` is held for a reviewer and denied (`REVIEWER_REQUIRED`) for a reader; no payment path exists. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
+| `closePackage` | `period`, `scenario?` (demo); `period` (native) | ClosePackage | `finance/ClosePackagePage` | `demoFinance` | native + historical demo + conflict | C-05, C-06. Read from the same fixture evidence as `periodClose`, so the two cannot disagree. An unknown `scenario` is refused with `VALIDATION_FAILED`. `closePeriod` stays held. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
+| `monthsHistory` | none | months list | `finance/CloseViews` | `demoFinance` | native + historical demo | Synthetic months. October's status is read from the close package. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
+| `periodClose` | `period`, `scenario?` (demo); `period` (native) | PeriodClose | `finance/CloseReconciliationPage` | `demoFinance` | native + historical demo + conflict | C-05 (period is a filter, `period` request field is `null`), C-06. `closePeriod` stays held. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `pipelineBranches` | `source` | BranchesData | `acquisition/BranchesView` | `demoAdapter` | proposed | Splits by source only; the page shows the other pipeline filters it was opened with and says they do not change these counts. |
 | `pipelineSummary` | `source`, `route`, `network`, `checkout`, `window`, `policy` | PipelineData | `acquisition/PipelinePage` | `demoAdapter` | proposed + conflict | C-05. Demo refuses unknown facet values with `VALIDATION_FAILED`. |
 | `postPerformance` | `postId` | PostPerformanceData | `monitor/PostPage` | `demoMonitor` | proposed |  |
 | `recruitmentQueue` | `networks`, `route` | RecruitmentData | `recruitment/RecruitmentPage` | `demoAdapter` | proposed + conflict | C-05. Uses `keepPrevious`. Demo refuses unknown facet values. |
-| `reportManifest` | none | Manifest | `finance/CloseViews` | `demoFinance` | proposed | Synthetic dry-run manifest of the seven package reports. Nothing is generated. |
+| `reportManifest` | none | Manifest | `finance/CloseViews` | `demoFinance` | native + historical demo | Synthetic dry-run manifest of the seven package reports. Nothing is generated. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `returnDetail` | `returnId`, `scenario?` | ReturnDetail | `operations/ReturnPage` | `demoOps` | proposed + conflict | C-06, C-07. |
 | `runDetail` | `runId` | RunDetail / NativeRunView | `approvals/RunPage`, `NativeRunPage` | `demoAdapter` | native + historical demo | The existing runner supplies finite item outcomes; local artifacts and provider effects remain distinct. `inspectRun` is not sent. |
 | `scheduleDetail` | `jobId` | ScheduleData | `settings/SchedulePage` | `demoSettings` | proposed |  |
-| `settlementDetail` | `settlementId` | SettlementRecord | `finance/SettlementPage` | `demoFinance` | proposed |  |
+| `settlementDetail` | `settlementId` | SettlementRecord | `finance/SettlementPage` | `demoFinance` | native + historical demo | `reconcileSettlement` held for a reviewer, `payCommission` unsupported (`PROVIDER_OWNS_PAYOUT`); both denied for a reader. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/finance/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `FINANCE_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `shippingException` | `shipmentId`, `exceptionId` | ShippingExceptionDetail | `operations/ShippingExceptionPage` | `demoOps` | proposed + conflict | C-07. |
 | `socialCatBoard` | `owner` | SocialCatBoardData | `creators/SocialCatPage` | `demoCreators` | proposed | Uses `keepPrevious`. Demo refuses unknown owners. |
 | `socialCatDashboard` | `network` | SocialCatDashboardData | `creators/SocialCatPage` | `demoCreators` | proposed + conflict | C-05. Uses `keepPrevious`. |
@@ -569,6 +569,32 @@ New native error classifications and recovery:
 | `FUNNEL_NARROW_COHORT_WINDOW` | validation | Narrow the cohort date range instead of silently truncating. |
 
 `EVIDENCE_DISPUTED` is a qualification reason, not an HTTP success or permission. Identical resaves and revision-label changes cannot resolve it. Mutations retain explicit `executionCertainty`; an uncertain save requires independent readback before another request.
+
+## Native finance and payable reads (THO-367)
+
+Stage: **sandbox, unconfigured source.** The creator agent serves the eight finance view keys at the authenticated `/v1/read` boundary through `src/creator-agent/finance/`. No accounting or provider reader exists in this repository, so nothing here is integration-verified, and no Pay, reconcile, close, sign-off or export path is added.
+
+| Surface | Native contract |
+| -- | -- |
+| `financeDashboard`, `commissionLedger`, `monthsHistory`, `reportManifest` | Filters `{}` exactly. A configured reader's record must parse with the view's schema in `viewSchemas/finance.ts`. `record: null` is `dataState: "empty"` only when the source counted zero expected rows. |
+| `periodClose`, `closePackage` | Filters `{ period: "YYYY-MM" }`. The source period and the record's `period` must equal the requested period. A source `null` is `RECORD_NOT_FOUND`. |
+| `settlementDetail`, `payableDetail` | Filters `{ settlementId }` or `{ payableId }`. The record id must equal the requested id. A source `null` is `RECORD_NOT_FOUND`. |
+| All eight | `scenario`, `fixture` and any other filter are refused with 400 `INVALID_INPUT` (D-11). A non-null cursor is 400 `INVALID_CURSOR`. `period` and `sort` are `null` and `[]`. Capabilities are `denied` with `REVIEWER_REQUIRED` for a reader. For a reviewer, `reconcileSettlement`, `executePayment` and `closePeriod` are `held` with `FINANCE_ACTIONS_NOT_CONNECTED`, and `payCommission` is `unsupported` with `PROVIDER_OWNS_PAYOUT`. Nothing is cached between reads. |
+
+Outcomes (error bodies use the D-14 envelope with `executionCertainty: "notApplied"`):
+
+| Situation | HTTP and code | Reason codes |
+| -- | -- | -- |
+| No reader configured (the default) | 503 `INTEGRATION_PENDING`, no `data` | `FINANCE_SOURCE_UNCONFIGURED` |
+| Reader threw or returned `null` | 503 `SOURCE_UNAVAILABLE` | `FINANCE_SOURCE_UNAVAILABLE` |
+| Reader exceeded 10 s | 504 `TIMEOUT` | `FINANCE_SOURCE_TIMEOUT` |
+| Reader denied (401/403), or answered for another scope | 403 `SOURCE_AUTHORITY_DENIED`, neutral message, no hints | none |
+| Invalid snapshot, wrong view, period or record address, future observation | 502 `SOURCE_RESPONSE_INVALID` | `FINANCE_SOURCE_INVALID`, `FINANCE_SOURCE_VIEW_MISMATCH`, `FINANCE_PERIOD_MISMATCH`, `FINANCE_RECORD_ADDRESS_MISMATCH`, `FINANCE_RECORD_INVALID`, `SOURCE_TIME_UNVERIFIED` |
+| Older than the source lease or the 24-hour D-13 accounting ceiling | 200 `dataState: "stale"`, `coverage.complete: false`, `sourceFreshness[0].staleReasonCode` | `FINANCE_SOURCE_STALE` |
+| Partial source coverage | 200 `dataState: "partial"`, counts as given (`null` stays `null`) | the source's own reason codes |
+| Client disconnected | the source signal is aborted; the 499 `REQUEST_CANCELLED` answer reaches no one | none |
+
+`/v1/capabilities` reports `financeReads: { sourceAuthority: "notConnected", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" }` until a reader is injected.
 
 ## Keeping the register honest
 

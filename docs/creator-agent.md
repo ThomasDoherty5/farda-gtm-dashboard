@@ -37,6 +37,12 @@ The existing draft/mark-watched controls are held for projected records. Review 
 
 All three response versions hash the returned read-model data. A stale/superseded readiness change therefore changes the response version while the original saved assessment identity remains stable. Model tables in a saved assessment describe the configuration used for that run; sourcing model summaries describe current bindings.
 
+### Finance and payable reads (THO-303, THO-300; THO-367)
+
+`financeDashboard`, `periodClose`, `monthsHistory`, `closePackage`, `reportManifest`, `commissionLedger`, `settlementDetail` and `payableDetail` are served by `src/creator-agent/finance/`. **Stage: sandbox, unconfigured source.** No QuickBooks or provider reader exists in this repository, so with the default configuration every one of these reads answers 503 `INTEGRATION_PENDING` with reason `FINANCE_SOURCE_UNCONFIGURED` and no data. The service never serves the demo fixtures and never synthesizes a figure or an empty success.
+
+A private `financeSource` reader can be injected through the server options. Its answer is validated strictly: exact scope, view, period and record id; the frontend's per-view schema; a lease capped at the 24-hour D-13 accounting ceiling; and explicit coverage. Stale and partial answers keep their state, counts and reasons. Unknown values stay unknown. A source denial clears to a neutral 403, and source text never reaches a response. Filters are exact, with no `scenario`. Cursors are refused. Reader capabilities are denied, and no Pay, reconcile, close, sign-off or export action exists. The full outcome table is in `adapter-freeze-register.md`, under "Native finance and payable reads".
+
 ### Creator intake (J01)
 
 `POST /v1/intake` records one signup or discovery candidate and resolves it to a canonical creator, without scoring, inviting, messaging, reserving or paying. Reads are under `/v1/intake/events`, `/v1/intake/creators` and `/v1/intake/sources`. The source route permission, suppression list, reviewed crosswalk and Notion/Sheets sinks are injected through `intakeAuthority`; none is connected yet. See [`src/creator-agent/intake/README.md`](../src/creator-agent/intake/README.md).
