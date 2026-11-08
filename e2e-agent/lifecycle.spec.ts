@@ -7,6 +7,7 @@ import { LifecycleError } from "../src/creator-agent/lifecycle/source.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
 import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
 import type { NativeEmailFlow } from "../src/creator-agent/lifecycle/contract.ts";
+import {screenReaderCheckpoint} from "./support/screen-reader";
 
 async function listen(app: ReturnType<typeof createAgentServer>) {
   await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT), "127.0.0.1", resolve); });
@@ -40,13 +41,17 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
       await page.goto(`/customers/flows/${flow}`); await capture(flow!, title!);
       const policies = page.getByRole("checkbox"); await expect(policies).toHaveCount(3);
       for (const checkbox of await policies.all()) { await expect(checkbox).toBeChecked(); await expect(checkbox).toHaveAttribute("aria-readonly", "true"); await checkbox.focus(); await page.keyboard.press("Space"); await expect(checkbox).toBeChecked(); }
+      await screenReaderCheckpoint(page,flow+"-locked-policy",policies.first(),["Recheck consent before send","checked"]);
       await page.getByRole("button", { name: "Preview template", exact: true }).focus(); await page.keyboard.press("Enter");
       await expect(page.getByRole("dialog").filter({ has: page.getByRole("heading", { name: "Template preview" }) })).toContainText("Synthetic preview");
       await page.keyboard.press("Escape"); await expect(page.getByRole("button", { name: "Preview template", exact: true })).toBeFocused();
+      await screenReaderCheckpoint(page,flow+"-dialog-focus-return",page.getByRole("button",{name:"Preview template",exact:true}),["Preview template","button"]);
       await page.getByLabel("Local draft title").fill("ab"); await page.getByRole("button", { name: "Save draft", exact: true }).click();
       await expect(page.getByLabel("Local draft title")).toHaveAttribute("aria-invalid", "true");
+      await screenReaderCheckpoint(page,flow+"-validation",page.getByLabel("Local draft title"),["Local draft title","invalid"]);
       await page.getByLabel("Local draft title").fill(`Reviewed ${flow} draft`); await page.getByRole("button", { name: "Save draft", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Draft persistence confirmed" })).toBeVisible();
+      await screenReaderCheckpoint(page,flow+"-save-announcement",page.getByRole("button",{name:"Continue editing",exact:true}),["Draft persistence confirmed","Continue editing"]);
       await page.getByRole("button", { name: "Continue editing", exact: true }).click(); await page.reload();
       await expect(page.getByLabel("Local draft title")).toHaveValue(`Reviewed ${flow} draft`);
       await page.getByRole("button", { name: "Event handling", exact: true }).click();
@@ -56,6 +61,7 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
     await page.goto("/customers/consent"); await capture("consent", "A clear view of who is eligible.");
     await page.getByRole("button", { name: "Review exclusions" }).focus(); await page.keyboard.press("Enter"); await expect(page.locator("#exclusions")).toBeFocused();
     const scroll = page.locator('[role="region"][aria-label="Why an enrollment stops"]'); await scroll.focus(); await page.keyboard.press("ArrowRight");
+    await screenReaderCheckpoint(page,"consent-table-alternative",scroll,["Why an enrollment stops"]);
     await expect.poll(() => scroll.evaluate(e => e.scrollLeft)).toBeGreaterThan(0);
     await page.goto("/customers/activation"); await capture("activation", "Measure setup, then sustained use.");
     await expect(page.getByRole("region", { name: "First-week cohort" })).toContainText("do not prove ingestion");
