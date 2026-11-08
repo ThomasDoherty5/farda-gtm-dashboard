@@ -75,7 +75,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `fulfillmentAnalytics` | `days` (7 or 14) | FulfillmentAnalytics | `operations/FulfillmentAnalyticsPage` | `demoOps` | native + historical demo + conflict | C-05 (period as `days`). Demo answers `VALIDATION_FAILED` for other values; native refuses them with 400 and requires the record's `periodDays` to equal `days`. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/operationsReads/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `OPERATIONS_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `hourlyRun` | `runId` | HourlyRunData | `monitor/HourlyRunPage` | `demoMonitor` | proposed |  |
 | `inventoryOverview` | `scenario?` | InventoryOverview | `inventory/InventoryPage` | `demoOps` | proposed + conflict | C-06. |
-| `invitationDraft` | none | InvitationData | `recruitment/InvitationPage` | `demoAdapter` | proposed |  |
+| `invitationDraft` | none | InvitationData | `recruitment/InvitationPage` | `demoAdapter` | native + historical demo | A read model of the composer's source facts, not a saved draft: the screen edits terms locally and saves nothing, so no `saveResource` path is involved. Native: `quota` stays the `unknown` marker and `automateInvitations` stays `off` (the schema refuses anything else); `sendInvitation` is `denied` (`REVIEWER_REQUIRED`) for a reader and `held` (`INVITATION_ACTIONS_NOT_CONNECTED`) for a reviewer; nothing is sent. The schema pins `datasetKey` to `invitation-demo`, so a live source must carry that key until the schema is widened. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/teamInvitationReads/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `INVITATION_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `launchControl` | optional original `requestKey` | LaunchControlData / NativeReadinessView | `analytics/LaunchControlPage`, `NativeLaunchControl` | `demoAnalytics` | native + historical demo | Source-owned readiness facts and exact original request recovery; recording does not grant release. |
 | `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
@@ -109,7 +109,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `socialCatBoard` | `owner` | SocialCatBoardData | `creators/SocialCatPage` | `demoCreators` | proposed | Uses `keepPrevious`. Demo refuses unknown owners. |
 | `socialCatDashboard` | `network` | SocialCatDashboardData | `creators/SocialCatPage` | `demoCreators` | proposed + conflict | C-05. Uses `keepPrevious`. |
 | `supportWorkspace` | `caseId`, `scenario?` | SupportWorkspace | `support/SupportPage` | `demoOps` | proposed + conflict | C-06. |
-| `teamPermissions` | none | TeamData | `settings/TeamPage` | `demoSettings` | proposed |  |
+| `teamPermissions` | none | TeamData | `settings/TeamPage` | `demoSettings` | native + historical demo | The live team screen renders `operationsControl` (section `team`); this read model is what the demo screen reads. Native: no capabilities are carried, so nothing on it can grant a role or assign an owner; keys outside `teamPermissionsSchema` are dropped and a source-supplied capability is refused. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/teamInvitationReads/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `TEAM_PERMISSIONS_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `operationsControl` | `section`, optional `targetRef`, reviewer-only `proposalRequestKey`, bounded `q`/`platform`/`mine`, reports-only `jobRef` | NativeOperationsControl | `settings/NativeOperationsControls` | native only | native | Supplemental source-owned team/run/report/capability/reconciliation detail. Existing paged lists and schedule drafts remain authoritative; no duplicate executor or ledger. |
 | `tiktokBoard` | `q` | TikTokBoardData | `creators/TikTokPage` | `demoCreators` | proposed + conflict | C-16. Uses `keepPrevious`. |
 | `tiktokDashboard` | none | TikTokDashboardData | `creators/TikTokPage` | `demoCreators` | proposed |  |
@@ -180,7 +180,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `saveFlowDraft` | `available` | `emailFlow` | none | conflict (C-15) |
 | `saveOfferDraft` | `available` | `offerDraft` | none | conflict (C-15) |
 | `saveScheduleDraft` | `available` | `scheduleDetail` | `settings/SchedulePage` | conflict (C-15) |
-| `sendInvitation` | `unverified` (`SOURCE_ACCESS_UNVERIFIED`) | `invitationDraft` | `recruitment/InvitationPage` | proposed |
+| `sendInvitation` | `unverified` (`SOURCE_ACCESS_UNVERIFIED`) (demo); native `denied` (`REVIEWER_REQUIRED`) for a reader, `held` (`INVITATION_ACTIONS_NOT_CONNECTED`) for a reviewer | `invitationDraft` | `recruitment/InvitationPage` | proposed |
 | `startLiveDiscovery` | `unverified` (`SOURCE_ACCESS_UNVERIFIED`) | `discoverySummary` | `acquisition/DiscoveryPage` | proposed |
 | `takeOverTask` | `held` (`TAKEOVER_NOT_ASSIGNED`) | `automationRuns` | none | proposed |
 
@@ -623,6 +623,31 @@ Outcomes (error bodies use the D-14 envelope with `executionCertainty: "notAppli
 | Client disconnected | the source signal is aborted; the 499 `REQUEST_CANCELLED` answer reaches no one | none |
 
 `orderCustomer` is personal data. A reader role never receives `revealed` values, whatever the source says. Keys outside `orderCustomerSchema` (for example a phone number, address or provider customer id) are stripped by the schema, the bearer credential and the source version never appear (the version is an HMAC alias), and the reveal itself is not connected. `/v1/capabilities` reports `operationsReads: { sourceAuthority: "notConnected", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" }` until a reader is injected.
+
+## Native team permission and invitation draft reads (THO-367)
+
+Stage: **sandbox, unconfigured source.** The creator agent serves `teamPermissions` (THO-305) and `invitationDraft` (THO-298) at the authenticated `/v1/read` boundary through `src/creator-agent/teamInvitationReads/`. No provider role register or TikTok Affiliate Center reader exists in this repository, so nothing here is integration-verified. No role is granted or changed, no owner is assigned and no invitation is sent: the team view carries no capability, and `sendInvitation` stays held. `invitationDraft` is a read model (the composer edits locally and saves nothing), so no versioned save path is involved. The existing PR #87 operations controls (`operationsControl`, section `team`) remain the live team screen and are unchanged; their source snapshot is a different shape and is not reused here.
+
+| Surface | Native contract |
+| -- | -- |
+| `teamPermissions` | Filters `{}` exactly. The record must parse with `teamPermissionsSchema` in `viewSchemas/settings.ts`, and only its output is returned. `capabilities` is always `[]`. A snapshot that carries its own capabilities is refused (strict), so recorded permission evidence can never be presented as an available grant. |
+| `invitationDraft` | Filters `{}` exactly. The record must parse with the `invitationDraft` schema in `viewSchemas/recruitment.ts`: `quota` is only the `unknown` marker (a numeric quota is refused) and `automateInvitations` is only `off`. `sendInvitation` is `denied` (`REVIEWER_REQUIRED`) for a reader and `held` (`INVITATION_ACTIONS_NOT_CONNECTED`) for a reviewer, plus `SOURCE_STALE` or `SOURCE_COVERAGE_PARTIAL` when applicable. |
+| Both | `record: null` is `dataState: "empty"` only when the source counted zero expected rows; an uncounted null is refused, and a partial null stays `partial`. `scenario`, `fixture` and any other filter are refused with 400 `INVALID_INPUT` (D-11) before the source is read. A non-null cursor is 400 `INVALID_CURSOR`. `period` and `sort` are `null` and `[]`. Freshness is capped at 15 minutes (the operations-controls ceiling for source role facts; D-13 names no class for these sources). Nothing is cached between reads. |
+
+Outcomes (error bodies use the D-14 envelope with `executionCertainty: "notApplied"`; `<P>` is `TEAM_PERMISSIONS` or `INVITATION`):
+
+| Situation | HTTP and code | Reason codes |
+| -- | -- | -- |
+| No reader configured (the default) | 503 `INTEGRATION_PENDING`, no `data` | `<P>_SOURCE_UNCONFIGURED` |
+| Reader threw or returned `null` | 503 `SOURCE_UNAVAILABLE` | `<P>_SOURCE_UNAVAILABLE` |
+| Reader exceeded 10 s | 504 `TIMEOUT` | `<P>_SOURCE_TIMEOUT` |
+| Reader denied (401/403), or answered for another scope | 403 `SOURCE_AUTHORITY_DENIED`, neutral message, no hints | none |
+| Invalid snapshot, wrong view, invalid record, future observation | 502 `SOURCE_RESPONSE_INVALID` | `<P>_SOURCE_INVALID`, `<P>_SOURCE_VIEW_MISMATCH`, `<P>_RECORD_INVALID`, `SOURCE_TIME_UNVERIFIED` |
+| Older than the source lease or the 15-minute ceiling | 200 `dataState: "stale"`, data kept, `coverage.complete: false`, `sourceFreshness[0].staleReasonCode` | `<P>_SOURCE_STALE` |
+| Partial source coverage | 200 `dataState: "partial"`, counts as given (`null` stays `null`) | the source's own reason codes |
+| Client disconnected | the source signal is aborted; the 499 `REQUEST_CANCELLED` answer reaches no one | none |
+
+`/v1/capabilities` reports `teamInvitationReads: { sourceAuthority: "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" }` until a reader is injected.
 
 ## Keeping the register honest
 
