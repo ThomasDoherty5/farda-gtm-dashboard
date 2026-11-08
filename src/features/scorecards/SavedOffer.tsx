@@ -1,5 +1,5 @@
 import { LeaveGuard } from "@/components/LeaveGuard";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, LinkButton } from "@/components/Button";
 import { Field, SelectField, TextField } from "@/components/Field";
@@ -71,7 +71,7 @@ function ScenarioFields({label,scenario,onChange}:{label:"Base"|"Downside";scena
 }
 export type CommercialOfferRecord = OfferRecord & { commercialEligibility?: CommercialEligibilityView };
 export function AgentOffer({record,canEdit,current=true}:{record:CommercialOfferRecord;canEdit:boolean;current?:boolean}) {
-  const baseTerms=useRef(record.terms);
+  const [baseTerms,setBaseTerms]=useState(record.terms);
   const [draft,setDraft]=useState(record.terms), [editingVersion,setEditingVersion]=useState(record.version);
   const [errors,setErrors]=useState<string[]>([]), [review,setReview]=useState(false);
   const save=useSave<OfferTerms,OfferRecord>();
@@ -82,14 +82,14 @@ export function AgentOffer({record,canEdit,current=true}:{record:CommercialOffer
     if(!parsed.success){setErrors(parsed.error.issues.map(i=>`${i.path.join(".")}: ${i.message}`));return;}
     setErrors([]);
     save.mutate({resourceKind:"actionDraft",resourceRef:record.offerId,expectedVersion:editingVersion,payload:parsed.data},
-      {onSuccess:r=>{baseTerms.current=r.record.terms;setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
+      {onSuccess:r=>{setBaseTerms(r.record.terms);setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
   };
-  const reload=()=>{baseTerms.current=record.terms;setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
+  const reload=()=>{setBaseTerms(record.terms);setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
   const provider=record.provider, saved=record.terms;
   const sourcePricing=record.commercial?.pricingBasis==="source";
   const candidatePricing=!sourcePricing && saved.pricingVersion===CANDIDATE_VERSION;
   const buyerPrices=sourcePricing?record.commercial?.bundles:candidatePricing?BUNDLES:null;
-  const dirty = JSON.stringify(draft)!==JSON.stringify(baseTerms.current);
+  const dirty = JSON.stringify(draft)!==JSON.stringify(baseTerms);
   const eligibilityCurrent = current && !dirty && record.version === editingVersion;
   return <>
     <LeaveGuard dirty={dirty} subject="offer draft" />

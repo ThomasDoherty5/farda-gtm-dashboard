@@ -2,13 +2,14 @@ import { useState } from "react";
 import type { ApprovalReview, ReviewField, ReviewLink } from "@/creator-agent/actions/reviewViews";
 import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
-import { useSourceLease } from "@/features/commercial/useSourceLease";
+import { useClockCheck, useSourceLease } from "@/features/commercial/useSourceLease";
 import { Details, dateTime } from "./shared";
 import styles from "./Approvals.module.css";
 
 export function useReviewAccess(review: ApprovalReview | undefined, current: boolean) {
   const leased = useSourceLease(review?.validUntil);
-  return Boolean(current && leased && review?.observedAt && Date.parse(review.observedAt) <= Date.now());
+  const observed = useClockCheck(now => Boolean(review?.observedAt && Date.parse(review.observedAt) <= now));
+  return Boolean(current && leased && observed);
 }
 export function reviewValue(field: ReviewField | undefined, permitted: boolean): string {
   if (!permitted) return "Unavailable · current display permission required";

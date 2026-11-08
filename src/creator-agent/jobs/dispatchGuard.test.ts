@@ -120,9 +120,9 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
  });
 
  it.each(["pause","cancel","approval","lease","worker"])("the execute context final fence blocks %s after a handler await",async change=>{
-   const reached=deferred<void>(),resume=deferred<void>();let active=true;let currentRun="";
+   const reached=deferred<void>(),resume=deferred<void>();let active=true;
    handler.execute=async c=>{reached.resolve();await resume.promise;c.assertCurrent();called++;return applied(c);};
-   const run=await handoff();currentRun=run.runRef;
+   const run=await handoff();const currentRun=run.runRef;
    const executing=guard.execute(currentRun,{workerRef:"synthetic-worker",assertCurrent:()=>{if(!active)throw new DispatchError("WORKER_REVOKED",403);}});
    await reached.promise;
    if(change==="pause"||change==="cancel")guard.control(currentRun,guard.read(currentRun).revision,change);

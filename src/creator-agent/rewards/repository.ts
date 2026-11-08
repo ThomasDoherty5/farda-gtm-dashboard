@@ -215,7 +215,6 @@ export class RewardRedemptionRepository {
       if (policy && !option) reasons.push("REWARD_OPTION_NOT_ALLOWED");
       const quoteSource = parse(quoteSchema, this.authority.quote?.(input.quoteRef, this.scope));
       const quote = quoteSource && sameScope(quoteSource.scope,this.scope) ? quoteSource : null;
-      let fardaMinor: number | null = null;
       if (!quote || quote.quoteRef !== input.quoteRef) reasons.push("QUOTE_UNVERIFIED");
       else {
         if (quote.optionId !== input.optionId || (option && quote.providerRef !== option.providerRef)) reasons.push("QUOTE_MISMATCH");
@@ -223,7 +222,7 @@ export class RewardRedemptionRepository {
         if (Date.parse(quote.validUntil) <= now.getTime()) reasons.push("QUOTE_EXPIRED");
         if (quote.creatorFundedMinor > quote.itemMinor) reasons.push("QUOTE_INVALID");
         // Everything Farda pays is inside the cap. An optional creator-funded upgrade never raises Farda's liability.
-        fardaMinor = Math.max(0, quote.itemMinor - quote.creatorFundedMinor) + quote.taxMinor + quote.shippingMinor + quote.bookingMinor + quote.adminMinor;
+        const fardaMinor = Math.max(0, quote.itemMinor - quote.creatorFundedMinor) + quote.taxMinor + quote.shippingMinor + quote.bookingMinor + quote.adminMinor;
         if (fardaMinor > entitlement.amountMinor) reasons.push("ALL_IN_CAP_EXCEEDED");
       }
       const provider = option ? this.provider(option) : null;
