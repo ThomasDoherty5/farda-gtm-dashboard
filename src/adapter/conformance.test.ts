@@ -9,7 +9,7 @@ runContractSchemaConformance();
 
 const demoScope = { workspaceId: "w", accountIds: ["a"], environment: "demo" as const };
 
-/** The demo adapter: every rule has a scenario except the one noted. */
+/** The demo adapter: every rule has a scenario. */
 const demo: ConformanceTarget = {
   name: "demo adapter",
   kind: "demo",
@@ -21,6 +21,7 @@ const demo: ConformanceTarget = {
   unauthenticated: () => createDemoAdapter({ fixture: "FX-09-expired-session" }),
   forbidden: () => createDemoAdapter({ fixture: "FX-08-forbidden-account" }),
   unavailable: () => createDemoAdapter({ fixture: "FX-07-offline-read" }),
+  unavailableWrites: () => createDemoAdapter({ writes: "unavailable" }),
   valueStates: {
     knownZero: { create: () => createDemoAdapter({ fixture: "FX-02-known-zero" }), read: { viewKey: "overviewSummary" } },
     unknown: { create: () => createDemoAdapter({ fixture: "FX-04-missing-metric" }), read: { viewKey: "customerJourney" } },
@@ -34,9 +35,7 @@ const demo: ConformanceTarget = {
     uncertainApprovalRef: "demo-approval-uncertain",
   },
   saves: { resourceKind: "evidenceDraft", resourceRef: "demo-evidence-1", version: "v1", changedPayload: { mediaUrl: null, checkoutRoute: "tiktok-shop", observations: [] } },
-  gaps: {
-    "PENDING-4": "FX-07 only fails reads. The demo adapter has no unavailable-backend scenario for actions or saves.",
-  },
+  gaps: {},
 };
 
 /**

@@ -2,7 +2,7 @@
  * Frontend-facing adapter contract, transcribed from sections 2–5 of
  * "Farda frontend — adapter contracts, fixtures and verification" (Linear, 2026-11-02).
  * Status: PROPOSED. THO-283 freezes it. Do not add fields that the document does not define.
- * Exception: Q-01 to Q-04 and D-13 of docs/adapter-decisions.md (2026-11-04) are defaults decided for the build and are
+ * Exception: Q-01 to Q-04, D-13 and D-14 (the save response schema) of docs/adapter-decisions.md (2026-11-04) are defaults decided for the build and are
  * implemented below. They are not verified against any service, and the backend owner may change them.
  */
 import { z } from "zod";
@@ -246,6 +246,24 @@ export type SaveResourceResponse<T> = {
   /** Q-04. Required on every save answer. */
   executionCertainty: ExecutionCertainty;
 };
+
+/**
+ * D-14 freezes the save response schema (docs/adapter-decisions.md). Same fields as `SaveResourceResponse`; `record` stays
+ * open (`z.unknown()`) because each resource kind has its own record shape.
+ */
+export const saveResourceResponseSchema = z.object({
+  schemaVersion: z.string(),
+  requestId: z.string(),
+  scope: verifiedScopeSchema,
+  resourceRef: z.string(),
+  resourceVersion: z.string(),
+  persistedAt: z.string(),
+  persistedByRef: z.string(),
+  record: z.unknown(),
+  reasonCodes: z.array(z.string()),
+  /** Q-04. Required on every save answer. */
+  executionCertainty: executionCertaintySchema,
+});
 
 /**
  * What the demo services and the reference server say for an action answer: the certainty describes the command the

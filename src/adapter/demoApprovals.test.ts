@@ -240,7 +240,7 @@ describe("unknown outcome (FX-16, FX-17)", () => {
   it("leaves both paths blocked when the source shows nothing", async () => {
     const { run, reconcile } = setup();
     await reconcile("demo-run-noevidence", "lookup");
-    expect(run("demo-run-noevidence").capabilities.filter((c) => c.state === "held").map((c) => c.actionKind)).toEqual(expect.arrayContaining(["recordConfirmedSent", "requestFreshAttempt"]));
+    expect(run("demo-run-noevidence").capabilities.filter((c) => c.state === "held").map((c) => c.actionKind)).toEqual(expect.arrayContaining(["recordConfirmedSent", "freshAttempt"]));
     await errorFrom(reconcile("demo-run-noevidence", "freshAttempt"));
   });
 });

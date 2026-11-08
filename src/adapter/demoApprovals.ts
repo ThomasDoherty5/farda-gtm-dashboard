@@ -81,9 +81,9 @@ export function createDemoApprovals(
       { actionKind: "pauseRun", state: pausable ? "available" : "held", reasonCodes: pausable ? [] : ["NOTHING_TO_PAUSE"] },
       ...(uncertain
         ? [
-            { actionKind: "lookupSource", state: "available" as const, reasonCodes: [] },
+            { actionKind: "lookup", state: "available" as const, reasonCodes: [] },
             { actionKind: "recordConfirmedSent", ...needsEvidence(r.reconciliation.result === "sourceReceiptFound") },
-            { actionKind: "requestFreshAttempt", ...needsEvidence(r.reconciliation.result === "confirmedNotExecuted") },
+            { actionKind: "freshAttempt", ...needsEvidence(r.reconciliation.result === "confirmedNotExecuted") },
           ]
         : []),
     ];

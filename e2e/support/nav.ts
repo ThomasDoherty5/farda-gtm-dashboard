@@ -2,7 +2,7 @@ import type { Page } from "@playwright/test";
 
 /** Opens the workspace menu with whichever control the current width shows: the profile button, "More" (1024) or "Menu" (390). */
 export async function openWorkspaceMenu(page: Page) {
-  await page.getByRole("button", { name: /^(Open workspace menu|More|Menu)$/ }).click();
+  await page.getByRole("button", { name: /^(.+, open workspace menu|More|Menu)$/ }).click();
 }
 
 /**
