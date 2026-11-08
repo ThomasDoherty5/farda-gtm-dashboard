@@ -96,6 +96,9 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
         expect(result.violations.map(v=>v.id)).toEqual([]);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
         await page.screenshot({path:`${dir}/native-${name}-${width}-top.png`,fullPage:true});
+        // The return button may already retain focus across viewport changes;
+        // focus() alone does not undo the deliberate top-of-dialog scroll.
+        await modal.getByRole("button",{name:/Return to (watchlist|run)/}).scrollIntoViewIfNeeded();
         await modal.getByRole("button",{name:/Return to (watchlist|run)/}).focus();
         await expect(modal.getByRole("button",{name:/Return to (watchlist|run)/})).toBeInViewport();
         await page.screenshot({path:`${dir}/native-${name}-${width}-bottom.png`,fullPage:true});

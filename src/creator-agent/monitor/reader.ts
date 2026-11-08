@@ -194,9 +194,24 @@ export function createMonitorReader(options:Options){
           data=item?nativePostSchema.parse({...meta,kind:"saved-monitor-post",...item}):null;total=returned=data?1:0;
         } else {
           const f=monitorFilters.contentMonitor.parse(filters),from=Date.parse(asOf)-(f.window==="last-7"?7:30)*86400000;
+          // A post has a creator/account/network, not a profile ID. Search a handle
+          // only when that exact tuple resolves to one permitted active profile.
+          // Count all matching rows before eligibility filtering to avoid guessing
+          // between multiple profiles on the same publishing account.
+          const handleRows=new Map<string,NativeWatchlist["profiles"]>();
+          for(const row of watches){
+            const key=JSON.stringify([row.creator,row.network,row.account]),prior=handleRows.get(key)??[];
+            prior.push(row);handleRows.set(key,prior);
+          }
+          const query=f.q.trim().toLowerCase(),handleQuery=query.replace(/^@/,"");
+          const matchesHandle=(p:{creator:string;network:string;account:string;conflict:boolean})=>{
+            const candidates=handleRows.get(JSON.stringify([p.creator,p.network,p.account]));
+            const row=candidates?.length===1?candidates[0]:undefined;
+            return Boolean(!p.conflict&&handleQuery&&row?.state==="active"&&row.handle?.toLowerCase().replace(/^@/,"").includes(handleQuery));
+          };
           const chosen=posts.map(({post})=>({...post,measurement:post.measurement && Date.parse(post.measurement.at)>=from?post.measurement:null}))
             .filter(p=>(f.source==="all"||p.enrollmentSource===f.source)&&(f.network==="all"||p.network===f.network)&&
-              (!f.q.trim() || [p.id,p.creator,p.network,p.campaign].some(value=>value.toLowerCase().includes(f.q.trim().toLowerCase()))))
+              (!query || [p.id,p.creator,p.network,p.campaign].some(value=>value.toLowerCase().includes(query)) || matchesHandle(p)))
             .sort((a,b)=>(b.publishedAt?Date.parse(b.publishedAt):0)-(a.publishedAt?Date.parse(a.publishedAt):0)||a.id.localeCompare(b.id));
           data=nativeContentSchema.parse({...meta,kind:"saved-content-monitor",posts:slice(chosen),total:chosen.length,window:f.window,
             ...monitorTotals(chosen,sourceState==="current" && members.complete,events,asOf,alias,publications)});

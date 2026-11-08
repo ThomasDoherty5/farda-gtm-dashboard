@@ -278,3 +278,31 @@ it.each(["denied","expired"] as const)("does not resolve a known ambiguous ident
   expect(w).toMatchObject({sourceState:"current",active:0,pendingReviewTotal:1});
   expect(r).toMatchObject({state:"identity-review",review:{state,candidates:[],history:[],receipt:null}});
 });
+
+describe("permitted handle search",()=>{
+  it("matches the unique active creator/network/account handle while preserving source and network filters",async()=>{
+    const reader=open(),result=await reader.read("contentMonitor",{q:" @TEST.A "},page),data=nativeContentSchema.parse(result.data);
+    expect(data).toMatchObject({total:1,sourceState:"current",views:0,posts:[{network:"instagram",measurement:{views:0}}]});
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a",network:"tiktok"},page)).data).total).toBe(0);
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a",source:"tiktok-affiliate"},page)).data).total).toBe(0);
+    snapshot.posts[0]!.account="different-publishing-account";
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a"},page)).data).total).toBe(0);
+  });
+  it("does not use quarantined or unavailable handles and preserves partial no-match semantics",async()=>{
+    addMonitorReviewEvidence(snapshot);
+    let data=nativeContentSchema.parse((await open().read("contentMonitor",{q:"test.a"},page)).data);
+    expect(data).toMatchObject({total:0,sourceState:"current",views:null});
+    snapshot=monitorFixture();
+    const unavailable=createMonitorReader({db:store.database,scope,secret,funnel,now:()=>now,source:async()=>structuredClone(snapshot),
+      intake:{monitorMembership:()=>({...members,records:members.records.map(r=>({...r,sourceStatus:"unavailable" as const}))})}});
+    expect(nativeContentSchema.parse((await unavailable.read("contentMonitor",{q:"test.a"},page)).data).total).toBe(0);
+    snapshot.coverage="partial";
+    const result=await open().read("contentMonitor",{q:"test.a"},page);data=nativeContentSchema.parse(result.data);
+    expect(result.partial).toBe(true);expect(data).toMatchObject({total:0,sourceState:"partial",views:null});
+  });
+  it("does not guess which profile owns a post when multiple profiles share its exact creator/account/network",async()=>{
+    members.records[0]!.profiles.push({...members.records[0]!.profiles[0]!,sourceId:"another-profile",handle:"another.handle"});
+    const data=nativeContentSchema.parse((await open().read("contentMonitor",{q:"test.a"},page)).data);
+    expect(data.total).toBe(0);
+  });
+});

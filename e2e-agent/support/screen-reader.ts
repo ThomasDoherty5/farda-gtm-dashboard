@@ -22,7 +22,8 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    return Boolean(window);
  },{timeout:5000,message:"Visible Chromium window with the current page title"}).toBe(true);
  if(!window)throw new Error("No visible Chromium AT window");
- await run("xdotool",["windowactivate","--sync",window]);
+ const activeWindow=window;
+ await run("xdotool",["windowactivate","--sync",activeWindow]);
  await transition?.();
  await focus.focus();
  await expect(focus).toBeFocused();
@@ -32,7 +33,18 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  await run("xdotool",["key","--clearmodifiers",key]);
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
  const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
- await expect.poll(()=>{const text=normalize(speech().join(" "));return words.filter(word=>!text.includes(normalize(word)));},{timeout:12000,message:"Orca spoken output: "+name}).toEqual([]);
+ await expect.poll(async()=>{
+   const text=normalize(speech().join(" ")),missing=words.filter(word=>!text.includes(normalize(word)));
+   // Chromium may finish publishing the AT-SPI document after DOM focus and
+   // the first inspection. Repeat only the read-only Where Am I command;
+   // never repeat Return, a transition callback, or a business action.
+   if(missing.length&&key==="KP_Enter"){
+     await page.bringToFront();await run("xdotool",["windowactivate","--sync",activeWindow]);
+     await focus.focus();await new Promise(resolve=>setTimeout(resolve,500));
+     await run("xdotool",["key","--clearmodifiers",key]);
+   }
+   return missing;
+ },{timeout:20000,intervals:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
  appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
 }

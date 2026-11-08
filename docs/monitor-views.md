@@ -27,6 +27,8 @@ Observed message context carries the exact network/account, conversation/message
 
 Every confirmed campaign publication remains eligible for display, including zero and low engagement. Publication identity uses network, publishing account and native post ID. Recruitment source is a separate field. Native publication, visibility history, campaign assignment, creative/deliverable lineage, attribution level, publication-age checkpoint and original receipt references remain inspectable.
 
+Search also matches a known handle only when the post's canonical creator, network and account resolve to exactly one active, permitted profile. It never guesses among multiple profiles or borrows a handle for a conflicted post; unavailable or quarantined identity retains unknown coverage. Source/network filters still apply to the matched posts.
+
 The view total requires comparable metric definitions, windows, counter basis and organic/paid context. Its DTO retains that exact basis beside the neutral Observed views label. Missing components remain unknown. Same-instant contradictory measurements are quarantined even when their timestamps use different offsets. Counter corrections retain their signed change.
 
 Post-level outcomes require an explicit post attribution claim. Creator- or campaign-level outcomes appear separately. Multi-post sales totals require matching verified order receipts, exact attribution window/version and currency, then reuse the existing funnel projection for order/refund deduplication. Ambiguous assignments remain unknown. Signed money accumulation uses exact integers before safe-number bounds checks. TikTok GMV retains its own definition.
