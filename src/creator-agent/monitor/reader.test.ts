@@ -114,6 +114,38 @@ describe("source-backed monitoring views",()=>{
     now+=5000;await ingest(order("ambiguous-order","EXAMPLE_A",1000,"two"));
     expect(await read()).toMatchObject({orders:null,net:null});
   });
+  it("expires the monitor at the server's 90-minute ceiling despite an extended source lease",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000,reader=open();
+    now=cutoff-1;
+    expect(nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data)).toMatchObject({sourceState:"current",active:1});
+    now=cutoff;
+    const expired=await reader.read("watchlist",{},page);
+    expect(expired).toMatchObject({stale:true,partial:true});
+    expect(nativeWatchlistSchema.parse(expired.data)).toMatchObject({sourceState:"expired",active:0});
+    const content=nativeContentSchema.parse((await reader.read("contentMonitor",{network:"instagram"},page)).data);
+    expect(content).toMatchObject({sourceState:"expired",total:1,views:null,orders:null});
+    expect(content.posts[0]!.measurement?.views).toBe(0); // Historical facts remain visible, never current totals.
+  });
+  it("bounds continuation expiry to the original observation even when the next read renews the lease",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000,reader=open();
+    now=cutoff-1000;
+    const first=await reader.read("contentMonitor",{}, {limit:1,cursor:null});
+    expect(first.hasMore).toBe(true);
+    now=cutoff;snapshot.observedAt=new Date(now).toISOString();
+    await expect(reader.read("contentMonitor",{}, {limit:1,cursor:first.nextCursor})).rejects.toThrow("MONITOR_CURSOR_EXPIRED");
+  });
+  it("checks the maximum observation age after a slow source read",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000;
+    now=cutoff-1;
+    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,
+      source:async()=>{now=cutoff;return structuredClone(snapshot);}});
+    const result=await reader.read("watchlist",{},page);
+    expect(result.stale).toBe(true);
+    expect(nativeWatchlistSchema.parse(result.data)).toMatchObject({sourceState:"expired",active:0});
+  });
   it("shows first-observed removals without inventing an earlier publication date, and new source facts invalidate a continuation",async()=>{
     await ingest(event("first-seen-removed","removed",{occurredAt:null,details:{postId:"REMOVED_FIRST",blockers:[]}}));
     const reader=open(false),result=nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data);

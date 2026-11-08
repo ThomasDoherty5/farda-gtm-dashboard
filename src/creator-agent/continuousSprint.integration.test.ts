@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentServer, type AgentServerOptions } from "./server";
 import { inventorySourceFixture, stockTestScope, stockTestTime, supportSourceFixture } from "./stockSupportFixtures";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
+import { loadCreatorSourceRuntime } from "./sourceRuntime";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
 const requestedScope = { workspaceId: stockTestScope.workspaceId, accountIds: [stockTestScope.accountId], environment: "sandbox" };
@@ -27,9 +28,41 @@ async function start(options: Partial<AgentServerOptions> = {}) {
   }, reviewer);
   return { app, call, read };
 }
-afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
+afterEach(async () => { for (const app of apps.splice(0)) await app.close(); vi.restoreAllMocks(); });
 
 describe("continuous sprint authenticated integration boundaries", () => {
+  it("wires the private mirror reader through the actual launcher and HTTP adapter without claiming complete inventory or handoff authority", async () => {
+    const stockId="00000000-0000-4000-8000-000000000011",supportId="00000000-0000-4000-8000-000000000012";
+    const rowId="00000000-0000-4000-8000-000000000013",orderId="00000000-0000-4000-8000-000000000014";
+    const actualFetch=globalThis.fetch,providerCalls:string[]=[];let denied=false;
+    vi.spyOn(globalThis,"fetch").mockImplementation(async(input,init)=>{
+      const url=String(input);
+      if(!url.startsWith("https://api.notion.com/"))return actualFetch(input,init);
+      providerCalls.push(url);
+      expect(init?.method).toBe("POST");expect(init?.redirect).toBe("error");
+      expect(JSON.parse(String(init?.body))).toEqual({page_size:100});
+      if(denied)return new Response("",{status:403});
+      const results=url.includes(supportId)?[{object:"page",id:rowId,parent:{type:"data_source_id",data_source_id:supportId},
+        last_edited_time:stockTestTime,in_trash:false,properties:{Status:{type:"status",status:{name:"Open"}},
+          Order:{type:"relation",relation:[{id:orderId}]},Notes:{type:"rich_text",rich_text:[{plain_text:"fictional-private-support-note"}]}}}]:[];
+      return Response.json({object:"list",results,has_more:false,next_cursor:null});
+    });
+    const runtime=loadCreatorSourceRuntime({FARDA_STOCK_SUPPORT_SOURCE_CONFIG:JSON.stringify({stockDataSourceId:stockId,supportDataSourceId:supportId}),
+      FARDA_AGENT_READ_TOKEN:SYNTHETIC_READ_TOKEN,FARDA_NOTION_READ_TOKEN:"synthetic-notion-read-token"},stockTestScope);
+    const {read,call}=await start({...runtime,operations:{now:Date.now}});
+    const stock=await read("inventoryOverview",{}),support=await read("supportWorkspace",{caseId:"queue"});
+    expect(stock).toMatchObject({status:200,data:{coverage:{complete:false},data:{kind:"source-stock",coverage:"partial",period:null,skus:[]}}});
+    expect(support).toMatchObject({status:200,data:{coverage:{complete:false},data:{kind:"source-support",allTimeOpen:null,cohort:null,
+      cases:[{state:"Open",owner:"Unknown",handoffAllowed:false}]}}});
+    for(const value of [rowId,orderId,"fictional-private-support-note","synthetic-notion-read-token"])
+      expect(JSON.stringify(support.data)).not.toContain(value);
+    const capabilities=(await call("/v1/capabilities")).data;
+    expect(capabilities.stockSupportReview).toMatchObject({sourceAuthority:"injected",inventoryExecution:"notConnected",supportExecution:"notConnected"});
+    expect(providerCalls).toEqual([stockId,supportId].map(id=>"https://api.notion.com/v1/data_sources/"+id+"/query"));
+    denied=true;
+    expect(await read("inventoryOverview",{})).toMatchObject({status:403,data:{executionCertainty:"notApplied"}});
+    expect(await read("supportWorkspace",{caseId:"queue"})).toMatchObject({status:403,data:{executionCertainty:"notApplied"}});
+  });
   it("reports absent source authority and truthful empty/missing monitor records", async () => {
     const { read, call } = await start();
     expect(await read("inventoryOverview", {})).toMatchObject({ status: 503, data: { code: "INTEGRATION_PENDING", executionCertainty: "notApplied" } });

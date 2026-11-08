@@ -59,7 +59,9 @@ export function decisionAuthorityReasons(manifest: ApprovalManifest, human: Trus
   const reasons: string[] = [];
   const draft = manifest.draft;
   if (!actorCanPropose(human, now)) reasons.push("AUTHORITY_REQUIRED");
-  if ((draft.effects.spendsMoney || draft.effects.sendsCreator || draft.effects.changesPolicy || ["mediaStageRelease", "mediaSafetyPause"].includes(draft.phase)) && human.personRef === manifest.proposer.personRef) reasons.push("SECOND_PERSON_REQUIRED");
-  if ((draft.bounds.maxSpendMinor > policy.founderThresholdMinor || ["policyChange", "settlement", "rewardRedemption", "mediaStageRelease", "mediaSafetyPause", "launch", "productionEnable"].includes(draft.phase)) && !human.roles.includes("founder")) reasons.push("FOUNDER_REQUIRED");
+  if ((draft.effects.spendsMoney || draft.effects.sendsCreator || draft.effects.changesPolicy || ["invitation", "activation", "mediaStageRelease", "mediaSafetyPause"].includes(draft.phase)) && human.personRef === manifest.proposer.personRef) reasons.push("SECOND_PERSON_REQUIRED");
+  // Commission commitments need founder approval even when no cash is charged now.
+  // A generic phase must not downgrade an explicit programme/rate policy change.
+  if ((draft.bounds.maxSpendMinor > policy.founderThresholdMinor || draft.effects.changesPolicy || ["invitation", "activation", "policyChange", "settlement", "rewardRedemption", "mediaStageRelease", "mediaSafetyPause", "launch", "productionEnable"].includes(draft.phase)) && !human.roles.includes("founder")) reasons.push("FOUNDER_REQUIRED");
   return reasons;
 }

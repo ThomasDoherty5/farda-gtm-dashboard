@@ -30,13 +30,13 @@ describe("source-owned final fences and durable negative observations", () => {
   });
   it.each(["actor", "draft"] as const)("the source-owned synchronous fence catches %s change in the final awaited source read", async kind => {
     const f = make(), approved = await f.approved(), original = f.sources.readSlackDecision!;
-    f.sources.readSlackDecision = async (...args) => { if (kind === "actor") f.humans.get("synthetic:reviewer")!.active = false; else { f.draft.sourceBasisVersion = "packet-v2"; f.draft.items[0]!.targetVersion = "identity-v2"; } return original(...args); };
+    f.sources.readSlackDecision = async (...args) => { if (kind === "actor") f.humans.get("synthetic:founder")!.active = false; else { f.draft.sourceBasisVersion = "packet-v2"; f.draft.items[0]!.targetVersion = "identity-v2"; } return original(...args); };
     const result = await f.repo.resolveCurrentProof(approvalDispatchBinding(approved.manifest, "synthetic:item-1"));
     expect(result).toMatchObject({ state: "held", reasonCodes: [kind === "actor" ? "AUTHORITY_REQUIRED" : "APPROVAL_SOURCE_CHANGED"] });
     expect(f.db.prepare("SELECT COUNT(*) AS n FROM approval_verifications").get()?.n).toBe(0);
   });
   it("the final dispatch assertion reads current source versions rather than accepting the proof's copied observations", async () => {
-    const f = make(), issued = await proof(f); f.humans.get("synthetic:reviewer")!.directoryVersion = "directory-v2";
+    const f = make(), issued = await proof(f); f.humans.get("synthetic:founder")!.directoryVersion = "directory-v2";
     expect(() => f.repo.assertCurrentProof(issued.proof, f.state.now)).toThrow("AUTHORITY_REQUIRED");
   });
   it("missing final source fences cannot issue authority even with otherwise valid historical source objects", async () => {

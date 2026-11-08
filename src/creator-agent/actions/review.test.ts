@@ -134,7 +134,7 @@ describe("actual immutable approval version history", () => {
     expect(restarted.readHistory("foreign-missing")).toBeNull();
   });
   it("rejects invalid bounds, does not synthesize absent versions, and projects real historical decisions", async () => {
-    const w = await setup(), event = w.event(w.input.record, "rejected");
+    const w = await setup(), event = w.event(w.input.record, "rejected", "synthetic:founder");
     const decided = await w.repo.observeDecision(event.locator, { ingressRef: "synthetic-ingress" });
     w.input.record = decided; w.input.base = await w.service.readApproval(decided.manifest.approvalRef, principal);
     w.input.assertCurrent = () => {};

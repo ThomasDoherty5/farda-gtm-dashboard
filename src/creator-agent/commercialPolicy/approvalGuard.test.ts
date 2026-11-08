@@ -29,7 +29,7 @@ function fixture() {
   async function approved() {
     const preview = await repo.preparePreview(a.command, { principalRef: "synthetic:requester" }, "synthetic-preview");
     const requested = await repo.requestDecision({ approvalRef: preview.manifest.approvalRef, expectedVersion: 1 }, { principalRef: "synthetic:requester" }, "synthetic-request");
-    const event = a.event(requested);
+    const event = a.event(requested, "approved", "synthetic:founder");
     return repo.observeDecision(event.locator, { ingressRef: "synthetic-native-relay" });
   }
   return { a, o, repo, registry, approved };

@@ -47,7 +47,7 @@ describe("J04 phase/version/lease and immutable source boundaries", () => {
     await expect(f.repo.observeDecision(event.locator, { ingressRef: "synthetic:ingress" })).rejects.toThrow("FOUNDER_REQUIRED");
   });
   it("retains rejection and edit-required decisions; an edited action must receive a new exact preview and approval", async () => {
-    const f = make(), requested = await f.requested(), edited = f.event(requested, "editRequired");
+    const f = make(), requested = await f.requested(), edited = f.event(requested, "editRequired", "synthetic:founder");
     const old = await f.repo.observeDecision(edited.locator, { ingressRef: "synthetic:ingress" }); expect(old.current.state).toBe("editRequired");
     expect(old.decisionReceipt?.proposedEditRef).toBe("synthetic:edited-draft");
     f.draft.payloadHash = digest("synthetic revised text"); f.draft.items[0]!.payloadHash = f.draft.payloadHash;
@@ -57,16 +57,16 @@ describe("J04 phase/version/lease and immutable source boundaries", () => {
     expect(f.repo.readApproval(old.manifest.approvalRef, 1)?.current.reasonCodes).toContain("APPROVAL_VERSION_CHANGED");
   });
   it("an explicit new preview after an edit requires fresh approval even when the current domain material is unchanged", async () => {
-    const f = make(), requested = await f.requested(), edited = f.event(requested, "editRequired");
+    const f = make(), requested = await f.requested(), edited = f.event(requested, "editRequired", "synthetic:founder");
     const old = await f.repo.observeDecision(edited.locator, { ingressRef: "synthetic:ingress" });
     const next = await f.repo.preparePreview({ ...f.command, approvalRef: old.manifest.approvalRef, expectedVersion: 1 }, { principalRef: "synthetic:requester" }, "fresh-exact-preview");
     expect(next.manifest.draft).toEqual(old.manifest.draft); expect(next.manifest.manifestHash).not.toBe(old.manifest.manifestHash);
     expect(next.decisionReceipt).toBeNull(); expect((await f.repo.resolveCurrentProof(approvalDispatchBinding(next.manifest, "synthetic:item-1"))).state).toBe("held");
   });
   it("returns a recorded reject without any dispatch proof, and prevents approval after canceling that exact version", async () => {
-    const f = make(), requested = await f.requested(), rejected = f.event(requested, "rejected");
+    const f = make(), requested = await f.requested(), rejected = f.event(requested, "rejected", "synthetic:founder");
     expect((await f.repo.observeDecision(rejected.locator, { ingressRef: "synthetic:ingress" })).current.state).toBe("rejected");
-    const g = make(), request = await g.requested(), cancel = g.event(request, "canceled"); await g.repo.observeDecision(cancel.locator, { ingressRef: "synthetic:ingress" });
+    const g = make(), request = await g.requested(), cancel = g.event(request, "canceled", "synthetic:founder"); await g.repo.observeDecision(cancel.locator, { ingressRef: "synthetic:ingress" });
     const approve = g.event(request, "approved", "synthetic:founder", "synthetic:later-approve");
     await expect(g.repo.observeDecision(approve.locator, { ingressRef: "synthetic:ingress" })).rejects.toThrow("APPROVAL_CANCELED");
   });

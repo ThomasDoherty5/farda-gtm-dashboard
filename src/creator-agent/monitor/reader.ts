@@ -26,6 +26,8 @@ type Options={db:DatabaseSync;scope:OperationsScope;secret:string;funnel:Pick<Fu
 const pageSchema=z.object({version:z.literal(1),context:z.string(),offset:z.number().int().positive().safe(),asOf:z.string().datetime(),
   sourceAsOf:z.string().datetime({offset:true}).nullable(),watermark:z.number().int().nonnegative().safe(),basis:z.string(),expires:z.number().int().nonnegative().safe()}).strict();
 const profileKey=(network:string,account:string,profile:string)=>JSON.stringify([network,account,profile]);
+// D-13 is a server ceiling; a source cannot extend it by issuing a longer lease.
+const monitorMaxAgeMs=90*60_000;
 function watchRows(intake:Membership,source:MonitorSnapshot|null,fresh:boolean,alias:Alias):NativeWatchlist["profiles"]{
   const owners=new Map<string,Set<string>>(),members=new Map<string,MonitorSnapshot["members"]>(),checks=new Map<string,string>();
   for(const record of intake.records)for(const profile of record.profiles)if(profile.sourceId){
@@ -111,7 +113,8 @@ export function createMonitorReader(options:Options){
     if(s && (s.scope.accountId!==scope.accountId || s.scope.workspaceId!==scope.workspaceId || s.scope.environment!==scope.environment))
       throw new MonitorError("SOURCE_SCOPE_DENIED",403);
     if(s && Date.parse(s.observedAt)>now)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
-    const expired=!!s && Date.parse(s.validUntil)<=now;
+    const sourceExpires=s?Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs):null;
+    const expired=sourceExpires!==null && sourceExpires<=now;
     const sourceState=!s ? source?"unavailable" as const:"unconfigured" as const : expired?"expired" as const:s.coverage==="partial"?"partial" as const:"current" as const;
     const asOf=cursor?.asOf??new Date(now).toISOString();
     db.exec("BEGIN");
@@ -167,7 +170,7 @@ export function createMonitorReader(options:Options){
         }
       }
       const more=offset+returned<total,partial=returned<total || sourceState!=="current" || !members.complete || (data?.kind==="saved-monitor-run"&&!data.complete);
-      const expires=cursor?.expires??Math.min(now+15*60_000,s&&!expired?Date.parse(s.validUntil):Number.MAX_SAFE_INTEGER);
+      const expires=cursor?.expires??Math.min(now+15*60_000,sourceExpires!==null&&!expired?sourceExpires:Number.MAX_SAFE_INTEGER);
       const nextCursor=more?sealOperationsToken(scope,secret,"monitor-page.v1",{version:1,context,offset:offset+limit,asOf,sourceAsOf:meta.sourceAsOf,watermark:saved.watermark,basis,expires}):null;
       db.exec("COMMIT");
       return {data,total,returned,partial,stale:expired,nextCursor,hasMore:more,capabilities:[{actionKind:"retryMonitorProfile",state:"held" as const,
