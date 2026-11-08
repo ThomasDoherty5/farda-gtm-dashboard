@@ -46,15 +46,15 @@ describe("native watchlist review controls",()=>{
     }}}),router=renderRoute("/creators/watchlist",adapter);
     await user.click(await screen.findByRole("button",{name:"All monitoring states"}));
     let dialog=screen.getByRole("dialog",{name:"Filter by monitoring state"});
-    await user.click(within(dialog).getByRole("radio",{name:"Active",exact:true}));
-    expect(within(dialog).getByRole("radio",{name:"Active",exact:true})).toBeChecked();
+    await user.click(within(dialog).getByRole("radio",{name:"Active"}));
+    expect(within(dialog).getByRole("radio",{name:"Active"})).toBeChecked();
     expect(router.state.location.search).toBe("");expect(reads).toHaveLength(1);
     fireEvent(dialog,new Event("cancel",{bubbles:false,cancelable:true}));expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button",{name:"All monitoring states"}));dialog=screen.getByRole("dialog",{name:"Filter by monitoring state"});
-    expect(within(dialog).getByRole("radio",{name:"All monitoring states",exact:true})).toBeChecked();
-    await user.click(within(dialog).getByRole("radio",{name:"Active",exact:true}));await user.click(within(dialog).getByRole("button",{name:"Done"}));
+    expect(within(dialog).getByRole("radio",{name:"All monitoring states"})).toBeChecked();
+    await user.click(within(dialog).getByRole("radio",{name:"Active"}));await user.click(within(dialog).getByRole("button",{name:"Done"}));
     await waitFor(()=>expect(router.state.location.search).toBe("?state=active"));
-    expect(await screen.findByRole("button",{name:"Active",exact:true})).toBeInTheDocument();expect(reads).toHaveLength(2);
+    expect(await screen.findByRole("button",{name:"Active"})).toBeInTheDocument();expect(reads).toHaveLength(2);
   });
   it("navigates the pending set and closes exact history before identity review",async()=>{
     const data=fixture(),user=userEvent.setup(),adapter=createLiveAdapter("sandbox",{transport:{async send(request){

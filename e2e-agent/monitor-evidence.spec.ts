@@ -64,6 +64,15 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
       for(const title of required[name]??[])await expect(page.getByRole("heading",{name:title,exact:true})).toBeVisible();
       for(const width of [1440,390]) {
         await page.setViewportSize({width,height:900});await page.evaluate(()=>document.fonts.ready);
+        // Full-page screenshots preserve a sticky header's current viewport offset.
+        // Baseline original-frame comparison must start at the document top.
+        await page.evaluate(async()=>{window.scrollTo(0,0);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));});
+        expect(await page.evaluate(()=>window.scrollY)).toBe(0);
+        if(width===1440){
+          expect((await page.getByTestId("source-workspace").boundingBox())?.width).toBe(132);
+          if(name==="content")expect((await page.getByTestId("coverage-intake-state").boundingBox())?.width).toBe(252);
+          if(name.startsWith("post"))expect((await page.getByTestId("post-publication-state").boundingBox())?.width).toBe(200);
+        }
         expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
         const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
         expect(result.violations.map(v=>v.id)).toEqual([]);
@@ -109,6 +118,8 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
         expect(result.violations.map(v=>v.id)).toEqual([]);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
         expect(await modal.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+        const modalBounds=await modal.boundingBox();expect(modalBounds).not.toBeNull();
+        expect(Math.abs(modalBounds!.x-(width-modalBounds!.width)/2)).toBeLessThanOrEqual(1);
         for(const paragraph of await modal.locator("p").all())expect(await paragraph.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
         await page.screenshot({path:`${dir}/native-${name}-${width}-top.png`,fullPage:true});
         for(const [i,region] of (await tables.all()).entries()){
@@ -165,6 +176,20 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await page.getByText("Inspect publication observation history",{exact:true}).click();
     await screenReaderCheckpoint(page,"post-publication-alternative",page.getByRole("region",{name:"Publication observation history"}),["Publication observation history","State","Observation time","Native receipt"],"KP_Enter");
     await page.reload();await page.getByText("View attribution evidence",{exact:true}).click();await expect(page.getByText(/No share is assigned/)).toBeVisible();
+    // The inaccessible post proves an honest empty chart. Also render real
+    // application deltas from explicitly fictional, comparable source receipts.
+    const measured=s.posts[0]!,basis=measured.measurements[0]!;
+    measured.measurements=[
+      {...basis,at:measured.publishedAt!,receipt:"synthetic-metric-baseline",views:0},
+      {...basis,at:new Date(Date.parse(measured.publishedAt!)+12*3600_000).toISOString(),receipt:"synthetic-metric-middle",views:100},
+      {...basis,receipt:"synthetic-metric-latest",views:150}
+    ];
+    await page.goto("/content?network=instagram");await page.getByRole("region",{name:"Saved campaign posts"}).getByRole("link").first().click();
+    const chart=page.getByRole("region",{name:"Views gained since publication",exact:true});
+    await expect(chart.getByRole("img")).toHaveAttribute("aria-label",/100 views;.*50 views/);
+    await expect(chart).toContainText("100");await expect(chart).toContainText("50");
+    await expect(page.getByRole("link",{name:"Open source post",exact:true})).toHaveAttribute("href",measured.originalUrl!);
+    await capture("post-measured","One post. Its evidence and impact.");
     denied=true;await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toHaveCount(0);
     await expect(page.getByRole("alert").first()).toBeVisible();

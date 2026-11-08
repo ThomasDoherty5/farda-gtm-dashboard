@@ -31,6 +31,18 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  await new Promise(resolve=>setTimeout(resolve,500));
  // An OS keyboard event reaches Orca's Where Am I command, rather than a CDP/AX snapshot.
  await run("xdotool",["key","--clearmodifiers",key]);
+ const osKeys=[key],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
+ const inspectHeaders=async()=>{
+   // A region can leave Orca's caret on its caption. Use real documented
+   // structural table navigation, never DOM/AX text as spoken evidence.
+   // https://help.gnome.org/orca/commands_structural_navigation.html
+   for(let column=0;column<columns;column++){
+     const command=column===0?"alt+shift+Home":"alt+shift+Right";
+     await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);
+     await new Promise(resolve=>setTimeout(resolve,1000));
+   }
+ };
+ if(columns)await inspectHeaders();
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
  const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
  await expect.poll(async()=>{
@@ -42,9 +54,10 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      await page.bringToFront();await run("xdotool",["windowactivate","--sync",activeWindow]);
      await focus.focus();await new Promise(resolve=>setTimeout(resolve,500));
      await run("xdotool",["key","--clearmodifiers",key]);
+     osKeys.push(key);if(columns)await inspectHeaders();
    }
    return missing;
  },{timeout:20000,intervals:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
- appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
+ appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
 }
