@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBlocker, useSearchParams } from "react-router-dom";
 import { scopeKey, useScope } from "@/adapter/scope";
@@ -69,9 +69,13 @@ function NativeFlowEditor({ flow, data, response, requestKey, invalidKey, pendin
   const scope = { workspaceId: response.scope.workspaceId, accountId: response.scope.accountIds[0] ?? "", environment: "sandbox" as const };
   const scopeId = JSON.stringify(scope);
   const [resolved, setResolved] = useState<Awaited<ReturnType<typeof recoverDraft>>>(null);
-  const current = useRef(data), mounted = useRef(true); current.current = data;
+  const current = useRef(data), mounted = useRef(true);
+  useLayoutEffect(() => { current.current = data; });
+  // A different source read, request or pending original withdraws a prior recovery result until it is re-read.
+  const [resolvedBasis, setResolvedBasis] = useState([data, requestKey, pending, scopeId] as const);
+  if (resolvedBasis[0] !== data || resolvedBasis[1] !== requestKey || resolvedBasis[2] !== pending || resolvedBasis[3] !== scopeId) { setResolvedBasis([data, requestKey, pending, scopeId]); setResolved(null); }
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  useEffect(() => { let active = true; setResolved(null); if (requestKey) void recoverDraft(JSON.parse(scopeId) as SaveReceipt["scope"], data, requestKey, pending).then(result => { if (active) setResolved(result); }); return () => { active = false; }; }, [data, requestKey, pending, scopeId]);
+  useEffect(() => { let active = true; if (requestKey) void recoverDraft(JSON.parse(scopeId) as SaveReceipt["scope"], data, requestKey, pending).then(result => { if (active) setResolved(result); }); return () => { active = false; }; }, [data, requestKey, pending, scopeId]);
   const save = useSave<FlowDraft, SaveReceipt>(), catalog = data.sourceConfig, baseline = initialDraft(data), draft = edit?.payload ?? baseline;
   const effective = resolved?.pending ?? pending, uncertain = Boolean(requestKey && !resolved), dirty = !!edit && (!baseline || !sameDraft(edit.payload, baseline));
   const baseVersion = edit?.baseVersion ?? data.draftVersion, conflict = !!edit && baseVersion !== data.draftVersion;
