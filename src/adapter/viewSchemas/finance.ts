@@ -14,7 +14,7 @@
  * - The helpers below are repeated in the sibling files on purpose, so each file stands alone.
  */
 import { z } from "zod";
-import { moneySchema, provenanceValueSchema } from "../contract";
+import { moneySchema, provenanceValueSchema } from "../contract.ts";
 
 const count = z.number().int().nonnegative();
 const signedMinor = z.number().int();
