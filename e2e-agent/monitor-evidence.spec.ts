@@ -194,7 +194,7 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toHaveCount(0);
     await expect(page.getByRole("alert").first()).toBeVisible();
     denied=false;s.coverage="partial";
-    await screenReaderCheckpoint(page,"monitor-partial-recovery",page.getByRole("button",{name:"All post networks",exact:true}),["Partial source coverage"],"KP_Enter",async()=>{
+    await screenReaderCheckpoint(page,"monitor-partial-recovery",page.getByRole("button",{name:"All post networks",exact:true}),["Partial source coverage"],"KP_Add",async()=>{
       await page.reload();await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
     });
     await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();

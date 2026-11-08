@@ -30,21 +30,16 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  // DOM focus resolves before Chromium publishes its AT-SPI focus event.
  await new Promise(resolve=>setTimeout(resolve,500));
  // An OS keyboard event reaches Orca's Where Am I command, rather than a CDP/AX snapshot.
- await run("xdotool",["key","--clearmodifiers",key]);
- const osKeys=[key],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
+ const osKeys:string[]=[],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
  const tableOrdinal=columns?await focus.evaluate(element=>{
    const target=element.matches("table")?element:element.querySelector("table");
    return Array.from(document.querySelectorAll("table")).filter(table=>table.getClientRects().length>0).indexOf(target as HTMLTableElement)+1;
  }):0;
  const press=async(command:string)=>{await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);};
- const inspectHeaders=async()=>{
-   // DOM focus on a region does not move Orca's caret into its table and
-   // a prior form may leave focus mode active. Establish browse mode from
-   // Orca's own announcement, then enter the exact visible table via OS keys.
-   // DOM geometry supplies only its ordinal, never the spoken evidence.
-   // https://help.gnome.org/orca/commands_structural_navigation.html
-   // https://help.gnome.org/orca/howto_forms.html
-   expect(tableOrdinal).toBeGreaterThan(0);
+ const browseFromStart=async()=>{
+   // A prior form may leave focus mode active. Establish browse mode from
+   // Orca's own announcement before actual document navigation.
+   // https://help.gnome.org/orca/commands_reading.html
    let mode="";
    for(let attempt=0;attempt<3&&mode!=="Browse mode";attempt++){
      const modeOffset=statSync(log).size;
@@ -58,6 +53,13 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    }
    expect(mode).toBe("Browse mode");
    await press("ctrl+Home");await new Promise(resolve=>setTimeout(resolve,500));
+ };
+ const inspectHeaders=async()=>{
+   // DOM focus does not move Orca's caret into its table. DOM geometry
+   // supplies only its ordinal, never the spoken evidence.
+   // https://help.gnome.org/orca/commands_structural_navigation.html
+   expect(tableOrdinal).toBeGreaterThan(0);
+   await browseFromStart();
    for(let table=0;table<tableOrdinal;table++){await press("t");await new Promise(resolve=>setTimeout(resolve,1000));}
    for(let column=0;column<columns;column++){
      const command=column===0?"alt+shift+Home":"alt+shift+Right";
@@ -65,6 +67,10 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      await new Promise(resolve=>setTimeout(resolve,1000));
    }
  };
+ // Say All reads source-status text from the real document. It does not
+ // assume an initial live region will announce itself after navigation.
+ if(key==="KP_Add")await browseFromStart();
+ await press(key);
  if(columns)await inspectHeaders();
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
  const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
@@ -80,7 +86,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      osKeys.push(key);if(columns)await inspectHeaders();
    }
    return missing;
- },{timeout:20000,intervals:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
+ },{timeout:key==="KP_Add"?60000:20000,intervals:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
  appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
 }
