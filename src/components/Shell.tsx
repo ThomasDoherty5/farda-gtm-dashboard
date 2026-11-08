@@ -62,7 +62,7 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
 
 /** Application shell (Figma 10:218): skip link, horizontal navigation, workspace menu and main landmark. */
 export function Shell() {
-  const { adapter } = useScope();
+  const { adapter, scope, principal } = useScope();
   const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
@@ -71,6 +71,7 @@ export function Shell() {
   const shippingHub = pathname === "/operations" && new URLSearchParams(search).get("view") === "hub";
   const compactOperations = pathname === "/operations" && !shippingHub;
   const demo = adapter.environment === "demo";
+  const principalMark=principal.split(/[^a-zA-Z0-9]+/).filter(Boolean).slice(0,2).map(part=>part[0]!.toUpperCase()).join("") || "?";
   const crumbs = breadcrumbsFor(pathname, search);
 
   return (
@@ -97,7 +98,8 @@ export function Shell() {
           <button type="button" className={styles.menuButton} aria-haspopup="dialog" onClick={() => setMenuOpen(true)}>Menu</button>
           <span className={styles.spacer} />
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
-          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : "Menu"}</button>
+          {!demo && <span className={styles.sourceWorkspace}><Badge tone="violet" width={132} testId="source-workspace">{scope.environment === "sandbox" ? "Sandbox" : "Production"}</Badge></span>}
+          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : <><span className={styles.nativeMenuText}>Menu</span><span className={styles.sourceProfile}>{principalMark}</span></>}</button>
           <nav aria-label="Breadcrumb" className={styles.crumbs}>
             <ol>
               {crumbs.map((c, i) => (

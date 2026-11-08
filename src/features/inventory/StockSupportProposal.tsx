@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 import { useAction } from "@/adapter/useAction";
@@ -34,7 +35,7 @@ async function hash(value:unknown){return [...new Uint8Array(await crypto.subtle
 const reasons={transfer:["low-stock","order-shortage","sample-shortage","rebalance"],support:["assignment","return-review","replacement-review","refund-review"]};
 const options=(items:string[])=>[{value:"",label:"Choose an option"},...items.map(value=>({value,label:value.replaceAll("-"," ")}))];
 
-export function StockSupportProposal({data,res}:{data:NativeStock|NativeSupport;res:ReadResponse<unknown>}){
+export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=false}:{data:NativeStock|NativeSupport;res:ReadResponse<unknown>;portalTarget?:HTMLElement|null;hideTrigger?:boolean}){
   const stock=data.kind==="source-stock",ctx=useScope(),client=useQueryClient(),action=useAction<StockIntent>();
   const filters=stock?data.selected:{caseId:data.caseId};
   const localKey="stock-support-request:"+canonical([scopeKey(ctx),data.actorRef,data.kind,stock?null:data.caseId]);
@@ -108,8 +109,8 @@ export function StockSupportProposal({data,res}:{data:NativeStock|NativeSupport;
     }catch{setStatus("The request could not be verified locally.");}finally{setBusy(false);}
   }
   const close=()=>{if(dirty)setDiscard(true);else setOpen(false);};
-  return <>
-    <Button variant="secondary" aria-haspopup="dialog" disabledReason={pending?"Resolve the previous request before creating another.":blocked} onClick={show}>{label}</Button>
+  const controls=<>
+    {(!hideTrigger||portalTarget)&&<Button variant="secondary" aria-haspopup="dialog" disabledReason={pending?"Resolve the previous request before creating another.":blocked} onClick={show}>{label}</Button>}
     {pending&&<><Button loading={busy} onClick={()=>void reconcile(pending)}>Reconcile exact request</Button>{absent&&<Button onClick={show}>Review original request</Button>}</>}
     {status&&<p role="status">{status}</p>}
     <Dialog open={open} title={label} onClose={close}><p>This saves a local proposal for human review. The source owner controls execution.</p>
@@ -126,4 +127,7 @@ export function StockSupportProposal({data,res}:{data:NativeStock|NativeSupport;
     <Dialog open={discard} title="Discard proposal edits?" onClose={()=>setDiscard(false)}><Button onClick={()=>setDiscard(false)}>Keep editing</Button><Button onClick={()=>{setDiscard(false);setOpen(false);}}>Discard edits</Button></Dialog>
     <LeaveGuard dirty={dirty} subject="proposal"/>
   </>;
+  // The source dialog owns the visual slot, not the request lifecycle. Keep one
+  // controller mounted so uncertainty and recovery remain visible after it closes.
+  return portalTarget?createPortal(controls,portalTarget):controls;
 }

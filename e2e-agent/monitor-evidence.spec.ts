@@ -60,30 +60,41 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     const audit:unknown[]=[];
     const capture=async(name:string,heading:string)=>{
       await expect(page.getByRole("heading",{name:heading,level:1})).toBeVisible();
+      const required:Record<string,string[]>={content:["Content finding its audience.","Keep every creator in view.","Posts worth paying attention to.","New posts. New replies. A clear next step.","Know where a number comes from."],watchlist:["The sheet is the tracking registry","Every signup enters a clear queue","What the agent needs to know"],hourly:["Checkpointed, source by source","Hourly policy","Observed events stay separate from inferred status"],post:["Views gained since publication","Known, sourced and traceable","Sales require an order match","The conversation explains the next step"]};
+      for(const title of required[name]??[])await expect(page.getByRole("heading",{name:title,exact:true})).toBeVisible();
       for(const width of [1440,390]) {
         await page.setViewportSize({width,height:900});await page.evaluate(()=>document.fonts.ready);
         expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
         const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
         expect(result.violations.map(v=>v.id)).toEqual([]);
         await page.screenshot({path:`${dir}/native-${name}-${width}.png`,fullPage:true});
-        audit.push({name,width,violations:result.violations.map(v=>v.id)});
+        const geometry=await page.locator("main").evaluate(main=>Array.from(main.querySelectorAll("h1,h2,h3")).map(el=>{const b=el.getBoundingClientRect(),s=getComputedStyle(el);return {text:el.textContent,box:[b.x,b.y,b.width,b.height],font:s.fontFamily,size:s.fontSize,weight:s.fontWeight,lineHeight:s.lineHeight};}));
+        audit.push({name,width,violations:result.violations.map(v=>v.id),geometry});
       }
     };
     await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toContainText("inaccessible");
     await capture("content","Creator content, without the blind spots.");
     await screenReaderCheckpoint(page,"monitor-table-headers",page.getByRole("region",{name:"Saved campaign posts"}),["Saved campaign posts","Post","Network","Views"],"KP_Enter");
-    await page.getByLabel("Post network").selectOption("instagram");
+    await page.getByRole("button",{name:"All post networks",exact:true}).click();
+    const networkFilter=page.getByRole("dialog",{name:"Filter by post network"});
+    await networkFilter.getByRole("radio",{name:"Instagram",exact:true}).check();
+    await networkFilter.getByRole("button",{name:"Done",exact:true}).click();
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).not.toContainText("inaccessible");
-    await page.getByRole("link",{name:"View latest hourly run"}).focus();await page.keyboard.press("Enter");
+    await page.goBack();await expect(page.getByRole("button",{name:"All post networks",exact:true})).toBeVisible();await expect(page.getByRole("region",{name:"Saved campaign posts"})).toContainText("inaccessible");
+    await page.goForward();await expect(page.getByRole("button",{name:"Instagram",exact:true})).toBeVisible();await expect(page.getByRole("region",{name:"Saved campaign posts"})).not.toContainText("inaccessible");
+    await page.getByRole("link",{name:"View hourly runs"}).focus();await page.keyboard.press("Enter");
+    await page.getByText("Inspect profile check receipts",{exact:true}).click();
     await expect(page.getByRole("region",{name:"Read-only run trace"})).toContainText("loginRequired");
+    await page.getByText("Inspect profile check receipts",{exact:true}).click();
     await expect(page.getByRole("button",{name:"Retry failed profile"})).toHaveAttribute("aria-disabled","true");
     await capture("hourly","Every hourly check leaves evidence.");
     await screenReaderCheckpoint(page,"monitor-held-retry",page.getByRole("button",{name:"Retry failed profile"}),["Retry failed profile","unavailable"]);
     await page.goto("/creators/watchlist");
     await expect(page.getByRole("region",{name:"Canonical creator and profile evidence"})).toContainText("test.maker");
-    await expect(page.getByRole("region",{name:"Canonical creator and profile evidence"})).toContainText("Current Sheets enrollment matches");
     await capture("watchlist","Know who the agent is watching.");
+    await page.getByRole("button",{name:"Match the correct profile",exact:true}).first().click();
+    await expect(page.getByRole("dialog",{name:"Match the correct profile"})).toContainText("Current Sheets enrollment matches");await page.keyboard.press("Escape");
     await screenReaderCheckpoint(page,"watchlist-table-headers",page.getByRole("region",{name:"Canonical creator and profile evidence"}),["Canonical creator and profile evidence","Creator","Monitoring"],"KP_Enter");
     addMonitorReviewEvidence(s);await page.reload();
     await page.getByRole("button",{name:"Review 1 matches",exact:true}).click();await expect(page).toHaveURL(/state=identity-review/);
@@ -139,23 +150,26 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await captureDialog("message-denied");await page.keyboard.press("Escape");
     await historyButton.click();await expect(page.getByRole("dialog",{name:"Intake history",exact:true})).toContainText("Intake evidence denied");await page.keyboard.press("Escape");
     s.reviewEvidence![0]!.access="authorized";s.runs[0]!.inbox[0]!.context!.access="authorized";
-    await page.goto("/content");await page.getByRole("link",{name:"View latest hourly run"}).click();
+    await page.goto("/content");await page.getByRole("link",{name:"View hourly runs"}).click();
     const suggestion=page.getByRole("button",{name:"Review status suggestion"});await suggestion.focus();await page.keyboard.press("Enter");
     dialog=page.getByRole("dialog",{name:"Source observation evidence"});await expect(dialog).toContainText("Expected source version");await expect(dialog).toContainText("draft");await expect(dialog).toContainText("ready");
     await captureDialog("status-suggestion");await page.keyboard.press("Escape");await expect(suggestion).toBeFocused();
     await page.goto("/content?network=tiktok");const table=page.getByRole("region",{name:"Saved campaign posts"});
     await table.getByRole("link").first().click();
+    await page.getByText("View attribution evidence",{exact:true}).click();
     await expect(page.getByText("creator-level outcomes",{exact:true})).toBeVisible();
     await expect(page.getByText(/No share is assigned/)).toBeVisible();
     await expect(page.getByRole("button",{name:"Open source post"})).toHaveAttribute("aria-disabled","true");
+    await page.getByText("View attribution evidence",{exact:true}).click();
     await capture("post","One post. Its evidence and impact.");
+    await page.getByText("Inspect publication observation history",{exact:true}).click();
     await screenReaderCheckpoint(page,"post-publication-alternative",page.getByRole("region",{name:"Publication observation history"}),["Publication observation history","State","Observation time","Native receipt"],"KP_Enter");
-    await page.reload();await expect(page.getByText(/No share is assigned/)).toBeVisible();
+    await page.reload();await page.getByText("View attribution evidence",{exact:true}).click();await expect(page.getByText(/No share is assigned/)).toBeVisible();
     denied=true;await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toHaveCount(0);
     await expect(page.getByRole("alert").first()).toBeVisible();
     denied=false;s.coverage="partial";
-    await screenReaderCheckpoint(page,"monitor-partial-recovery",page.getByLabel("Post network"),["Partial source coverage"],"KP_Enter",async()=>{
+    await screenReaderCheckpoint(page,"monitor-partial-recovery",page.getByRole("button",{name:"All post networks",exact:true}),["Partial source coverage"],"KP_Enter",async()=>{
       await page.reload();await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
     });
     await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();

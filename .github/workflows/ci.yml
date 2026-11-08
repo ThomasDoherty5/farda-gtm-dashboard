@@ -53,6 +53,9 @@ jobs:
         if: always()
         with:
           name: synthetic-agent-browser-evidence
-          path: test-results/agent/**/*.png
+          path: |
+            test-results/agent/**/*.png
+            test-results/agent/**/monitor-evidence/native-browser-proof.json
+            test-results/agent/**/stock-support-evidence/accessibility.json
           if-no-files-found: ignore
           retention-days: 7

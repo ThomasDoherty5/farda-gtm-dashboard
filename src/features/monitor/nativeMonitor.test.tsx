@@ -16,9 +16,9 @@ describe("native monitoring metric basis",()=>{
       return respondWith(request.envelope,data,{dataVersion:"synthetic-basis-v1"});
     }}});
     renderRoute("/content",adapter);
-    expect(await screen.findByText("Observed views",{exact:true})).toBeInTheDocument();
+    expect(await screen.findByText(semantics==="cumulative"?"Cumulative views":"Observed views",{exact:true})).toBeInTheDocument();
     expect(screen.getByText(`Source view counter · ${semantics} · Previous 24 hours · organic`)).toBeInTheDocument();
-    expect(screen.queryByText("Cumulative views",{exact:true})).not.toBeInTheDocument();
+    expect(screen.queryByText(semantics==="cumulative"?"Observed views":"Cumulative views",{exact:true})).not.toBeInTheDocument();
   });
 });
 
