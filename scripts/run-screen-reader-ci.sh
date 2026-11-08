@@ -54,6 +54,7 @@ set -e
 kill -INT "$record_pid" 2>/dev/null || true
 wait "$record_pid" 2>/dev/null || true
 grep 'SPEECH OUTPUT:' "$FARDA_SCREEN_READER_LOG" > "$out/spoken-output.txt" || true
-python3 scripts/verify-screen-reader-audio.py "$out"
 cat "$out/browser.log"
+if test "$browser_status" -ne 0; then exit "$browser_status"; fi
+python3 scripts/verify-screen-reader-audio.py "$out"
 exit "$browser_status"

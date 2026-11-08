@@ -8,6 +8,8 @@ Orca supports Chromium and its debug output records what was spoken. Its **Where
 
 The runner records the actual synthesized audio to its ephemeral PulseAudio sink. Every checkpoint must have its expected Orca utterances and non-silent audio in the corresponding recording window. Missing speech, an unavailable synthesizer or absent checkpoints fail verification. No log-only fallback is accepted as a pass.
 
+The headed Linux browser hides its scrollbar gutter to retain the existing headless capture geometry. The original exact-width, overflow, keyboard scrolling and axe assertions remain unchanged.
+
 Evidence contains the browser log, Orca spoken-output transcript, checkpoint intervals, software versions and WAV recording. Review these actual observations alongside the existing keyboard/focus, axe, full-source visual comparisons and service tests. This is a scripted real-screen-reader journey with reviewed output, not a claim of a human participant usability study or real provider qualification. The exact CI revision and findings belong in the owning issue's release evidence.
 
 Run only in the existing ephemeral Linux CI environment with:
