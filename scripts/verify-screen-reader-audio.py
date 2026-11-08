@@ -8,7 +8,7 @@ import wave
 
 root = pathlib.Path(sys.argv[1])
 rows = [json.loads(line) for line in (root / "checkpoints.jsonl").read_text().splitlines()]
-assert len(rows) >= 17, f"Expected the actual approval/recovery and lifecycle checkpoints, got {len(rows)}"
+assert len(rows) >= 18, f"Expected the actual approval/recovery and lifecycle checkpoints, got {len(rows)}"
 started = int((root / "recording-start-ms.txt").read_text())
 with wave.open(str(root / "speech.wav"), "rb") as recording:
     assert recording.getsampwidth() == 2 and recording.getnchannels() == 1

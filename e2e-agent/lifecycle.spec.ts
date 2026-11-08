@@ -65,6 +65,11 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
     await expect.poll(() => scroll.evaluate(e => e.scrollLeft)).toBeGreaterThan(0);
     await page.goto("/customers/activation"); await capture("activation", "Measure setup, then sustained use.");
     await expect(page.getByRole("region", { name: "First-week cohort" })).toContainText("do not prove ingestion");
+    if(process.env.FARDA_SCREEN_READER_LOG){
+      await screenReaderCheckpoint(page,"activation-cohort-dialog",page.getByRole("button",{name:"View cohort",exact:true}),["Cohort","dialog"],"Return");
+      await expect(page.getByRole("dialog",{name:"Cohort",exact:true})).toContainText("Synthetic matched 14-day source cohort");
+      await page.keyboard.press("Escape");await expect(page.getByRole("button",{name:"View cohort",exact:true})).toBeFocused();
+    }
     snapshot = lifecycleSourceFixture(lifecycleTestScope, Date.now()); snapshot.version = "synthetic-zero-source";
     for (const key of ["total", "eligible", "withdrawn", "suppressed", "unknown"] as const) snapshot.consent![key] = { value: 0, missingReason: null };
     for (const key of ["delivered", "paired", "weekOne", "pairingFailureEvents"] as const) snapshot.activation![key] = { value: 0, missingReason: null };
