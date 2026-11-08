@@ -34,7 +34,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  const osKeys=[key],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
  const tableOrdinal=columns?await focus.evaluate(element=>{
    const target=element.matches("table")?element:element.querySelector("table");
-   return [...document.querySelectorAll("table")].filter(table=>table.getClientRects().length>0).indexOf(target as HTMLTableElement)+1;
+   return Array.from(document.querySelectorAll("table")).filter(table=>table.getClientRects().length>0).indexOf(target as HTMLTableElement)+1;
  }):0;
  const press=async(command:string)=>{await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);};
  const inspectHeaders=async()=>{
@@ -49,6 +49,8 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    for(let attempt=0;attempt<2&&mode!=="Browse mode";attempt++){
      const modeOffset=statSync(log).size;
      await press("KP_Insert+a");
+     // Orca treats a rapid second press as sticky mode, not another toggle.
+     await new Promise(resolve=>setTimeout(resolve,1000));
      await expect.poll(()=>{
        mode=[...readFileSync(log).subarray(modeOffset).toString("utf8").matchAll(/SPEECH OUTPUT: '(Browse mode|Focus mode)'/g)].at(-1)?.[1]??"";
        return mode;
