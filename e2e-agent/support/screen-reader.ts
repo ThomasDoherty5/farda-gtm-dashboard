@@ -32,13 +32,34 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  // An OS keyboard event reaches Orca's Where Am I command, rather than a CDP/AX snapshot.
  await run("xdotool",["key","--clearmodifiers",key]);
  const osKeys=[key],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
+ const tableOrdinal=columns?await focus.evaluate(element=>{
+   const target=element.matches("table")?element:element.querySelector("table");
+   return [...document.querySelectorAll("table")].filter(table=>table.getClientRects().length>0).indexOf(target as HTMLTableElement)+1;
+ }):0;
+ const press=async(command:string)=>{await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);};
  const inspectHeaders=async()=>{
-   // A region can leave Orca's caret on its caption. Use real documented
-   // structural table navigation, never DOM/AX text as spoken evidence.
+   // DOM focus on a region does not move Orca's caret into its table and
+   // a prior form may leave focus mode active. Establish browse mode from
+   // Orca's own announcement, then enter the exact visible table via OS keys.
+   // DOM geometry supplies only its ordinal, never the spoken evidence.
    // https://help.gnome.org/orca/commands_structural_navigation.html
+   // https://help.gnome.org/orca/howto_forms.html
+   expect(tableOrdinal).toBeGreaterThan(0);
+   let mode="";
+   for(let attempt=0;attempt<2&&mode!=="Browse mode";attempt++){
+     const modeOffset=statSync(log).size;
+     await press("KP_Insert+a");
+     await expect.poll(()=>{
+       mode=[...readFileSync(log).subarray(modeOffset).toString("utf8").matchAll(/SPEECH OUTPUT: '(Browse mode|Focus mode)'/g)].at(-1)?.[1]??"";
+       return mode;
+     },{timeout:5000,message:"Actual Orca browse/focus mode announcement"}).toMatch(/^(Browse|Focus) mode$/);
+   }
+   expect(mode).toBe("Browse mode");
+   await press("ctrl+Home");await new Promise(resolve=>setTimeout(resolve,500));
+   for(let table=0;table<tableOrdinal;table++){await press("t");await new Promise(resolve=>setTimeout(resolve,1000));}
    for(let column=0;column<columns;column++){
      const command=column===0?"alt+shift+Home":"alt+shift+Right";
-     await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);
+     await press(command);
      await new Promise(resolve=>setTimeout(resolve,1000));
    }
  };
