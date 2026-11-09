@@ -127,7 +127,30 @@ test("all reporting families preserve complete responsive content and actual ass
     await login(page);
     for (const [key, route, heading] of routes) {
       await page.goto(route!); await expect(page.getByRole("heading", { name: heading!, exact: true })).toBeVisible(); await expect(page.getByRole("button", { name: "Source evidence", exact: true })).toBeVisible();
-      for (const width of [1440, 1024, 390]) { await page.setViewportSize({ width, height: 1000 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await accessible(page); await page.screenshot({ path: info.outputPath(`analytics-native-${key}-${width}.png`), fullPage: true }); }
+      for (const width of [1440, 1024, 390]) {
+        await page.setViewportSize({ width, height: 1000 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        if (key === "performance") {
+          expect(await page.getByTestId("native-creator-roi-axis").locator("span").evaluateAll(nodes => {
+            const labels = nodes.filter(node => node.textContent?.trim()).map(node => node.getBoundingClientRect());
+            return labels.length === 4 && labels.every((box, index) => box.width > 0 && box.top === labels[0]!.top && (index === 0 || labels[index - 1]!.right <= box.left));
+          }), "The four creator ROI ticks share one horizontal axis at every viewport").toBe(true);
+          const track = await page.getByRole("list", { name: "Creator return on cost" }).locator("li > span[aria-hidden=true]").first().boundingBox();
+          const zero = await page.getByTestId("native-creator-roi-axis").getByText("0×", { exact: true }).boundingBox();
+          const maximum = await page.getByTestId("native-creator-roi-axis").getByText("3×", { exact: true }).boundingBox();
+          expect(track).not.toBeNull(); expect(zero).not.toBeNull(); expect(maximum).not.toBeNull();
+          expect(Math.abs(zero!.x - track!.x), "ROI zero aligns with the beginning of the bar").toBeLessThan(1);
+          expect(Math.abs((width < 480 ? maximum!.x + maximum!.width : maximum!.x) - (track!.x + track!.width)), "ROI maximum aligns with the end of the bar").toBeLessThan(1);
+        }
+        if (key === "launch") {
+          const gates = page.getByRole("region", { name: "Make the next move." });
+          expect(await gates.locator("dl > div").evaluateAll(rows => rows.every(row => {
+            const label = row.querySelector("dt")!, detail = row.querySelector("dd")!;
+            const a = label.getBoundingClientRect(), b = detail.getBoundingClientRect();
+            return a.right <= b.left && label.scrollWidth <= label.clientWidth && detail.scrollWidth <= detail.clientWidth;
+          })), "Every native anchor label remains separate from its complete gate evidence").toBe(true);
+        }
+        await accessible(page); await page.screenshot({ path: info.outputPath(`analytics-native-${key}-${width}.png`), fullPage: true });
+      }
       await page.setViewportSize({ width: 1440, height: 1000 });
       if (key === "overview") {
         const trigger = page.getByRole("button", { name: "Source evidence", exact: true }); await trigger.focus(); await page.keyboard.press("Enter"); const dialog = page.getByRole("dialog", { name: "Reporting source evidence" }); await expect(dialog).toBeVisible();

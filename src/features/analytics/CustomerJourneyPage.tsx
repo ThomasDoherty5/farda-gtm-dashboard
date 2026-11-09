@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useView } from "@/adapter/useView";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
-import { DEMO_RETURN_ID, DEMO_SUPPORT_CASE_ID, type CustomerJourneyData } from "@/fixtures/analytics";
+import { DEMO_RETURN_ID, DEMO_SUPPORT_CASE_ID, type CustomerJourneyDemoData as CustomerJourneyData } from "@/fixtures/analytics";
 import { averageRating, niceScale, rate } from "./journeyMath";
 import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, SectionHeading, ViewShell, count, percent, ratio, usd, usdExact, useIsDemo } from "./parts";
 import { NativeSiteTrafficPage } from "./NativeSiteTrafficPage";

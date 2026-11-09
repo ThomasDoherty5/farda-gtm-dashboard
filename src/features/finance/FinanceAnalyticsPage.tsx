@@ -1,3 +1,4 @@
+import { FinanceReadGrant, type FinanceReadQuery } from "./FinanceReadGrant";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -33,6 +34,10 @@ export function FinanceAnalyticsPage() {
   const [search] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;
   const query = useView<{ scenario?: string }, FinanceDashboard>("financeDashboard", scenario ? { scenario } : {});
+  return <FinanceReadGrant query={query} title="Financial pulse" titleId="pulse-title"><FinanceAnalyticsContent query={query} /></FinanceReadGrant>;
+}
+
+function FinanceAnalyticsContent({ query }: { query: FinanceReadQuery<FinanceDashboard> & { isPending: boolean } }) {
   const [dialog, setDialog] = useState(false);
   const res = query.data;
   const data = res?.data ?? null;

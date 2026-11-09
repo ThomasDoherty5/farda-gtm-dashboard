@@ -104,7 +104,9 @@ test("full source-layout evidence, responsive creator details and actual table a
     expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([]);
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await screenReaderCheckpoint(page, "shipping-hub-table-headers", page.getByRole("region", { name: "Shared shipment table" }), ["Shared shipment", "Recipient", "Shipment state", "Cost"], "KP_Enter");
+  // Target the real table; its focus anchor keeps AT navigation inside it after leaving the header checkbox.
+  // The enclosing region stays keyboard-focusable for horizontal scrolling.
+  await screenReaderCheckpoint(page, "shipping-hub-table-headers", queue, ["Shared shipment", "Recipient", "Shipment state", "Cost"], "KP_Enter");
   const trigger = queue.getByRole("row").filter({ hasText: "Creator" }).filter({ hasText: "DELIVERED" }).getByRole("button");
   await trigger.focus(); await page.keyboard.press("Enter");
   const detail = page.getByRole("dialog", { name: "Creator shipment" }); await expect(detail).toBeVisible();
@@ -113,6 +115,17 @@ test("full source-layout evidence, responsive creator details and actual table a
     expect(await detail.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await expect(detail.getByRole("heading", { name: "Creator shipment", exact: true })).toBeInViewport();
     await page.screenshot({ path: info.outputPath(`shipping-native-creator-${width}.png`), fullPage: true });
+    // Capture the lower, scrollable handoff as well as the opening state. A full
+    // page capture alone cannot show content outside a modal's scroll viewport.
+    await detail.getByRole("button", { name: "Open collaboration", exact: true }).scrollIntoViewIfNeeded();
+    await expect(detail.getByText("Posting deadline · read-only", { exact: true })).toBeInViewport();
+    await expect(detail.getByRole("button", { name: "Open collaboration", exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath(`shipping-native-creator-handoff-${width}.png`), fullPage: true });
+    await detail.getByText("Address access restricted", { exact: true }).scrollIntoViewIfNeeded();
+    await expect(detail.getByText("Address access restricted", { exact: true })).toBeInViewport();
+    await expect(detail.getByRole("button", { name: "Refresh source evidence", exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath(`shipping-native-creator-bottom-${width}.png`), fullPage: true });
+    await detail.evaluate(element => { element.scrollTop = 0; });
   }
   await page.setViewportSize({ width: 1440, height: 1000 }); await page.keyboard.press("Escape"); await expect(trigger).toBeFocused();
   await screenReaderCheckpoint(page, "shipping-hub-creator-focus-return", trigger, ["Inspect source evidence", "button"]);

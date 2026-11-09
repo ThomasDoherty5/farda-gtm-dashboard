@@ -1,3 +1,4 @@
+import { FinanceReadGrant } from "./FinanceReadGrant";
 import type { ReactNode } from "react";
 import { useView } from "@/adapter/useView";
 import { Badge, type BadgeTone } from "@/components/Badge";
@@ -25,9 +26,11 @@ const when = (iso: string | null) => (iso ? iso.replace("T", " ").replace(/:\d\d
 export function ClosePackagePage({ period, scenario }: { period: string; scenario: string | undefined }) {
   const query = useView<{ period: string; scenario?: string }, ClosePackage>("closePackage", scenario ? { period, scenario } : { period });
   return (
+    <FinanceReadGrant query={query} title={`Close package ${period}`} titleId="package-title">
     <RecordShell query={query} id="package-title" title={`Close package ${period}`} subject="close package" figma="7:683">
       {(_res, p) => <Body p={p} />}
     </RecordShell>
+    </FinanceReadGrant>
   );
 }
 

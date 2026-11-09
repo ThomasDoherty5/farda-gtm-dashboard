@@ -206,7 +206,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     };
   }
 
-  const loadCollaborationSnapshot = async (requested:AssetScope,id:string,serverReferenceKey:string) => {
+  const loadCollaborationSnapshot = async (requested:CollaborationReadBinding["scope"],id:string,serverReferenceKey:string) => {
     if (!sameAssetScope(requested,config.scope) || requested.environment !== "sandbox") throw new AssetRegistryReadError("SOURCE_SCOPE_DENIED",403,"denied");
     const canonical = pageId.safeParse(id);
     if (!canonical.success) return null;

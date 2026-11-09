@@ -1,3 +1,4 @@
+import { FinanceReadGrant } from "./FinanceReadGrant";
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -48,6 +49,10 @@ export function CloseReconciliationPage() {
 
 function CloseSummary({ period, scenario }: { period: string; scenario: string | undefined }) {
   const query = useView<{ period: string; scenario?: string }, PeriodClose>("periodClose", scenario ? { period, scenario } : { period });
+  return <FinanceReadGrant query={query} title={`Close ${period}`} titleId="close-title"><CloseSummaryContent query={query} period={period} scenario={scenario} /></FinanceReadGrant>;
+}
+
+function CloseSummaryContent({ query, period, scenario }: { query: ReturnType<typeof useView<{ period: string; scenario?: string }, PeriodClose>>; period: string; scenario: string | undefined }) {
   const [dialog, setDialog] = useState<null | "reconciliation" | { source: string }>(null);
   return (
     <RecordShell query={query} id="close-title" title={`Close ${period}`} subject="accounting period" figma="7:683">

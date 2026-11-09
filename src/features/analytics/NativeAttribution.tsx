@@ -48,7 +48,7 @@ export function NativeAttribution({ data, refresh, refreshing, definitions }: { 
       </Card>
       <Card><SectionHeading title="Creator efficiency, on a common basis" note="Source-qualified attributed contribution ÷ total creator cost" />
         {data.creators.length ? <BarList label="Creator return on cost" cols="160px minmax(0, 1fr) 64px" gap={12} rows={data.creators.map((row, index) => ({ key: row.creatorRef, label: `Creator ${index + 1}`, value: factText(row.roi, nativeMultiple), share: Math.min(1, Math.max(0, row.roi.value ?? 0) / 3) }))} /> : <p>Creator economics Unknown · no qualified rows supplied.</p>}
-        <div className={styles.axis} aria-hidden="true"><span>0×</span><span>1×</span><span>2×</span><span>3×</span></div><p className={styles.small}>Commission, accepted historical fees, landed sample costs and shipping retain their separate evidence. Missing costs never produce a favorable ranking.</p><Button variant="ghost" onClick={definitions}>Open creator economics evidence</Button>
+        <div className={`${styles.axis} ${styles.nativeRoiAxis}`} aria-hidden="true" data-testid="native-creator-roi-axis"><span /><span>0×</span><span>1×</span><span>2×</span><span>3×</span></div><p className={styles.small}>Commission, accepted historical fees, landed sample costs and shipping retain their separate evidence. Missing costs never produce a favorable ranking.</p><Button variant="ghost" onClick={definitions}>Open creator economics evidence</Button>
       </Card>
     </div>
     <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>

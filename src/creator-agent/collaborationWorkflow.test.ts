@@ -142,7 +142,7 @@ describe("authoritative collaboration workflow",()=>{
       const w=createCollaborationWorkflow(db,scope,secret,collaborationTestSource(()=>s,now),now,async()=>({nextCursor:null,data:{source:"saved-agent-records",kind:"collaboration-evidence",
         collaborationId:collabTestId,observedAt:collabTestAt,total:1,offset:0,hasMore:false,records:[{kind:"asset",id:"asset-receipt",assetId:"linked-asset",fileVersion:"drive-v1",
           productId:"product",productRevision:"revision",version:1,recordedAt:collabTestAt,parentAssetId:null,parentVersion:null,availability:"available",reviewState:"pending",rightsState:"unknown",rightsObservedAt:null}]}}));
-      const data=(await w.read(collabTestId))!.data;expect(data.deliverables[0]).toMatchObject({submissionVersion:expect.stringMatching(/^v1-/),review:{state:"pending"},rights:{state:"unknown"},publishPermission:{state:"unknown"}});
+      const data=(await w.read(collabTestId))!.data;expect(data).not.toBeNull();expect(data!.deliverables[0]).toMatchObject({submissionVersion:expect.stringMatching(/^v1-/),review:{state:"pending"},rights:{state:"unknown"},publishPermission:{state:"unknown"}});
     }finally{db.close();}
   });
 });

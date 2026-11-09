@@ -1,3 +1,4 @@
+import { FinanceReadGrant, type FinanceReadQuery } from "./FinanceReadGrant";
 import { useView } from "@/adapter/useView";
 import { Badge, type BadgeTone } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
@@ -9,8 +10,9 @@ import { FinanceNav } from "./FinanceNav";
 
 const TONE: Record<MonthStatus, BadgeTone> = { open: "neutral", reconciling: "warning", blocked: "danger", awaitingCpa: "warning", readyToExport: "violet", exporting: "violet", failed: "danger", closed: "success", reopened: "warning", revised: "violet" };
 
-function Shell({ id, title, subtitle, children, query }: { id: string; title: string; subtitle: string; children: React.ReactNode; query: { isPending: boolean; isError: boolean; error: Error | null; refetch: () => unknown; data: unknown } }) {
+function Shell({ id, title, subtitle, children, query }: { id: string; title: string; subtitle: string; children: React.ReactNode; query: FinanceReadQuery & { isPending: boolean } }) {
   return (
+    <FinanceReadGrant query={query} title={title} titleId={id}>
     <Page aria-labelledby={id}>
       <PageHeader id={id} title={title} subtitle={subtitle}>
         <LinkButton variant="secondary" to="/finance/close/2026-10" style={{ minWidth: 190 }}>Back to the close</LinkButton>
@@ -20,6 +22,7 @@ function Shell({ id, title, subtitle, children, query }: { id: string; title: st
       {query.isError && query.error && <ViewError error={query.error} subject={title} hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {children}
     </Page>
+    </FinanceReadGrant>
   );
 }
 
