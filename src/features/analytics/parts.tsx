@@ -164,7 +164,7 @@ export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }
       )}
       {res?.dataState === "partial" && (
         <Alert state="warning" title="Partial data">
-          <p>{res.coverage.observedCount} of {res.coverage.expectedCount} source records are available. Totals cover only those records.</p>
+          <p>{res.coverage.expectedCount === null ? `${res.coverage.observedCount ?? "Unknown"} source records observed; total coverage is unknown.` : `${res.coverage.observedCount ?? "Unknown"} of ${res.coverage.expectedCount} source records are available.`} Totals cover only those records.</p>
         </Alert>
       )}
       {query.isPlaceholderData && <span role="status" className="visually-hidden">Updating results…</span>}

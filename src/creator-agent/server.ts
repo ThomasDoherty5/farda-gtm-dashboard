@@ -89,6 +89,10 @@ import { apiErrorEnvelope } from "./apiErrorEnvelope.ts";
 import { composeActionDomains } from "./actionDomains.ts";
 import { createBulkService, type BulkServiceOptions } from "./bulk/service.ts";
 import { BulkError, bulkReadFiltersSchema } from "./bulk/contract.ts";
+import { createSiteTrafficService, type SiteTrafficServiceOptions } from "./siteTraffic/service.ts";
+import { trafficFiltersSchema } from "./siteTraffic/contract.ts";
+import { SiteTrafficError } from "./siteTraffic/source.ts";
+import { createSiteTrafficImportApi, SiteTrafficApiError, type SiteTrafficImportMachine } from "./siteTrafficApi.ts";
 import { assertBulkRuntimeRegistration, findBulkGroupManifest } from "./bulkRuntime.ts";
 import { createRecruitmentService, type RecruitmentServiceOptions } from "./recruitment/service.ts";
 import { InvitationDraftRepository } from "./recruitment/drafts.ts";
@@ -138,6 +142,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   recruitmentWorkspace?: Pick<RecruitmentServiceOptions, "source" | "invitationOwner" | "permittedLinkOrigins">;
   /** Finite source-owned J13 sets and exact compiled domain owners. No default source or activation. */
   bulkWorkspace?: Pick<BulkServiceOptions, "source" | "owners">;
+  /** Qualified aggregate owners and a separate machine importer. Unset keeps the actual import pending. */
+  siteTraffic?: Pick<SiteTrafficServiceOptions, "source" | "orders" | "clicks"> & { machine?: SiteTrafficImportMachine };
   rewardDomain?: { source: RewardDomainSource; registration: RewardRegistration };
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
@@ -150,6 +156,12 @@ export function createAgentServer(options: AgentServerOptions) {
   if (options.readToken.length < 32 || options.reviewToken.length < 32 || safeEqual(options.readToken, options.reviewToken)) throw new Error("Two distinct server-only tokens of at least 32 characters are required");
   if (!options.workspaceId || !options.accountId) throw new Error("Explicit workspace and account scope are required");
   assertMachineTokens(options.actionFoundation, options.readToken, options.reviewToken);
+  if (options.siteTraffic?.machine) {
+    const token = options.siteTraffic.machine.token;
+    if (token.length < 32 || [options.readToken, options.reviewToken, options.runtime?.machine?.token, options.actionFoundation?.worker?.token,
+      options.actionFoundation?.decisionRelay?.token, options.actionFoundation?.reporting?.token].some(other => other !== undefined && safeEqual(token, other)))
+      throw new Error("Traffic import authority requires its own distinct server-only credential.");
+  }
   if (options.runtime?.machine) {
     const token = options.runtime.machine.token;
     if (token.length < 32 || [options.readToken, options.reviewToken, options.actionFoundation?.worker?.token,
@@ -185,6 +197,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let teamInvitationReads: ReturnType<typeof createTeamInvitationReadReader>;
   let recruitmentWorkspace: ReturnType<typeof createRecruitmentService>;
   let bulkWorkspace: ReturnType<typeof createBulkService>;
+  let siteTraffic: ReturnType<typeof createSiteTrafficService>;
+  let siteTrafficApi: ReturnType<typeof createSiteTrafficImportApi>;
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
@@ -215,6 +229,8 @@ export function createAgentServer(options: AgentServerOptions) {
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
     commercialProjection = createCommercialProjection({ offers, db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret, now: options.operations?.now });
     recruitment = createRecruitmentSourceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
@@ -323,6 +339,8 @@ export function createAgentServer(options: AgentServerOptions) {
       // Public reads already consume the shared transport admission below. Standalone
       // runtime gateways retain their default own admission; machine writes always do.
       readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now });
+    siteTrafficApi = createSiteTrafficImportApi({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      service: siteTraffic, machine: options.siteTraffic?.machine, limits: actionFoundation.limits, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
       (record, superseded) => current(record, superseded, false));
     collaborationWorkflow = createCollaborationWorkflow(store.database,
@@ -432,6 +450,7 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240), manifestVersion:z.number().int().positive().safe().optional(), history:z.boolean().optional(), beforeVersion:z.number().int().positive().safe().optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(1400) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("batchDetail"), filters: z.union([scorecardPreviewFilters, recruitmentBatchFiltersSchema, bulkReadFiltersSchema.extend({context:z.literal("bulk")}).strict()]) }),
+    readBase.extend({ viewKey: z.literal("customerJourney"), filters: trafficFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("recruitmentQueue"), filters: recruitmentFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
       period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -491,6 +510,16 @@ export function createAgentServer(options: AgentServerOptions) {
     try {
       const path = new URL(req.url ?? "/", "http://localhost").pathname;
       if (path === "/health" && req.method === "GET") return reply(res, 200, { service: "farda-creator-agent", schemaVersion: AGENT_SCHEMA_VERSION });
+      if (path === "/v1/site-traffic/import") {
+        siteTrafficApi.authenticate(req.headers.authorization);
+        if (req.method !== "POST" || new URL(req.url!, "http://localhost").search) return reply(res, 400, { code: "INVALID_INPUT", executionCertainty: "uncertain" });
+        if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "uncertain" });
+        const cancel = new AbortController();
+        res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+        const result = await siteTrafficApi.execute(await bodyOf(req), req.headers.authorization, cancel.signal);
+        try { result.assertCurrent(); return reply(res, 200, result.receipt); }
+        finally { result.dispose(); }
+      }
       if (path === "/v1/runtime/machine") {
         const machine = options.runtime?.machine;
         if (!machine) throw new RuntimeApiError("RUNTIME_MACHINE_NOT_CONFIGURED", 503, "uncertain");
@@ -768,6 +797,8 @@ export function createAgentServer(options: AgentServerOptions) {
         teamInvitationReads: { sourceAuthority: options.teamInvitationReadSource ? "injected" : "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
+        siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
+          importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
           dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
@@ -799,6 +830,23 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (path === "/v1/read" && req.method === "POST") {
         const input = readSchema.parse(await bodyOf(req));
+        if (input.viewKey === "customerJourney") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const cancel = new AbortController();
+          res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const result = await siteTraffic.read(input.filters, { principalRef: `agent-${auth.role}` }, cancel.signal);
+          const data = result.data;
+          const expected = data.coverage.expectedDays, observed = data.coverage.observedDays;
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: data.freshness.state === "stale" ? "stale" : data.coverage.state === "complete" ? "ready" : "partial", data,
+            sourceFreshness: [], coverage: { expectedCount: expected, observedCount: observed, missingCount: expected === null ? null : Math.max(0, expected - observed),
+              complete: data.coverage.state === "complete", reasonCodes: data.coverage.reasonCodes },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
+          const assertSession = () => { const currentAuth = authorize(req); if (!currentAuth || currentAuth.role !== auth.role) throw new SiteTrafficError("TRAFFIC_PRINCIPAL_DENIED", currentAuth ? 403 : 401); };
+          assertSession(); result.assertCurrent(); assertSession();
+          return reply(res, 200, envelope);
+        }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const recovery = input.filters.requestKey === undefined ? null
@@ -1270,6 +1318,10 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       return reply(res, 404, { code: "UNSUPPORTED_OPERATION", executionCertainty: "notApplied" });
     } catch (error) {
+      if (error instanceof SiteTrafficApiError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
+        ...(error.retryAfterMs === null ? {} : { retryAfterMs: error.retryAfterMs }) });
+      if (error instanceof SiteTrafficError) return reply(res, error.status, { code: error.code,
+        executionCertainty: new URL(req.url ?? "/", "http://localhost").pathname === "/v1/site-traffic/import" ? "uncertain" : "notApplied" });
       if(error instanceof ReportError) return reply(res,error.status,{code:error.code,executionCertainty:error.executionCertainty,
         ...(error.retryAfterMs===null?{}:{retryAfterMs:error.retryAfterMs})});
       if (error instanceof CommercialProjectionError || error instanceof RecruitmentSourceError)

@@ -10,6 +10,7 @@ import { allocateCosts, aov as aovOf, contributionPerOrder, evaluateCase, period
 import { weekBarHeight, weekTotals, AXIS_MAX_MINOR } from "./attributionMath";
 import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, PeriodDialog, SectionHeading, ViewShell, WorkspaceTabs, count, percent, ratio, usd, usdExact, useIsDemo } from "./parts";
 import styles from "./Analytics.module.css";
+import { NativeTrafficDefinitionRead } from "./NativeSiteTrafficPage";
 
 const axisLabel = (minor: number) => (minor === 0 ? "$0" : `$${minor / 100_000}k`);
 const multiple = (n: number) => `${n.toFixed(2)}×`;
@@ -52,6 +53,7 @@ const STATIC_DEFS: [string, string][] = [
 ];
 
 function Definitions({ data }: { data: AttributionData | null }) {
+  const demo = useIsDemo();
   return (
     <div>
       <dl className={styles.defs} data-testid="static-definitions">
@@ -59,6 +61,7 @@ function Definitions({ data }: { data: AttributionData | null }) {
       </dl>
       {data && <PeriodEvidence data={data} />}
       <DictionaryRead />
+      {!demo && <NativeTrafficDefinitionRead />}
     </div>
   );
 }

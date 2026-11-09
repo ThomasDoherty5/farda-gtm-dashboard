@@ -29,6 +29,7 @@ for flow in ("early-access", "abandoned-checkout", "review-request"):
 names = [row["name"] for row in rows]
 expected.update({"recruitment-invitation-dialog-focus-return", "recruitment-invitation-invalid-start", "recruitment-finite-outcomes-table"})
 expected.update({"bulk-row-dialog-focus-return", "bulk-finite-row-table"})
+expected.update({"traffic-definitions-focus-return", "traffic-daily-table-headers"})
 assert len(names) == len(set(names)), "Duplicate speech checkpoints cannot replace missing journeys"
 assert expected <= set(names), f"Missing actual screen-reader checkpoints: {sorted(expected - set(names))}"
 started = int((root / "recording-start-ms.txt").read_text())

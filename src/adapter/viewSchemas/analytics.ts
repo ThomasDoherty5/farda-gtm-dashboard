@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { moneySchema, provenanceValueSchema } from "../contract";
 import { nativeReadinessViewSchema } from "../../creator-agent/actions/views";
+import { nativeSiteTrafficViewSchema } from "../../creator-agent/siteTraffic/views";
 
 const count = z.number().int().nonnegative();
 const nonNegativeMoney = moneySchema.extend({ minorUnits: z.number().int().nonnegative() });
@@ -263,6 +264,6 @@ export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
   attribution: attributionSchema,
   paidMedia: paidMediaSchema,
   campaignFunnel: campaignFunnelSchema,
-  customerJourney: customerJourneySchema,
+  customerJourney: z.union([nativeSiteTrafficViewSchema, customerJourneySchema]),
   metricDictionary: metricDictionarySchema,
 };
