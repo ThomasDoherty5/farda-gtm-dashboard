@@ -50,7 +50,7 @@ function DemoPayablePage() {
             <Panel large roomy title="Approval, execution, and reconciliation are separate." testId="lifecycle">
               <ol className={styles.stages} aria-label="Payment lifecycle">
                 {PAYABLE_STAGES.map((st, i) => (
-                  <li key={st.key} className={styles.stage} aria-current={i === idx ? "step" : undefined} data-done={i < idx}>
+                  <li key={st.key} className={styles.stage} aria-current={i === idx ? "step" : undefined} data-done={i < idx} style={st.key === "requested" && i < idx ? { background: "var(--color-subtle)" } : undefined}>
                     <p className={styles.stageTitle}>{st.title}<span className="visually-hidden"> · {i < idx ? "done" : i === idx ? "current step" : "not yet"}</span></p>
                     <p className={styles.stageNote}>{st.note}</p>
                   </li>

@@ -73,7 +73,7 @@ function Collabs({ res, s }: { res: ReadResponse<SettlementRecord>; s: Settlemen
         header={
           <div className={styles.headRow}>
             <SectionHeading id="paid-title" large title="Creator paid. Invoice match still open." subtitle={`Synthetic settled group · ${s.retainedOrders} retained orders × ${dollars(s.eligibleMerchandise)} eligible merchandise × ${s.ratePct}% = ${dollars(paid)}.`} />
-            <span><Badge tone="violet" width={174}>Source fixture</Badge></span>
+            <span style={{ width: 174, maxWidth: "100%", flexShrink: 0 }}><Badge tone="violet" width={174}>Source fixture</Badge></span>
           </div>
         }
       >
