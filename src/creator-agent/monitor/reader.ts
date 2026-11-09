@@ -154,20 +154,18 @@ export function createMonitorReader(options:Options){
     if(result && !result.success)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
     if(source && !result)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
     const packet=result?.data??null,s=packet?.snapshot??null,now=clock();
-    let expectedExpired:boolean|undefined;
+    const sourceExpires=s?Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs):null;
+    const expired=sourceExpires!==null && sourceExpires<=now;
     const assertCurrent=()=>{assertCaller();if(packet && source){const proof=packet.authority,time=clock();
       if(digest(proof.binding)!==digest(binding) || proof.sourceVersion!==(s?.version??null))throw new MonitorError("MONITOR_SOURCE_INVALID",502);
       if(!Number.isFinite(time)||Date.parse(proof.observedAt)>time||Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+15*60_000)<=time)throw new MonitorError("MONITOR_SOURCE_ACCESS_EXPIRED",409);
       try{assertSynchronousVoid(()=>source.assertCurrent(structuredClone(packet),structuredClone(binding),time));}catch(error){sourceFailure(error);}}
       assertCaller();if(packet && Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)<=clock())throw new MonitorError("MONITOR_SOURCE_ACCESS_EXPIRED",409);
-      if(s && expectedExpired!==undefined && expectedExpired!==(Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs)<=clock()))throw new MonitorError("MONITOR_SOURCE_CHANGED",409);};
+      if(s && expired!==(Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs)<=clock()))throw new MonitorError("MONITOR_SOURCE_CHANGED",409);};
     assertCurrent();
     if(s && (s.scope.accountId!==scope.accountId || s.scope.workspaceId!==scope.workspaceId || s.scope.environment!==scope.environment))
       throw new MonitorError("SOURCE_SCOPE_DENIED",403);
     if(s && Date.parse(s.observedAt)>now)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
-    const sourceExpires=s?Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs):null;
-    const expired=sourceExpires!==null && sourceExpires<=now;
-    expectedExpired=expired;
     const sourceState=!s ? source?"unavailable" as const:"unconfigured" as const : expired?"expired" as const:s.coverage==="partial"?"partial" as const:"current" as const;
     const asOf=cursor?.asOf??new Date(now).toISOString();
     db.exec("BEGIN");

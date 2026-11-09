@@ -54,6 +54,7 @@ test("served orders retain original arithmetic and missing-source distinctions, 
     // 180 code orders include20 sitewide promotion orders; only160 belong to creators.
     await expect(page.getByTestId("metric-Attributed orders")).toHaveText("160");
     await expect(page.getByText("Demo performance")).toHaveCount(0); await accessible(page);
+    // eslint-disable-next-line no-restricted-globals -- Read-only privacy assertion; this test writes no browser storage.
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);
     staleOrders = true; await page.getByRole("button", { name: "Refresh reporting evidence", exact: true }).click();
     await expect(page.getByTestId("metric-Net receipts")).toContainText("$12,596.00");
@@ -167,6 +168,7 @@ test("all reporting families preserve complete responsive content and actual ass
       if (key === "paid") await screenReaderCheckpoint(page, "analytics-paid-table-headers", page.getByRole("region", { name: "Paid channel metrics" }), ["Paid channel metrics", "Channel", "Media spend", "Platform ROAS"], "KP_Enter");
       if (key === "campaign") { await expect(page.getByTestId("metric-no-post")).toHaveText("Unknown"); await screenReaderCheckpoint(page, "analytics-campaign-table-headers", page.getByRole("region", { name: "Campaign progression" }), ["Campaign progression", "Campaign", "Contacted", "Posted"], "KP_Enter"); }
     }
+    // eslint-disable-next-line no-restricted-globals -- Read-only privacy assertion; this test writes no browser storage.
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);
   } finally { await app.close(); }
 });
