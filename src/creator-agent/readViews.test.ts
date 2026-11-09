@@ -155,8 +155,8 @@ describe("actual agent sourcing and immutable assessment read models", () => {
       { ...SYNTHETIC_SCOPE, environment: "production" },
       { ...SYNTHETIC_SCOPE, accountIds: [...SYNTHETIC_SCOPE.accountIds, "synthetic-extra-account"] },
     ]) {
-      expect((await read("discoverySummary", {}, scope)).status).toBe(400);
-      expect((await read("assessmentRecord", { creatorId: record.packet.creatorId, assessmentId: record.runId }, scope)).status).toBe(400);
+      expect((await read("discoverySummary", {}, scope)).status).toBe(403);
+      expect((await read("assessmentRecord", { creatorId: record.packet.creatorId, assessmentId: record.runId }, scope)).status).toBe(403);
     }
     expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, null)).status).toBe(401);
     expect((await read("assessmentRecord", { creatorId: record.packet.creatorId, assessmentId: record.runId, eligible: true })).status).toBe(400);

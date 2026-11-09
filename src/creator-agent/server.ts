@@ -436,6 +436,19 @@ export function createAgentServer(options: AgentServerOptions) {
   };
   const commercialSelection = { offerId: offerIdSchema.optional(), offerVersion: z.string().regex(/^v[1-9]\d*$/).optional(),
     phase: z.enum(["invitation", "activation", "shipment"]).optional() };
+  const requestedScopeInput = z.object({ requestedScope: z.object({
+    workspaceId: z.string().min(1), accountIds: z.array(z.string().min(1)), environment: z.enum(["demo", "sandbox", "production"]),
+  }).strict() }).passthrough();
+  const assertReadSaveScope = (raw: unknown) => {
+    // Authenticate before this boundary. A malformed scope is still a 400;
+    // a valid foreign scope is a neutral 403 before any view or save owner runs.
+    // Keep the exact granted-scope schema below as a second admission check.
+    const { requestedScope } = requestedScopeInput.parse(raw);
+    if (requestedScope.workspaceId !== options.workspaceId || requestedScope.environment !== "sandbox" ||
+        requestedScope.accountIds.length !== 1 || requestedScope.accountIds[0] !== options.accountId)
+      throw new RuntimeApiError("FORBIDDEN", 403, "notApplied");
+    return raw;
+  };
   const readBase = z.object({
     schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
     requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
@@ -732,7 +745,7 @@ export function createAgentServer(options: AgentServerOptions) {
       if (path === "/v1/save" && req.method === "POST") {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
-        const input = saveSchema.parse(await bodyOf(req));
+        const input = saveSchema.parse(assertReadSaveScope(await bodyOf(req)));
         const admittedCaller = authorize(req);
         if (!admittedCaller || admittedCaller.role !== auth.role) return reply(res, admittedCaller ? 403 : 401, { code: "CALLER_AUTHORITY_CHANGED", executionCertainty: "notApplied" });
         if (input.resourceKind === "configurationDraft") {
@@ -886,7 +899,7 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const input = readSchema.parse(await bodyOf(req));
+        const input = readSchema.parse(assertReadSaveScope(await bodyOf(req)));
         const admittedCaller = authorize(req);
         if (!admittedCaller || admittedCaller.role !== auth.role) return reply(res, admittedCaller ? 403 : 401, { code: "CALLER_AUTHORITY_CHANGED", executionCertainty: "notApplied" });
         if (input.viewKey === "customerJourney") {

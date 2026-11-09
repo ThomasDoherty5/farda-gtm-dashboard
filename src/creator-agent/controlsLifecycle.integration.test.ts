@@ -57,7 +57,7 @@ describe("authenticated controls and lifecycle integration", () => {
   it("rejects foreign scope and reader request-key lookups before source access", async () => {
     let reads = 0;
     const { read } = await start({ lifecycleSource: lifecycleTestSource(async () => { reads++; return lifecycleSourceFixture(); }) });
-    expect((await read("emailFlow", { flow: "early-access" }, false, { ...requestedScope, accountIds: ["foreign-account"] })).status).toBe(400);
+    expect((await read("emailFlow", { flow: "early-access" }, false, { ...requestedScope, accountIds: ["foreign-account"] })).status).toBe(403);
     expect((await read("emailFlow", { flow: "early-access", draftRequestKey: "private-key" })).status).toBe(403);
     expect((await read("operationsControl", { section: "runs", proposalRequestKey: "private-key" })).status).toBe(403);
     expect(reads).toBe(0);

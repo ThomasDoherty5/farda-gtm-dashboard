@@ -66,8 +66,8 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     for (const scope of [{ ...requestedScope, workspaceId: "foreign-workspace" }, { ...requestedScope, accountIds: ["foreign-account"] },
       { ...requestedScope, environment: "production" }]) {
       const foreign = await read(viewKey, operationsReadTestFilters[viewKey], { scope });
-      expect(foreign.status).toBe(400);
-      expect(foreign.body).toMatchObject({ code: "INVALID_INPUT", executionCertainty: "notApplied" });
+      expect(foreign.status).toBe(403);
+      expect(foreign.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: "notApplied" });
       expect(foreign.body).not.toHaveProperty("data");
     }
     expect(reads).toBe(0);

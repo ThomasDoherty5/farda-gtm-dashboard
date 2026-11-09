@@ -49,7 +49,7 @@ describe("native daily sourcing over actual HTTP and SQLite", () => {
   it("refuses unauthenticated and foreign scopes before source access", async () => {
     const f = await start(); expect((await f.read({}, "none")).status).toBe(401);
     for (const requestedScope of [{ ...f.requestedScope, workspaceId: "foreign" }, { ...f.requestedScope, accountIds: ["foreign"] }, { ...f.requestedScope, accountIds: [...f.requestedScope.accountIds, "foreign"] }, { ...f.requestedScope, environment: "production" }]) {
-      const result = await f.read({ requestedScope }); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT");
+      const result = await f.read({ requestedScope }); expect(result.status).toBe(403); canonical(result.body, "FORBIDDEN");
     }
     expect(f.calls.reads).toBe(0);
   });

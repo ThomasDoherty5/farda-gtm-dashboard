@@ -117,7 +117,7 @@ app.store.close(); console.log("native-service-initialized");`;
     expect(result.body.data).toMatchObject({ kind: "collaboration-evidence", total: 1, records: [expect.objectContaining({ assetId: "synthetic-http-0", rightsState: "unknown" })] });
     expect(result.body.data.records).toHaveLength(1);
     const foreign = structuredClone(body); foreign.requestedScope.accountIds = ["foreign"];
-    expect((await request("/v1/read", "POST", foreign)).status).toBe(400);
+    expect((await request("/v1/read", "POST", foreign)).status).toBe(403);
     expect((await request("/v1/read", "POST", { ...body, filters: { collaborationId: "empty" } })).body.data.total).toBe(0);
   });
   it("protects registry discovery and distinguishes unconfigured access from a verified empty read", async () => {

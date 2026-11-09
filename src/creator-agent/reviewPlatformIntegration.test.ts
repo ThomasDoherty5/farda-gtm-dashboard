@@ -82,7 +82,7 @@ describe("review sprint creator platform HTTP pagination and provenance", () => 
     expect((await post("/v1/read", request("socialCatBoard", cursor), SYNTHETIC_REVIEW_TOKEN)).status).toBe(400);
     expect((await post("/v1/read", request("socialCatDashboard", cursor))).status).toBe(400);
     expect((await post("/v1/read", request("socialCatBoard", cursor, { q: "changed" }))).status).toBe(400);
-    expect((await post("/v1/read", { ...request("socialCatBoard", cursor), requestedScope: { ...scope, accountIds: ["foreign-account"] } })).status).toBe(400);
+    expect((await post("/v1/read", { ...request("socialCatBoard", cursor), requestedScope: { ...scope, accountIds: ["foreign-account"] } })).status).toBe(403);
     expect((await post("/v1/read", { ...request("socialCatBoard"), sort: [{ arbitrary: "sort" }] })).status).toBe(400);
     expect((await post("/v1/read", request("socialCatBoard", null, { unsupported: true }))).status).toBe(400);
   });

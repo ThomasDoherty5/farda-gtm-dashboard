@@ -115,7 +115,7 @@ describe("continuous sprint authenticated integration boundaries", () => {
       readInventory: scope => { reads++; return inventorySourceFixture(scope); },
       readSupport: scope => { reads++; return supportSourceFixture(scope); },
     }) });
-    expect((await read("inventoryOverview", {}, false, { ...requestedScope, accountIds: ["other-account"] })).status).toBe(400);
+    expect((await read("inventoryOverview", {}, false, { ...requestedScope, accountIds: ["other-account"] })).status).toBe(403);
     expect(await read("inventoryOverview", { proposalRequestKey: "private-request" })).toMatchObject({ status: 403 });
     expect(await read("supportWorkspace", { caseId: "queue", proposalRequestKey: "private-request" })).toMatchObject({ status: 403 });
     expect(reads).toBe(0);

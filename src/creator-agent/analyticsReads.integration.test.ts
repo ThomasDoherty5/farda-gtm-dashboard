@@ -42,7 +42,7 @@ describe("all seven native analytics keys through actual authenticated HTTP and 
     expect((await f.post(f.envelope("overviewSummary"), null)).status).toBe(401);
     expect((await f.post(f.envelope("overviewSummary"), "wrong-token")).status).toBe(401);
     for (const requestedScope of [{ ...f.requestedScope, workspaceId: "foreign" }, { ...f.requestedScope, accountIds: ["foreign"] }, { ...f.requestedScope, accountIds: [...f.requestedScope.accountIds, "foreign"] }, { ...f.requestedScope, environment: "production" }, { ...f.requestedScope, environment: "demo" }]) {
-      for (const key of nativeAnalyticsViewKeys) { const result = await f.post(f.envelope(key, { requestedScope })); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT"); }
+      for (const key of nativeAnalyticsViewKeys) { const result = await f.post(f.envelope(key, { requestedScope })); expect(result.status).toBe(403); canonical(result.body, "FORBIDDEN"); }
     }
     expect(f.calls).toEqual([]);
   });
