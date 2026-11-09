@@ -172,12 +172,11 @@ describe("native recruitment views reuse exact scoped offers and canonical runs"
 describe("exact saved invitation -> existing J04 bridge",()=>{
   async function connected(){
     const w=setup(),owner=recruitmentInvitationOwnerFixture({drafts:w.options.drafts,offers:w.o.repo,baseDraft:w.a.draft,now:w.o.now});
-    let repo:ApprovalRepository;
     const service=createRecruitmentService({...w.options,invitationOwner:owner.owner,records:{...w.options.records,
       readPreview:(command,actor,key)=>repo.readCommand("propose",command,actor,key)}});
     const request=await draftRequest(w),saved=await service.saveInvitation(request,principal,"save-for-preview");
     const view=await service.readInvitation({...w.filters,draftId:request.draftId},principal);
-    repo=new ApprovalRepository(w.o.store.database,{...w.a.options,registry:withCommercialOffers(service.domain!.registry,w.o.repo,w.o.now),now:w.o.now});
+    const repo=new ApprovalRepository(w.o.store.database,{...w.a.options,registry:withCommercialOffers(service.domain!.registry,w.o.repo,w.o.now),now:w.o.now});
     const command={actionKind:RECRUITMENT_INVITATION_ACTION,entityRef:request.draftId,entityVersion:saved.data.version,selectionRefs:view.data.previewSelectionRefs,expectedVersion:0};
     return {...w,service,owner,request,saved,view,repo,command};
   }
