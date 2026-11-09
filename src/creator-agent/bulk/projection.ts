@@ -80,7 +80,8 @@ export function projectBulkSampleCommitments(s: BulkSnapshot, evidence: BulkEvid
     reasonCodes: uncertain ? ["ORIGINAL_SAMPLE_OUTCOME_UNCERTAIN"] : [], confersAuthority: false };
 }
 /** Projection consumes verified canonical records. Counts partition recipients once; action receipts remain separate. */
-export function projectBulkSnapshot(s: BulkSnapshot, evidence: BulkEvidence, alias: BulkAlias, validUntil: string): BulkReadData {
+export function projectBulkSnapshot(s: BulkSnapshot, evidence: BulkEvidence, alias: BulkAlias, validUntil: string, now: number): BulkReadData {
+  const expired = (group: BulkGroup) => Date.parse(s.expiresAt) <= now || Boolean(group.draft && Date.parse(group.draft.expiresAt) <= now);
   const rows: BulkReadData["rows"] = s.rows.map(row => { const allBlockers = bulkRowBlockers(s, row.rowId); return { rowId: alias("bulk-row", row.rowId),
     recipientRef: alias("creator", row.recipientRef), recipient: row.recipient, product: row.product, sampleDisposition: row.sampleDisposition, state: "ready",
     productRefs: row.productRefs.map(ref => alias("product", ref)), evidenceModelVersions: row.evidenceModelVersions.map(ref => alias("evidence-model", ref)),
@@ -93,7 +94,8 @@ export function projectBulkSnapshot(s: BulkSnapshot, evidence: BulkEvidence, ali
     const safeReason = (code: string | null) => code && /^[A-Z][A-Z0-9_]{0,99}$/.test(code) ? code : "EXECUTION_HELD";
     for (const group of s.groups.filter(g => g.members.some(m => m.rowId === row.rowId))) {
       const member = group.members.find(m => m.rowId === row.rowId)!;
-      const sourceHeld = bulkRowBlockers(s, row.rowId, group.groupRef).length > 0;
+      const sourceHeld = bulkRowBlockers(s, row.rowId, group.groupRef).length > 0 || expired(group);
+      if (expired(group)) blockers.push("BULK_APPROVAL_EXPIRED");
       const facts = evidence.groups.get(group.groupRef)!, outcomes = facts.runs.flatMap(run => run.items.filter(i => i.intent.approval.itemRef === member.itemRef).map(item => ({ run, item })));
       const approvalHeld = facts.approval?.current.state === "held";
       if (approvalHeld) blockers.push(...facts.approval!.current.reasonCodes.map(safeReason));
@@ -125,9 +127,9 @@ export function projectBulkSnapshot(s: BulkSnapshot, evidence: BulkEvidence, ali
     sourceVersion: alias("bulk-source", s.sourceVersion), observedAt: s.observedAt, validUntil, rows,
     primaryCounts: [...primary].map(([reason, count]) => ({ reason, count })),
     groups: s.groups.map(group => { const facts = evidence.groups.get(group.groupRef)!, manifest = facts.approval?.manifest; return ({ groupRef: alias("bulk-group", group.groupRef), kind: group.kind, actionKind: group.actionKind,
-      preview: group.draft ? { entityRef: bulkEntityRef(s, group, alias), entityVersion: bulkMaterialHash(s), selectionRefs: group.draft.items.map(i => i.itemRef) } : null,
+      preview: group.draft && !expired(group) ? { entityRef: bulkEntityRef(s, group, alias), entityVersion: bulkMaterialHash(s), selectionRefs: group.draft.items.map(i => i.itemRef) } : null,
       approval: manifest ? { approvalRef: manifest.approvalRef, manifestVersion: manifest.manifestVersion, manifestHash: manifest.manifestHash } : null,
-      runRefs: facts.runs.map(r => r.runRef), reasonCodes: group.draft ? [] : ["BULK_NO_ELIGIBLE_ROWS"] }); }),
+      runRefs: facts.runs.map(r => r.runRef), reasonCodes: expired(group) ? ["BULK_APPROVAL_EXPIRED"] : group.draft ? [] : ["BULK_NO_ELIGIBLE_ROWS"] }); }),
     aggregateCounts: counts, rowReceipts: receipts, recoveryQueue: recovery, sampleCommitments: projectBulkSampleCommitments(s, evidence, alias),
     capacity: s.capacity.map(c => ({ ...c, providerAccountRef: alias("account", c.providerAccountRef), sourceRef: alias("bulk-capacity", c.sourceRef), sourceVersion: alias("bulk-capacity-version", c.sourceVersion) })),
     commissionForecastMinor: s.commissionForecastMinor, forecastIsEarnedCap: false, sourceEffect: "none", confersAuthority: false });

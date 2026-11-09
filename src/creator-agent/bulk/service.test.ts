@@ -6,6 +6,7 @@ import { bulkMaterialHash, validateBulkMaterial } from "./material.ts";
 import { createBulkService } from "./service.ts";
 import { digest } from "../config.ts";
 import { SCHEMA_VERSION } from "../../adapter/contract.ts";
+import { approvalDraftSchema } from "../approvals/contract.ts";
 
 const worlds: ReturnType<typeof bulkFixture>[] = [];
 function world() { const w = bulkFixture(); worlds.push(w); return w; }
@@ -92,8 +93,16 @@ describe("J13 finite source composition with actual canonical approvals and jobs
 
   it("freezes held membership too and refuses a new-key duplicate proposal inside the existing J04 transaction", async () => {
     const w = world(), command = await w.command(), first = await w.repo.preparePreview(command, w.principal, "first");
-    await expect(w.repo.preparePreview(command, w.principal, "second")).rejects.toThrow("BULK_GROUP_ALREADY_PROPOSED");
+    const observed = approvalDraftSchema.parse(await w.bulk.domain.registry.resolvePreview(command, w.principal, w.scope));
+    expect(() => w.bulk.domain.registry.assertCurrentDraft!({ ...first.manifest, approvalRef: "fictional-duplicate-preview" }, observed, w.a.state.now))
+      .toThrow("BULK_GROUP_ALREADY_PROPOSED");
+    // J04 deliberately maps a domain's final-fence error to its public source error.
+    await expect(w.repo.preparePreview(command, w.principal, "second")).rejects.toThrow("APPROVAL_CURRENT_SOURCE_UNVERIFIED");
     expect(w.a.db.prepare("SELECT COUNT(*) n FROM approval_manifests").get()?.n).toBe(1);
+    expect(w.a.db.prepare("SELECT COUNT(*) n FROM approval_heads").get()?.n).toBe(1);
+    expect(w.a.db.prepare("SELECT COUNT(*) n FROM approval_commands").get()?.n).toBe(1);
+    expect(w.repo.readCommand("propose", command, w.principal, "second")).toBeNull();
+    expect(w.a.db.prepare("SELECT COUNT(*) n FROM job_runs").get()?.n).toBe(0);
     w.restart(); expect((await w.repo.preparePreview(command, w.principal, "first")).manifest).toEqual(first.manifest);
     w.packet.rows[23]!.blockers.push({ code: "SUPPRESSED", groupRef: null });
     await expect(w.bulk.domain.registry.currentDraft(first.manifest)).rejects.toThrow("BULK_MANIFEST_BINDING_INVALID");
@@ -156,6 +165,44 @@ describe("J13 finite source composition with actual canonical approvals and jobs
     const read = await w.bulk.read(w.filters, w.principal); w.a.state.now += 10;
     expect(read.assertCurrent).toThrow("BULK_SOURCE_STALE");
     expect(read.data.validUntil).toBe(w.packet.sampleAllocation!.validUntil);
+  });
+
+  it("keeps expired batch receipts and original uncertain recovery readable under current source permission", async () => {
+    const w = world(), originalCommand = await w.command(1), run = await w.queue(1);
+    w.state.uncertain.add(w.packet.rows[0]!.recipientRef); await w.dispatch.execute(run.runRef);
+    const original = w.state.calls[0]!, calls = w.state.calls.length, before = await w.bulk.read(w.filters, w.principal);
+    expect(before.data.rowReceipts).toHaveLength(11);
+    w.a.state.now = Date.parse(w.packet.expiresAt);
+    expect(before.assertCurrent).toThrow("BULK_SOURCE_STALE");
+    w.restart();
+    const expired = (await w.bulk.read(w.filters, w.principal)).data;
+    expect(expired.groups.every(g => g.preview === null && g.reasonCodes.includes("BULK_APPROVAL_EXPIRED"))).toBe(true);
+    expect(expired.groups[1]!.runRefs).toEqual([run.runRef]); expect(expired.rowReceipts).toEqual(before.data.rowReceipts);
+    expect(expired.aggregateCounts.uncertain).toBe(1);
+    expect(expired.recoveryQueue).toContainEqual(expect.objectContaining({ runRef: run.runRef, nextAction: "reconcileOriginal" }));
+    expect(expired.sampleCommitments).toMatchObject({ remainingUnits: null, remainingMinor: null });
+    await expect(w.bulk.domain.registry.resolvePreview(originalCommand, w.principal, w.scope)).rejects.toThrow("BULK_SOURCE_STALE");
+    const approval = w.repo.readApproval(expired.groups[1]!.approval!.approvalRef)!.manifest;
+    await expect(w.bulk.domain.registry.currentDraft(approval)).rejects.toThrow("BULK_SOURCE_STALE");
+    w.state.receipts.set(original.dispatchKey, { receiptRef: "fictional-expired-original-receipt", dispatchKey: original.dispatchKey,
+      payloadHash: original.intent.approval.payloadHash, handlerRef: original.intent.handlerRef, providerBindingHash: original.providerBindingHash,
+      sourceEffect: "localArtifact", observedAt: w.a.at() });
+    await w.dispatch.reconcile(run.runRef);
+    const recovered = (await w.bulk.read(w.filters, w.principal)).data;
+    expect(recovered.rowReceipts).toHaveLength(12); expect(recovered.aggregateCounts.uncertain).toBe(0);
+    expect(recovered.sampleCommitments).toMatchObject({ remainingUnits: 0, remainingMinor: 0 }); expect(w.state.calls).toHaveLength(calls);
+    w.state.denied = true; await expect(w.bulk.read(w.filters, w.principal)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("fences a shorter group expiry at publication and holds only that group's new preview", async () => {
+    const w = world(); w.packet.groups[0]!.draft!.expiresAt = new Date(w.a.state.now + 10).toISOString(); w.seal();
+    const before = await w.bulk.read(w.filters, w.principal);
+    expect(before.data.validUntil).toBe(w.packet.groups[0]!.draft!.expiresAt);
+    w.a.state.now += 10; expect(before.assertCurrent).toThrow("BULK_SOURCE_STALE");
+    const after = (await w.bulk.read(w.filters, w.principal)).data;
+    expect(after.groups[0]).toMatchObject({ preview: null, reasonCodes: ["BULK_APPROVAL_EXPIRED"] });
+    expect(after.groups[1]!.preview).not.toBeNull(); expect(after.aggregateCounts.blocked).toBe(24);
+    expect(after.primaryCounts.reduce((n, row) => n + row.count, 0)).toBe(24);
   });
 
   it("keeps original uncertain sample allocation unavailable and never replays it or counts a new key as recovery", async () => {

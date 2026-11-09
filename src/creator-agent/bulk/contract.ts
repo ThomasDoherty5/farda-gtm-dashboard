@@ -35,7 +35,7 @@ export const bulkSnapshotSchema = z.object({ schemaVersion: z.literal("farda.bul
     draft: approvalDraftSchema.nullable(), approval: bulkApprovalLinkSchema.nullable(), runRefs: z.array(ref).max(100),
   }).strict()).min(1).max(100),
   capacity: z.array(z.object({ provider: ref, providerAccountRef: ref, action: ref, unit: ref,
-    kind: z.enum(["invitationQuota", "activeCollaborations"]), remaining: count.nullable(), resetAt: instant.nullable(),
+    kind: z.enum(["invitationQuota", "actionQuota", "activeCollaborations"]), remaining: count.nullable(), resetAt: instant.nullable(),
     observedAt: instant, validUntil: instant, sourceRef: ref, sourceVersion: ref, reasonCode: bulkReasonSchema.nullable() }).strict()).max(100),
   sampleAllocation: z.object({ sourceRef: ref, sourceVersion: ref, observedAt: instant, validUntil: instant,
     approvedUnits: count, approvedMinor: count, currency: z.literal("USD") }).strict().nullable(),

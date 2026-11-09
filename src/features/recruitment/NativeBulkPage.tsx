@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useSearchParams } from "react-router-dom";
 import { scopeKey, useScope } from "@/adapter/scope";
@@ -14,7 +14,7 @@ import { reviewValue } from "@/features/approvals/NativeReview";
 import { blockedReason, dateTime } from "@/features/approvals/shared";
 import { useSourceLease } from "@/features/commercial/useSourceLease";
 import { PageTitle, Pending, StaleNotice } from "@/features/creators/creatorsShared";
-import { bulkPreviewStorageKey, readBulkPreview, rememberBulkPreview, type BulkPreviewMarker } from "./bulkPreviewRecovery";
+import { bulkPreviewStorageKey, readBulkPreview, rememberBulkPreview, verifiedBulkPreviewResult, type BulkPreviewMarker } from "./bulkPreviewRecovery";
 import { acquisition, ContextBox, creators, styles } from "./recruitmentShared";
 
 const money=(minor:number|null|undefined)=>minor===null||minor===undefined?"Unknown":new Intl.NumberFormat("en-US",{style:"currency",currency:"USD"}).format(minor/100);
@@ -79,18 +79,29 @@ function BulkGroup({group,data,res,current,refresh}:{group:BulkReadData["groups"
   const ctx=useScope(),client=useQueryClient(),action=useAction<BulkPreviewMarker["payload"]>(),busy=useRef(false);
   const storageKey=bulkPreviewStorageKey(scopeKey(ctx),data.actorRef,data.filters.batchRef,group.groupRef);
   const [saved,setSaved]=useState(()=>readBulkPreview(storageKey,data.actorRef,group.groupRef)),[error,setError]=useState<string|null>(null);
-  const hold=!current?"Refresh current source evidence.":saved.invalid?"Original preview metadata is invalid; owner reconciliation is required.":group.approval?"Review the existing immutable manifest.":!group.preview?"No eligible finite action is available.":blockedReason(res,group.actionKind);
+  const [originalResult,setOriginalResult]=useState<ReturnType<typeof verifiedBulkPreviewResult>>(null);
+  const alive=useRef(true),live=useRef({actorRef:data.actorRef,storageKey});
+  useLayoutEffect(()=>{alive.current=true;return()=>{alive.current=false;};},[]);
+  useLayoutEffect(()=>{live.current={actorRef:data.actorRef,storageKey};},[data.actorRef,storageKey]);
+  const hold=!current?"Refresh current source evidence.":saved.invalid?"Original preview metadata is invalid; owner reconciliation is required.":saved.marker?null:group.approval?"Review the existing immutable manifest.":!group.preview?"No eligible finite action is available.":blockedReason(res,group.actionKind);
   async function preview(){
-    if(hold||busy.current||!group.preview)return;
+    if(hold||busy.current)return;
     const prior=readBulkPreview(storageKey,data.actorRef,group.groupRef);if(prior.invalid){setSaved(prior);return;}
-    const marker=prior.marker??{requestKey:crypto.randomUUID(),actorRef:data.actorRef,groupRef:group.groupRef,actionKind:group.actionKind,payload:group.preview};
+    if(!prior.marker&&!group.preview)return;
+    const marker=prior.marker??{requestKey:crypto.randomUUID(),actorRef:data.actorRef,groupRef:group.groupRef,actionKind:group.actionKind,payload:group.preview!};
     busy.current=true;rememberBulkPreview(storageKey,marker);setSaved({marker,invalid:false});setError(null);
-    try{await protectedRead(client,scopeKey(ctx),marker.requestKey,()=>action.mutateAsync({operation:"previewAction",actionKind:marker.actionKind,entityRefs:[],expectedVersion:marker.payload.entityVersion,approvalRef:null,manifestRef:null,runRef:null,payload:marker.payload,idempotencyKey:marker.requestKey}));}
-    catch{setError("Original preview needs authoritative readback. Keep its original key; no action was authorized by this proposal.");}
+    try{
+      const ack=await protectedRead(client,scopeKey(ctx),marker.requestKey,()=>action.mutateAsync({operation:"previewAction",actionKind:marker.actionKind,entityRefs:[],expectedVersion:marker.payload.entityVersion,approvalRef:null,manifestRef:null,runRef:null,payload:marker.payload,idempotencyKey:marker.requestKey}));
+      const result=verifiedBulkPreviewResult(ack,ctx.scope);
+      if(!result)throw new Error("Original result was not an exact scoped preview acknowledgment.");
+      if(alive.current&&live.current.actorRef===marker.actorRef&&live.current.storageKey===storageKey)setOriginalResult(result);
+    }catch{if(alive.current&&live.current.storageKey===storageKey)setError("Original preview needs authoritative readback. Keep its original key; no action was authorized by this proposal.");}
     finally{busy.current=false;refresh();}
   }
   return <div className={styles.notice}><h3 className={styles.noticeTitle}>{names[group.kind]}</h3><p>{current?group.preview?.selectionRefs.length??0:"Unknown"} exact eligible actions · {current?group.reasonCodes.join(" · ")||"Source review available":"Current permission unavailable"}</p>
     {error&&<p role="alert">{error}</p>}
-    {current&&group.approval?<LinkButton to={`/approvals/${encodeURIComponent(group.approval.approvalRef)}?version=v${group.approval.manifestVersion}`}>Review {names[group.kind].toLowerCase()} approval</LinkButton>:<><Button disabledReason={hold} loading={action.isPending} onClick={()=>void preview()}>{saved.marker?"Recover original preview":`Preview ${names[group.kind].toLowerCase()}`}</Button>{saved.marker&&<p role="status">Original request retained. Only canonical approval readback confirms this preview; it is not permission to dispatch.</p>}</>}
+    {current&&originalResult&&<LinkButton to={`/approvals/${encodeURIComponent(originalResult.approvalRef)}?version=v${originalResult.manifestVersion}`}>Review original recorded preview</LinkButton>}
+    {current&&group.approval&&<LinkButton to={`/approvals/${encodeURIComponent(group.approval.approvalRef)}?version=v${group.approval.manifestVersion}`}>Review {names[group.kind].toLowerCase()} approval</LinkButton>}
+    {(!group.approval||saved.marker&&!originalResult)&&<><Button disabledReason={hold} loading={action.isPending} onClick={()=>void preview()}>{saved.marker?"Recover original preview":`Preview ${names[group.kind].toLowerCase()}`}</Button>{saved.marker&&!originalResult&&<p role="status">Original request retained. Only canonical approval readback confirms this preview; it is not permission to dispatch.</p>}</>}
   </div>;
 }

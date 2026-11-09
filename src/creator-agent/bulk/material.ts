@@ -41,7 +41,7 @@ export function bulkRowBlockers(s: BulkSnapshot, rowId: string, groupRef?: strin
   const first = s.rows.filter(r => r.recipientRef === row.recipientRef).map(r => r.rowId).sort()[0];
   const capacityReasons: string[] = [];
   for (const group of s.groups.filter(g => (groupRef === undefined || g.groupRef === groupRef) && g.members.some(m => m.rowId === rowId))) {
-    const required = ["invitationQuota", ...(group.kind === "activation" ? ["activeCollaborations"] : [])];
+    const required = [group.kind === "invitation" ? "invitationQuota" : "actionQuota", ...(group.kind === "activation" ? ["activeCollaborations"] : [])];
     for (const kind of required) {
       const counters = s.capacity.filter(c => c.providerAccountRef === group.providerAccountRef && c.action === group.actionKind && c.kind === kind);
       if (counters.length !== 1 || counters[0]!.remaining === null) capacityReasons.push("CAPACITY_UNKNOWN");

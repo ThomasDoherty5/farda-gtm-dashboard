@@ -49,6 +49,9 @@ export function bulkServerFixture(databasePath: string) {
     versions.push({ itemRef, offerRef: offerId, offerVersion: offer.version });
   }
   invitation.draft!.acquisitionTerms = acquisitionTermsOf(o.terms);
+  // The fictional owner permits these offer sample terms; this gate does not
+  // approve or execute the separate finite sample-allocation manifest.
+  invitation.draft!.gates.sampleAuthority = structuredClone(invitation.draft!.gates.sourcePermission);
   invitation.draft!.commercialOffers = versions.map(({ itemRef, offerRef }) => ({ itemRef, offerRef }));
   invitation.draft!.termsVersion = { state: "required", version: commercialTermsVersion(versions) };
   invitation.draft!.productVersion = { state: "required", version: o.terms.manifest.productRevision! };

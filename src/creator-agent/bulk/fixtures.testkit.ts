@@ -46,7 +46,7 @@ export function bulkFixture(options: { path?: string; timestamp?: number; assert
     scope, principalRef: principal.principalRef, permissionVersion: "fictional-permission-v1", permission: "permitted", request: { kind: "batch", batchRef: "fictional-batch", batchVersion: "v1" },
     provenance: { evidenceStage: "synthetic", synthetic: true }, batchRef: "fictional-batch", batchVersion: "v1", sourceRef: "fictional-private-bulk-source", sourceVersion: "fictional-source-v1",
     observedAt: a.at(), validUntil: a.until(), expiresAt: a.draft.expiresAt, rows, groups: [group("invitation", 24), group("sampleDecision", 12)],
-    capacity: ["bulk.invitation", "bulk.sample"].map(action => ({ provider: "fictional-provider", providerAccountRef: a.draft.providerAccountRef, action, unit: "request", kind: "invitationQuota" as const,
+    capacity: ["bulk.invitation", "bulk.sample"].map(action => ({ provider: "fictional-provider", providerAccountRef: a.draft.providerAccountRef, action, unit: "request", kind: action === "bulk.invitation" ? "invitationQuota" as const : "actionQuota" as const,
       remaining: 80, resetAt: a.until(), observedAt: a.at(), validUntil: a.until(), sourceRef: "fictional-private-quota", sourceVersion: "quota-v1", reasonCode: null })),
     sampleAllocation: { sourceRef: "fictional-private-sample-allocation", sourceVersion: "allocation-v1", observedAt: a.at(), validUntil: a.until(), approvedUnits: 12, approvedMinor: 30000, currency: "USD" }, commissionForecastMinor: 75000 };
   const state = { denied: false, registrationAllowed: true, ownerDenied: false, beforeOwner: null as null | (() => Promise<void>), beforeFinal: null as null | (() => void),

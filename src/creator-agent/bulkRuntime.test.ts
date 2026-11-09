@@ -27,7 +27,15 @@ it("J13 executes exact canonical approvals through the registered durable runtim
     runtime.install(registration.registrationRef,0,machine);
     const input={registrationRef:registration.registrationRef,registrationVersion:1,intendedAt:w.a.at(),triggerEventRef:"fictional-exact-bulk-event"};
     const first=await runtime.fire(input,machine),same=await runtime.fire(input,machine);
-    expect(same.run.runId).toBe(first.run.runId);expect(first.run.definition.jobId).toBe("J13");expect(w.jobs.processOne("fictional-legacy-worker")).toBeNull();
+    expect(same.run.runId).toBe(first.run.runId);
+    // Approved runtime windows retain the immutable dispatch job identity;
+    // the installed registration and durable window carry J13 ownership.
+    const registered=await runtime.readRegistration(registration.registrationRef);
+    expect(registered.registration.definition).toMatchObject({jobId:"J13",version:1,mode:"executeApproved"});
+    expect(first).toMatchObject({registrationRef:registration.registrationRef,registrationVersion:1,window:{registrationRef:registration.registrationRef,registrationVersion:1}});
+    expect(registered.windows).toContainEqual({runRef:first.run.runId,window:first.window});
+    expect(first.run.definition.jobId).toMatch(/^approved:[a-f0-9]{64}$/);expect(runtime.ownsRun(first.run.runId)).toBe(true);
+    expect(w.jobs.processOne("fictional-legacy-worker")).toBeNull();
     await runtime.work({runRef:first.run.runId,maxItems:3},machine);
     runtime=new JobRuntime(w.a.db,options);await runtime.work({runRef:first.run.runId,maxItems:100},machine);
     const final=w.dispatch.read(first.run.runId,false);expect(final.items).toHaveLength(24);expect(final.items.every(i=>i.receipt?.sourceEffect==="localArtifact")).toBe(true);

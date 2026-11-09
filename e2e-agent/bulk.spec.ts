@@ -67,3 +67,13 @@ test("complete bulk frame at three widths, keyboard row inspection and actual sc
   await screenReaderCheckpoint(page,"bulk-row-dialog-focus-return",trigger,["Inspect row","button"]);
   await screenReaderCheckpoint(page,"bulk-finite-row-table",page.getByRole("region",{name:"Exact finite bulk rows"}),["Exact finite bulk rows","Recipient","All blockers"],"KP_Enter");
 });
+
+test("lost preview with changed material recovers its exact original approval instead of rekeying",async({page})=>{
+  await login(page);await page.goto(path());let original="",lost=false;const keys:string[]=[];
+  await page.route("**/v1/action",async route=>{const body=route.request().postDataJSON();if(body.operation!=="previewAction")return route.continue();keys.push(body.idempotencyKey);const response=await route.fetch();expect(response.status(),await response.text()).toBe(200);
+    if(!lost){lost=true;original=(await response.json()).approvalRef;w.packet.commissionForecastMinor=76000;w.seal();await route.abort("failed");}else await route.fulfill({response});});
+  await page.getByRole("button",{name:"Preview invitation",exact:true}).click();await expect(page.getByRole("button",{name:"Recover original preview",exact:true})).toBeVisible();
+  await page.reload();await page.getByRole("button",{name:"Recover original preview",exact:true}).click();
+  await expect(page.getByRole("link",{name:"Review original recorded preview",exact:true})).toHaveAttribute("href",`/approvals/${encodeURIComponent(original)}?version=v1`);
+  expect(new Set(keys).size).toBe(1);expect(w.a.db.prepare("SELECT count(*) n FROM approval_manifests").get()?.n).toBe(1);expect(w.state.calls).toHaveLength(0);
+});

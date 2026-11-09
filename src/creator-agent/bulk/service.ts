@@ -39,7 +39,8 @@ export function createBulkService(options: BulkServiceOptions) {
     const raw = await boundedSourceRead(() => options.source!.read(structuredClone(input)), undefined, timeoutMs);
     const parsed = bulkSnapshotSchema.safeParse(raw); if (!parsed.success) return fail("BULK_SOURCE_INVALID", 502);
     const snapshot = freeze(structuredClone(parsed.data)), hash = validateBulkMaterial(snapshot);
-    const deadlines = [Date.parse(snapshot.validUntil), Date.parse(snapshot.expiresAt), Date.parse(snapshot.observedAt) + MAX_AGE,
+    // Expiry holds new actions, not a currently authorized read of historical receipts.
+    const deadlines = [Date.parse(snapshot.validUntil), ...(request.kind === "batch" ? [] : [Date.parse(snapshot.expiresAt)]), Date.parse(snapshot.observedAt) + MAX_AGE,
       ...snapshot.capacity.map(c => Date.parse(c.validUntil)), ...(snapshot.sampleAllocation ? [Date.parse(snapshot.sampleAllocation.validUntil)] : [])];
     const validUntil = new Date(Math.min(...deadlines)).toISOString();
     const assertCurrent = () => {
@@ -108,8 +109,16 @@ export function createBulkService(options: BulkServiceOptions) {
   async function read(filters: BulkReadFilters, principal: ApprovalPrincipal) {
     const loaded = await load({ kind: "batch", ...bulkReadFiltersSchema.parse(filters) }, principal);
     const evidence = readBulkEvidence(loaded.snapshot, options.records);
-    const data = projectBulkSnapshot(loaded.snapshot, evidence, alias, loaded.validUntil);
-    const assertCurrent = () => { evidence.assertCurrent(); loaded.assertCurrent(); };
+    const time = now(), actionDeadlines = [Date.parse(loaded.snapshot.expiresAt), ...loaded.snapshot.groups.flatMap(g => g.draft ? [Date.parse(g.draft.expiresAt)] : [])];
+    // A displayed preview must disappear at its exact expiry; a later fresh read
+    // can still publish the same immutable outcomes under its current read lease.
+    const validUntil = new Date(Math.min(Date.parse(loaded.validUntil), ...actionDeadlines.filter(deadline => deadline > time))).toISOString();
+    const data = projectBulkSnapshot(loaded.snapshot, evidence, alias, validUntil, time);
+    const assertCurrent = () => {
+      if (now() >= Date.parse(validUntil)) fail("BULK_SOURCE_STALE");
+      evidence.assertCurrent(); loaded.assertCurrent();
+      if (now() >= Date.parse(validUntil)) fail("BULK_SOURCE_STALE");
+    };
     assertCurrent(); return { data, assertCurrent };
   }
   return { domain, read, alias };

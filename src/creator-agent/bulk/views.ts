@@ -26,7 +26,7 @@ export const nativeBulkViewSchema = z.object({ kind: z.literal("native-bulk"), s
     nextAction: z.enum(["reconcileOriginal", "waitForSourceReset", "inspectFailure", "refreshSource"]), owner: z.literal("sourceOwner") }).strict()),
   sampleCommitments: bulkSampleCommitmentsSchema.nullable(), commissionForecastMinor: count.nullable(), forecastIsEarnedCap: z.literal(false),
   capacity: z.array(z.object({ provider: ref, providerAccountRef: ref, action: ref, unit: ref,
-    kind: z.enum(["invitationQuota", "activeCollaborations"]), remaining: count.nullable(), resetAt: instant.nullable(),
+    kind: z.enum(["invitationQuota", "actionQuota", "activeCollaborations"]), remaining: count.nullable(), resetAt: instant.nullable(),
     observedAt: instant, validUntil: instant, sourceRef: ref, sourceVersion: ref, reasonCode: bulkReasonSchema.nullable() }).strict()).max(100),
   sourceEffect: z.literal("none"), confersAuthority: z.literal(false),
 }).strict();
