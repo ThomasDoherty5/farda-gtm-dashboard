@@ -106,7 +106,7 @@ test("full source-layout evidence, responsive creator details and actual table a
   await page.setViewportSize({ width: 1440, height: 1000 });
   // Target the real table; its focus anchor keeps AT navigation inside it after leaving the header checkbox.
   // The enclosing region stays keyboard-focusable for horizontal scrolling.
-  await screenReaderCheckpoint(page, "shipping-hub-table-headers", queue, ["Shared shipment", "Recipient", "Shipment state", "Cost"], "KP_Enter");
+  await screenReaderCheckpoint(page, "shipping-hub-table-headers", queue, ["Shared shipment", "Recipient", "Shipment state", "Cost"], "KP_Enter", undefined, { tableBrowseMode: "sticky" });
   const trigger = queue.getByRole("row").filter({ hasText: "Creator" }).filter({ hasText: "DELIVERED" }).getByRole("button");
   await trigger.focus(); await page.keyboard.press("Enter");
   const detail = page.getByRole("dialog", { name: "Creator shipment" }); await expect(detail).toBeVisible();

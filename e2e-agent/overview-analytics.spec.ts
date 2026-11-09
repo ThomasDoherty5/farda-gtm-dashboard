@@ -129,17 +129,18 @@ test("all reporting families preserve complete responsive content and actual ass
       await page.goto(route!); await expect(page.getByRole("heading", { name: heading!, exact: true })).toBeVisible(); await expect(page.getByRole("button", { name: "Source evidence", exact: true })).toBeVisible();
       for (const width of [1440, 1024, 390]) {
         await page.setViewportSize({ width, height: 1000 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-        if (key === "performance") {
-          expect(await page.getByTestId("native-creator-roi-axis").locator("span").evaluateAll(nodes => {
+        if (key === "performance" || key === "paid") {
+          const axis = page.getByTestId(key === "performance" ? "native-creator-roi-axis" : "native-ctr-axis");
+          expect(await axis.locator("span").evaluateAll(nodes => {
             const labels = nodes.filter(node => node.textContent?.trim()).map(node => node.getBoundingClientRect());
             return labels.length === 4 && labels.every((box, index) => box.width > 0 && box.top === labels[0]!.top && (index === 0 || labels[index - 1]!.right <= box.left));
-          }), "The four creator ROI ticks share one horizontal axis at every viewport").toBe(true);
-          const track = await page.getByRole("list", { name: "Creator return on cost" }).locator("li > span[aria-hidden=true]").first().boundingBox();
-          const zero = await page.getByTestId("native-creator-roi-axis").getByText("0×", { exact: true }).boundingBox();
-          const maximum = await page.getByTestId("native-creator-roi-axis").getByText("3×", { exact: true }).boundingBox();
+          }), "All four ticks share one horizontal axis at every viewport").toBe(true);
+          const track = await page.getByRole("list", { name: key === "performance" ? "Creator return on cost" : "Click-through rate by asset" }).locator("li > span[aria-hidden=true]").first().boundingBox();
+          const zero = await axis.locator("span").nth(1).boundingBox();
+          const maximum = await axis.locator("span").last().boundingBox();
           expect(track).not.toBeNull(); expect(zero).not.toBeNull(); expect(maximum).not.toBeNull();
-          expect(Math.abs(zero!.x - track!.x), "ROI zero aligns with the beginning of the bar").toBeLessThan(1);
-          expect(Math.abs((width < 480 ? maximum!.x + maximum!.width : maximum!.x) - (track!.x + track!.width)), "ROI maximum aligns with the end of the bar").toBeLessThan(1);
+          expect(Math.abs(zero!.x - track!.x), "Axis zero aligns with the beginning of the bar").toBeLessThan(1);
+          expect(Math.abs((width < 480 ? maximum!.x + maximum!.width : maximum!.x) - (track!.x + track!.width)), "Axis maximum aligns with the end of the bar").toBeLessThan(1);
         }
         if (key === "launch") {
           const gates = page.getByRole("region", { name: "Make the next move." });

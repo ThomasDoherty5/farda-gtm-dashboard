@@ -43,7 +43,7 @@ export function NativePaidMedia({ data, filters, setFilter, clear, next, first, 
       <Card labelledBy="native-ctr-title" className={styles.card20}><SectionHeading id="native-ctr-title" title="Click-through by asset" note="Source-computed CTR · up to four assets from the current filtered page" />
         {ranked.length ? <><BarList label="Click-through rate by asset" rows={ranked.map(row => ({ key: row.assetRef, label: row.label,
           value: factText(row.ctr, nativePercent), share: row.ctr.state === "known" && row.ctr.value !== null ? Math.max(0, Math.min(1, row.ctr.value / chartMax)) : 0 }))} />
-          <div className={styles.axis} aria-hidden="true" style={{ gridTemplateColumns: "192px repeat(3, minmax(0, 1fr)) 72px" }}><span />{[0, 1, 2, 3].map(step => <span key={step}>{(chartMax * step / 3).toFixed(chartMax === 3 ? 0 : 1)}%</span>)}</div></> : <p className={styles.small}>Asset click-through evidence unavailable for this selection.</p>}
+          <div className={`${styles.axis} ${styles.nativeCtrAxis}`} aria-hidden="true" data-testid="native-ctr-axis"><span />{[0, 1, 2, 3].map(step => <span key={step}>{(chartMax * step / 3).toFixed(chartMax === 3 ? 0 : 1)}%</span>)}</div></> : <p className={styles.small}>Asset click-through evidence unavailable for this selection.</p>}
         <p className={styles.small}>Clicks are a leading signal. They are not attributed orders, customer count or paid-media revenue.</p>
       </Card>
     </div>

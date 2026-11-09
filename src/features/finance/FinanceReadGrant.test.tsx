@@ -41,7 +41,7 @@ describe("all legacy finance consumers use the independent native access grant",
     const state = setup(path, key);
     expect(await screen.findByTestId(marker)).toBeInTheDocument();
     if (dialogButton) {
-      fireEvent.click(screen.getByRole("button", { name: dialogButton, exact: true }));
+      fireEvent.click(screen.getByRole("button", { name: dialogButton }));
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     }
     act(() => { state.expire(); window.dispatchEvent(new Event("focus")); });
@@ -58,7 +58,7 @@ describe("all legacy finance consumers use the independent native access grant",
   it.each(cases)("%s clears retained facts and dialogs after a current read failure", async (path, key, marker, dialogButton) => {
     const state = setup(path, key);
     expect(await screen.findByTestId(marker)).toBeInTheDocument();
-    if (dialogButton) fireEvent.click(screen.getByRole("button", { name: dialogButton, exact: true }));
+    if (dialogButton) fireEvent.click(screen.getByRole("button", { name: dialogButton }));
     state.deny("SOURCE_UNAVAILABLE");
     await act(async () => { await state.client.invalidateQueries(); });
     await waitFor(() => expect(screen.queryByTestId(marker)).not.toBeInTheDocument());

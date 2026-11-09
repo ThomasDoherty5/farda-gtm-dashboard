@@ -54,6 +54,7 @@
 .barNote { font: var(--text-small); color: var(--color-muted); }
 .axis { display: grid; font: var(--text-micro); color: var(--color-muted); }
 .nativeRoiAxis { grid-template-columns: 172px repeat(3, minmax(0, 1fr)) 76px; font: var(--text-small); }
+.nativeCtrAxis { grid-template-columns: 192px repeat(3, minmax(0, 1fr)) 88px; }
 
 .details { display: flex; flex-direction: column; gap: var(--space-12); margin: 0; }
 .details > div { display: grid; grid-template-columns: 42% minmax(0, 1fr); gap: var(--space-12); min-height: 20px; }
@@ -164,8 +165,8 @@
   .sourceRow { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
 }
 @media (max-width: 479px) {
-  .nativeRoiAxis { display: flex; justify-content: space-between; }
-  .nativeRoiAxis > span:first-child { display: none; }
+  .nativeRoiAxis, .nativeCtrAxis { display: flex; justify-content: space-between; }
+  .nativeRoiAxis > span:first-child, .nativeCtrAxis > span:first-child { display: none; }
   .kpis { grid-template-columns: minmax(0, 1fr); }
   .kpi { min-height: 0; }
   .card { padding: var(--space-16); }

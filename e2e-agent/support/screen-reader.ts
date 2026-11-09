@@ -5,12 +5,13 @@ import {promisify} from "node:util";
 
 const run=promisify(execFile);
 /** Actual Linux AT-SPI/Orca only. Normal native tests retain their existing assertions. */
-export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator,words:string[],key="KP_Enter",transition?:()=>Promise<void>){
+export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator,words:string[],key="KP_Enter",transition?:()=>Promise<void>,options?:{tableBrowseMode:"sticky"}){
  const log=process.env.FARDA_SCREEN_READER_LOG,proof=process.env.FARDA_SCREEN_READER_PROOF;
  if(!log&&!proof){await transition?.();return;}
  if(process.platform!=="linux"||!log||!proof)throw new Error("An actual configured Linux screen-reader session is required.");
  const start=Date.now(),offset=statSync(log).size;
  const osKeys:string[]=[],diagnostic:Record<string,unknown>={phase:"window"};
+ let stickyBrowseAttempted=false;
  try {
  await page.bringToFront();
  // Axe may create another Chromium page. Activate this page's actual titled
@@ -63,6 +64,20 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      },{timeout:Math.max(1,Math.min(5000,deadline-Date.now())),message:"Actual Orca browse/focus mode announcement"}).toMatch(/^(Browse|Focus) mode$/);
    }
    expect(mode).toBe("Browse mode");
+   if(columns&&options?.tableBrowseMode==="sticky"){
+     // A checkbox-bearing table can trigger automatic Focus mode while its
+     // headers are being read. Use Orca's documented triple-press command,
+     // and require its real announcement; never alter the DOM or supply text.
+     // https://help.gnome.org/orca/commands_reading.html#browse-and-focus-modes
+     requireTime(deadline,1000);
+     const stickyOffset=statSync(log).size;
+     stickyBrowseAttempted=true;
+     await run("xdotool",["key","--clearmodifiers","--repeat","3","--delay","100","KP_Insert+a"]);
+     osKeys.push("KP_Insert+a","KP_Insert+a","KP_Insert+a");
+     await new Promise(resolve=>setTimeout(resolve,1000));
+     await expect.poll(()=>speechSince(stickyOffset).join("\n"),{timeout:Math.max(1,Math.min(5000,deadline-Date.now())),message:"Actual Orca sticky browse announcement"}).toContain("SPEECH OUTPUT: 'Browse mode is sticky.'");
+     diagnostic.tableBrowseMode="sticky";
+   }
    diagnostic.phase="document-start";
    requireTime(deadline,500);
    await press("ctrl+Home");await new Promise(resolve=>setTimeout(resolve,500));
@@ -197,6 +212,12 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    return words.filter(word=>!latest.includes(normalize(word)));
  },{timeout:speechTimeout,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
+ if(stickyBrowseAttempted){
+   const resetOffset=statSync(log).size;
+   await press("KP_Insert+a");
+   await expect.poll(()=>speechSince(resetOffset).join("\n"),{timeout:5000,message:"Restore non-sticky Orca interaction mode"}).toContain("SPEECH OUTPUT: 'Focus mode'");
+   stickyBrowseAttempted=false;
+ }
  appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:columns?"structural-table-navigation":key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
  } catch(error) {
    // The existing uploaded browser.log retains bounded failure evidence even
@@ -205,5 +226,9 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    try {tail=readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:")).slice(-16).map(line=>line.split(" {'established'")[0]!.slice(0,500));} catch { /* Preserve the original failure if the log is unavailable. */ }
    console.error("Orca checkpoint failure "+JSON.stringify({name,elapsedMs:Date.now()-start,...diagnostic,osKeys,speechTail:tail}));
    throw error;
+ } finally {
+   // A failed scoped checkpoint must not leave sticky reading enabled for the
+   // next test. A single toggle clears both sticky flags in Orca 46.1.
+   if(stickyBrowseAttempted)await run("xdotool",["key","--clearmodifiers","KP_Insert+a"]).catch(()=>{});
  }
 }
