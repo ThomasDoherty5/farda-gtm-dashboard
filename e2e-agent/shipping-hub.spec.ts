@@ -41,7 +41,7 @@ test("both recipient types preserve independent origins, delivery proof and held
   const queue = page.getByRole("table", { name: "Shared shipment queue" });
   await expect(queue.getByRole("row")).toHaveCount(7);
   await expect(page.getByTestId("hub-recipients")).toHaveText("6");
-  await expect(page.getByText(/Synthetic owner evidence · sandbox/)).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "Synthetic owner evidence · sandbox" })).toBeVisible();
   const creator = queue.getByRole("row").filter({ hasText: "Creator" }).filter({ hasText: "DELIVERED" });
   await creator.getByRole("button").click();
   const detail = page.getByRole("dialog", { name: "Creator shipment" });

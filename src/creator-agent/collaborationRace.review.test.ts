@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { CollaborationEvidenceData } from "./collaborationEvidence.ts";
 import { createCollaborationWorkflow } from "./collaborationWorkflow.ts";
-import { collaborationAction, collaborationSnapshot, collabTestAt, collabTestId, collabTestScope as scope } from "./collaborationWorkflowFixtures.ts";
+import { collaborationTestSource,collaborationAction, collaborationSnapshot, collabTestAt, collabTestId, collabTestScope as scope } from "./collaborationWorkflowFixtures.ts";
 import type { CollaborationSourceSnapshot } from "./collaborationWorkflowSchema.ts";
 import { AssetRepository } from "./assetStore.ts";
 import { assetTestDatabase, assetTestScope, syntheticAsset, syntheticAssetAuthority } from "./assetTestFixtures.ts";
@@ -21,19 +21,18 @@ describe("independent adversarial review of collaboration source and evidence or
       const submitted=syntheticAsset({deliverableId:deliverable.ref,collaborationId:collabTestId});
       await assets.ingest({scope:assetTestScope,expectedVersion:0,submission:submitted},"original-asset");
       let armed=false, firstAssetRead=false, quarantineRecorded=false;
-      const service=createCollaborationWorkflow(db,scope,"synthetic-private-key",async()=>{
+      const service=createCollaborationWorkflow(db,scope,"synthetic-private-key",collaborationTestSource(()=>registry,()=>Date.parse(collabTestAt),async()=>{
         // A local authoritative version is revoked while a final remote membership read is in flight.
         if(armed && firstAssetRead && change==="quarantined-asset" && !quarantineRecorded) {
           quarantineRecorded=true;source.state.availability="quarantined";
           await assets.ingest({scope:assetTestScope,expectedVersion:1,submission:{...submitted,fileVersion:"file-v2"}},"quarantine-v2");
         }
-        return structuredClone(registry);
-      },()=>Date.parse(collabTestAt),async()=>{
+      }),()=>Date.parse(collabTestAt),async()=>{
         const head=assets.get(submitted.assetId)!;
         const data:CollaborationEvidenceData={source:"saved-agent-records",kind:"collaboration-evidence",collaborationId:collabTestId,
           observedAt:collabTestAt,total:1,offset:0,hasMore:false,records:[{kind:"asset",id:"synthetic-file-receipt",assetId:"synthetic-asset",
             fileVersion:head.submission.fileVersion,productId:head.submission.productId,productRevision:head.submission.productRevision,
-            version:head.version,recordedAt:head.recordedAt,parentAssetId:null,parentVersion:null,availability:head.sourceEvidence.availability,
+            version:head.version!,recordedAt:head.recordedAt,parentAssetId:null,parentVersion:null,availability:head.sourceEvidence.availability,
             reviewState:"pending",rightsState:"unknown",rightsObservedAt:null}]};
         if(armed && !firstAssetRead) {
           firstAssetRead=true;
@@ -49,9 +48,9 @@ describe("independent adversarial review of collaboration source and evidence or
       });
       try {
         const before=await service.read(collabTestId);
-        const submission=before!.data.deliverables[0]!.submissionVersion!;
+        const submission=before!.data!.deliverables[0]!.submissionVersion!;
         expect(submission).toMatch(/^v1-/); armed=true;
-        await expect(service.propose(collaborationAction(before!.version,{
+        await expect(service.propose(collaborationAction(before!.version!,{
           kind:"approve-content",deliverableRef:deliverable.ref,submissionVersion:submission,
         }),"agent-reviewer")).rejects.toThrow();
         expect(firstAssetRead).toBe(true);

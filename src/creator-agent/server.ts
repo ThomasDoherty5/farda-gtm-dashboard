@@ -518,7 +518,7 @@ export function createAgentServer(options: AgentServerOptions) {
     const expectedRole = req ? readSaveRoles.get(req) : undefined;
     // Shared final caller fence for every dashboard family, including legacy
     // async owners. Owner assertions still govern source permissions separately.
-    if (req && expectedRole && status < 400) {
+    if (req && expectedRole && (status < 400 || status === 404)) {
       const currentAuth = authorize(req);
       if (!currentAuth || currentAuth.role !== expectedRole) {
         status = currentAuth ? 403 : 401;
@@ -613,7 +613,12 @@ export function createAgentServer(options: AgentServerOptions) {
       if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED",
         executionCertainty: apiRequestKind(req.method ?? "GET", path) === "read" ? "notApplied" : "uncertain" });
       if (path === "/v1/read" || path === "/v1/save") readSaveRoles.set(req, auth.role);
-      const controlsCaller = { assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new OperationsControlError("OPERATIONS_CALLER_DENIED", current ? 403 : 401); } };
+      const callerAbort = new AbortController();
+      res.once("close", () => { if (!res.writableEnded) callerAbort.abort(); });
+      const monitorCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new MonitorError("MONITOR_CALLER_DENIED", current ? 403 : 401); } };
+      const stockCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new StockSupportError("STOCK_CALLER_DENIED", current ? 403 : 401); } };
+      const collaborationCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new CollaborationWorkflowError("COLLABORATION_CALLER_DENIED", current ? 403 : 401); } };
+      const controlsCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new OperationsControlError("OPERATIONS_CALLER_DENIED", current ? 403 : 401); } };
       // Cookie-authorized writes require both CSRF proof and exact same-origin. Machine bearer requests are separate.
       if (req.method !== "GET" && path !== "/v1/read" && auth.session) {
         const origin = options.publicOrigin ?? `http://${req.headers.host}`;
@@ -813,8 +818,8 @@ export function createAgentServer(options: AgentServerOptions) {
             nextPollAfterMs: null });
         }
         const result = input.actionKind === "proposeCollaborationReview"
-          ? await collaborationWorkflow.propose(input, "agent-reviewer") : input.actionKind === "proposeOperationsReview"
-            ? await controls.propose(input, "agent-reviewer", auth.role, controlsCaller) : await stockSupport.propose(input, "agent-reviewer");
+          ? await collaborationWorkflow.propose(input, "agent-reviewer", collaborationCaller) : input.actionKind === "proposeOperationsReview"
+            ? await controls.propose(input, "agent-reviewer", auth.role, controlsCaller) : await stockSupport.propose(input, "agent-reviewer", stockCaller);
         if ("assertCurrent" in result && typeof result.assertCurrent === "function") result.assertCurrent();
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
@@ -1021,7 +1026,8 @@ export function createAgentServer(options: AgentServerOptions) {
         }
         if (input.viewKey === "contentMonitor" || input.viewKey === "watchlist" || input.viewKey === "hourlyRun" || input.viewKey === "postPerformance") {
           const result = await monitor.read(input.viewKey, input.filters,
-            { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role });
+            { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role }, monitorCaller);
+          result.assertCurrent();
           if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
@@ -1038,7 +1044,9 @@ export function createAgentServer(options: AgentServerOptions) {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
-          const result = await stockSupport.read(input.viewKey, input.filters, `agent-${auth.role}`);
+          const result = await stockSupport.read(input.viewKey, input.filters, `agent-${auth.role}`, stockCaller);
+          result.assertCurrent();
+          if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           const held = result.stale || result.partial || result.empty;
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
@@ -1232,8 +1240,9 @@ export function createAgentServer(options: AgentServerOptions) {
           if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
           const result = await collaborationWorkflow.read(input.filters.collaborationId,
-            { requestKey: input.filters.proposalRequestKey, actorRef: `agent-${auth.role}` });
-          if (!result) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
+            { requestKey: input.filters.proposalRequestKey, actorRef: `agent-${auth.role}`, ...collaborationCaller });
+          result.assertCurrent();
+          if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
             dataState: result.stale ? "stale" : result.partial ? "partial" : "ready", data: result.data, sourceFreshness: [],
@@ -1459,9 +1468,9 @@ export function createAgentServer(options: AgentServerOptions) {
       if (error instanceof NativeSourcingError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof NativeAnalyticsError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
-      if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+      if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
-      if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+      if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof EvidenceReviewError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });

@@ -3,18 +3,29 @@ import AxeBuilder from "@axe-core/playwright";
 import {mkdirSync,writeFileSync} from "node:fs";
 import {createAgentServer} from "../src/creator-agent/server.ts";
 import {SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN,SYNTHETIC_SCOPE} from "../src/creator-agent/testFixtures.ts";
-import {collaborationSnapshot,collabTestAt,collabTestId} from "../src/creator-agent/collaborationWorkflowFixtures.ts";
+import {collaborationTestSource,collaborationSnapshot,collabTestAt,collabTestId} from "../src/creator-agent/collaborationWorkflowFixtures.ts";
 
 const port=Number(process.env.E2E_AGENT_SERVER_PORT);
 let app:ReturnType<typeof createAgentServer>, source=collaborationSnapshot();
-test.beforeEach(async()=>{
+test.beforeEach(async({page})=>{
+  await page.clock.setFixedTime(new Date(collabTestAt));
   source=collaborationSnapshot();source.scope={workspaceId:SYNTHETIC_SCOPE.workspaceId,accountId:SYNTHETIC_SCOPE.accountIds[0]!,environment:"sandbox"};
   app=createAgentServer({databasePath:":memory:",workspaceId:source.scope.workspaceId,accountId:source.scope.accountId,readToken:SYNTHETIC_READ_TOKEN,
-    reviewToken:SYNTHETIC_REVIEW_TOKEN,operations:{now:()=>Date.parse(collabTestAt)},collaborationSourceReader:async(_,id)=>id===collabTestId?structuredClone(source):null});
+    reviewToken:SYNTHETIC_REVIEW_TOKEN,operations:{now:()=>Date.parse(collabTestAt)},collaborationSourceReader:collaborationTestSource(id=>id===collabTestId?source:null)});
   await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(port,"127.0.0.1",resolve);});
 });
 test.afterEach(async()=>{if(app)await app.close();});
 async function signIn(page:Page,reviewer=true){expect((await page.request.get("/v1/session",{headers:{authorization:"Bearer "+(reviewer?SYNTHETIC_REVIEW_TOKEN:SYNTHETIC_READ_TOKEN)}})).ok()).toBe(true);}
+test("resuming after read authority expires clears collaboration content and the unsent draft",async({page})=>{
+  await signIn(page);await page.goto("/collaborations/"+collabTestId+"?tab=content");
+  await page.getByRole("button",{name:"Request revision"}).click();
+  const form=page.getByRole("dialog",{name:"Request revision"});await form.getByLabel("Reason").fill("Fictional unsent revision");
+  await page.clock.setFixedTime(new Date(Date.parse(collabTestAt)+15*60_000+1));
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("alert").filter({hasText:"Source access has expired"})).toBeVisible();
+  await expect(page.getByRole("region",{name:"Content review"})).toHaveCount(0);await expect(form).toHaveCount(0);
+  expect(app.store.database.prepare("SELECT COUNT(*) AS n FROM collaboration_review_requests").get()?.n).toBe(0);
+});
 test("source-owned content and separate rights/publication gates, immutable reviewer proposal and reload",async({page})=>{
   await signIn(page);await page.goto("/collaborations/"+collabTestId+"?tab=content");
   const content=page.getByRole("region",{name:"Content review"});

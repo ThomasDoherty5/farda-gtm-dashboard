@@ -3,16 +3,19 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { CollaborationEvidenceData } from "./collaborationEvidence.ts";
 import { digest } from "./config.ts";
+import { boundedSourceRead } from "./actions/readBoundary.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 import type { OperationsScope } from "./operations.ts";
 import { openCollaborationRef } from "./creatorPlatformReferences.ts";
-import { collaborationSnapshotSchema, intentHold, nativeCollaborationSchema, workflowIntentSchema, type CollaborationSourceReader, type CollaborationSourceSnapshot, type NativeCollaborationData } from "./collaborationWorkflowSchema.ts";
+import { collaborationReadBindingSchema,collaborationSourceResultSchema, intentHold, nativeCollaborationSchema, workflowIntentSchema, type CollaborationSourceReader, type CollaborationSourceSnapshot, type NativeCollaborationData } from "./collaborationWorkflowSchema.ts";
 
 const observationLeaseMs=15*60_000;
 const policyVersion="collaboration-review-proposal.v1";
 export class CollaborationWorkflowError extends Error {
-  readonly code:string; readonly status:number; readonly currentVersion?:string;
-  constructor(code:string,status:number,currentVersion?:string){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;}
+  readonly code:string; readonly status:number; readonly currentVersion?:string;readonly executionCertainty:"notApplied"|"uncertain";
+  constructor(code:string,status:number,currentVersion?:string,certainty:"notApplied"|"uncertain"="notApplied"){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;this.executionCertainty=certainty;}
 }
+export type CollaborationCaller={assertCurrent():void;signal?:AbortSignal};
 const envelopeSchema=z.object({operation:z.literal("requestApproval"),actionKind:z.literal("proposeCollaborationReview"),entityRefs:z.array(z.never()).max(0),
   approvalRef:z.null(),manifestRef:z.null(),runRef:z.null().optional(),expectedVersion:z.string().regex(/^cw1-[a-f0-9]{64}$/),idempotencyKey:z.string().trim().min(1).max(240),
   requestedScope:z.object({workspaceId:z.string(),accountIds:z.array(z.string()).length(1),environment:z.literal("sandbox")}).strict(),payload:workflowIntentSchema});
@@ -48,30 +51,45 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
     const expected=assetMarks.get(source);
     if(expected!==undefined && assetMark(source)!==expected)throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);
   }
-  async function readSource(id:string) {
+  async function readSource(id:string,actorRef:string,operation:"read"|"propose",request:unknown,caller?:CollaborationCaller) {
     if(!reader)throw new CollaborationWorkflowError("INTEGRATION_PENDING",503);
-    const raw=await reader(scope,id,secret);
-    if(raw===null)return null;
-    const parsed=collaborationSnapshotSchema.safeParse(raw);
+    const binding=collaborationReadBindingSchema.parse({scope,principalRef:actorRef,operation,collaborationId:id,requestDigest:digest(request)});
+    const assertCaller=()=>{if(caller?.signal?.aborted)throw new CollaborationWorkflowError("REQUEST_CANCELLED",499);if(caller)assertSynchronousVoid(caller.assertCurrent);};
+    const sourceFailure=(error:unknown):never=>{if(error instanceof CollaborationWorkflowError && [401,403].includes(error.status))throw new CollaborationWorkflowError("COLLABORATION_SOURCE_DENIED",error.status);
+      if(error instanceof CollaborationWorkflowError && error.status===409)throw new CollaborationWorkflowError("COLLABORATION_SOURCE_CHANGED",409);
+      if(caller?.signal?.aborted)throw new CollaborationWorkflowError("REQUEST_CANCELLED",499);throw new CollaborationWorkflowError("COLLABORATION_SOURCE_UNAVAILABLE",503);};
+    assertCaller();
+    if(typeof reader.read!=="function"||typeof reader.assertCurrent!=="function")throw new CollaborationWorkflowError("SOURCE_RESPONSE_INVALID",502);
+    let raw:unknown;try{raw=await boundedSourceRead(()=>reader.read(structuredClone(binding),secret,caller?.signal),caller?.signal);}catch(error){sourceFailure(error);}
+    assertCaller();
+    const parsed=collaborationSourceResultSchema.safeParse(raw);
     if(!parsed.success)throw new CollaborationWorkflowError("SOURCE_RESPONSE_INVALID",502);
-    const s=parsed.data;
-    if(s.id!==id || s.scope.workspaceId!==scope.workspaceId || s.scope.accountId!==scope.accountId || s.scope.environment!==scope.environment)
+    const packet=parsed.data,s=structuredClone(packet.snapshot);
+    const assertCurrent=()=>{assertCaller();const proof=packet.authority,time=now();
+      if(digest(proof.binding)!==digest(binding)||proof.sourceVersion!==(s?.sourceRevision??null))throw new CollaborationWorkflowError("SOURCE_RESPONSE_INVALID",502);
+      if(!Number.isFinite(time)||Date.parse(proof.observedAt)>time||Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+observationLeaseMs)<=time)throw new CollaborationWorkflowError("COLLABORATION_ACCESS_EXPIRED",409);
+      try{assertSynchronousVoid(()=>reader.assertCurrent(structuredClone(packet),structuredClone(binding),time));}catch(error){sourceFailure(error);}assertCaller();
+      if(Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+observationLeaseMs)<=now())throw new CollaborationWorkflowError("COLLABORATION_ACCESS_EXPIRED",409);};
+    assertCurrent();
+    if(s && (s.id!==id || s.scope.workspaceId!==scope.workspaceId || s.scope.accountId!==scope.accountId || s.scope.environment!==scope.environment))
       throw new CollaborationWorkflowError("SOURCE_SCOPE_DENIED",403);
-    if(Date.parse(s.observedAt)>now())throw new CollaborationWorkflowError("SOURCE_TIME_UNVERIFIED",503);
-    return s;
+    if(s && Date.parse(s.observedAt)>now())throw new CollaborationWorkflowError("SOURCE_TIME_UNVERIFIED",503);
+    if(!s && packet.absence!=="verified")throw new CollaborationWorkflowError("SOURCE_COVERAGE_INCOMPLETE",503);
+    return {snapshot:s,assertCurrent,readAccess:{validUntil:new Date(Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+observationLeaseMs)).toISOString()}};
   }
-  async function snapshot(id:string) {
-    const s=await readSource(id);
-    if(!s)return null;
+  async function snapshot(id:string,actorRef:string,operation:"read"|"propose",request:unknown,caller?:CollaborationCaller) {
+    const observed=await readSource(id,actorRef,operation,request,caller),s=observed.snapshot;
+    if(!s)return observed;
     if(readEvidence && s.assetBindings?.length){
       const mark=assetMark(s);
       const sourceFacts=version(s,0);
-      const assets=(await readEvidence({collaborationId:id,cursor:null,limit:100})).data;
+      const assets=(await boundedSourceRead(()=>readEvidence({collaborationId:id,cursor:null,limit:100}),caller?.signal)).data;
+      observed.assertCurrent();
       if(assets.collaborationId!==id)throw new CollaborationWorkflowError("SOURCE_SCOPE_DENIED",403);
       // The evidence resolver awaits external authority. Recheck membership and the exact source version after it returns.
-      const current=await readSource(id);
+      const reread=await readSource(id,actorRef,operation,request,caller),current=reread.snapshot;
+      observed.assertCurrent();reread.assertCurrent();
       if(!current || version(current,0)!==sourceFacts || assetMark(s)!==mark)throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);
-      s.observedAt=current.observedAt;
       assetMarks.set(s,mark);
       if(assets.hasMore)s.coverage="partial";
       for(const binding of s.assetBindings){
@@ -92,7 +110,7 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
         if(latest.availability!=="available")d.blocker="Submitted asset "+latest.availability;
       }
     }
-    return s;
+    observed.assertCurrent();return observed;
   }
   function version(source:CollaborationSourceSnapshot,seq:number) {
     // Authentication observations advance on every read. Pin every source fact except the live check clock.
@@ -107,15 +125,16 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
     if(row.request_digest!==requestDigest)throw new CollaborationWorkflowError("IDEMPOTENCY_KEY_REUSED",409);
     return JSON.parse(String(row.receipt));
   }
-  async function read(ref:string, options:{requestKey?:string;actorRef?:string}={}){
+  async function read(ref:string, options:{requestKey?:string;actorRef?:string;assertCurrent?:()=>void;signal?:AbortSignal}={}){
     const actorRef=options.actorRef??"agent-reader";
     if(options.requestKey!==undefined && (!options.requestKey.trim() || options.requestKey.length>240 || actorRef==="agent-reader"))
       throw new CollaborationWorkflowError("SOURCE_SCOPE_DENIED",403);
-    const id=canonical(ref),source=await snapshot(id);
-    if(!source)return null;
+    const caller=options.assertCurrent?{assertCurrent:options.assertCurrent,signal:options.signal}:undefined;
+    const id=canonical(ref),observed=await snapshot(id,actorRef,"read",{ref,requestKey:options.requestKey??null},caller),source=observed.snapshot;
+    if(!source){observed.assertCurrent();return {data:null,version:null,partial:false,stale:false,capabilities:[],assertCurrent:observed.assertCurrent};}
     db.exec("BEGIN");
     try{
-      assertCurrentAssets(source);
+      observed.assertCurrent();assertCurrentAssets(source);
       const seq=head(id);
       const total=Number(db.prepare("SELECT COUNT(*) AS n FROM collaboration_review_proposals WHERE collaboration_id=?").get(id)!.n);
       const rows=db.prepare("SELECT public_body FROM collaboration_review_proposals WHERE collaboration_id=? ORDER BY seq DESC LIMIT 50").all(id);
@@ -130,13 +149,14 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
         proposalReconciliation={requestKey:options.requestKey,actorRef,state:found?"recorded":rejected?"notApplied":"notRecorded",
           reasonCode:rejected?"STALE_VERSION":null,currentVersion:rejected?String(rejected.current_version):null,proposal:found?JSON.parse(String(found.public_body)):null};
       }
-      const data:NativeCollaborationData=nativeCollaborationSchema.parse({...fields,stale,actorRef,proposalReconciliation,collaborationRef:ref,kind:"source-collaboration",
+      const data:NativeCollaborationData=nativeCollaborationSchema.parse({...fields,readAccess:observed.readAccess,stale,actorRef,proposalReconciliation,collaborationRef:ref,kind:"source-collaboration",
         proposals:rows.map(row=>JSON.parse(String(row.public_body))),proposalTotal:total});
-      db.exec("COMMIT");return {data,version:version(source,seq),partial:source.coverage==="partial" || rows.length<total,stale,
+      const assertCurrent=()=>{observed.assertCurrent();assertCurrentAssets(source);if(head(id)!==seq || stale!==(now()-Date.parse(source.observedAt)>observationLeaseMs))throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);};
+      assertCurrent();db.exec("COMMIT");return {data,version:version(source,seq),partial:source.coverage==="partial" || rows.length<total,stale,assertCurrent,
         capabilities:[{actionKind:"proposeCollaborationReview",state:source.coverage==="complete" && !stale?"available" as const:"held" as const,reasonCodes:stale?["SOURCE_STALE"]:source.coverage==="complete"?[]:["SOURCE_COVERAGE_PARTIAL"]}]};
     }catch(e){db.exec("ROLLBACK");throw e;}
   }
-  async function propose(raw:unknown,actor:string):Promise<Ack> {
+  async function propose(raw:unknown,actor:string,caller?:CollaborationCaller):Promise<Ack&{assertCurrent():void}> {
     const input=envelopeSchema.parse(raw);
     if(input.requestedScope.workspaceId!==scope.workspaceId || input.requestedScope.accountIds[0]!==scope.accountId || input.requestedScope.environment!==scope.environment || !actor.trim())
       throw new CollaborationWorkflowError("SOURCE_SCOPE_DENIED",403);
@@ -144,14 +164,16 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
     const {collaborationRef,...action}=intent;void collaborationRef;
     const requestDigest=digest([scope,actor,id,input.expectedVersion,action]);
     // Read source membership before disclosing even a historical replay.
-    const source=await snapshot(id);
+    const observed=await snapshot(id,actor,"propose",input,caller),source=observed.snapshot;
+    const publish=(value:Ack)=>{const fence=()=>{try{observed.assertCurrent();}catch(error){if(error instanceof CollaborationWorkflowError)throw new CollaborationWorkflowError(error.code,error.status,undefined,"uncertain");throw new CollaborationWorkflowError("COLLABORATION_SOURCE_UNAVAILABLE",503,undefined,"uncertain");}};
+      Object.defineProperty(value,"assertCurrent",{value:fence,enumerable:false});fence();return value as Ack&{assertCurrent():void};};
     if(!source)throw new CollaborationWorkflowError("RECORD_NOT_FOUND",404);
     db.exec("BEGIN IMMEDIATE");
     let committed=false;
     try {
-      assertCurrentAssets(source);
+      observed.assertCurrent();assertCurrentAssets(source);
       const old=previous(input.idempotencyKey,requestDigest);
-      if(old){db.exec("COMMIT");return old;}
+      if(old){observed.assertCurrent();db.exec("COMMIT");committed=true;return publish(old);}
       const rejected=db.prepare("SELECT request_digest,current_version FROM collaboration_review_rejections WHERE request_key=?").get(input.idempotencyKey);
       if(rejected){
         if(rejected.request_digest!==requestDigest)throw new CollaborationWorkflowError("IDEMPOTENCY_KEY_REUSED",409);
@@ -162,7 +184,7 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
       if(current!==input.expectedVersion){
         // Seal this exact nonce as a no-op. An earlier, still-running copy must observe this result before it could append a proposal.
         db.prepare("INSERT INTO collaboration_review_rejections VALUES(?,?,?,?,?)").run(input.idempotencyKey,requestDigest,actor,id,current);
-        db.exec("COMMIT");committed=true;
+        observed.assertCurrent();if(now()-Date.parse(source.observedAt)>observationLeaseMs)throw new CollaborationWorkflowError("SOURCE_STALE",409);db.exec("COMMIT");committed=true;
         throw new CollaborationWorkflowError("STALE_VERSION",409,current);
       }
       const targeted=["request-revision","reject-content","approve-content"].includes(intent.kind);
@@ -180,7 +202,7 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
         .run(proposalId,id,actor,intent.kind,hash,JSON.stringify(manifest),JSON.stringify(body),createdAt);
       const ack:Ack={actionRef:proposalId,payloadVersion:hash,policyVersion,receiptRefs:["proposal:"+proposalId],state:"approvalPending"};
       db.prepare("INSERT INTO collaboration_review_requests VALUES(?,?,?)").run(input.idempotencyKey,requestDigest,JSON.stringify(ack));
-      db.exec("COMMIT");return ack;
+      observed.assertCurrent();if(now()-Date.parse(source.observedAt)>observationLeaseMs)throw new CollaborationWorkflowError("SOURCE_STALE",409);db.exec("COMMIT");committed=true;return publish(ack);
     }catch(e){if(!committed)db.exec("ROLLBACK");throw e;}
   }
   return {read,propose};

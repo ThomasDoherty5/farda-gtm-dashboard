@@ -37,6 +37,7 @@ jobs:
             test-results/**/finance-original-layout-demo-*.json
           if-no-files-found: ignore
           retention-days: 7
+
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -85,5 +86,18 @@ jobs:
             test-results/agent/**/stock-support-evidence/accessibility.json
             test-results/agent/finance-operations/capture-manifest.json
             test-results/agent/**/attachments/header-geometry-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-native-read-review
+          path: |
+            test-results/agent/**/analytics-native-*.png
+            test-results/agent/**/shipping-native-*.png
+            test-results/agent/**/native-sourcing-plan-*.png
+            test-results/agent/**/error-context.md
+            test-results/agent/**/test-failed-*.png
           if-no-files-found: ignore
           retention-days: 7

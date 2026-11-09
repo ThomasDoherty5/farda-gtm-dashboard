@@ -17,9 +17,9 @@ const healthBinding:ExpectedBinding={...scope,provider:"notion",providerAccountI
 const healthReceipt:VerificationReceipt={receiptRef:"receipt:synthetic",binding:healthBinding,outcome:"Ready",checkedAt:controlTestTime,expiresAt:"2026-11-06T12:10:00Z",verifiedScopes:["read"],connectionHealth:"Authenticated",sourceFreshness:unknownSourceFreshness(),businessEligibility:unknownBusinessEligibility(),reasonCodes:[]};
 const healthObservation:HealthObservation={bindingDigest:healthBindingDigest(healthBinding),checkedAt:controlTestTime,status:"observed",permission:"allowed",session:"authenticated",roleScopePlan:"verified",coverage:"complete",sourceLastSuccess:controlTestTime,sourceUpdatedAt:controlTestTime,mirrorUpdatedAt:null,quotaState:"not_applicable",quotaRemaining:null,deadlineState:"not_applicable",deadline:null};
 // Playwright requires a destructured fixture argument before testInfo.
-// eslint-disable-next-line no-empty-pattern
-test.beforeEach(async({},info)=>{
+test.beforeEach(async({page},info)=>{
  const healthCase=info.title.startsWith("health observation");probeCalls=0;denyDuringProbe=false;
+ if(healthCase)await page.clock.setFixedTime(new Date(controlTestTime));
  source=controlSourceFixture(scope);denied=false;canonical=undefined;
  if(!healthCase){canonical=createOperationsControlHttpFixture({}, {repair:true});app=canonical.app;source=canonical.snapshot;renew();}
  else{app=createAgentServer({databasePath:":memory:",...scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,

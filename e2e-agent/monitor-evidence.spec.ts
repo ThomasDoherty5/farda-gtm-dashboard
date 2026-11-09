@@ -4,7 +4,7 @@ import { mkdirSync,writeFileSync } from "node:fs";
 import { expect,test,type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { digest } from "../src/creator-agent/config.ts";
-import { addMonitorReviewEvidence,monitorFixture,monitorScope } from "../src/creator-agent/monitor/fixtures.testkit.ts";
+import { addMonitorReviewEvidence,monitorTestSource,monitorFixture,monitorScope } from "../src/creator-agent/monitor/fixtures.testkit.ts";
 import { MonitorError } from "../src/creator-agent/monitor/reader.ts";
 import { intakeInputSchema,type SinkBinding,type SinkReceipt } from "../src/creator-agent/intake/contract.ts";
 import type { CanonicalRecord } from "../src/creator-agent/intake/repository.ts";
@@ -37,9 +37,7 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
   const s=monitorFixture(Date.now()),dir=process.env.FARDA_MONITOR_PROOF_DIR??testInfo.outputPath("monitor-evidence");mkdirSync(dir,{recursive:true});
   let denied=false;
   const app=createAgentServer({databasePath:":memory:",workspaceId:monitorScope.workspaceId,accountId:monitorScope.accountId,
-    readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,monitorSource:async()=>{
-      if(denied)throw new MonitorError("FORBIDDEN",403);return structuredClone(s);
-    },intakeAuthority:{route:()=>"Ready",crosswalk:()=>({version:"map-v1",entries:[]}),suppression:()=>({version:"suppression-v1",entries:[]}),
+    readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,monitorSource:monitorTestSource(()=>{if(denied)throw new MonitorError("FORBIDDEN",403);return s;}),intakeAuthority:{route:()=>"Ready",crosswalk:()=>({version:"map-v1",entries:[]}),suppression:()=>({version:"suppression-v1",entries:[]}),
       sinks:{"notion-creator-crm":sink("synthetic-notion"),"sheets-watchlist":sink("synthetic-sheets")}}});
   await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});
   try{
@@ -190,6 +188,11 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await expect(chart).toContainText("100");await expect(chart).toContainText("50");
     await expect(page.getByRole("link",{name:"Open source post",exact:true})).toHaveAttribute("href",measured.originalUrl!);
     await capture("post-measured","One post. Its evidence and impact.");
+    await page.clock.setFixedTime(new Date(Date.now()+16*60_000));
+    await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+    await expect(page.getByRole("alert").filter({hasText:"Source access has expired"})).toBeVisible();
+    await expect(chart).toHaveCount(0);await expect(page.getByRole("link",{name:"Open source post",exact:true})).toHaveCount(0);
+    await page.clock.setFixedTime(new Date());
     denied=true;await page.goto("/content");
     await expect(page.getByRole("region",{name:"Saved campaign posts"})).toHaveCount(0);
     await expect(page.getByRole("alert").first()).toBeVisible();

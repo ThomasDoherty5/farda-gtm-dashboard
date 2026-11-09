@@ -4,19 +4,29 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync,writeFileSync } from "node:fs";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { SYNTHETIC_SCOPE,SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
-import { inventorySourceFixture,supportSourceFixture,stockTestTime } from "../src/creator-agent/stockSupportFixtures.ts";
+import { stockSupportTestSource,inventorySourceFixture,supportSourceFixture,stockTestTime } from "../src/creator-agent/stockSupportFixtures.ts";
 
 const scope={workspaceId:SYNTHETIC_SCOPE.workspaceId,accountId:SYNTHETIC_SCOPE.accountIds[0]!,environment:"sandbox" as const};
 let clock=Date.parse(stockTestTime);
 let app:ReturnType<typeof createAgentServer>,stock=inventorySourceFixture(scope),support=supportSourceFixture(scope);
-test.beforeEach(async()=>{
-  clock=Date.parse(stockTestTime);stock=inventorySourceFixture(scope);support=supportSourceFixture(scope);
+test.beforeEach(async({page})=>{
+  clock=Date.parse(stockTestTime);await page.clock.setFixedTime(new Date(clock));stock=inventorySourceFixture(scope);support=supportSourceFixture(scope);
   app=createAgentServer({databasePath:":memory:",workspaceId:scope.workspaceId,accountId:scope.accountId,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,
-    operations:{now:()=>clock},stockSupportSource:{readInventory:async()=>stock,readSupport:async()=>support}});
+    operations:{now:()=>clock},stockSupportSource:stockSupportTestSource({readInventory:()=>stock,readSupport:()=>support},()=>clock)});
   await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});
 });
 test.afterEach(async()=>{await app.close();});
 async function login(page:Page,reviewer=true){expect((await page.request.get("/v1/session",{headers:{authorization:"Bearer "+(reviewer?SYNTHETIC_REVIEW_TOKEN:SYNTHETIC_READ_TOKEN)}})).ok()).toBe(true);}
+test("resuming after read authority expires clears stock rows and its open evidence dialog",async({page})=>{
+  await login(page);await page.goto("/inventory");
+  await expect(page.getByRole("table",{name:"Inventory by location"})).toBeVisible();
+  await page.getByRole("button",{name:"Open source for Home H1 / FARDA-GRAPHITE"}).click();
+  await expect(page.getByRole("dialog",{name:"Position evidence"})).toBeVisible();
+  await page.clock.setFixedTime(new Date(clock+15*60_000+1));
+  await page.evaluate(()=>window.dispatchEvent(new Event("focus")));
+  await expect(page.getByRole("alert").filter({hasText:"Source access has expired"})).toBeVisible();
+  await expect(page.getByRole("table")).toHaveCount(0);await expect(page.getByRole("dialog")).toHaveCount(0);
+});
 const stockFilter=(page:Page)=>page.getByRole("button",{name:/^(All homes|Home H[123])$/});
 async function openInventory(page:Page){await page.getByRole("button",{name:"Open inventory",exact:true}).click();return page.getByRole("dialog",{name:"Inventory evidence",exact:true});}
 async function fill(page:Page){
@@ -158,7 +168,7 @@ test("a lost request for a now-historical period gets a sealed stale no-op befor
   });
   const form=await fill(page);const dropped=page.waitForResponse(r=>r.request().method()==="POST"&&new URL(r.url()).pathname==="/v1/action"&&r.status()===502);
   await form.getByRole("button",{name:"Save proposal for review"}).click();await dropped;await expect(page.getByText("Proposal outcome unverified. Reconcile the exact request before continuing.")).toBeVisible();
-  clock=Date.parse("2026-11-05T17:00:00Z");stock.observedAt=new Date(clock).toISOString();stock.revision="stock-synthetic-2";stock.currentWindow="next";
+  clock=Date.parse("2026-11-05T17:00:00Z");await page.clock.setFixedTime(new Date(clock));stock.observedAt=new Date(clock).toISOString();stock.revision="stock-synthetic-2";stock.currentWindow="next";
   stock.periods.push({...structuredClone(stock.periods[0]!),window:{ref:"next",start:"2026-10-23",end:"2026-11-05"}});
   await page.reload();await page.getByRole("button",{name:"Reconcile exact request"}).click();await page.getByRole("button",{name:"Review original request"}).click();
   const retry=page.getByRole("dialog",{name:"Request transfer"});

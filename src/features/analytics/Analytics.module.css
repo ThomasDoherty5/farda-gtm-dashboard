@@ -30,6 +30,7 @@
 .card20 { gap: var(--space-20); }
 .cardDark { background: var(--color-ink); color: var(--color-onDark); border: 0; }
 .cardDark p { color: inherit; }
+.cardDark .small { color: var(--color-onDark); }
 .btnRow { display: flex; }
 .gap18 { gap: 18px; }
 .cardH2 { font: var(--text-h2); }

@@ -26,7 +26,7 @@ async function start(configured = true, extra: Partial<AgentServerOptions> = {},
   const base = `http://127.0.0.1:${address.port}`;
   const requestedScope = { workspaceId: fixture.scope.workspaceId, accountIds: [fixture.scope.accountId], environment: "sandbox" };
   const call = async (path: string, body?: unknown, auth: Auth = "reader") => {
-    const headers = auth === "none" ? {} : typeof auth === "object" ? { cookie: auth.cookie } : { authorization: `Bearer ${auth === "reviewer" ? SYNTHETIC_REVIEW_TOKEN : SYNTHETIC_READ_TOKEN}` };
+    const headers: Record<string, string> = auth === "none" ? {} : typeof auth === "object" ? { cookie: auth.cookie } : { authorization: `Bearer ${auth === "reviewer" ? SYNTHETIC_REVIEW_TOKEN : SYNTHETIC_READ_TOKEN}` };
     const response = await fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { ...headers, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, body: await response.json(), headers: response.headers };
   };

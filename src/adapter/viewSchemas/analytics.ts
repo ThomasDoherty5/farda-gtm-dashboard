@@ -241,7 +241,7 @@ export const campaignFunnelSchema = z.object({
 
 /* ---------- Customer journey ---------- */
 
-const customerJourneyDemoSchema = z.object({
+export const customerJourneySchema = z.object({
   datasetKey: z.literal("customer-journey-demo"),
   commercePeriod: z.string(),
   sessions: provenanceValueSchema(count),
@@ -263,20 +263,6 @@ const customerJourneyDemoSchema = z.object({
   cohorts: z.array(z.object({ metric: z.string(), grain: z.string(), window: z.string(), denominator: z.string(), inclusion: z.string(), version: z.string() })),
   provenance: provenanceDisclosure,
 });
-
-/** Served by the creator-agent. An unconfigured or unreported source leaves its fields null (N/A), never 0. */
-const customerJourneyObservedSchema = customerJourneyDemoSchema.extend({
-  datasetKey: z.literal("customer-journey-observed"),
-  productViewed: count.nullable(), checkoutStarted: count.nullable(), websiteOrders: count.nullable(), tiktokOrders: count.nullable(),
-  websiteNetReceipts: nonNegativeMoney.nullable(), globalAov: nonNegativeMoney.nullable(), globalOrders: count.nullable(),
-  tickets: z.array(z.object({ category: z.string(), count })).nullable(),
-  resolution: z.object({ byFin: count, byPeople: count, open: count }).nullable(),
-  returns: z.object({ returned: count, received: count, awaitingInspection: count, restocked: count, quarantined: count }).nullable(),
-  measures,
-  sources,
-});
-
-export const customerJourneySchema = z.discriminatedUnion("datasetKey", [customerJourneyDemoSchema, customerJourneyObservedSchema]);
 
 /* ---------- Source freshness and reconciliation ---------- */
 

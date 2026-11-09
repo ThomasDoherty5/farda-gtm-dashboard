@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { collaborationTestSource } from "./collaborationWorkflowFixtures.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentServer } from "./server.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "./testFixtures.ts";
@@ -24,7 +25,7 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
       sample: { state: null, observedAt: null, sourceRef: null }, suppression: { state: "unknown", sourceRef: null }, history: [], deliverables: [] });
     app = createAgentServer({ databasePath: ":memory:", readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
       workspaceId: scope.workspaceId, accountId: scope.accountId, operations: { now: () => clock },
-      collaborationSourceReader: async (_scope, id) => id === "synthetic-collaboration" ? source : null });
+      collaborationSourceReader: collaborationTestSource(id => id === "synthetic-collaboration" ? source : null,()=>clock) });
     await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
     const address = app.server.address();
     if (!address || typeof address === "string") throw new Error("Expected test server.");

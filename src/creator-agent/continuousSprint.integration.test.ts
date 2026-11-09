@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAgentServer, type AgentServerOptions } from "./server";
-import { inventorySourceFixture, stockTestScope, stockTestTime, supportSourceFixture } from "./stockSupportFixtures";
+import { stockSupportTestSource,inventorySourceFixture, stockTestScope, stockTestTime, supportSourceFixture } from "./stockSupportFixtures";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
 import { loadCreatorSourceRuntime } from "./sourceRuntime";
 
@@ -83,10 +83,10 @@ describe("continuous sprint authenticated integration boundaries", () => {
 
   it("rejects wrong scope and private request-key lookups before touching the source", async () => {
     let reads = 0;
-    const { read } = await start({ stockSupportSource: {
-      readInventory: async scope => { reads++; return inventorySourceFixture(scope); },
-      readSupport: async scope => { reads++; return supportSourceFixture(scope); },
-    } });
+    const { read } = await start({ stockSupportSource: stockSupportTestSource({
+      readInventory: scope => { reads++; return inventorySourceFixture(scope); },
+      readSupport: scope => { reads++; return supportSourceFixture(scope); },
+    }) });
     expect((await read("inventoryOverview", {}, false, { ...requestedScope, accountIds: ["other-account"] })).status).toBe(400);
     expect(await read("inventoryOverview", { proposalRequestKey: "private-request" })).toMatchObject({ status: 403 });
     expect(await read("supportWorkspace", { caseId: "queue", proposalRequestKey: "private-request" })).toMatchObject({ status: 403 });
@@ -96,9 +96,9 @@ describe("continuous sprint authenticated integration boundaries", () => {
   it("stores one local transfer proposal without changing source stock, and fences reader writes", async () => {
     const inventory = inventorySourceFixture();
     const sourceBefore = structuredClone(inventory);
-    const { read, call, app } = await start({ stockSupportSource: {
-      readInventory: async () => structuredClone(inventory), readSupport: async scope => supportSourceFixture(scope),
-    } });
+    const { read, call, app } = await start({ stockSupportSource: stockSupportTestSource({
+      readInventory: () => structuredClone(inventory), readSupport: scope => supportSourceFixture(scope),
+    }) });
     const shown = await read("inventoryOverview", {}, true);
     expect(shown.status).toBe(200);
     const request = { schemaVersion: "2026-11-02.proposed", operation: "requestApproval", requestId: "synthetic-transfer",
@@ -117,11 +117,11 @@ describe("continuous sprint authenticated integration boundaries", () => {
 
   it("does not certify a missing request from stale or partial source evidence", async () => {
     let clock = Date.parse(stockTestTime), partial = false;
-    const { read } = await start({ operations: { now: () => clock }, stockSupportSource: {
-      readInventory: async scope => ({ ...inventorySourceFixture(scope),
+    const { read } = await start({ operations: { now: () => clock }, stockSupportSource: stockSupportTestSource({
+      readInventory: scope => ({ ...inventorySourceFixture(scope),
         observedAt: partial ? new Date(clock).toISOString() : stockTestTime, coverage: partial ? "partial" : "complete" }),
-      readSupport: async scope => supportSourceFixture(scope),
-    } });
+      readSupport: scope => supportSourceFixture(scope),
+    },()=>clock) });
     clock += 16 * 60_000;
     const stale = await read("inventoryOverview", { proposalRequestKey: "uncertain-original-key" }, true);
     expect(stale.status).toBe(409);

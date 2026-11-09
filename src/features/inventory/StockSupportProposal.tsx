@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
@@ -39,6 +39,13 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
   const invalidId=useId(),statusId=useId();
   const stock=data.kind==="source-stock",ctx=useScope(),client=useQueryClient(),action=useAction<StockIntent>();
   const filters=stock?data.selected:{caseId:data.caseId};
+  const binding=canonical([scopeKey(ctx),data.actorRef,data.kind,filters]);
+  const snapshot=canonical([data,res.dataVersion,res.capabilities]);
+  const validUntil=data.readAccess?.validUntil;
+  const current=useRef<{binding:string;snapshot:string;validUntil?:string;adapter:typeof ctx.adapter}|null>(null);
+  useLayoutEffect(()=>{current.current={binding,snapshot,validUntil,adapter:ctx.adapter};return()=>{current.current=null;};},[binding,snapshot,validUntil,ctx.adapter]);
+  const stillCurrent=(exact=false)=>{const value=current.current;return !!value&&value.binding===binding&&value.adapter===ctx.adapter&&(!exact||value.snapshot===snapshot)&&
+    (value.validUntil==null||Number.isFinite(Date.parse(value.validUntil))&&Date.parse(value.validUntil)>Date.now());};
   const localKey="stock-support-request:"+canonical([scopeKey(ctx),data.actorRef,data.kind,stock?null:data.caseId]);
   const [pending,setPending]=useState<Marker|null>(()=>previous(localKey));
   const [open,setOpen]=useState(false),[discard,setDiscard]=useState(false),[base,setBase]=useState("");
@@ -60,6 +67,7 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
     setTo(transfer?.to??"");setUnits(transfer?String(transfer.units):"");setReason(original?.reasonCode??"");setOpen(true);
   }
   async function reconcile(m:Marker){
+    if(!stillCurrent())return;
     setBusy(true);setAbsent(false);
     try{
       const rid="stock-reconcile-"+crypto.randomUUID();
@@ -67,12 +75,13 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
         const r=await ctx.adapter.readView({schemaVersion:SCHEMA_VERSION,operation:"readView",viewKey:view,filters:{...m.filters,proposalRequestKey:m.key},requestedScope:ctx.scope,
           period:null,sort:[],page:{limit:50,cursor:null},requestId:rid});assertScopeMatches(r,ctx.scope);return r;
       });
+      if(!stillCurrent())return;
       const parsed=(stock?nativeInventorySchema:nativeSupportSchema).safeParse(response.data);
       if(!parsed.success||parsed.data.actorRef!==m.actor||parsed.data.revision!==response.dataVersion||parsed.data.coverage!=="complete"||parsed.data.stale)throw new Error("unverified");
       const sameTarget=parsed.data.kind==="source-stock"?canonical(parsed.data.selected)===canonical(m.filters):parsed.data.caseId===m.filters.caseId;
       const proof=parsed.data.reconciliation;
       if(!sameTarget||!proof||proof.actorRef!==m.actor||proof.requestKey!==m.key)throw new Error("unverified");
-      if(proof.state==="absent"){await client.invalidateQueries({queryKey:[...scopeKey(ctx),SCHEMA_VERSION,view]});setAbsent(true);setStatus("No receipt for this request. Only its original version and parameters can be retried.");return;}
+      if(proof.state==="absent"){await client.invalidateQueries({queryKey:[...scopeKey(ctx),SCHEMA_VERSION,view]});if(!stillCurrent())return;setAbsent(true);setStatus("No receipt for this request. Only its original version and parameters can be retried.");return;}
       if(proof.payloadDigest!==m.hash||proof.baseVersion!==m.base)throw new Error("unverified");
       if(proof.state==="rejected"){marker(null);setOpen(false);setStatus("This exact request was rejected because its source version changed. Review the current record.");return;}
       if(!proof.actionRef||!proof.digest||(m.id&&m.id!==proof.actionRef)||(m.digest&&m.digest!==proof.digest))throw new Error("unverified");
@@ -80,7 +89,7 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
     }catch{setStatus("The exact request receipt could not be verified. Further proposals are held.");}finally{setBusy(false);}
   }
   async function submit(){
-    if(action.isPending||busy||formHold)return;
+    if(!stillCurrent(true)||action.isPending||busy||formHold)return;
     const oldTransfer=pending && "units" in pending.payload?pending.payload:null;
     const entry=stock?transferIntent.safeParse({scope:pending?.filters??filters,windowRef:oldTransfer?.windowRef??data.period?.window.ref,sku,from,to,units:Number(units),reasonCode:reason}):
       handoffIntent.safeParse({caseId:data.caseId,reasonCode:reason});
@@ -94,15 +103,20 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
     setBusy(true);setInvalid("");
     try{
       const fingerprint=await hash(entry.data);
+      // Hashing is asynchronous: an expired/unmounted or replaced read cannot
+      // start a request. A request already sent keeps its original recovery key.
+      if(!stillCurrent(true))return;
       const prior=previous(localKey);
       if(prior&&(!absent||prior.hash!==fingerprint||prior.actor!==data.actorRef)){setInvalid("Use the original request parameters after verifying an absent receipt.");return;}
       let m=prior??{key:crypto.randomUUID(),base,hash:fingerprint,actor:data.actorRef,payload:entry.data,filters:Object.fromEntries(Object.entries(filters).filter((pair):pair is [string,string]=>typeof pair[1]==="string")),id:null,digest:null};
       marker(m);setAbsent(false);
       try{
         const result=await action.mutateAsync({operation:"requestApproval",actionKind:act,idempotencyKey:m.key,entityRefs:[],expectedVersion:m.base,approvalRef:null,manifestRef:null,payload:entry.data});
+        if(!stillCurrent())return;
         if(result.executionCertainty!=="applied"||result.state!=="approvalPending"||!result.receiptRefs.includes("proposal:"+result.actionRef)||!/^[0-9a-f]{64}$/.test(result.payloadVersion))throw new Error("unverified");
         m={...m,id:result.actionRef,digest:result.payloadVersion};marker(m);await reconcile(m);
       }catch(e){
+        if(!stillCurrent())return;
         if(prior && e instanceof AdapterError && e.body.code==="STALE_VERSION"){await reconcile(m);}
         else if(!prior && e instanceof AdapterError && e.body.executionCertainty==="notApplied"){marker(null);setStatus("The proposal was not applied. Review the source and the reported reason.");}
         else setStatus("Proposal outcome unverified. Reconcile the exact request before continuing.");

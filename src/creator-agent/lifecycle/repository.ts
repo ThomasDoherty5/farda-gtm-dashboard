@@ -16,7 +16,7 @@ type SourceRead = { snapshot: LifecycleSnapshot | null; reason: string | null; s
 type RequestRow = { actor: string; resource: string; hash: string; original: string; state: "recorded" | "rejected"; receipt: string | null; reason: string | null; current_version: string | null };
 export type LifecycleReadResult = { assertCurrent(): void; data: NativeLifecycleData; version: string; observedAt: string; partial: boolean; stale: boolean; empty: boolean;
   capabilities: { actionKind: string; state: "available" | "held" | "denied"; reasonCodes: string[] }[] };
-const fail = (code: string, status: number, currentVersion?: string): never => { throw new LifecycleError(code, status, { currentVersion }); };
+function fail(code: string, status: number, currentVersion?: string): never { throw new LifecycleError(code, status, { currentVersion }); }
 const unknown = (missingReason: string) => ({ value: null, missingReason });
 const isEditable = (flow: FlowKey): flow is Exclude<FlowKey, "setup"> => flow !== "setup";
 

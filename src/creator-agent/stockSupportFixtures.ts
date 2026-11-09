@@ -1,5 +1,14 @@
 import { type InventorySnapshot,type SupportSnapshot } from "./stockSupportSchema.ts";
 import type { OperationsScope } from "./operations.ts";
+import { digest } from "./config.ts";
+import { StockSupportError,type StockSupportSource,type StockSupportBinding } from "./stockSupport.ts";
+/** Explicit fictional current-grant owner; no provider authority is inferred from these records. */
+export function stockSupportTestSource(current:{readInventory(scope:OperationsScope):InventorySnapshot;readSupport(scope:OperationsScope):SupportSnapshot},now:()=>number=()=>Date.parse(stockTestTime),beforeRead?:()=>void|Promise<void>):StockSupportSource {
+  const get=(binding:StockSupportBinding)=>binding.viewKey==="inventoryOverview"?current.readInventory(binding.scope):current.readSupport(binding.scope);
+  const read=async(binding:StockSupportBinding)=>{await beforeRead?.();const snapshot=structuredClone(get(binding)),time=now();return {snapshot,authority:{binding:structuredClone(binding),
+    sourceVersion:snapshot.revision,permissionVersion:"fictional-stock-support-permission-v1",observedAt:new Date(time).toISOString(),validUntil:new Date(time+15*60_000).toISOString()}};};
+  return {readInventory:read,readSupport:read,assertCurrent(result,binding){if(result.authority.permissionVersion!=="fictional-stock-support-permission-v1"||digest(result.authority.binding)!==digest(binding)||digest(result.snapshot)!==digest(get(binding)))throw new StockSupportError("STOCK_SUPPORT_SOURCE_CHANGED",409);}};
+}
 export const stockTestTime="2026-11-04T17:00:00Z";
 export const stockTestScope:OperationsScope={workspaceId:"test-workspace",accountId:"test-account",environment:"sandbox"};
 export function inventorySourceFixture(scope:OperationsScope=stockTestScope):InventorySnapshot{

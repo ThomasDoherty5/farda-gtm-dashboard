@@ -4,7 +4,9 @@ import { assetIdSchema, assetScopeSchema, sameAssetScope, unavailableAssetAuthor
 import type { AssetAuthority, AssetScope, AssetSubmission } from "./assets.ts";
 import { digest } from "./config.ts";
 import { projectNotionCollaboration } from "./notionCollaboration.ts";
-import type { CollaborationSourceReader } from "./collaborationWorkflowSchema.ts";
+import { collaborationSourceResultSchema,type CollaborationReadBinding,type CollaborationSourceResult,type CollaborationSourceSnapshot,type CollaborationSourceReader } from "./collaborationWorkflowSchema.ts";
+import { CollaborationWorkflowError } from "./collaborationWorkflow.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 
 // Credentials and provider identifiers belong in private server configuration.
 type TokenReader = () => Promise<string | null>;
@@ -12,6 +14,7 @@ type DriveBinding = { accountId: string; permissionId: string; parentFolderIds: 
 export type NotionDriveAssetConfig = {
   scope: AssetScope; contentDataSourceId: string; collaborationDataSourceId: string;
   notionToken: TokenReader; drive?: DriveBinding;
+  collaborationAuthority?:{observe(binding:CollaborationReadBinding,snapshot:CollaborationSourceSnapshot|null,now:number):CollaborationSourceResult["authority"];assertCurrent:CollaborationSourceReader["assertCurrent"]};
 };
 export type AssetRegistryQuery = { registry: "content" | "collaborations"; cursor?: string; limit?: number };
 export type AssetRegistryPage = {
@@ -203,7 +206,7 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     };
   }
 
-  const readCollaborationSnapshot: CollaborationSourceReader = async (requested,id,serverReferenceKey) => {
+  const loadCollaborationSnapshot = async (requested:AssetScope,id:string,serverReferenceKey:string) => {
     if (!sameAssetScope(requested,config.scope) || requested.environment !== "sandbox") throw new AssetRegistryReadError("SOURCE_SCOPE_DENIED",403,"denied");
     const canonical = pageId.safeParse(id);
     if (!canonical.success) return null;
@@ -237,6 +240,20 @@ export function createNotionDriveAssetSource(config: NotionDriveAssetConfig, opt
     const safeRef=(raw:string)=>"registry:"+createHmac("sha256",serverReferenceKey??secret).update(JSON.stringify(["collaboration-detail.v1",snapshotScope,raw])).digest("hex");
     return projectNotionCollaboration(snapshotScope,row,content.data.results,
       content.data.has_more || content.data.request_status?.type==="incomplete" ? "partial":"complete",clock(),safeRef);
+  };
+
+  const readCollaborationSnapshot:CollaborationSourceReader={
+    async read(binding,referenceKey){
+      if(!config.collaborationAuthority)throw new CollaborationWorkflowError("SOURCE_AUTHORITY_UNCONFIGURED",503);
+      let snapshot:CollaborationSourceSnapshot|null;
+      try{snapshot=await loadCollaborationSnapshot(binding.scope,binding.collaborationId,referenceKey);}
+      catch(error){if(error instanceof AssetRegistryReadError)throw new CollaborationWorkflowError(["SOURCE_SCOPE_DENIED","SOURCE_COVERAGE_INCOMPLETE","SOURCE_RESPONSE_INVALID","SOURCE_ACCESS_UNAVAILABLE","SOURCE_VERSION_CHANGED"].includes(error.code)?error.code:"COLLABORATION_SOURCE_UNAVAILABLE",[401,403,409,502,503].includes(error.status)?error.status:503);throw error;}
+      const time=Date.parse(clock());
+      const result=collaborationSourceResultSchema.parse({snapshot,absence:"verified",authority:config.collaborationAuthority.observe(structuredClone(binding),structuredClone(snapshot),time)});
+      readCollaborationSnapshot.assertCurrent(result,binding,time);return result;
+    },
+    assertCurrent(result,binding,time){if(!config.collaborationAuthority)throw new CollaborationWorkflowError("SOURCE_AUTHORITY_UNCONFIGURED",503);
+      assertSynchronousVoid(()=>config.collaborationAuthority!.assertCurrent(structuredClone(result),structuredClone(binding),time));}
   };
 
   async function registryRow(id: string, source: string, token: string | null) {

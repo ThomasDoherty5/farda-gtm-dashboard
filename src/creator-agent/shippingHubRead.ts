@@ -63,7 +63,7 @@ export class ShippingHubReadError extends Error {
   readonly code: string; readonly status: number;
   constructor(code: string, status: number) { super(code); this.code = code; this.status = status; }
 }
-const fail = (code: string, status: number): never => { throw new ShippingHubReadError(code, status); };
+function fail(code: string, status: number): never { throw new ShippingHubReadError(code, status); }
 export function createShippingHubReader(options: { scope: OperationsScope; referenceKey: string; source?: ShippingHubSource; now?: () => number }) {
   const { scope, source } = options, now = options.now ?? Date.now;
   if (options.referenceKey.length < 32) throw new Error("A private shipping reference key is required.");

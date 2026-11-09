@@ -1,5 +1,13 @@
 /** Synthetic registry snapshots used only by collaboration workflow tests. */
-import type { CollaborationSourceSnapshot, WorkflowIntent } from "./collaborationWorkflowSchema.ts";
+import type { CollaborationSourceSnapshot, CollaborationSourceReader, WorkflowIntent } from "./collaborationWorkflowSchema.ts";
+import { digest } from "./config.ts";
+import { CollaborationWorkflowError } from "./collaborationWorkflow.ts";
+/** Explicit fictional current-grant owner; a null fixture is an authoritative exact lookup. */
+export function collaborationTestSource(current:(id:string)=>CollaborationSourceSnapshot|null,now:()=>number=()=>Date.parse(collabTestAt),beforeRead?:()=>void|Promise<void>):CollaborationSourceReader {
+  return {async read(binding){await beforeRead?.();const snapshot=structuredClone(current(binding.collaborationId)),time=now();return {snapshot,absence:"verified",authority:{binding:structuredClone(binding),
+    sourceVersion:snapshot?.sourceRevision??null,permissionVersion:"fictional-collaboration-permission-v1",observedAt:new Date(time).toISOString(),validUntil:new Date(time+15*60_000).toISOString()}};},
+    assertCurrent(result,binding){if(result.authority.permissionVersion!=="fictional-collaboration-permission-v1"||digest(result.authority.binding)!==digest(binding)||digest(result.snapshot)!==digest(current(binding.collaborationId)))throw new CollaborationWorkflowError("COLLABORATION_SOURCE_CHANGED",409);}};
+}
 export const collabTestScope={workspaceId:"synthetic-workspace",accountId:"synthetic-account",environment:"sandbox" as const};
 export const collabTestAt="2026-11-06T18:00:00.000Z";
 export const collabTestId="synthetic-collaboration";

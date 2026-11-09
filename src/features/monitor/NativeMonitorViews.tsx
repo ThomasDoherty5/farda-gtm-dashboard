@@ -1,3 +1,4 @@
+import { SourceReadGrant } from "@/components/SourceReadGrant";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link,useParams,useSearchParams } from "react-router-dom";
@@ -32,19 +33,19 @@ function PageReads<T extends Native>({view,filters,kind,render,before}:{view:str
   const query=usePagedView<Record<string,string>,T>(view,filters,null,pageSize);
   const frozenKey=JSON.stringify([...scopeKey(ctx),SCHEMA_VERSION,"cursor-pages",view,filters,null,pageSize]);
   useEffect(()=>()=>{const key=JSON.parse(frozenKey);void client.cancelQueries({queryKey:key,exact:true});client.removeQueries({queryKey:key,exact:true});},[client,frozenKey]);
-  const pages=query.data?.pages.flatMap(p=>p.data?.kind===kind?[p.data]:[])??[];
+  const pages=(query.isError?undefined:query.data)?.pages.flatMap(p=>p.data?.kind===kind?[p.data]:[])??[];
   const latest=pages.at(-1);
   const restart=()=>client.resetQueries({queryKey:JSON.parse(frozenKey),exact:true});
   return <>
     {!latest&&<h1 id="native-monitor-title" className={n.loadingTitle}>{kind==="saved-content-monitor"?"Creator content, without the blind spots.":kind==="saved-monitor-watchlist"?"Know who the agent is watching.":"Every hourly check leaves evidence."}</h1>}
     {query.isPending && <SkeletonCard label="Loading saved monitoring evidence…"/>}
     {query.isError && <ViewError error={query.error} subject="Monitoring evidence" hasPriorData={Boolean(latest)} onRetry={()=>void restart()}/>}
-    {latest && <>
+    {latest && <SourceReadGrant validUntil={pages.map(p=>p.readAccess?.validUntil).filter((v):v is string=>!!v).sort((a,b)=>Date.parse(a)-Date.parse(b))[0]} title="Monitoring evidence" titleId="native-monitor-title" refresh={()=>void restart()}>
       {before?.(latest)}
       {render(pages)}
       {query.hasNextPage && <Button variant="secondary" loading={query.isFetchingNextPage} onClick={()=>void query.fetchNextPage({cancelRefetch:false})}>Load more saved records</Button>}
       {query.isFetchNextPageError && <Button variant="secondary" onClick={()=>void restart()}>Restart this list</Button>}
-    </>}
+    </SourceReadGrant>}
     {!query.isPending && !query.isError && !latest && <p role="status">No matching scoped monitoring record is available. Provider coverage is unknown.</p>}
   </>;
 }

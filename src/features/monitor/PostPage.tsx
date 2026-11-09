@@ -1,3 +1,4 @@
+import { SourceReadGrant } from "@/components/SourceReadGrant";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -25,7 +26,7 @@ export function PostPage() {
         <p>The source returned a different post. Refresh to request the selected post again.</p>
         <Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh post</Button>
       </EmptyState> : <ViewShell query={query} subject="The post" emptyTitle="No post record" emptyBody="The source responded, but there is no post to show.">
-        {(data) => "kind" in data ? <NativePostBody data={data}/> : <Post data={data} />}
+        {(data) => "kind" in data ? <SourceReadGrant validUntil={data.readAccess?.validUntil} title="Post performance" titleId="post-title" refresh={()=>void query.refetch()}><NativePostBody data={data}/></SourceReadGrant> : <Post data={data} />}
       </ViewShell>}
     </section>
   );

@@ -45,7 +45,7 @@ export function LivePlanView() {
   const query = useView<Record<string, never>, SourcingPlan>("sourcingPlan", FILTERS);
   const res = query.data;
   const data = query.isError ? null : res?.data ?? null;
-  const native = data?.datasetKey === "sourcing-plan-native" ? data as NativeSourcingPlan : null;
+  const native = data && "datasetKey" in data && data.datasetKey === "sourcing-plan-native" ? data as NativeSourcingPlan : null;
   const expired = useSourceLease(native?.provenance.validUntil);
   const unconfigured = query.error instanceof AdapterError && query.error.body.code === "SOURCING_SOURCE_UNCONFIGURED";
   return <>
@@ -155,8 +155,9 @@ function PlanDetail({ res, data, plan }: { res: ReadResponse<SourcingPlan>; data
       </div>
       <ul>{plan.dispatchHoldReasons.map((r) => <li key={r} className={styles.small}>{r}</li>)}</ul>
       <div className={styles.actions}>
-        <Button style={{ minWidth: 252 }} disabledReason={approval}>Request approval for a batch</Button>
+        <Button style={{ minWidth: 252 }} disabledReason={approval} reasonFor="live-plan-approval-hold">Request approval for a batch</Button>
       </div>
+      <p id="live-plan-approval-hold" className={styles.small}>{approval}</p>
     </section>
   </>;
 }
