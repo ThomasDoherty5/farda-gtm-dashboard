@@ -21,8 +21,12 @@ pulseaudio --start --exit-idle-time=-1
 pactl load-module module-null-sink sink_name=farda_at >/dev/null
 pactl set-default-sink farda_at
 speech-dispatcher -d -l 3 -L "$out"
+# Orca 46.1 can throw in automatic page-load SayAll during document replacement.
+# Keep speech enabled and require every existing manual navigation checkpoint.
+# This is the documented web preference, not a patch to Orca's speech engine:
+# https://help.gnome.org/orca/preferences_web.html
 cat > "$prefs/user-settings.conf" <<'JSON'
-{"general":{"startingProfile":["Default","default"],"activeProfile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory"},"pronunciations":{},"keybindings":{},"profiles":{"default":{"profile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","pronunciations":{},"keybindings":{}}}}
+{"general":{"startingProfile":["Default","default"],"activeProfile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","sayAllOnLoad":false},"pronunciations":{},"keybindings":{},"profiles":{"default":{"profile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","sayAllOnLoad":false,"pronunciations":{},"keybindings":{}}}}
 JSON
 cat > "$prefs/orca-customizations.py" <<'PY'
 import orca.debug
@@ -60,5 +64,8 @@ wait "$record_pid" 2>/dev/null || true
 grep 'SPEECH OUTPUT:' "$FARDA_SCREEN_READER_LOG" > "$out/spoken-output.txt" || true
 cat "$out/browser.log"
 if test "$browser_status" -ne 0; then exit "$browser_status"; fi
+# Require the native web script's effective preference readback, and retain it
+# in the existing evidence artifact. A requested JSON setting alone is no proof.
+grep -F -m 1 'WEB: Not doing SayAll due to sayAllOnLoad being False' "$FARDA_SCREEN_READER_LOG" >> "$out/versions.txt"
 python3 scripts/verify-screen-reader-audio.py "$out"
 exit "$browser_status"
