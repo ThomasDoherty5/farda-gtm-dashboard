@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { expect,it } from "vitest";
 import { bulkFixture } from "./bulk/fixtures.testkit.ts";
 import { digest } from "./config.ts";
+import type { DispatchRead } from "./jobs/dispatchSchema.ts";
 
 it("four concurrent J13 batches share one source quota instead of multiplying capacity per batch",async()=>{
   const dir=mkdtempSync(join(tmpdir(),"bulk-shared-quota-")),worlds:ReturnType<typeof bulkFixture>[]=[];
   try{
-    const jobs=[];
+    const jobs:DispatchRead[]=[];
     for(let n=0;n<4;n++){
       const w=bulkFixture({path:join(dir,"shared.sqlite")});worlds.push(w);w.packet.batchRef=`fictional-concurrent-batch-${n}`;
       for(const row of w.packet.rows){row.recipientRef+=`-batch-${n}`;row.payloadHashes=row.payloadHashes.map(hash=>digest([hash,n]));}

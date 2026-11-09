@@ -361,6 +361,25 @@ export class JobRepository {
     if(row.state==="completed") {if(digest(parse(row.result))!==digest(receipt)) throw new JobConflict("DISPATCH_RECEIPT_CONFLICT"); return run;}
     record(); this.release(row); this.db.prepare("UPDATE job_items SET state=?,result=?,reason_code=?,lease_token=NULL,lease_owner=NULL,lease_until=NULL,lease_run_id=NULL,updated_at=? WHERE item_id=?").run(receipt?"completed":"reconcile",receipt?JSON.stringify(receipt):null,receipt?null:reasonCode,this.now(),String(row.item_id)); this.log(runId,String(row.item_id),receipt?"dispatch-receipt":"dispatch-uncertain"); return this.getRun(runId);
   }); }
+  /** Persist a preflight hold only if this exact observed item is still unsent.
+   * A concurrent lease, receipt, reconciliation or operator control always wins. */
+  holdApprovedPreflight(runId:string,itemKey:string,expectedItemHash:string,reasonCode:string,retryAfterMs:number|null,assertCurrent:()=>void){
+    failureSchema.shape.reasonCode.parse(reasonCode);
+    if(retryAfterMs!==null&&(!Number.isSafeInteger(retryAfterMs)||retryAfterMs<=0||retryAfterMs>3_600_000))throw new JobConflict("DISPATCH_RETRY_DELAY_INVALID");
+    return this.tx(()=>{
+      const run=this.getRun(runId),item=run.items.find(value=>value.itemKey===itemKey);
+      if(!item||run.definition.handler!=="dispatch-approved.v1")throw new JobConflict("DISPATCH_HANDLER_REQUIRED");
+      const row=this.itemRow(item.itemId);
+      if(run.control!=="active"||digest(item)!==expectedItemHash||!["queued","held","retryWait"].includes(String(row.state))||row.dispatch_started||row.lease_token||row.result)return run;
+      assertCurrent();
+      const current=this.getRun(runId);
+      if(current.control!=="active"||digest(current.items.find(value=>value.itemKey===itemKey))!==expectedItemHash)return current;
+      const state=retryAfterMs===null?"held":"retryWait",dueAt=retryAfterMs===null?Number(row.due_at):this.now()+retryAfterMs;
+      this.db.prepare("UPDATE job_items SET state=?,reason_code=?,due_at=?,updated_at=? WHERE item_id=?").run(state,reasonCode,dueAt,this.now(),item.itemId);
+      this.log(runId,item.itemId,"preflight-held",{reason:reasonCode,retryAt:retryAfterMs===null?null:iso(dueAt)});
+      return this.getRun(runId);
+    });
+  }
   /** Records a positively closed original attempt under read authority. It never re-arms a retry. */
   closeApprovedAttempt(runId: string, itemKey: string, attemptNumber: number, assertAndRecord: () => void) {
     if (!Number.isSafeInteger(attemptNumber) || attemptNumber < 1) throw new JobConflict("DISPATCH_ATTEMPT_UNVERIFIED");

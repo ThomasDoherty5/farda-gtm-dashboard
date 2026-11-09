@@ -294,7 +294,18 @@ export class DispatchGuard {
         const runRef = s.runRef, view = this.read(runRef), item = view.run.items.find(i => i.itemKey === s.dispatchKey)!;
         if (s.receipt || view.run.control !== "active" || ["leased", "completed", "reconcile", "cancelled", "failed"].includes(item.state))
             return;
-        const p = await this.preflight(s);
+        if(Date.parse(item.dueAt)>this.now())return;
+        let p:Preflight;
+        try{p=await this.preflight(s);}
+        catch(error){
+            if(error instanceof DispatchError&&error.executionCertainty==="notApplied"){
+                const reason=/^[A-Z][A-Z0-9_]{0,99}$/.test(error.code)?error.code:"DISPATCH_PREFLIGHT_HELD";
+                const delay=error.code==="SOURCE_RATE_LIMITED"&&error.status===429&&error.retryAfterMs!==null&&Number.isSafeInteger(error.retryAfterMs)&&error.retryAfterMs>0&&error.retryAfterMs<=3_600_000?error.retryAfterMs:null;
+                this.jobs.holdApprovedPreflight(runRef,s.dispatchKey,digest(item),reason,delay,()=>assertSynchronousVoid(()=>worker?.assertCurrent()));
+                throw new DispatchError(error.code,error.status,this.read(runRef,false).executionCertainty,error.retryAfterMs);
+            }
+            throw error;
+        }
         this.jobs.activateApproved(view.run.jobId, 1, p.proof.decisionReceipt.receiptRef, () => {assertSynchronousVoid(()=>worker?.assertCurrent());this.assert(s, p);});
         const claim = this.jobs.claimApproved(runRef, worker?.workerRef??"worker:approved-dispatch", s.dispatchKey, () => {assertSynchronousVoid(()=>worker?.assertCurrent());this.consume(s, p);});
         if (!claim)

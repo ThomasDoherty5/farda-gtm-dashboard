@@ -13,7 +13,7 @@ import { bulkFixture } from "./fixtures.testkit.ts";
 
 /** Reusable actual-HTTP fixture. Fictional source observations and local artifacts only;
  * the compiled J13 runtime registration is real, with no installed/activated trigger. */
-export function bulkServerFixture(databasePath: string) {
+export function bulkServerFixture(databasePath: string, fixtureOptions: { offerExpiryMs?: number } = {}) {
   if (databasePath === ":memory:") throw new Error("The server fixture requires its shared temporary SQLite path.");
   const w = bulkFixture({ path: databasePath, timestamp: Date.now() });
   const o = offerPolicyFixture(databasePath, w.scope), binding = syntheticBinding(), termsByCreator = new Map<string, OfferTerms>();
@@ -27,7 +27,7 @@ export function bulkServerFixture(databasePath: string) {
   o.auth.cost = sourceRef => {
     for (const terms of termsByCreator.values()) for (const key of costKeys) if (terms.costs[key].sourceRef === sourceRef) return {
       scope: { workspaceId: w.scope.workspaceId, accountId: w.scope.accountId }, creatorId: terms.creatorId, provider: terms.provider, programRef: terms.programRef,
-      sourceRef, validUntil: terms.expiresAt, costKey: key, minor: terms.costs[key].minor, currency: "USD", productRef: terms.manifest.productRef, productRevision: terms.manifest.productRevision };
+      sourceRef, validUntil: o.terms.expiresAt, costKey: key, minor: terms.costs[key].minor, currency: "USD", productRef: terms.manifest.productRef, productRevision: terms.manifest.productRevision };
     return null;
   };
   o.auth.assertCurrent = proof => {
@@ -40,6 +40,7 @@ export function bulkServerFixture(databasePath: string) {
   const invitation = w.packet.groups[0]!, versions: { itemRef: string; offerRef: string; offerVersion: string }[] = [];
   for (const row of w.packet.rows) {
     const terms = { ...structuredClone(o.terms), creatorId: row.recipientRef };
+    if (fixtureOptions.offerExpiryMs !== undefined) terms.expiresAt = new Date(o.now() + fixtureOptions.offerExpiryMs).toISOString();
     for (const key of costKeys) terms.costs[key].sourceRef = `fictional-${row.rowId}-${key}`;
     termsByCreator.set(terms.creatorId, terms);
     const offerId = `fictional-offer-${row.rowId}`, offer = o.repo.saveFromAdapter(offerId, null, terms, `fictional-save-${row.rowId}`);

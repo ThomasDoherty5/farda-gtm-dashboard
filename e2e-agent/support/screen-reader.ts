@@ -154,7 +154,11 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  const readLines=key==="Down";
  if(key==="KP_Add"||readLines)await browseFromStart();
  if(readLines){await press("h");await new Promise(resolve=>setTimeout(resolve,500));}
- if(!readLines)await press(key);
+ // A region Where-Am-I can enqueue every table cell before the next mode
+ // command (the 25x6 bulk trace emitted 498 utterances). Table checkpoints
+ // already require actual caption, coordinates and header navigation below.
+ // Do not precede that traversal with a redundant whole-region presentation.
+ if(!readLines&&!columns)await press(key);
  let lineMoves=0,statusPresented=false;
  if(columns)await inspectHeaders();
  const speech=()=>speechSince(offset);
@@ -168,8 +172,8 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      requireTime(speechDeadline,500);
      await page.bringToFront();await run("xdotool",["windowactivate","--sync",activeWindow]);
      await focus.focus();await new Promise(resolve=>setTimeout(resolve,500));
-     await run("xdotool",["key","--clearmodifiers",key]);
-     osKeys.push(key);if(columns)await inspectHeaders(speechDeadline);
+     if(columns)await inspectHeaders(speechDeadline);
+     else await press(key);
    }
    if(missing.length&&readLines&&lineMoves<40){
      // A finite read-only traversal replaces the non-starting Say All command.
@@ -193,7 +197,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    return words.filter(word=>!latest.includes(normalize(word)));
  },{timeout:speechTimeout,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
- appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
+ appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:columns?"structural-table-navigation":key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
  } catch(error) {
    // The existing uploaded browser.log retains bounded failure evidence even
    // when a checkpoint cannot be appended to the successful speech proof.

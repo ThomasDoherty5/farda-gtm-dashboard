@@ -105,7 +105,7 @@ export function projectBulkSnapshot(s: BulkSnapshot, evidence: BulkEvidence, ali
         const state = item.receipt ? item.receipt.providerOutcome?.state === "rejected" ? "failed" : "confirmed" :
           !job || job.state === "reconcile" || job.state === "leased" ? "uncertain" : job.state === "cancelled" ? "canceled" :
           job.state === "failed" ? "failed" : job.state === "held" || sourceHeld || approvalHeld ? "blocked" : job.state === "retryWait" ? "deferred" : "ready";
-        if (state === "blocked" && job?.state === "held") blockers.push(safeReason(job.reasonCode));
+        if (job?.state === "held" || job?.state === "retryWait") blockers.push(safeReason(job.reasonCode));
         states.push(state);
         if (item.receipt) receipts.push({ rowId: alias("bulk-row", row.rowId), groupRef: alias("bulk-group", group.groupRef), receiptRef: alias("receipt", item.receipt.receiptRef), sourceEffect: item.receipt.sourceEffect });
         if (["uncertain", "deferred", "failed", "blocked"].includes(state)) recovery.push({ rowId: alias("bulk-row", row.rowId), groupRef: alias("bulk-group", group.groupRef), runRef: run.runRef,
