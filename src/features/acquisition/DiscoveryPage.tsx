@@ -22,6 +22,7 @@ import { AcquisitionTabs } from "./AcquisitionTabs";
 import { decisionLabel } from "./AgentQualification";
 import { creatorAssessmentPath, evidenceReviewPath } from "./creatorReviewPaths";
 import { FilterButton } from "./FilterButton";
+import { LivePlanView } from "./LivePlanView";
 import { PlanView } from "./PlanView";
 import styles from "./Acquisition.module.css";
 
@@ -58,6 +59,29 @@ function sourcingPortfolio(pages: ReadResponse<DiscoveryReadData>[]) {
 
 /** Daily sourcing and invitation plan (Figma source 102:555, owner THO-287). Read work only: nothing here starts a source action. */
 export function DiscoveryPage() {
+  const { adapter } = useScope();
+  const [search] = useSearchParams();
+  // A live adapter reads the plan detail from the served `sourcingPlan` view; the demo keeps its labeled synthetic plan.
+  if (adapter.kind !== "demo" && search.get("view") === "plan") return <LivePlanPage />;
+  return <DiscoverySummary />;
+}
+
+function LivePlanPage() {
+  return (
+    <section aria-labelledby="discovery-title" data-figma-source="102:555" className={styles.page}>
+      <div className={styles.titleRow}>
+        <div className={styles.heading}>
+          <h1 id="discovery-title">Find the next right fit.</h1>
+          <p>Daily plan detail · read from the daily sourcing source · nothing here starts, approves or sends</p>
+        </div>
+      </div>
+      <AcquisitionTabs current="Daily sourcing" evidencePath={null} />
+      <LivePlanView />
+    </section>
+  );
+}
+
+function DiscoverySummary() {
   const { adapter } = useScope();
   const query = usePagedView<Record<string, never>, DiscoveryReadData>("discoverySummary", {});
   const demo = adapter.kind === "demo";
@@ -132,6 +156,7 @@ function AgentSourcing({ data, records, hasMore, loading, refreshing, onLoadMore
         {selection.length > 0 && <LinkButton variant="secondary" to={scorecardPreviewPath(selection)}>Preview {selection.length} selected</LinkButton>}
         {hasMore && <Button variant="secondary" loading={loading} disabledReason={refreshing ? "The queue is refreshing." : null} onClick={onLoadMore}>Load more creators</Button>}
         <Button variant="secondary" loading={refreshing} disabledReason={loading ? "A page is loading." : null} onClick={onRefresh}>Refresh queue</Button>
+        <LinkButton variant="secondary" to="/creators/discovery?view=plan">Open daily plan detail</LinkButton>
       </div>
     </section>
     {data.models.map((model) => <PublishedModel key={model.modelId} model={model} />)}

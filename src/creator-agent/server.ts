@@ -101,6 +101,9 @@ import { invitationFiltersSchema, invitationSaveSchema, recruitmentBatchFiltersS
 import { JobRuntime } from "./jobs/runtime.ts";
 import { RuntimeError, type RuntimeAuthority, type RuntimeRegistry } from "./jobs/runtimeSchema.ts";
 import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type RuntimeMachineBinding } from "./jobs/runtimeApi.ts";
+import { createSourcingPlanReader, SourcingError } from "./sourcing/reader.ts";
+import { SOURCING_PLAN_VIEW, sourcingPlanFilters } from "./sourcing/contract.ts";
+import type { SourcingPlanSourceReader } from "./sourcing/source.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -135,6 +138,7 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   operationsControlSource?: OperationsControlSource;
   operationsControlAuthority?: OperationsControlAuthoritySource;
   operationsCanonical?: {source:OperationsCanonicalSource;owners:ReadonlyMap<OperationsCanonicalKind,OperationsOwnerRegistration>};
+  sourcingPlanSource?: SourcingPlanSourceReader;
   /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
   commercialPolicy?: CommercialPolicySource;
   recruitmentSource?: RecruitmentSource;
@@ -201,6 +205,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let siteTrafficApi: ReturnType<typeof createSiteTrafficImportApi>;
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
+  let sourcingPlan: ReturnType<typeof createSourcingPlanReader>;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
   let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
   let mediaDomain: MediaComposition | undefined;
@@ -274,6 +279,9 @@ export function createAgentServer(options: AgentServerOptions) {
       scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},authority:controlAuthority,
       source:options.operationsCanonical.source,owners:options.operationsCanonical.owners,intents:controls.canonicalIntents,
       actions:()=>actionFoundation.service,approvals:()=>actionFoundation.approvals,now:options.operations?.now});
+    sourcingPlan = createSourcingPlanReader({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      source: options.sourcingPlanSource, now: options.operations?.now });
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -483,6 +491,7 @@ export function createAgentServer(options: AgentServerOptions) {
       proposalRequestKey: z.string().trim().min(1).max(240).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal(SOURCING_PLAN_VIEW), filters: sourcingPlanFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
   ]);
   const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
   const requestIds = new WeakMap<IncomingMessage, string>();
@@ -799,6 +808,7 @@ export function createAgentServer(options: AgentServerOptions) {
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
           importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
+        dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
           dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
@@ -846,6 +856,12 @@ export function createAgentServer(options: AgentServerOptions) {
           const assertSession = () => { const currentAuth = authorize(req); if (!currentAuth || currentAuth.role !== auth.role) throw new SiteTrafficError("TRAFFIC_PRINCIPAL_DENIED", currentAuth ? 403 : 401); };
           assertSession(); result.assertCurrent(); assertSession();
           return reply(res, 200, envelope);
+        }
+        if (input.viewKey === SOURCING_PLAN_VIEW) {
+          // Shared authentication, read admission and the read union (scope, envelope, filters) have all passed before the
+          // source is read. Source refusals are thrown as SourcingError and rendered by the shared error envelope below.
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          return reply(res, 200, await sourcingPlan.respond(input, auth.role, ADAPTER_SCHEMA));
         }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -1356,6 +1372,8 @@ export function createAgentServer(options: AgentServerOptions) {
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
       if (error instanceof TeamInvitationReadError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
+      if (error instanceof SourcingError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+        ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
