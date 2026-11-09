@@ -323,7 +323,10 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     }
     expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 2 })).body).toMatchObject({ code: "INVALID_CURSOR" });
     expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, null, { cursor, limit: 1 })).status).toBe(401);
-    expect((await read("discoverySummary", {}, { ...SYNTHETIC_SCOPE, accountIds: ["synthetic-forbidden-account"] }, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 })).status).toBe(400);
+    const deniedScope = await read("discoverySummary", {}, { ...SYNTHETIC_SCOPE, accountIds: ["synthetic-forbidden-account"] }, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
+    expect(deniedScope.status).toBe(403);
+    expect(deniedScope.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: "notApplied" });
+    expect(deniedScope.body).not.toHaveProperty("data");
     expect((await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor: null, limit: 101 })).status).toBe(400);
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(first.body.data!.snapshot!.expiresAt) + 1);
     const expired = await read("discoverySummary", {}, SYNTHETIC_SCOPE, SYNTHETIC_READ_TOKEN, { cursor, limit: 1 });
