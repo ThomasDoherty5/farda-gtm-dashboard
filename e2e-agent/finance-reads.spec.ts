@@ -83,7 +83,7 @@ test("native ledger header controls remain inside their panels at desktop, table
         const boundsOf = (node: Element) => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
         const style = getComputedStyle(element);
         return { panel: boundsOf(element.parentElement!), header: boundsOf(element), display: style.display, columns: style.gridTemplateColumns,
-          controls: [...element.querySelectorAll("button, a")].map(control => { const css = getComputedStyle(control); return {
+          controls: Array.from(element.querySelectorAll("button, a")).map(control => { const css = getComputedStyle(control); return {
             name: control.getAttribute("aria-label") ?? control.textContent?.trim(), bounds: boundsOf(control), minWidth: css.minWidth, maxWidth: css.maxWidth, flexBasis: css.flexBasis,
           }; }) };
       });
