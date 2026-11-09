@@ -27,7 +27,8 @@
 /* Reserve the controls' intrinsic width; the heading takes the remaining space. */
 div.panelHeader { display: grid; grid-template-columns: minmax(0, 1fr) max-content; }
 .panelHeader > :last-child { min-width: 0; max-width: 100%; flex-wrap: nowrap; align-items: flex-start; }
-.panelHeader > :last-child button { flex: 0 0 auto; white-space: nowrap; }
+/* A definite minimum participates in max-content sizing; the shared percentage minimum does not. */
+.panelHeader > :last-child button, .panelHeader > :last-child a { min-width: 152px; flex: 0 0 auto; white-space: nowrap; }
 @media (max-width: 1024px) {
   div.panelHeader { grid-template-columns: minmax(0, 1fr); }
   .panelHeader > :last-child { flex-wrap: wrap; }

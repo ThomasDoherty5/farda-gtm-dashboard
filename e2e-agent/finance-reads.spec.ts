@@ -68,7 +68,7 @@ test("a configured source renders validated finance data, and a later source den
 });
 
 
-test("native ledger header controls remain inside their panels at desktop, tablet and mobile widths", async ({ page }) => {
+test("native ledger header controls remain inside their panels at desktop, tablet and mobile widths", async ({ page }, testInfo) => {
   await login(page);
   await page.goto("/finance/commissions?provider=collabs");
   for (const width of [1440, 1024, 390]) {
@@ -79,6 +79,15 @@ test("native ledger header controls remain inside their panels at desktop, table
       const header = panel.locator(":scope > div").first();
       const controls = header.getByRole("button").or(header.getByRole("link"));
       expect(await controls.count()).toBeGreaterThan(0);
+      const diagnostic = await header.evaluate(element => {
+        const boundsOf = (node: Element) => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height, right: r.right }; };
+        const style = getComputedStyle(element);
+        return { panel: boundsOf(element.parentElement!), header: boundsOf(element), display: style.display, columns: style.gridTemplateColumns,
+          controls: [...element.querySelectorAll("button, a")].map(control => { const css = getComputedStyle(control); return {
+            name: control.getAttribute("aria-label") ?? control.textContent?.trim(), bounds: boundsOf(control), minWidth: css.minWidth, maxWidth: css.maxWidth, flexBasis: css.flexBasis,
+          }; }) };
+      });
+      await testInfo.attach(`header-geometry-${width}-${title.startsWith("Accrued") ? "ledger" : "contribution"}`, { body: JSON.stringify({ viewport: width, title, ...diagnostic }, null, 2), contentType: "application/json" });
       const bounds = await panel.boundingBox();
       expect(bounds).not.toBeNull();
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
@@ -86,8 +95,9 @@ test("native ledger header controls remain inside their panels at desktop, table
         await expect(control).toBeVisible();
         const rect = await control.boundingBox();
         expect(rect).not.toBeNull();
-        expect(rect!.x).toBeGreaterThanOrEqual(bounds!.x);
-        expect(rect!.x + rect!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+        const context = `${width}px / ${title} / ${(await control.getAttribute("aria-label")) ?? (await control.innerText())}`;
+        expect(rect!.x, `${context}: left edge`).toBeGreaterThanOrEqual(bounds!.x);
+        expect(rect!.x + rect!.width, `${context}: right edge`).toBeLessThanOrEqual(bounds!.x + bounds!.width);
         expect(await control.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
         if (width === 1440) expect(rect!.height).toBeLessThanOrEqual(45);
       }
