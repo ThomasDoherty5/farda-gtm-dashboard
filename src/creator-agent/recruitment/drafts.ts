@@ -41,10 +41,14 @@ export class InvitationDraftRepository {
     return value;
   }
   read(id: string, principal: ApprovalPrincipal): InvitationDraft | null { return this.readStored(id, principal)?.draft ?? null; }
-  approvalRef(payloadDigest: string): string | null {
-    const row=this.db.prepare("SELECT approval_ref FROM recruitment_invitation_approval_refs WHERE payload_digest=?").get(payloadDigest);
-    return row ? String(row.approval_ref) : null;
+  approvalBinding(payloadDigest: string): {approvalRef:string;manifestVersion:number} | null {
+    const row=this.db.prepare("SELECT approval_ref,manifest_version FROM recruitment_invitation_approval_refs WHERE payload_digest=?").get(payloadDigest);
+    if(!row)return null;
+    const manifestVersion=Number(row.manifest_version);
+    if(!Number.isSafeInteger(manifestVersion)||manifestVersion<1)throw new RecruitmentError("RECRUITMENT_PREVIEW_BINDING_INVALID");
+    return {approvalRef:approvalRefSchema.parse(row.approval_ref),manifestVersion};
   }
+  approvalRef(payloadDigest: string): string | null { return this.approvalBinding(payloadDigest)?.approvalRef??null; }
   /** Runs inside the existing J04 final transaction. This is immutable identity binding, not approval state. */
   bindApproval(payloadDigest: string, approvalRef: string, manifestVersion: number): void {
     const row=this.db.prepare("SELECT approval_ref,manifest_version FROM recruitment_invitation_approval_refs WHERE payload_digest=?").get(payloadDigest);

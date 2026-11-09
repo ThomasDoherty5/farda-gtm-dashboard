@@ -45,7 +45,7 @@ test("bounded stock drilldown, report filters and exact approval-only receipt th
     await f.getByRole("button",{name:"Save proposal for review"}).click();await expect(f.getByRole("alert")).toHaveText("Units exceed available stock.");
   });
   await f.getByLabel("Units").fill("8");
-  await screenReaderCheckpoint(page,"stock-proposal-status",page.getByRole("button",{name:"Request transfer",exact:true}),["recorded for human review","No source action was executed"],"KP_Enter",async()=>{
+  await screenReaderCheckpoint(page,"stock-proposal-status",page.getByRole("button",{name:"Request transfer",exact:true}),["recorded for human review","No source action was executed"],"KP_Insert+KP_Enter",async()=>{
     await f.getByRole("button",{name:"Save proposal for review"}).focus();await page.keyboard.press("Enter");
     await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();
   });

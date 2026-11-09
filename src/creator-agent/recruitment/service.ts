@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { digest } from "../config.ts";
-import { approvalScopeSchema, principalSchema, trustedHumanSchema, type ApprovalPrincipal, type ApprovalRead, type ApprovalScope, type ApprovalSources, type TrustedHuman } from "../approvals/contract.ts";
+import { approvalScopeSchema, principalSchema, trustedHumanSchema, type ApprovalPrincipal, type ApprovalRead, type ApprovalScope, type ApprovalSources, type ProposeCommand, type TrustedHuman } from "../approvals/contract.ts";
 import type { NativeApprovalView, NativeRunView } from "../actions/views.ts";
 import type { ReviewField, ReviewLink } from "../actions/reviewViews.ts";
 import type { OfferRepository } from "../offers/repository.ts";
@@ -10,7 +10,7 @@ import { assertSynchronousVoid } from "../sourceFence.ts";
 import { boundedSourceRead } from "../actions/readBoundary.ts";
 import { ActionServiceError } from "../actions/contract.ts";
 import { InvitationDraftRepository, type InvitationBasis } from "./drafts.ts";
-import { createRecruitmentActionDomain } from "./proposalBridge.ts";
+import { createRecruitmentActionDomain, recruitmentInvitationPayloadRef, RECRUITMENT_INVITATION_ACTION } from "./proposalBridge.ts";
 import { invitationFiltersSchema, recruitmentBatchFiltersSchema, nativeInvitationViewSchema, nativeRecruitmentBatchSchema,
   invitationSaveSchema, type InvitationSaveReceipt, type NativeInvitationView, type NativeRecruitmentBatch } from "./contract.ts";
 import { invitationSourceSchema, recruitmentBatchSourceSchema, RECRUITMENT_SOURCE_MAX_AGE_MS, RecruitmentError,
@@ -27,6 +27,8 @@ export type RecruitmentServiceOptions = {
   records: {
     readApproval(ref: string): ApprovalRead | null;
     readRun(ref: string): DispatchRead;
+    /** Pure lookup of the original canonical propose command; never prepares or rebases it. */
+    readPreview?(command: ProposeCommand, principal: ApprovalPrincipal, key: string): ApprovalRead | null;
   };
   drafts?: InvitationDraftRepository;
   invitationOwner?: RecruitmentInvitationOwner;
@@ -140,22 +142,53 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
         ...snapshot.capacity.filter(v=>v.remaining!==null||v.limit!==null).flatMap(v=>v.validUntil&&Date.parse(v.validUntil)>now()?[Date.parse(v.validUntil)]:[]))).toISOString(), actorRef: alias("person", actor.personRef),
       sourceState: snapshot.complete ? "current" as const : "partial" as const, reasonCodes: snapshot.reasonCodes };
   }
-  async function loadInvitation(raw: unknown, input: ApprovalPrincipal) {
+  async function loadInvitation(raw: unknown, input: ApprovalPrincipal, fencePreviewBinding = true) {
     const filters = invitationFiltersSchema.parse(structuredClone(raw)), { actor, principal } = await actorFor(input);
     const request: RecruitmentSourceRequest = freeze({ kind: "invitation", scope, actor, filters });
     const snapshot = await readSource(request, principal);
     if (snapshot.kind !== "invitation") return fail("RECRUITMENT_SOURCE_INVALID", 502);
+    const previewRecovery = Boolean(filters.previewRequestKey);
+    const recovering = Boolean(filters.requestKey) || previewRecovery;
+    const originalDraft = previewRecovery ? options.drafts?.readStored(filters.draftId!, principal, filters.previewVersion!) ?? null : null;
+    if (previewRecovery && !originalDraft) { assertSource(request, snapshot, principal); return fail("RECRUITMENT_DRAFT_NOT_FOUND", 404); }
+    if (originalDraft && originalDraft.draft.actorRef !== alias("person", actor.personRef)) return fail("RECRUITMENT_DRAFT_OWNER_DENIED", 403);
     const recovery=filters.requestKey&&filters.draftId ? options.drafts?.lookup(filters.draftId,principal,filters.requestKey)??null : null;
     const selectedRecord = filters.offerId ? options.offers.readOffer(filters.offerId) : null;
-    const record=filters.requestKey&&selectedRecord?.version!==filters.offerVersion?null:selectedRecord;
+    const record=recovering&&selectedRecord?.version!==filters.offerVersion?null:selectedRecord;
     if (record && (record.terms.creatorId !== filters.creatorId || record.version !== filters.offerVersion))
       fail("RECRUITMENT_OFFER_CHANGED");
     if (filters.creatorId && !snapshot.creators.some(value => value.creatorId === filters.creatorId))
       fail("RECRUITMENT_CREATOR_NOT_PERMITTED", 403);
-    const commercial = !filters.requestKey&&filters.creatorId ? options.commercial.project({ creatorId: filters.creatorId, offerId: filters.offerId, offerVersion: filters.offerVersion, phase: "invitation" }) : null;
-    const draft = filters.requestKey?recovery?.resource??null:filters.draftId ? options.drafts?.read(filters.draftId, principal) ?? null : null;
+    const commercial = !recovering&&filters.creatorId ? options.commercial.project({ creatorId: filters.creatorId, offerId: filters.offerId, offerVersion: filters.offerVersion, phase: "invitation" }) : null;
+    const draft = previewRecovery ? originalDraft!.draft : filters.requestKey?recovery?.resource??null:filters.draftId ? options.drafts?.read(filters.draftId, principal) ?? null : null;
     if (draft && (draft.terms.creatorId !== filters.creatorId || draft.terms.offerId !== filters.offerId || draft.terms.offerVersion !== filters.offerVersion))
       fail("RECRUITMENT_DRAFT_SELECTION_MISMATCH");
+    const previewBinding = () => draft ? options.drafts?.approvalBinding(draft.payloadDigest) ?? null : null;
+    const binding = previewBinding(), bindingHash = digest(binding);
+    const previewCommand: ProposeCommand | null = originalDraft ? { actionKind: RECRUITMENT_INVITATION_ACTION,
+      entityRef: originalDraft.draft.draftId, entityVersion: originalDraft.draft.version,
+      selectionRefs: [alias("creator", originalDraft.basis.creatorRef)], expectedVersion: 0 } : null;
+    const readOriginalPreview = () => {
+      if (!previewCommand || !originalDraft) return null;
+      if (!options.records.readPreview) return fail("RECRUITMENT_PREVIEW_RECOVERY_UNCONFIGURED", 503);
+      let result: ApprovalRead | null;
+      try { result = options.records.readPreview(previewCommand, principal, filters.previewRequestKey!); }
+      catch { return fail("RECRUITMENT_PREVIEW_RECOVERY_MISMATCH", 403); }
+      if (!result) return null; // Absence confers no permission to issue another command.
+      const m = result.manifest, d = originalDraft.draft, b = originalDraft.basis, item = m.items[0], currentBinding = previewBinding();
+      if (digest(m.scope) !== digest(scope) || m.proposer.principalRef !== principal.principalRef || m.proposer.personRef !== actor.personRef ||
+          m.approvalRef !== currentBinding?.approvalRef || m.manifestVersion !== currentBinding?.manifestVersion || m.draft.actionKind !== RECRUITMENT_INVITATION_ACTION || m.draft.phase !== "invitation" ||
+          m.draft.payloadRef !== recruitmentInvitationPayloadRef(d.draftId, d.version) || m.draft.payloadHash !== d.payloadDigest ||
+          m.draft.providerAccountRef !== b.providerAccountRef || m.draft.providerAccountVersion !== b.providerAccountVersion ||
+          m.draft.sourceBasisRef !== b.sourceRef || m.draft.sourceBasisVersion !== b.sourceVersion ||
+          m.draft.productVersion.state !== "required" || m.draft.productVersion.version !== b.productVersion ||
+          m.draft.termsVersion.state !== "required" || m.draft.termsVersion.version !== d.terms.offerVersion ||
+          m.items.length !== 1 || !item || item.itemRef !== previewCommand.selectionRefs[0] || item.targetRef !== b.creatorId ||
+          item.itemVersion !== d.version || item.targetVersion !== b.sourceVersion || item.payloadHash !== d.payloadDigest)
+        return fail("RECRUITMENT_PREVIEW_RECOVERY_MISMATCH", 403);
+      return m;
+    };
+    const originalPreview = readOriginalPreview(), previewHash = digest(originalPreview);
     const canEdit = actor.roles.some(role => ["founder", "operator", "reviewer"].includes(role));
     const accepted = record && snapshot.acceptedOffer && snapshot.willingness === "willing" &&
       snapshot.acceptedOffer.offerId === record.offerId && snapshot.acceptedOffer.version === record.version &&
@@ -179,17 +212,19 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
         currency: "USD", relationship: "commission-only", upfrontFeeMinor: 0, guaranteedFeeMinor: 0,
         accepted: accepted ? true : snapshot.willingness === "unknown" ? null : false, commercialEligibility: commercial.data } : null,
       capacity: capacity(snapshot.capacity, snapshot.validUntil), samples: samples(snapshot.samples), sourceLink: link(snapshot.sourceLink,snapshot.provenance.synthetic),
-      canSaveDraft: !filters.requestKey && canEdit && snapshot.draftPermission && Boolean(record) && snapshot.complete && Boolean(options.drafts)&&snapshot.creators.some(c=>c.creatorId===filters.creatorId&&c.eligible===true),
-      canPreview: !filters.requestKey && canEdit && snapshot.complete && draft !== null && commercial?.data.state === "eligible" && Boolean(options.invitationOwner) && draft?.terms.sourceVersion===alias("source-version",snapshot.sourceVersion)&&Date.parse(draft.terms.expiresAt)>now()&&snapshot.creators.some(c=>c.creatorId===filters.creatorId&&c.eligible===true),
-      previewSelectionRefs: filters.creatorId?snapshot.creators.filter(c=>c.creatorId===filters.creatorId&&c.eligible===true).map(c=>alias("creator",c.ref)):[],
-      previewApprovalRef: draft?options.drafts?.approvalRef(draft.payloadDigest)??null:null,
+      canSaveDraft: !recovering && canEdit && snapshot.draftPermission && Boolean(record) && snapshot.complete && Boolean(options.drafts)&&snapshot.creators.some(c=>c.creatorId===filters.creatorId&&c.eligible===true),
+      canPreview: !recovering && canEdit && snapshot.complete && draft !== null && commercial?.data.state === "eligible" && Boolean(options.invitationOwner) && draft?.terms.sourceVersion===alias("source-version",snapshot.sourceVersion)&&Date.parse(draft.terms.expiresAt)>now()&&snapshot.creators.some(c=>c.creatorId===filters.creatorId&&c.eligible===true),
+      previewSelectionRefs: !previewRecovery&&filters.creatorId?snapshot.creators.filter(c=>c.creatorId===filters.creatorId&&c.eligible===true).map(c=>alias("creator",c.ref)):[],
+      previewApprovalRef: previewRecovery ? originalPreview?.approvalRef ?? null : binding?.approvalRef ?? null,
+      previewManifestVersion: previewRecovery ? originalPreview?.manifestVersion ?? null : binding?.manifestVersion ?? null,
       dispatchAuthorized: false,
     });
     const recordHash = digest(selectedRecord), draftHash = digest(draft), dataHash = digest(data),recoveryHash=digest(recovery);
     const assertCurrent = () => {
       assertSource(request, snapshot, principal);
       if (digest(filters.offerId ? options.offers.readOffer(filters.offerId) : null) !== recordHash ||
-          (!filters.requestKey&&digest(filters.draftId ? options.drafts?.read(filters.draftId, principal) ?? null : null) !== draftHash) || digest(data) !== dataHash ||
+          (!filters.requestKey&&digest(previewRecovery ? options.drafts?.readStored(filters.draftId!, principal, filters.previewVersion!)?.draft ?? null : filters.draftId ? options.drafts?.read(filters.draftId, principal) ?? null : null) !== draftHash) || digest(data) !== dataHash ||
+          fencePreviewBinding && (digest(previewBinding()) !== bindingHash || digest(readOriginalPreview()) !== previewHash) ||
           filters.requestKey&&digest(filters.draftId?options.drafts?.lookup(filters.draftId,principal,filters.requestKey)??null:null)!==recoveryHash)
         fail("RECRUITMENT_RECORD_CHANGED");
       if(Date.parse(data.validUntil)<=now())fail("RECRUITMENT_SOURCE_STALE");
@@ -292,7 +327,8 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
   async function loadSaved(draftId:string,version:string,principal:ApprovalPrincipal){
     const repo=options.drafts,stored=repo?.readStored(draftId,principal,version);if(!repo||!stored)return fail("RECRUITMENT_DRAFT_NOT_FOUND",404);
     if(repo.read(draftId,principal)?.version!==version)return fail("RECRUITMENT_DRAFT_CHANGED");
-    const terms=stored.draft.terms,loaded=await loadInvitation({context:"recruitment",draftId,creatorId:terms.creatorId,offerId:terms.offerId,offerVersion:terms.offerVersion},principal);
+    // This internal context authorizes J04's atomic binding insert and is never published as a read.
+    const terms=stored.draft.terms,loaded=await loadInvitation({context:"recruitment",draftId,creatorId:terms.creatorId,offerId:terms.offerId,offerVersion:terms.offerVersion},principal,false);
     if(!loaded.data.canPreview)return fail("RECRUITMENT_PREVIEW_HELD");
     const basis=exactBasis(loaded,terms,true);if(digest(basis)!==digest(stored.basis))return fail("RECRUITMENT_DRAFT_BASIS_CHANGED");
     const expected=digest(stored),assertCurrent=()=>{loaded.assertCurrent();if(digest(repo.readStored(draftId,principal,version))!==expected||repo.read(draftId,principal)?.version!==version)fail("RECRUITMENT_DRAFT_CHANGED");};

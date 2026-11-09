@@ -268,7 +268,8 @@ export function createAgentServer(options: AgentServerOptions) {
       authority: options.actionFoundation?.approvals?.sources ?? {}, offers, commercial: commercialProjection,
       drafts: new InvitationDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations?.now),
       actions: { readApproval: (ref, principal) => actionFoundation.service.readApproval(ref, principal), readRun: (ref, principal) => actionFoundation.service.readRun(ref, principal) },
-      records: { readApproval: ref => actionFoundation.approvals.readApproval(ref), readRun: ref => actionFoundation.dispatch.read(ref, false) },
+      records: { readApproval: ref => actionFoundation.approvals.readApproval(ref), readRun: ref => actionFoundation.dispatch.read(ref, false),
+        readPreview: (command, principal, key) => actionFoundation.approvals.readCommand("propose", command, principal, key) },
     });
     let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[]),...(options.fulfillment?[fulfillment.domain]:[]),...(recruitmentWorkspace.domain?[recruitmentWorkspace.domain]:[])]);
     if(settlementLedger)actionBindings={...actionBindings,ledger:settlementLedger};

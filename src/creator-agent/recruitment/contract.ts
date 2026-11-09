@@ -12,11 +12,15 @@ export const invitationFiltersSchema = z.object({
   context: z.literal("recruitment"),
   draftId: routeId.optional(), creatorId: routeId.optional(), offerId: routeId.optional(), offerVersion: offerVersion.optional(),
   requestKey: ref.optional(),
+  previewRequestKey: ref.optional(), previewVersion: z.string().regex(/^invitation-v[1-9]\d*$/).optional(),
 }).strict().superRefine((value, ctx) => {
   if ((value.offerId === undefined) !== (value.offerVersion === undefined))
     ctx.addIssue({ code: "custom", message: "An exact offer selection requires its version." });
   if (value.offerId && !value.creatorId || value.requestKey && !value.draftId)
     ctx.addIssue({ code: "custom", message: "Select the exact creator or original draft before reading its evidence." });
+  if ((value.previewRequestKey === undefined) !== (value.previewVersion === undefined) ||
+      value.previewRequestKey && (!value.draftId || !value.creatorId || !value.offerId || !value.offerVersion || value.requestKey))
+    ctx.addIssue({ code: "custom", message: "Preview recovery requires its original key, draft revision and exact selection, separately from save recovery." });
 });
 export const recruitmentBatchFiltersSchema = z.object({
   context: z.literal("recruitment"),
@@ -119,6 +123,7 @@ export const nativeInvitationViewSchema = z.object({
   dispatchAuthorized: z.literal(false),
   previewSelectionRefs: z.array(ref).max(1),
   previewApprovalRef: ref.nullable(),
+  previewManifestVersion: recruitmentCount.positive().nullable(),
 }).strict();
 export type NativeInvitationView = z.infer<typeof nativeInvitationViewSchema>;
 

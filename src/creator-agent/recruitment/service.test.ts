@@ -13,7 +13,7 @@ import { createRecruitmentService } from "./service.ts";
 import { recruitmentSourceFixture } from "./fixtures.testkit.ts";
 import { recruitmentBatchSourceSchema } from "./source.ts";
 import { InvitationDraftRepository } from "./drafts.ts";
-import { unknownRecruitmentModels, type InvitationSave } from "./contract.ts";
+import { invitationFiltersSchema, unknownRecruitmentModels, type InvitationSave } from "./contract.ts";
 import { recruitmentInvitationOwnerFixture } from "./ownerFixture.testkit.ts";
 import { RECRUITMENT_INVITATION_ACTION, RECRUITMENT_INVITATION_HANDLER } from "./proposalBridge.ts";
 
@@ -172,10 +172,12 @@ describe("native recruitment views reuse exact scoped offers and canonical runs"
 describe("exact saved invitation -> existing J04 bridge",()=>{
   async function connected(){
     const w=setup(),owner=recruitmentInvitationOwnerFixture({drafts:w.options.drafts,offers:w.o.repo,baseDraft:w.a.draft,now:w.o.now});
-    const service=createRecruitmentService({...w.options,invitationOwner:owner.owner});
+    let repo:ApprovalRepository;
+    const service=createRecruitmentService({...w.options,invitationOwner:owner.owner,records:{...w.options.records,
+      readPreview:(command,actor,key)=>repo.readCommand("propose",command,actor,key)}});
     const request=await draftRequest(w),saved=await service.saveInvitation(request,principal,"save-for-preview");
     const view=await service.readInvitation({...w.filters,draftId:request.draftId},principal);
-    const repo=new ApprovalRepository(w.o.store.database,{...w.a.options,registry:withCommercialOffers(service.domain!.registry,w.o.repo,w.o.now),now:w.o.now});
+    repo=new ApprovalRepository(w.o.store.database,{...w.a.options,registry:withCommercialOffers(service.domain!.registry,w.o.repo,w.o.now),now:w.o.now});
     const command={actionKind:RECRUITMENT_INVITATION_ACTION,entityRef:request.draftId,entityVersion:saved.data.version,selectionRefs:view.data.previewSelectionRefs,expectedVersion:0};
     return {...w,service,owner,request,saved,view,repo,command};
   }
@@ -191,7 +193,57 @@ describe("exact saved invitation -> existing J04 bridge",()=>{
     const another={...w.request,draftId:"second-local-id"};await w.service.saveInvitation(another,principal,"another-local-save");
     await expect(w.repo.preparePreview({...w.command,entityRef:another.draftId},principal,"fresh-key-new-local-id")).rejects.toMatchObject({code:"APPROVAL_CURRENT_SOURCE_UNVERIFIED"});
     expect(w.o.store.database.prepare("SELECT count(*) n FROM approval_manifests").get()?.n).toBe(1);
-    const recovered=await w.service.readInvitation({...w.filters,draftId:w.request.draftId},principal);expect(recovered.data.previewApprovalRef).toBe(a.manifest.approvalRef);
+    const recovered=await w.service.readInvitation({...w.filters,draftId:w.request.draftId},principal);
+    expect(recovered.data).toMatchObject({previewApprovalRef:a.manifest.approvalRef,previewManifestVersion:a.manifest.manifestVersion});
+  });
+  it("recovers only the original preview after newer draft, offer and source revisions without preparing or sending",async()=>{
+    const w=await connected(),preview=await w.repo.preparePreview(w.command,principal,"original-preview-key");
+    const next=await w.service.saveInvitation({...w.request,expectedVersion:w.saved.data.version,terms:{...w.request.terms,message:"A separate newer local revision."}},principal,"newer-draft-key");
+    const revised=await w.repo.preparePreview({...w.command,entityVersion:next.data.version,approvalRef:preview.manifest.approvalRef,
+      expectedVersion:preview.manifest.manifestVersion},principal,"different-material-preview-key");
+    expect(revised.manifest.manifestVersion).toBe(2);
+    w.o.repo.saveFromAdapter(w.offer.offerId,w.offer.version,{...w.offer.terms,expiresAt:new Date(w.o.now()+7_200_000).toISOString()},"newer-offer-key");
+    w.source.state.version="synthetic-source-v2";
+    const filters={...w.filters,draftId:w.request.draftId,previewRequestKey:"original-preview-key",previewVersion:w.saved.data.version};
+    const recovered=await w.service.readInvitation(filters,principal);recovered.assertCurrent();
+    expect(recovered.data).toMatchObject({draft:w.saved.data.resource,offer:null,previewApprovalRef:preview.manifest.approvalRef,previewManifestVersion:1,
+      canSaveDraft:false,canPreview:false,previewSelectionRefs:[]});
+    expect(w.options.drafts.read(w.request.draftId,principal)?.version).toBe("invitation-v2");
+    expect(w.o.store.database.prepare("SELECT count(*) n FROM approval_manifests").get()?.n).toBe(2);
+    expect(w.o.store.database.prepare("SELECT count(*) n FROM job_runs").get()?.n).toBe(0);
+    expect(w.a.state.writes).toBe(0);expect(w.owner.state.contexts).toEqual([]);
+    w.source.state.denied=true;
+    expect(recovered.assertCurrent).toThrow("RECRUITMENT_SOURCE_SCOPE_DENIED");
+    await expect(w.service.readInvitation(filters,principal)).rejects.toMatchObject({status:403});
+  });
+  it.each(["ordinary","original-key"])("fences a concurrent preview commit before publishing %s absence",async mode=>{
+    const w=await connected(),filters={...w.filters,draftId:w.request.draftId,
+      ...(mode==="original-key"?{previewRequestKey:"late-original-key",previewVersion:w.saved.data.version}:{})};
+    const before=await w.service.readInvitation(filters,principal);expect(before.data).toMatchObject({previewApprovalRef:null,previewManifestVersion:null});
+    if(mode==="original-key")expect(before.data).toMatchObject({canSaveDraft:false,canPreview:false,previewSelectionRefs:[]});
+    const recorded=await w.repo.preparePreview(w.command,principal,"late-original-key");
+    expect(before.assertCurrent).toThrow("RECRUITMENT_RECORD_CHANGED");
+    const after=await w.service.readInvitation(filters,principal);after.assertCurrent();expect(after.data.previewApprovalRef).toBe(recorded.manifest.approvalRef);
+    expect(w.o.store.database.prepare("SELECT count(*) n FROM approval_manifests").get()?.n).toBe(1);expect(w.a.state.writes).toBe(0);
+  });
+  it("keeps absent original preview keys read-only and rejects conflicting revisions or actor identities",async()=>{
+    const w=await connected();await w.repo.preparePreview(w.command,principal,"original-preview-key");
+    const filters={...w.filters,draftId:w.request.draftId,previewRequestKey:"unknown-key",previewVersion:w.saved.data.version};
+    const absent=await w.service.readInvitation(filters,principal);
+    expect(absent.data).toMatchObject({previewApprovalRef:null,previewManifestVersion:null,canSaveDraft:false,canPreview:false});absent.assertCurrent();
+    await w.service.saveInvitation({...w.request,expectedVersion:w.saved.data.version,terms:{...w.request.terms,message:"A newer exact draft."}},principal,"newer-draft-key");
+    await expect(w.service.readInvitation({...filters,previewRequestKey:"original-preview-key",previewVersion:"invitation-v2"},principal))
+      .rejects.toMatchObject({code:"RECRUITMENT_PREVIEW_RECOVERY_MISMATCH",status:403});
+    w.a.humans.get(principal.principalRef)!.personRef="synthetic:different-person";
+    await expect(w.service.readInvitation({...filters,previewRequestKey:"original-preview-key"},principal))
+      .rejects.toMatchObject({code:"RECRUITMENT_DRAFT_OWNER_DENIED",status:403});
+  });
+  it("requires the paired original preview selectors and a configured pure canonical lookup",async()=>{
+    const w=await connected(),filters={...w.filters,draftId:w.request.draftId,previewRequestKey:"original-preview-key",previewVersion:w.saved.data.version};
+    for(const patch of [{previewRequestKey:undefined},{previewVersion:undefined},{draftId:undefined},{creatorId:undefined},{offerId:undefined,offerVersion:undefined},{requestKey:"different-save-key"}])
+      expect(invitationFiltersSchema.safeParse({...filters,...patch}).success).toBe(false);
+    const unbound=createRecruitmentService(w.options);
+    await expect(unbound.readInvitation(filters,principal)).rejects.toMatchObject({code:"RECRUITMENT_PREVIEW_RECOVERY_UNCONFIGURED",status:503});
   });
   it("rolls the identity claim back if the canonical manifest transaction fails",async()=>{
     const w=await connected();w.o.store.database.exec("CREATE TRIGGER synthetic_fail_manifest BEFORE INSERT ON approval_manifests BEGIN SELECT RAISE(ABORT,'fictional interrupted commit'); END");

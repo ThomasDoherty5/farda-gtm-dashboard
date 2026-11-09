@@ -53,10 +53,36 @@ test("actual HTTP invitation save, original readback, immutable preview and cano
   await page.getByRole("button",{name:"Save invitation draft",exact:true}).click();await expect(page.getByRole("button",{name:"Continue with saved revision",exact:true})).toBeVisible();
   const savedUrl=page.url();expect(savedUrl).toContain("requestKey=");await page.reload();await expect(page.getByRole("button",{name:"Continue with saved revision",exact:true})).toBeVisible();await page.getByRole("button",{name:"Continue with saved revision",exact:true}).click();expect(recordedKeys).toHaveLength(2);expect(new Set(recordedKeys).size).toBe(1);expect(fixture.drafts.read(originalDraftId,fixture.principal)?.version).toBe("invitation-v1");
   await page.getByRole("button",{name:"Review exact request",exact:true}).first().click();const dialog=page.getByRole("dialog",{name:"Review exact invitation request"});await expect(dialog).toBeVisible();await dialog.getByRole("button",{name:"Create immutable approval preview",exact:true}).click();
-  const preview=dialog.getByRole("link",{name:"Open immutable invitation preview",exact:true});await expect(preview).toBeVisible();const approvalRef=decodeURIComponent((await preview.getAttribute("href"))!.split("/").pop()!);await page.keyboard.press("Escape");
+  const preview=dialog.getByRole("link",{name:"Open immutable invitation preview",exact:true});await expect(preview).toBeVisible();const approvalRef=decodeURIComponent(new URL((await preview.getAttribute("href"))!,page.url()).pathname.split("/").pop()!);await page.keyboard.press("Escape");
   const queued=await fixture.approveAndQueue(app,approvalRef);selectedRun={approvalRef,runRef:queued.run.runRef};await page.goto(`/approvals/${encodeURIComponent(approvalRef)}`);await page.getByRole("link",{name:"Open finite recruitment batch",exact:true}).click();await expect(page.getByRole("table",{name:"Exact finite batch outcomes"})).toBeVisible();
   await page.getByRole("checkbox",{name:/Select Fictional creator/}).check();await page.getByRole("button",{name:"Cancel selected unsent items",exact:true}).click();const cancel=page.getByRole("dialog",{name:"Review selected unsent cancellation"});await expect(cancel).toBeVisible();await cancel.getByRole("button",{name:"Request selected cancellation",exact:true}).click();
   await expect(page.getByRole("table",{name:"Exact finite batch outcomes"})).toContainText("cancelled");expect(fixture.owner.state.contexts).toHaveLength(0);expect(app.actionFoundation.dispatch.read(queued.run.runRef,false).run.items[0]?.state).toBe("cancelled");await capture(page,info,"cancelled",1440);
+});
+
+test("a lost preview acknowledgment recovers its original immutable manifest after the saved offer changes",async({page})=>{
+  const saved=await saveRequest();await login(page);await page.goto(`${composer()}&draftId=${encodeURIComponent(saved.payload.draftId)}`);
+  let approvalRef="";const previewKeys:string[]=[];
+  await page.route("**/v1/action",async route=>{
+    const body=route.request().postDataJSON();if(body.operation!=="previewAction"||body.actionKind!=="recruitment.invitation")return route.continue();
+    previewKeys.push(body.idempotencyKey);const response=await route.fetch();
+    if(!approvalRef){expect(response.status()).toBe(200);approvalRef=(await response.json()).approvalRef;
+      const prior=fixture.o.repo.readOffer(fixture.offer.offerId)!;
+      const next=structuredClone(prior.terms);next.commission.standardRateBps=1700;
+      fixture.o.repo.saveFromAdapter(prior.offerId,prior.version,next,"fictional-concurrent-offer-revision");
+    }
+    await route.abort("failed");
+  });
+  await page.getByRole("button",{name:"Review exact request",exact:true}).first().click();
+  const dialog=page.getByRole("dialog",{name:"Review exact invitation request"});
+  await dialog.getByRole("button",{name:"Create immutable approval preview",exact:true}).click();
+  await expect(page.getByRole("link",{name:"Open immutable invitation preview",exact:true}).first()).toHaveAttribute("href",/\/approvals\//);
+  const originalUrl=page.url();expect(originalUrl).toContain("previewRequestKey=");expect(originalUrl).toContain("previewVersion=invitation-v1");
+  await page.reload();
+  await expect(page.getByRole("link",{name:"Open immutable invitation preview",exact:true}).first()).toHaveAttribute("href",`/approvals/${encodeURIComponent(approvalRef)}?version=v1`);
+  await expect(page.getByRole("button",{name:"Save invitation draft",exact:true})).toBeDisabled();
+  expect(previewKeys.length).toBeGreaterThan(0);expect(new Set(previewKeys).size).toBe(1);expect(fixture.o.repo.readOffer(fixture.offer.offerId)?.version).toBe("v2");
+  expect(fixture.drafts.read(saved.payload.draftId,fixture.principal)?.terms.offerVersion).toBe("v1");
+  expect(fixture.owner.state.contexts).toHaveLength(0);expect(app.store.database.prepare("SELECT count(*) n FROM job_runs").get()?.n).toBe(0);
 });
 
 test("proposed Social Cat terms save through the actual offer repository and remain proposals after reload",async({page})=>{
