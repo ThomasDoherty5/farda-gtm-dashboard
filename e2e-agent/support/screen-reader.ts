@@ -154,14 +154,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  const readLines=key==="Down";
  if(key==="KP_Add"||readLines)await browseFromStart();
  if(readLines){await press("h");await new Promise(resolve=>setTimeout(resolve,500));}
- if(key==="KP_Insert+KP_Enter"){
-   // The 10ca stock trace correctly returned focus to the trigger, so basic
-   // Where Am I repeated its button name rather than the separate status.
-   // Read the real AT-SPI status bar with Orca's documented desktop command.
-   // https://help.gnome.org/orca/commands_where_am_i.html
-   await run("xdotool",["key","--clearmodifiers","--repeat","2","--delay","100",key]);
-   osKeys.push(key,key);
- } else if(!readLines)await press(key);
+ if(!readLines)await press(key);
  let lineMoves=0,statusPresented=false;
  if(columns)await inspectHeaders();
  const speech=()=>speechSince(offset);

@@ -41,17 +41,27 @@ test("bounded stock drilldown, report filters and exact approval-only receipt th
   const inspect=page.getByRole("button",{name:"Open source for Home H1 / FARDA-GRAPHITE"});await expect(inspect).toBeFocused();
   await screenReaderCheckpoint(page,"stock-evidence-focus-return",inspect,["Open source","H1","button"]);
   const f=await fill(page);await f.getByLabel("Units").fill("999");
+  const transfer=page.getByRole("button",{name:"Request transfer",exact:true});
+  const inactiveTransfer=page.getByRole("button",{name:"Request transfer",exact:true,includeHidden:true});
+  await expect(inactiveTransfer).not.toHaveAttribute("aria-describedby");
   await screenReaderCheckpoint(page,"stock-form-error",f.getByRole("button",{name:"Save proposal for review"}),["Units exceed available stock"],"KP_Enter",async()=>{
     await f.getByRole("button",{name:"Save proposal for review"}).click();await expect(f.getByRole("alert")).toHaveText("Units exceed available stock.");
   });
   await f.getByLabel("Units").fill("8");
-  await screenReaderCheckpoint(page,"stock-proposal-status",page.getByRole("button",{name:"Request transfer",exact:true}),["recorded for human review","No source action was executed"],"KP_Insert+KP_Enter",async()=>{
+  await screenReaderCheckpoint(page,"stock-proposal-status",transfer,["recorded for human review","No source action was executed"],"KP_Enter",async()=>{
     await f.getByRole("button",{name:"Save proposal for review"}).focus();await page.keyboard.press("Enter");
-    await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();
+    const receipt=page.getByRole("status").filter({hasText:"recorded for human review"});
+    await expect(receipt).toBeVisible();await expect(receipt).toHaveAttribute("aria-atomic","true");
+    await expect(transfer).toHaveAttribute("aria-describedby",(await receipt.getAttribute("id"))!);
+    await expect(transfer).toHaveAccessibleDescription((await receipt.textContent())!);
   });
   await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toBeVisible();await expect(page.getByText("Transfer proposals awaiting review")).toBeVisible();
   await expect(page.getByRole("dialog",{name:"Request transfer",exact:true})).not.toBeVisible();
   await expect(page.getByRole("button",{name:"Request transfer",exact:true})).toBeFocused();
+  await transfer.click();await expect(f).toBeVisible();
+  await expect(inactiveTransfer).not.toHaveAttribute("aria-describedby");
+  await expect(page.getByRole("status").filter({hasText:"recorded for human review"})).toHaveCount(0);
+  await f.getByRole("button",{name:"Return to record",exact:true}).click();
   await page.getByRole("button",{name:"Close evidence",exact:true}).click();await expect(page.getByRole("button",{name:"Open inventory",exact:true})).toBeFocused();
   await expect(table).toContainText("100");expect(app.store.database.prepare("SELECT count(*) n FROM stock_support_reviews WHERE status='recorded'").get()?.n).toBe(1);
   await stockFilter(page).click();dlg=page.getByRole("dialog",{name:"Stock filters"});await dlg.getByLabel("Reporting period").selectOption("prior");await dlg.getByRole("button",{name:"Apply filters"}).click();await expect(table).toContainText("FARDA-GRAPHITE-2");await expect(table).toContainText("Unknown");
