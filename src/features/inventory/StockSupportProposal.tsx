@@ -36,7 +36,7 @@ const reasons={transfer:["low-stock","order-shortage","sample-shortage","rebalan
 const options=(items:string[])=>[{value:"",label:"Choose an option"},...items.map(value=>({value,label:value.replaceAll("-"," ")}))];
 
 export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=false}:{data:NativeStock|NativeSupport;res:ReadResponse<unknown>;portalTarget?:HTMLElement|null;hideTrigger?:boolean}){
-  const invalidId=useId();
+  const invalidId=useId(),statusId=useId();
   const stock=data.kind==="source-stock",ctx=useScope(),client=useQueryClient(),action=useAction<StockIntent>();
   const filters=stock?data.selected:{caseId:data.caseId};
   const localKey="stock-support-request:"+canonical([scopeKey(ctx),data.actorRef,data.kind,stock?null:data.caseId]);
@@ -54,7 +54,7 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
   const formHold=retrying?null:blocked;
   const marker=(m:Marker|null)=>{keep(localKey,m);setPending(m);};
   function show(){
-    action.reset();setInvalid("");setBase(pending?.base??data.revision);
+    action.reset();setInvalid("");setStatus("");setBase(pending?.base??data.revision);
     const original=pending?.payload,transfer=original&&"units" in original?original:null;
     setFrom(transfer?.from??(stock?data.selected.home??"":""));setSku(transfer?.sku??(stock?data.selected.sku??data.skus[0]??"":""));
     setTo(transfer?.to??"");setUnits(transfer?String(transfer.units):"");setReason(original?.reasonCode??"");setOpen(true);
@@ -111,9 +111,9 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
   }
   const close=()=>{if(dirty)setDiscard(true);else setOpen(false);};
   const controls=<>
-    {(!hideTrigger||portalTarget)&&<Button variant="secondary" aria-haspopup="dialog" disabledReason={pending?"Resolve the previous request before creating another.":blocked} onClick={show}>{label}</Button>}
+    {(!hideTrigger||portalTarget)&&<Button variant="secondary" aria-haspopup="dialog" aria-describedby={status?statusId:undefined} disabledReason={pending?"Resolve the previous request before creating another.":blocked} onClick={show}>{label}</Button>}
     {pending&&<><Button loading={busy} onClick={()=>void reconcile(pending)}>Reconcile exact request</Button>{absent&&<Button onClick={show}>Review original request</Button>}</>}
-    {status&&<p role="status">{status}</p>}
+    {status&&<p id={statusId} role="status" aria-atomic="true">{status}</p>}
     <Dialog open={open} title={label} onClose={close}><p>This saves a local proposal for human review. The source owner controls execution.</p>
       {pending&&<p>Original source version {pending.base}. {"windowRef" in pending.payload?"Reporting period "+pending.payload.windowRef+".":""} Only this original request can be retried.</p>}
       <form className={styles.form} onSubmit={e=>{e.preventDefault();void submit();}}>

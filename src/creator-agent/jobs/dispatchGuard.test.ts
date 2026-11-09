@@ -55,6 +55,51 @@ describe("approved dispatch guard using actual scoped SQLite/jobs", () => {
     it("unknown readback cannot release a pending key; definitive current absence permits only the original key", async () => { handler.execute = async () => { called++; return { state: "unknown", reasonCode: "TIMEOUT" }; }; const run = await handoff(); await guard.execute(run.runRef); expect((await guard.reconcile(run.runRef)).current.state).toBe("uncertain"); handler.reconcile = async (c) => ({ state: "notApplied",attemptRef:c.attemptRef,attemptNumber:c.attemptNumber, dispatchKey: c.dispatchKey, payloadHash: c.intent.approval.payloadHash, handlerRef: c.intent.handlerRef, providerBindingHash: c.providerBindingHash, receiptRef: "synthetic-absence", observedAt: new Date(now).toISOString(), validUntil: new Date(now + 1000).toISOString(), complete: true, originalAttemptClosed: true }); const retriable = await guard.reconcile(run.runRef); expect(retriable.executionCertainty).toBe("notApplied"); handler.execute = async (c) => { called++; return applied(c); }; await guard.execute(run.runRef); expect(called).toBe(2); expect(db.prepare("SELECT COUNT(DISTINCT dispatch_key) AS n FROM job_dispatch_attempts").get()?.n).toBe(1); });
     it("heartbeats are capped by run time, proof expiry and never revive an expired lease", async () => { let context: DispatchContext | undefined; const pending = deferred<DispatchReadback>(); handler.execute = async (c) => { context = c; return pending.promise; }; const run = await handoff(); const execute = guard.execute(run.runRef); await new Promise(r => setTimeout(r, 0)); now += 500; expect(Date.parse(await context!.heartbeat())).toBe(now + 1000); now += 1001; await expect(context!.heartbeat()).rejects.toThrow("JOB_LEASE_FENCED"); pending.resolve(applied(context!)); await execute; });
     it("does not claim a changed registered handler under an old manifest", async () => { const run = await handoff(); handler.resources = () => ({ budget: na, stock: { state: "required", resourceRef: "synthetic-sku-home", quantity: 1, unit: "unit", currency: null }, quota: na }); await expect(guard.execute(run.runRef)).rejects.toThrow("DISPATCH_HANDLER_CHANGED"); expect(called).toBe(0); });
+    it("cancels only selected unsent rows and executes the other original item", async () => {
+        const run=await guard.handoffBatch([intent("synthetic-selected"),intent("synthetic-retained")],{principalRef:"synthetic-principal",idempotencyKey:"synthetic-finite"});
+        const cancelled=guard.control(run.runRef,run.revision,"cancel",{principalRef:"synthetic-principal",idempotencyKey:"synthetic-cancel-one"},["synthetic-selected"]);
+        expect(cancelled.run.control).toBe("active");expect(cancelled.run.counts.cancelled).toBe(1);expect(cancelled.controlReceipt?.itemRefs).toEqual(["synthetic-selected"]);
+        const done=await guard.execute(run.runRef);expect(called).toBe(1);expect(done.run.counts).toMatchObject({cancelled:1,completed:1});
+        expect(done.items.find(i=>i.intent.approval.itemRef==="synthetic-selected")?.receipt).toBeNull();
+    });
+    it("atomically rejects a mixed leased/unsent selection and retains the late original receipt",async()=>{
+        const pending=deferred<DispatchReadback>();let context:DispatchContext|undefined;
+        handler.execute=async c=>{called++;context=c;return pending.promise;};
+        const run=await guard.handoffBatch([intent("synthetic-first"),intent("synthetic-second")],{principalRef:"synthetic-principal",idempotencyKey:"synthetic-finite"});
+        const executing=guard.execute(run.runRef);await new Promise(r=>setTimeout(r,0));
+        const current=guard.read(run.runRef),started=context!.intent.approval.itemRef,unsent=current.items.find(i=>i.intent.approval.itemRef!==started)!.intent.approval.itemRef;
+        expect(()=>guard.control(run.runRef,current.revision,"cancel",undefined,[unsent,started])).toThrow("ITEM_NOT_UNSENT");
+        expect(guard.read(run.runRef).run.counts.cancelled).toBe(0);
+        guard.control(run.runRef,current.revision,"cancel",undefined,[unsent]);
+        pending.resolve(applied(context!));const done=await executing;
+        expect(called).toBe(1);expect(done.run.counts).toMatchObject({completed:1,cancelled:1});
+        expect(done.items.find(i=>i.intent.approval.itemRef===started)?.receipt).not.toBeNull();
+    });
+    it("does not turn an uncertain original submission into a canceled unsent row",async()=>{
+        handler.execute=async()=>{called++;return {state:"unknown",reasonCode:"SYNTHETIC_TIMEOUT"};};
+        const run=await handoff();await guard.execute(run.runRef);const current=guard.read(run.runRef);
+        expect(()=>guard.control(run.runRef,current.revision,"cancel",undefined,["synthetic-item"])).toThrow("ITEM_NOT_UNSENT");
+        expect(guard.read(run.runRef).executionCertainty).toBe("uncertain");expect(called).toBe(1);
+    });
+    it("replays selected cancellation across restart and binds its exact finite set",async()=>{
+        const run=await guard.handoffBatch([intent("synthetic-a"),intent("synthetic-b"),intent("synthetic-c")],{principalRef:"synthetic-principal",idempotencyKey:"synthetic-finite"});
+        const request={principalRef:"synthetic-principal",idempotencyKey:"synthetic-cancel-selected"};
+        const first=guard.control(run.runRef,run.revision,"cancel",request,["synthetic-b","synthetic-a"]);
+        ({guard,jobs}=build());const replay=guard.control(run.runRef,run.revision,"cancel",request,["synthetic-a","synthetic-b"]);
+        expect(replay.controlReceipt).toEqual(first.controlReceipt);expect(replay.revision).toBe(first.revision);
+        expect(guard.lookupControl(run.runRef,run.revision,"cancel",request,["synthetic-a","synthetic-b"])?.controlReceipt).toEqual(first.controlReceipt);
+        expect(()=>guard.control(run.runRef,run.revision,"cancel",request,["synthetic-c"])).toThrow("DISPATCH_IDEMPOTENCY_KEY_REUSED");
+        expect(()=>guard.control(run.runRef,run.revision,"cancel",request)).toThrow("DISPATCH_IDEMPOTENCY_KEY_REUSED");
+        expect(()=>guard.control(run.runRef,run.revision,"cancel",{...request,idempotencyKey:"synthetic-new-key"},["synthetic-c"])).toThrow("DISPATCH_VERSION_CONFLICT");
+        expect(called).toBe(0);
+    });
+    it("refuses foreign, duplicate, empty or noncancel selections",async()=>{
+        const run=await handoff();
+        expect(()=>guard.control(run.runRef,run.revision,"cancel",undefined,["synthetic-foreign"])).toThrow("EXACT_RUN_ITEM_REQUIRED");
+        for(const refs of [[],["synthetic-item","synthetic-item"]])expect(()=>guard.control(run.runRef,run.revision,"cancel",undefined,refs)).toThrow("INVALID_ITEM_SELECTION");
+        expect(()=>guard.control(run.runRef,run.revision,"pause",undefined,["synthetic-item"])).toThrow("INVALID_ITEM_SELECTION");
+        expect(guard.read(run.runRef).run.counts.cancelled).toBe(0);
+    });
     it("runs a finite homogeneous manifest in ONE native run, with independent item receipts and whole-run cancellation", async () => {
         const inputs = [intent("synthetic-batch-a"), intent("synthetic-batch-b")];
         const run = await guard.handoffBatch(inputs, { principalRef: "synthetic-principal", idempotencyKey: "synthetic-batch" });

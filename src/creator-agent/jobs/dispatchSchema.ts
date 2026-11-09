@@ -97,6 +97,7 @@ export type DispatchRead = {
         command: "pause" | "resume" | "cancel";
         expectedRevision: number;
         appliedRevision: number;
+        itemRefs?: string[];
     };
 };
 export class DispatchError extends Error {

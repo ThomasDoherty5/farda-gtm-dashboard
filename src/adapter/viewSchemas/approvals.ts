@@ -220,7 +220,7 @@ export const approvalActionSchemas: Record<string, { payload: z.ZodTypeAny }> = 
   previewAction: { payload: previewPayload },
   requestApproval: { payload: z.object({}).strict() },
   reconcileApproval: { payload: z.object({}).strict() },
-  cancelUnsent: { payload: z.object({ control: z.literal("cancel") }).strict() },
+  cancelUnsent: { payload: z.object({ control: z.literal("cancel"),itemRefs:z.array(reference).min(1).max(100).refine(v=>new Set(v).size===v.length).optional() }).strict() },
   resumeRun: { payload: z.object({ control: z.literal("resume") }).strict() },
   exportLedger: { payload: exportPayloadSchema },
   recordLaunchReadiness: { payload: readinessPayloadSchema },

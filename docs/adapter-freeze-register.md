@@ -181,6 +181,7 @@ Named in `ReadResponse.capabilities` (and, for some, in a screen's `disabledReas
 | `saveEvidenceDraft` | `available` | `evidenceRecord` | `acquisition/EvidencePage` | conflict (C-15) |
 | `saveFlowDraft` | `available` | `emailFlow` | none | conflict (C-15) |
 | `saveOfferDraft` | `available` | `offerDraft` | none | conflict (C-15) |
+| `saveRecruitmentInvitation` | native `available` only with current source, named reviewer and exact offer; otherwise `held` | `invitationDraft` with recruitment context | `recruitment/NativeInvitationPage` | configurationDraft save only; no provider effect |
 | `saveScheduleDraft` | `available` | `scheduleDetail` | `settings/SchedulePage` | conflict (C-15) |
 | `sendInvitation` | `unverified` (`SOURCE_ACCESS_UNVERIFIED`) (demo); native `denied` (`REVIEWER_REQUIRED`) for a reader, `held` (`INVITATION_ACTIONS_NOT_CONNECTED`) for a reviewer | `invitationDraft` | `recruitment/InvitationPage` | proposed |
 | `startLiveDiscovery` | `unverified` (`SOURCE_ACCESS_UNVERIFIED`) | `discoverySummary` | `acquisition/DiscoveryPage` | proposed |

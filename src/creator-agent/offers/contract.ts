@@ -116,6 +116,9 @@ export const offerRecordSchema = z.object({
     rewardVersion:id.nullable(),reasonCodes:z.array(id),replyRevision:count}).strict().optional(),
 }).strict();
 export type OfferRecord = z.infer<typeof offerRecordSchema>;
+export const offerSaveRecoverySchema = z.object({ requestKey: id, expectedVersion: id.nullable(), payloadDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  state: z.enum(["recorded", "notFound"]), record: offerRecordSchema.nullable(), confersRetry: z.literal(false) }).strict();
+export type OfferSaveRecovery = z.infer<typeof offerSaveRecoverySchema>;
 export type ProviderFacts = z.infer<typeof providerFactsSchema>;
 
 export const rewardsRecordSchema = z.object({

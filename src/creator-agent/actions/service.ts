@@ -159,10 +159,19 @@ export function createActionService(options: ActionServiceOptions) {
     if (input.operation === "controlRun") {
       const allowed = { pauseRun: "pause", cancelUnsent: "cancel", resumeRun: "resume" } as const;
       if (allowed[input.actionKind] !== input.payload.control) fail("VALIDATION_FAILED", 422);
-      return runResponse(input, a, dispatch.control(run.runRef, original.revision, input.payload.control, { principalRef: principal.principalRef, idempotencyKey: input.idempotencyKey }), true);
+      return runResponse(input, a, dispatch.control(run.runRef, original.revision, input.payload.control, { principalRef: principal.principalRef, idempotencyKey: input.idempotencyKey },input.payload.control==="cancel"?selectedRunItems(run,input.payload.itemRefs):undefined), true);
     }
     if (input.actionKind !== input.payload.request) fail("VALIDATION_FAILED", 422);
     return runResponse(input, a, await dispatch.reconcile(run.runRef));
+  }
+  function selectedRunItems(run:DispatchRead,refs?:readonly string[]){
+    if(refs===undefined)return undefined;
+    const selected=refs.map(ref=>{
+      const item=run.items.find(i=>i.intent.approval.itemRef===ref||alias("item",i.intent.approval.itemRef)===ref);
+      if(!item)fail("EXACT_RUN_ITEM_REQUIRED",422);return item.intent.approval.itemRef;
+    });
+    if(new Set(selected).size!==selected.length)fail("INVALID_ITEM_SELECTION",422);
+    return selected;
   }
   function priorCertainty(input: FoundationAction, principal: ApprovalPrincipal): ActionResponse["executionCertainty"] | null {
     if (input.operation === "previewAction") {
@@ -182,7 +191,7 @@ export function createActionService(options: ActionServiceOptions) {
     if (input.operation === "controlRun") {
       const run = dispatch.read(input.runRef, false); approval(run.intent.approval.approvalRef, principal, run.intent.approval.manifestVersion);
       const expected = version(input.expectedVersion, "run", input.runRef);
-      return dispatch.lookupControl(input.runRef, expected.revision, input.payload.control, { principalRef: principal.principalRef, idempotencyKey: input.idempotencyKey }) ? "applied" : null;
+      return dispatch.lookupControl(input.runRef, expected.revision, input.payload.control, { principalRef: principal.principalRef, idempotencyKey: input.idempotencyKey },input.payload.control==="cancel"?selectedRunItems(run,input.payload.itemRefs):undefined) ? "applied" : null;
     }
     if (input.operation === "reconcileRun") {
       const run = dispatch.read(input.runRef, false); approval(run.intent.approval.approvalRef, principal, run.intent.approval.manifestVersion); return run.executionCertainty;

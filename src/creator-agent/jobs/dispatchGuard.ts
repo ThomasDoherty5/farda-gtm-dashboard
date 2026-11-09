@@ -4,7 +4,7 @@ import { assertSynchronousVoid } from "../sourceFence.ts";
 import type { CapabilityLedger } from "../connections/ledger.ts";
 import type { ApprovalScope, VerifiedApprovalProof } from "../approvals/contract.ts";
 import { approvalRefSchema } from "../approvals/contract.ts";
-import { JobRepository } from "./repository.ts";
+import { JobRepository, JobConflict } from "./repository.ts";
 import { dispatchIntentSchema, dispatchReadbackSchema, grantSchema, providerRequirementSchema, resourceRequirementsSchema, DispatchError, type DispatchIntent, type DispatchHandler, type DispatchRead, type DispatchReceipt, type DispatchApprovalAuthority, type ResourceAuthority, type ResourceGrant, type ResourceRequirements, type DispatchReadback, type DispatchContext, type DispatchWorker } from "./dispatchSchema.ts";
 export type DispatchGuardOptions = {
     db: DatabaseSync;
@@ -364,17 +364,25 @@ export class DispatchGuard {
     catch {
         return false;
     } }
+    private controlSelection(runRef:string,command:"pause"|"resume"|"cancel",selected?:readonly string[]){
+        if(selected===undefined)return undefined;
+        if(command!=="cancel"||!selected.length||selected.length>100||new Set(selected).size!==selected.length)throw new DispatchError("INVALID_ITEM_SELECTION",422);
+        const rows=this.storedAll(runRef),itemRefs=[...selected].sort();
+        const itemKeys=itemRefs.map(ref=>{const row=rows.find(r=>r.intent.approval.itemRef===ref);if(!row)throw new DispatchError("EXACT_RUN_ITEM_REQUIRED",422);return row.dispatchKey;});
+        return {itemRefs,itemKeys};
+    }
     lookupControl(runRef: string, expectedRevision: number, command: "pause" | "resume" | "cancel", request: {
         principalRef: string;
         idempotencyKey: string;
-    }): DispatchRead | null { approvalRefSchema.parse(request.principalRef); approvalRefSchema.parse(request.idempotencyKey); const requestKey = digest({ scope: this.options.scope, actor: request.principalRef, key: request.idempotencyKey, operation: "dispatch-control" }); const old = this.db.prepare("SELECT * FROM job_dispatch_controls WHERE request_key=?").get(requestKey); if (!old)
-        return null; if (old.body_hash !== digest({ runRef, expectedRevision, command }))
+    },selected?:readonly string[]): DispatchRead | null { const selection=this.controlSelection(runRef,command,selected); approvalRefSchema.parse(request.principalRef); approvalRefSchema.parse(request.idempotencyKey); const requestKey = digest({ scope: this.options.scope, actor: request.principalRef, key: request.idempotencyKey, operation: "dispatch-control" }); const old = this.db.prepare("SELECT * FROM job_dispatch_controls WHERE request_key=?").get(requestKey); if (!old)
+        return null; if (old.body_hash !== digest({ runRef, expectedRevision, command,...(selection?{itemRefs:selection.itemRefs}:{}) }))
         throw new DispatchError("DISPATCH_IDEMPOTENCY_KEY_REUSED"); return { ...this.read(runRef, false), controlReceipt: JSON.parse(String(old.receipt)) as NonNullable<DispatchRead["controlReceipt"]> }; }
     control(runRef: string, expectedRevision: number, command: "pause" | "resume" | "cancel", request?: {
         principalRef: string;
         idempotencyKey: string;
-    }): DispatchRead {
+    },selected?:readonly string[]): DispatchRead {
         this.stored(runRef);
+        const selection=this.controlSelection(runRef,command,selected);
         if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0)
             throw new DispatchError("DISPATCH_VERSION_CONFLICT");
         if (request) {
@@ -382,18 +390,31 @@ export class DispatchGuard {
             approvalRefSchema.parse(request.idempotencyKey);
         }
         const requestKey = request ? digest({ scope: this.options.scope, actor: request.principalRef, key: request.idempotencyKey, operation: "dispatch-control" }) : null;
-        const bodyHash = digest({ runRef, expectedRevision, command });
+        const bodyHash = digest({ runRef, expectedRevision, command,...(selection?{itemRefs:selection.itemRefs}:{}) });
         const prior = () => requestKey ? this.db.prepare("SELECT * FROM job_dispatch_controls WHERE request_key=?").get(requestKey) : undefined;
         const validatePrior = () => { const old = prior(); if (old && old.body_hash !== bodyHash)
             throw new DispatchError("DISPATCH_IDEMPOTENCY_KEY_REUSED"); return old; };
         const existing = validatePrior();
-        if (!existing)
-            this.jobs.controlRun(runRef, command, () => { if (validatePrior())
+        if (!existing){
+            const assertCurrent=() => { if (validatePrior())
                 return false; if (expectedRevision !== this.revision(runRef))
-                throw new DispatchError("DISPATCH_VERSION_CONFLICT"); }, () => { if (request && requestKey) {
-                const receipt = { requestKey: request.idempotencyKey, principalRef: request.principalRef, command, expectedRevision, appliedRevision: this.revision(runRef) };
+                throw new DispatchError("DISPATCH_VERSION_CONFLICT"); };
+            const persist=() => { if (request && requestKey) {
+                const receipt = { requestKey: request.idempotencyKey, principalRef: request.principalRef, command, expectedRevision, appliedRevision: this.revision(runRef),...(selection?{itemRefs:selection.itemRefs}:{}) };
                 this.db.prepare("INSERT INTO job_dispatch_controls VALUES(?,?,?,?)").run(requestKey, bodyHash, runRef, JSON.stringify(receipt));
-            } });
+            } };
+            if(selection) {
+                try { this.jobs.cancelUnsentItems(runRef,selection.itemKeys,assertCurrent,persist); }
+                catch(error) {
+                    // The existing transaction rolls back both selected rows and the control receipt.
+                    // Only known finite-selection conflicts cross the public action boundary.
+                    if(error instanceof JobConflict && ["INVALID_ITEM_SELECTION","APPROVED_DISPATCH_REQUIRED","ITEM_NOT_IN_RUN","ITEM_NOT_UNSENT","ITEM_SHARED_WITH_OTHER_RUN"].includes(error.message))
+                        throw new DispatchError(error.message,error.message==="INVALID_ITEM_SELECTION"?422:409,"notApplied");
+                    throw error;
+                }
+            }
+            else this.jobs.controlRun(runRef,command,assertCurrent,persist);
+        }
         const saved = validatePrior();
         return { ...this.read(runRef), ...(saved ? { controlReceipt: JSON.parse(String(saved.receipt)) as NonNullable<DispatchRead["controlReceipt"]> } : {}) };
     }

@@ -1,0 +1,19 @@
+# Source-bound recruitment workspaces
+
+These application views compose the existing offer repository, exact approval manifests and finite job runner. They do not create a provider database, scheduler, commission ledger or source permission.
+
+| Original frame | Route and component | Source and controls |
+| --- | --- | --- |
+| Social Cat recruitment, `38:131` | `/creators/social-cat/recruitment`, `NativeRecruitment` and `RecruitmentOfferTerms` | Source-owned queue membership; Instagram and TikTok publishing filters; exact assessment/offer selection; six proposed-term groups; separate rights, sample and content gates; read-only historical deal classes. |
+| Invitation, `38:348` | `/creators/tiktok/invitations/new`, `NativeInvitationPage` | `invitationDraft` with `context: recruitment`; exact creator, offer/version, provider product/program, message/claims basis, supported timestamps and sample proposal. Saved offer changes use the existing versioned offer editor. |
+| Finite batch, `66:821` | `/batches/:batchId`, `NativeBatchPage` | `batchDetail` with `context: recruitment`; current source membership joined to the actual canonical approval and run; pause, selected known-unsent cancellation, item recovery, held rows, native capacity units and checkout-selected model status. |
+
+The original shared shell, six-button navigation, violet context panels, four-KPI grids, wide/narrow panel pair, numbered workflow tiles, dark invitation panel, outcome and held-row tables use the existing design-system tokens and components. Responsive grids stack at the established breakpoints; wide tables retain labeled keyboard-scroll regions. Native state determines content and height: unknown planning allocations and capacity remain Unknown, explicit recovery/permission reasons are visible, and additional controls save/recover actual local revisions. The original example's fixed historical scores, illustrative rates, outcomes and deadlines are never copied into native source facts. Full original and native screenshots remain private; synthetic cloud captures contain fictional fixtures only.
+
+Invitation drafts are immutable configuration revisions. A save receipt binds scope, actor, original request key, expected version and payload digest. Lost acknowledgments recover from that same durable receipt; absence does not authorize a fresh key. A source-owned invitation handler must qualify the exact saved proposal before the existing approval service can prepare a manifest. The composer cannot send. Current approval pages link recorded recruitment runs to their finite batch view; unrelated runs keep their own domain view.
+
+Batch selection is bound to the current run version, source version and filters. A canceled selection cannot include attempted, running, uncertain or receipt-confirmed items. Existing runner idempotency and original-outcome reconciliation remain authoritative. Quota, collaboration slots, sample units and cost use separate source-native units. Forecast commission is never a cap on earned obligations.
+
+Source/actor leases are bounded, with earlier sample deadlines and accepted-proof expiry limiting displayed validity. A supported PENDING Open sample request may show verified API capability only with its source grant; other routes need independent permission. Permission denial 16022020 stays an owner handoff. Synthetic links cannot launch provider actions.
+
+Verification includes actual shared-SQLite HTTP journeys, source/actor/version denial, material changes after awaits, final publication fences, selected cancellation, original-key recovery, responsive full-page captures, axe and the existing actual screen-reader CI. These prove the labeled application integration stage. An unconfigured hosted source stays held; fixture acceptance does not qualify or activate a live provider.

@@ -129,6 +129,18 @@ export class OfferRepository {
     return !!latest && latest.version===version && latest.manifestHash===manifestHash;
   }
   readOffer(id:string,revision?:number) {const s=this.snapshot(routeId.parse(id),revision);return s?this.project(s):null;}
+  /** Read the original immutable draft command. Absence never closes a delayed save. */
+  readSaveRequest(offerId:string,expectedVersion:string|null,requestKey:string,payloadDigest:string) {
+    routeId.parse(offerId);id.parse(requestKey);z.string().regex(/^[a-f0-9]{64}$/).parse(payloadDigest);
+    const row=this.db.prepare("SELECT hash,body FROM offer_commands WHERE key=?").get(requestKey);
+    const base={requestKey,expectedVersion,payloadDigest,confersRetry:false as const};
+    if(!row)return {...base,state:"notFound" as const,record:null};
+    const parsed=offerRecordSchema.safeParse(JSON.parse(String(row.body)));
+    if(!parsed.success||parsed.data.offerId!==offerId||row.hash!==payloadDigest||
+      digest({id:offerId,expected:expectedVersion,terms:parsed.data.terms,job:null,operation:"offer-propose"})!==payloadDigest)
+      throw new OfferPolicyError("OFFER_SAVE_RECOVERY_MISMATCH",{status:403,reasonCodes:["OFFER_SAVE_RECOVERY_MISMATCH"]});
+    return {...base,state:"recorded" as const,record:parsed.data};
+  }
   private withJob(record:OfferRecord,job?:OfferJobEnvelope):OfferRecord {
     if(!job)return record;
     if(this.readJobReceipt(record.offerId,job.correlationId))throw new AgentConflict("JOB_CORRELATION_ALREADY_USED");

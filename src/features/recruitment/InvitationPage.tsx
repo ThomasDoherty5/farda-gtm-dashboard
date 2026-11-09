@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useScope } from "@/adapter/scope";
+import { NativeInvitationPage } from "./NativeInvitationPage";
 import type { ReadResponse } from "@/adapter/contract";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
@@ -20,6 +22,10 @@ const errorOf = (c: Check) => (c.ok ? null : c.error);
 
 /** TikTok native invitation (Figma source 38:348, owner THO-298). An exact draft: nothing here sends, approves or reaches TikTok. */
 export function InvitationPage() {
+  const ctx = useScope();
+  return ctx.adapter.kind === "demo" ? <DemoInvitationPage /> : <NativeInvitationPage />;
+}
+function DemoInvitationPage() {
   const query = useView<Record<string, never>, InvitationData>("invitationDraft", {});
   return (
     <section aria-labelledby="inv-title" data-figma-source="38:348" className={acquisition.page}>
