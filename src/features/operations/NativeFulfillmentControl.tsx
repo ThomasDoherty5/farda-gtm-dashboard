@@ -15,11 +15,20 @@ import styles from "./Operations.module.css";
 const markerSchema = z.object({ requestKey: z.string().min(1), kind: z.enum(["shippingDecision", "returnTask"]), targetRef: z.string().min(1), planRef: z.string().min(1), version: z.string().min(1) }).strict();
 type Marker = z.infer<typeof markerSchema>;
 type Payload = { kind: FulfillmentKind; targetRef: string; planRef: string; reason: string };
-export function NativeFulfillmentControl({ kind, targetRef, label }: { kind: FulfillmentKind; targetRef: string | null; label: string }) {
+export function NativeFulfillmentControl({ kind, targetRef, label, inline = false }: { inline?: boolean; kind: FulfillmentKind; targetRef: string | null; label: string }) {
   const ctx = useScope();
   const [open, setOpen] = useState(false);
+  if (inline) return targetRef ? <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} /> : <HeldReturnFields reason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action." />;
   if (!targetRef) return <HeldOperationButton disabledReason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action.">{label}</HeldOperationButton>;
   return <><Button aria-haspopup="dialog" onClick={() => setOpen(true)}>{label}</Button><Dialog open={open} title={kind === "returnTask" ? "Prepare the source return plan" : "Record the next step"} onClose={() => setOpen(false)}>{open && <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} />}<Button variant="secondary" onClick={() => setOpen(false)}>Close plan review</Button></Dialog></>;
+}
+function HeldReturnFields({ reason }: { reason: string }) {
+  return <div className={styles.stack}>
+    <SelectField label="Disposition" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source disposition unavailable"}]} helpText="Quarantine damaged or unverified stock. A source-inspected quantity is required." />
+    <SelectField label="Resolution" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source remedy unavailable"}]} helpText="Refund or a distinct replacement requires an exact source-reviewed plan." />
+    <TextField label="Reason" value="" onChange={() => undefined} disabled helpText="No customer conversation text is copied here. Source authority is unavailable." />
+    <HeldOperationButton disabledReason={reason}>Preview exact source plan</HeldOperationButton>
+  </div>;
 }
 function Proposal({ kind, targetRef }: { kind: FulfillmentKind; targetRef: string }) {
   const ctx = useScope();
@@ -43,7 +52,7 @@ function Proposal({ kind, targetRef }: { kind: FulfillmentKind; targetRef: strin
     action.mutate({ operation: "previewAction", actionKind: "previewFulfillmentDecision", entityRefs: [], expectedVersion: original.version, approvalRef: null, manifestRef: null, idempotencyKey: original.requestKey, payload: { kind, targetRef, planRef: original.planRef, reason: reason.trim() } });
   };
   const change = (setter: (value: string) => void) => (value: string) => { if (!marker) { setter(value); setPlanRef(""); } };
-  if (!data || query.isError || !leased || data.target.kind !== kind || data.target.ref !== targetRef) return <div role="status"><p>{query.isPending ? "Reading current source plans…" : "Source plans are unavailable or expired. No request is submitted automatically; check any original request before retrying."}</p><Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh source plans</Button></div>;
+  if (!data || query.isError || !leased || data.target.kind !== kind || data.target.ref !== targetRef) return <div>{kind === "returnTask" && <HeldReturnFields reason="Current complete source authority is unavailable. Refresh the original source plans." />}<p role="status">{query.isPending ? "Reading current source plans…" : "Source plans are unavailable or expired. No request is submitted automatically; check any original request before retrying."}</p><Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh source plans</Button></div>;
   const choices = data.plans.filter(item => (!quantity || String(item.inspectedQuantity) === quantity) && (!disposition || item.disposition === disposition) && (!resolution || item.remedy.kind === resolution));
   const recovery = data.recovery;
   const approvalRef = recovery?.state === "recorded" && recovery.requestKey === marker?.requestKey ? recovery.approvalRef : action.data?.approvalRef;

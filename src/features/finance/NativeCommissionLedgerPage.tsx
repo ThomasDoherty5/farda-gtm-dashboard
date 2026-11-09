@@ -5,7 +5,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
 import { scopeKey, useScope } from "@/adapter/scope";
 import type { ReadResponse } from "@/adapter/contract";
-import type { NativeCommissionLedger } from "@/creator-agent/settlements/contract";
+import type { NativeCommissionLedger, SettlementRecord } from "@/creator-agent/settlements/contract";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
@@ -63,7 +63,7 @@ function LedgerBody({ data, response, provider, changeProvider, pageNumber, prev
       <ul className={styles.statusBar} aria-label="Whole-snapshot source balances by state">{segments.map(segment => { const fact = data.stateTotals?.[segment.key]; return <li key={segment.key} data-state={segment.key} style={{ flex: `${quantitative && fact?.state === "known" ? fact.value.minorUnits : 1} 1 0px` }}>{segment.label} {fact?.state === "known" ? exactMoney(fact.value) : fact?.state === "notApplicable" ? "N/A" : "Unknown"}</li>; })}</ul>
       {!quantitative && <p className={styles.footnote}>Segment widths are not quantitative: complete source balances are unavailable or all balances are zero. Visible page rows are never used to calculate this distribution.</p>}
       <DataTable caption="Commission and historical obligation records" minWidth={1248} columns={[{ label: "Record / provider", width: "180px" }, { label: "Gross → eligible basis", width: "180px" }, { label: "Gross earned", width: "150px" }, { label: "Reversed", width: "140px" }, { label: "Net accrued", width: "160px" }, { label: "Current source state", width: "230px" }, { label: "Next action", width: "208px" }]} rows={data.records.map(row => [
-        <span key="identity" className={native.reference}><Link to={recordPath(row)} title={row.ref} aria-label={`Open ${row.provider === "externalManual" ? "historical payable" : "settlement"} ${row.ref}`}>{displayReference(row.ref)}</Link><br />{row.provider}</span>, `${moneyFact(row.grossSales)} → ${moneyFact(row.eligibleBase)}`, row.grossEarned ? moneyFact(row.grossEarned) : "Unknown · gross earned not supplied", row.reversed ? moneyFact(row.reversed) : "Unknown · reversal total not supplied", row.netAccrued ? moneyFact(row.netAccrued) : "Unknown · source accrual not supplied", <Badge key="state">{stateText[row.state]}</Badge>, <Button key="evidence" variant="secondary" aria-haspopup="dialog" onClick={() => setSelected(row.ref)}>Inspect evidence<span className="visually-hidden"> for {row.ref}</span></Button>,
+        <span key="identity" className={native.reference}><Link to={recordPath(row)} title={row.ref} aria-label={`Open ${row.provider === "externalManual" ? "historical payable" : "settlement"} ${row.ref}`}>{displayReference(row.ref)}</Link><br />{row.provider}</span>, `${moneyFact(row.grossSales)} → ${moneyFact(row.eligibleBase)}`, row.grossEarned ? moneyFact(row.grossEarned) : "Unknown · gross earned not supplied", row.reversed ? moneyFact(row.reversed) : "Unknown · reversal total not supplied", row.netAccrued ? moneyFact(row.netAccrued) : "Unknown · source accrual not supplied", <Badge key="state">{stateText[row.state]}</Badge>, <Button key="evidence" variant="secondary" aria-haspopup="dialog" onClick={() => setSelected(row.ref)}>{ledgerEvidenceLabel(row)}<span className="visually-hidden"> for {row.ref}</span></Button>,
       ])} />
       {(pageNumber > 1 || response.page.hasMore) && <nav className={native.filters} aria-label="Ledger pages"><Button variant="secondary" disabledReason={pageNumber === 1 ? "This is the first page." : undefined} onClick={previousPage}>Previous page</Button><span role="status">Page {pageNumber}</span><Button variant="secondary" disabledReason={!response.page.hasMore || !response.page.nextCursor ? "No next page was returned." : undefined} onClick={nextPage}>Next page</Button></nav>}
       {!data.records.length && <p>No financial records were returned for this provider and currency scope. Unknown amounts are not zero owed.</p>}
@@ -80,4 +80,13 @@ function LedgerBody({ data, response, provider, changeProvider, pageNumber, prev
     <FinancialEvidenceDialog record={record} onClose={() => setSelected(null)} />
     <NativeExportDialog open={exportOpen} data={data} response={response} onClose={() => setExportOpen(false)} />
   </>;
+}
+
+/** Navigation into independent evidence; none of these labels authorizes a source mutation. */
+function ledgerEvidenceLabel(record: SettlementRecord) {
+  if (record.state === "held") return "Review hold";
+  if (record.state === "disputed") return "Review dispute";
+  if (record.state === "awaitingProvider" || record.state === "awaitingCreator" || record.state === "earned" || record.state === "estimated") return "Inspect eligibility";
+  if (record.receipts.length > 0) return "View receipt";
+  return "Inspect evidence";
 }

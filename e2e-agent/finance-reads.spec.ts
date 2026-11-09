@@ -120,6 +120,26 @@ test("native ledger and every settlement frame retain evidence, held authority a
     await captureFinanceOperations(page, index === 0 ? "66:252" : "66:447");
     const axe = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
     expect(axe.violations).toEqual([]);
+    if(index===0){
+      const activation=page.getByRole("button",{name:"View activation exception",exact:true});
+      await activation.click();
+      const dialog=page.getByRole("dialog",{name:"Creator payout activation evidence",exact:true});
+      await expect(dialog).toContainText("No creator-activation exception observations were returned");
+      await page.keyboard.press("Escape");await expect(activation).toBeFocused();
+    }else{
+      const history=page.getByRole("button",{name:"Review historical terms",exact:true});
+      await history.click();
+      await expect(page.getByRole("dialog",{name:"Historical accepted terms",exact:true})).toContainText("Original source receipts");
+      await page.keyboard.press("Escape");await expect(history).toBeFocused();
+      await page.getByRole("link",{name:"Samples",exact:true}).click();
+      const inspect=page.getByRole("button",{name:/^Inspect sample evidence for /});
+      await inspect.click();
+      const sample=page.getByRole("dialog",{name:"Independent sample source evidence",exact:true});
+      await expect(sample).toContainText("Acceptance");await expect(sample).toContainText("Stock");await expect(sample).toContainText("Fulfillment");
+      await expect(sample).toContainText("not observed");
+      expect((await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze()).violations).toEqual([]);
+      await page.keyboard.press("Escape");await expect(inspect).toBeFocused();
+    }
   }
   expect(payable).toBeTruthy();
   await page.goto(payable!);

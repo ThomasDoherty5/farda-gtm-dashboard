@@ -42,7 +42,7 @@ async function setup(page:Page,kind:FulfillmentKind){
 }
 async function openPlan(page:Page,kind:FulfillmentKind){
   await page.getByRole("button",{name:kind==="returnTask"?"Prepare browser task":"Record next step",exact:true}).click();
-  const dialog=page.getByRole("dialog",{name:titleFor(kind),exact:true});
+  const dialog=page.getByRole(kind === "returnTask" ? "region" : "dialog",{name:titleFor(kind),exact:true});
   await expect(dialog).toBeVisible();return dialog;
 }
 async function choosePlan(page:Page,kind:FulfillmentKind){

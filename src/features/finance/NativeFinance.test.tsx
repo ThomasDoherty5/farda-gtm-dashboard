@@ -9,8 +9,9 @@ import { renderRoute, testClient } from "@/test/renderWithAdapter";
 import { moneyFact } from "./NativeFinance";
 
 beforeAll(() => {
-  HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
-  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+  const openers = new WeakMap<HTMLDialogElement, HTMLElement>();
+  HTMLDialogElement.prototype.showModal = function () { if (document.activeElement instanceof HTMLElement) openers.set(this, document.activeElement); this.setAttribute("open", ""); };
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); const opener=openers.get(this); if(opener?.isConnected)opener.focus(); openers.delete(this); };
 });
 
 const fixture = () => {
@@ -67,7 +68,7 @@ it("retains the historical accepted amount and shows absent execution evidence a
 });
 it("clears open financial evidence after a denied refetch", async () => {
   const { ledger } = fixture(), h = harness(ledger), user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: "Inspect evidence for collabs-one" }));
+  await user.click(await screen.findByRole("button", { name: "View receipt for collabs-one" }));
   expect(screen.getByRole("dialog", { name: "Financial source evidence" })).toHaveTextContent("collabs-one-receipt");
   h.state.denied = true;
   await act(async () => { await h.client.invalidateQueries(); });
@@ -136,5 +137,72 @@ it("keeps each native TikTok product scope explicit and does not infer an absent
   expect(within(standard).getByText("Fictional source-approved product set A")).toBeVisible();
   expect(within(screen.getByRole("region", { name: "Shop Ads commission" })).getByText("Unknown · source product scope not supplied")).toBeVisible();
   expect(within(standard).getByText("Effective time")).toBeVisible();
+  expect(h.requests).toHaveLength(0);
+});
+
+
+it("reviews typed activation evidence without inferring activation or retrying a provider failure", async () => {
+  const { source, payable } = fixture(), record = source.records.find(item => item.provider === "collabs")!;
+  record.exceptions = [{ref:"failure-only",reason:"PROVIDER_FAILURE",owner:"Provider",deadline:null,evidenceRef:"failure-receipt"}];
+  const data: NativeSettlement = {...payable,kind:"native-settlement",record}, h=harness(data,"/finance/settlements/collabs-one"), user=userEvent.setup();
+  const activation=await screen.findByRole("button",{name:"View activation exception"});
+  await user.click(activation);
+  const dialog=screen.getByRole("dialog",{name:"Creator payout activation evidence"});
+  expect(within(dialog).getByText(/No creator-activation exception observations/)).toBeVisible();
+  expect(within(dialog).queryByText("failure-only")).not.toBeInTheDocument();
+  expect(within(dialog).getByText("Creator paid")).toBeVisible();
+  await user.click(within(dialog).getByRole("button",{name:"Close activation evidence"}));
+  expect(activation).toHaveFocus();
+  await user.click(screen.getByRole("button",{name:"Review provider failure"}));
+  expect(screen.getByRole("dialog",{name:"Provider exceptions and recovery"})).toHaveTextContent("failure-only");
+  expect(h.requests).toHaveLength(0);
+});
+it.each([["held","Review hold"],["disputed","Review dispute"],["awaitingProvider","Inspect eligibility"],["creatorPaid","View receipt"]] as const)("opens independent %s evidence without submitting a payment",async(state,label)=>{
+  const {ledger}=fixture();ledger.records[0]!.state=state;
+  const h=harness(ledger),user=userEvent.setup();
+  await user.click(await screen.findByRole("button",{name:`${label} for collabs-one`}));
+  expect(screen.getByRole("dialog",{name:"Financial source evidence"})).toHaveTextContent("collabs-one-receipt");
+  expect(h.requests).toHaveLength(0);
+});
+
+it("retains crosswalk, statement differences and accounting effects inside read-only financial evidence",async()=>{
+  const {ledger}=fixture(),record=ledger.records[0]!;
+  record.netAccrued={state:"known",value:{currency:"USD",minorUnits:9000},evidenceRef:"net-basis",observedAt:"2026-11-07T12:00:00Z",reasonCode:null};
+  record.candidates=[{ref:"candidate-a",statementRef:"statement-a",componentRef:record.componentRef,amount:{currency:"USD",minorUnits:9500},periodStart:"2026-11-01T00:00:00Z",periodEnd:"2026-11-08T00:00:00Z",evidenceRef:"statement-evidence",problem:null}];
+  record.crosswalk.payeeRef="payee-evidence";
+  record.accounting={state:"unposted",qboRef:null,policyRef:"policy-a",policyVersion:"policy-v1",evidenceRef:"policy-proof"};
+  const h=harness(ledger),user=userEvent.setup();
+  await user.click(await screen.findByRole("button",{name:"View receipt for collabs-one"}));
+  const dialog=screen.getByRole("dialog",{name:"Financial source evidence"});
+  expect(within(dialog).getByText("payee-evidence")).toBeVisible();
+  expect(within(dialog).getByRole("table",{name:"Read-only statement differences"})).toHaveTextContent("USD 5.00");
+  expect(within(dialog).getByText("policy-v1")).toBeVisible();
+  expect(dialog).toHaveTextContent("not a confirmed accounting match");
+  expect(h.requests).toHaveLength(0);
+});
+
+it("shows original paid receipts inside historical TikTok terms without creating an offer",async()=>{
+  const {source,payable}=fixture(),record=source.records.find(item=>item.provider==="tiktok")!;
+  record.historical=payable.record!.historical;
+  const h=harness({...payable,kind:"native-settlement",record},"/finance/settlements/tiktok-one"),user=userEvent.setup();
+  await user.click(await screen.findByRole("button",{name:"Review historical terms"}));
+  const dialog=screen.getByRole("dialog",{name:"Historical accepted terms"});
+  expect(dialog).toHaveTextContent("tiktok-one-receipt");
+  expect(dialog).toHaveTextContent("Original source receipts");
+  expect(dialog).toHaveTextContent("Read only");
+  expect(h.requests).toHaveLength(0);
+});
+
+it("keeps sample acceptance, stock and fulfillment independently evidenced instead of inferring them from summary state",async()=>{
+  const {source,payable}=fixture(),record=source.records.find(item=>item.provider==="tiktok")!;
+  record.samples=[{ref:"sample-independent",state:"delivered",quantity:1,cost:source.money(0),evidenceRef:"sample-receipt",
+    acceptance:{state:"known",value:{state:"accepted",eventAt:"2026-11-07T11:00:00Z"},observedAt:"2026-11-07T12:00:00Z",evidenceRef:"acceptance-proof",reasonCode:null},
+    stock:{state:"known",value:{homeRef:"home-a",skuRef:"sku-a",availableUnits:0,reservedUnits:1},observedAt:"2026-11-07T12:00:00Z",evidenceRef:"stock-proof",reasonCode:null},fulfillment:null}];
+  const h=harness({...payable,kind:"native-settlement",record},"/finance/settlements/tiktok-one?tab=samples"),user=userEvent.setup();
+  await user.click(await screen.findByRole("button",{name:"Inspect sample evidence for sample-independent"}));
+  const dialog=screen.getByRole("dialog",{name:"Independent sample source evidence"});
+  expect(dialog).toHaveTextContent("acceptance-proof");expect(dialog).toHaveTextContent("0 available · 1 reserved");
+  expect(within(dialog).getByText("Unknown · independent source observation not supplied")).toBeVisible();
+  expect(within(dialog).getByRole("button",{name:"Open exact native sample"})).toHaveAttribute("aria-disabled","true");
   expect(h.requests).toHaveLength(0);
 });

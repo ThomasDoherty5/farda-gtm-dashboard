@@ -12,6 +12,7 @@ import { displayReference, exactMoney, FinancialEvidenceDialog, FinancialHeldBut
 import { SettlementExceptions } from "./NativeSettlementPage";
 import { SettlementMatchDialog } from "./NativeStatementMatch";
 import styles from "./Finance.module.css";
+import native from "./NativeFinance.module.css";
 
 const tabs = [{ key: "rates", label: "Rates & terms", width: 123 }, { key: "samples", label: "Samples", width: 100 }, { key: "settlement", label: "Native settlement", width: 151 }, { key: "exceptions", label: "Exceptions", width: 102 }] as const;
 const rateText = (fact: SettlementRecord["commissionRatePct"] | undefined) => !fact ? "Unknown" : fact.state === "known" ? `${fact.value}%` : fact.state === "notApplicable" ? "N/A" : "Unknown";
@@ -19,9 +20,11 @@ const rateText = (fact: SettlementRecord["commissionRatePct"] | undefined) => !f
 export function NativeTikTokSettlement({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
   const [params] = useSearchParams();
   const tab = tabs.find(item => item.key === params.get("tab"))?.key ?? "rates";
-  const [dialog, setDialog] = useState<"history" | "evidence" | "match" | "recovery" | null>(null);
+  const [dialog, setDialog] = useState<"history" | "evidence" | "match" | "recovery" | "sample" | null>(null);
   const tabTo = (key: string) => { const next = new URLSearchParams(params); if (key === "rates") next.delete("tab"); else next.set("tab", key); return `${recordPath(record)}${next.size ? `?${next}` : ""}`; };
   const historical = record.historical;
+  const [selectedSample, setSelectedSample] = useState<string | null>(null);
+  const sample = record.samples.find(item => item.ref === selectedSample);
   const lane = (key: "standard" | "shopAds", title: string, tone: "violet" | "subtle") => {
     const rate = record.rates.find(item => item.lane === key);
     return <section className={styles.lane} data-tone={tone} aria-labelledby={`native-rate-${key}`}><h3 id={`native-rate-${key}`}>{title}</h3><p className={styles.footnote}>{key === "standard" ? "Organic / native affiliate context" : "Eligible ad-driven order context"}</p>
@@ -58,20 +61,33 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
       <Panel title="Missing API action routes to a validated browser task." large roomy subtitle="A missing API does not grant permission. A native browser route requires its own verified authority.">
         <ul className={styles.chips} aria-label="Source action requirements"><li><Badge>Verified source capability</Badge></li><li><Badge tone="violet">Exact approved decision</Badge></li><li><Badge>Current source permission</Badge></li><li><Badge>Original native receipt</Badge></li></ul>
         <p className={styles.footnote}>Use the actual request and program deadline. Login/MFA, denied access, UI drift and uncertain submission require source-owner recovery; do not repeat an unknown request.</p>
-        <div className={styles.actionsRow}><FinanceSourceLink record={record} kind="sample" label="Open sample request" /><Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("recovery")}>Reconcile unknown result</Button><Button variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("recovery")}>Request takeover</Button></div>
+        <div className={styles.actionsRow}><FinanceSourceLink record={record} kind="sample" label="Open sample request" /><Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("recovery")}>Reconcile unknown result</Button><FinancialHeldButton reason="A connected source owner and exact request authority are required. No takeover request has been sent.">Request takeover</FinancialHeldButton></div>
       </Panel>
     </> : tab === "samples" ? <Panel title="Samples" large roomy subtitle="Provider-scoped source evidence; opening this tab changes nothing.">
-      <DataTable caption="Native sample requests" columns={[{ label: "Sample" }, { label: "Source state" }, { label: "Quantity" }, { label: "Cost" }, { label: "Evidence" }]} rows={record.samples.map(sample => [sample.ref, sample.state, sample.quantity === null ? "Unknown" : String(sample.quantity), moneyFact(sample.cost), sample.evidenceRef ?? "Unknown"])} />
+      <DataTable caption="Native sample requests" columns={[{ label: "Sample" }, { label: "Source state" }, { label: "Quantity" }, { label: "Cost" }, { label: "Evidence" }]} rows={record.samples.map(sample => [sample.ref, sample.state, sample.quantity === null ? "Unknown" : String(sample.quantity), moneyFact(sample.cost), <Button key="inspect" variant="secondary" aria-haspopup="dialog" onClick={()=>{setSelectedSample(sample.ref);setDialog("sample");}}>Inspect sample evidence<span className="visually-hidden"> for {sample.ref}</span></Button>])} />
       {!record.samples.length && <p>No sample observations were returned for this record.</p>}<FinanceSourceLink record={record} kind="sample" label="Open sample request" />
     </Panel> : tab === "settlement" ? <Panel title="Native settlement" large roomy subtitle="Source receipts and accounting matches remain separate.">
       <FactList rows={[["Earned", moneyFact(record.balances.earned)], ["Creator paid", moneyFact(record.balances.creatorPaid)], ["Outstanding", moneyFact(record.balances.outstanding)], ["Accounting", record.accounting.state]]} />
       <div className={styles.actionsRow}><Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Inspect immutable receipts</Button><Button aria-haspopup="dialog" onClick={() => setDialog("match")}>Match statement</Button></div>
     </Panel> : <Panel title="Exceptions" large roomy subtitle="Original records and source recovery reasons."><SettlementExceptions record={record} /><Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("recovery")}>Review recovery</Button></Panel>}
+    <Dialog open={dialog === "sample"} title="Independent sample source evidence" onClose={() => setDialog(null)}>
+      {sample ? <><FactList label="Independent sample facts" rows={[["Sample",sample.ref],["Reported summary state",sample.state],["Quantity",sample.quantity===null?"Unknown":String(sample.quantity)],["Cost",moneyFact(sample.cost)],["Sample evidence",sample.evidenceRef??"Unknown"],
+        ["Acceptance",sampleEvidence(sample.acceptance,sample.acceptance?.state==="known"?`${sample.acceptance.value.state} · event ${observed(sample.acceptance.value.eventAt)}`:null)],
+        ["Stock",sampleEvidence(sample.stock,sample.stock?.state==="known"?`Home ${sample.stock.value.homeRef} · SKU ${sample.stock.value.skuRef} · ${sample.stock.value.availableUnits} available · ${sample.stock.value.reservedUnits} reserved`:null)],
+        ["Fulfillment",sampleEvidence(sample.fulfillment,sample.fulfillment?.state==="known"?`${sample.fulfillment.value.state.replace(/([A-Z])/g," $1").toLowerCase()} · shipment ${sample.fulfillment.value.shipmentRef??"Not supplied"} · event ${observed(sample.fulfillment.value.eventAt)}`:null)],
+      ]} /><p>Acceptance, stock and shipment observations are independent. The summary state does not establish missing facts or authorize a reservation, label or shipment.</p><FinanceSourceLink record={record} kind="sample" targetRef={sample.ref} label="Open exact native sample" /></> : <p>No matching source sample was returned.</p>}
+      <Button variant="secondary" onClick={()=>setDialog(null)}>Close sample evidence</Button>
+    </Dialog>
     <Dialog open={dialog === "history"} title="Historical accepted terms" onClose={() => setDialog(null)}>
-      {historical ? <FactList rows={[["Accepted", observed(historical.acceptedAt)], ["Accepted amount", exactMoney(historical.acceptedAmount)], ["Terms", historical.termsRef], ["Version", historical.termsVersion], ["Contract", historical.contractRef], ["Original approval", historical.approvalRef ?? "Unknown"], ["Funding", historical.fundingRef ?? "Unknown"], ["Review deadline", observed(historical.reviewDeadline)], ["Settlement owner", historical.payoutOwner]]} /> : <p>No historical accepted terms were returned. No flat-fee or hybrid obligation is inferred.</p>}<p>Read only. This review cannot create a new commitment or change current commission-only policy.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close historical terms</Button>
+      {historical ? <FactList rows={[["Accepted", observed(historical.acceptedAt)], ["Accepted amount", exactMoney(historical.acceptedAmount)], ["Terms", historical.termsRef], ["Version", historical.termsVersion], ["Contract", historical.contractRef], ["Original approval", historical.approvalRef ?? "Unknown"], ["Funding", historical.fundingRef ?? "Unknown"], ["Review deadline", observed(historical.reviewDeadline)], ["Settlement owner", historical.payoutOwner]]} /> : <p>No historical accepted terms were returned. No flat-fee or hybrid obligation is inferred.</p>}<h3>Original source receipts</h3>{record.receipts.length ? <ul className={native.evidence}>{record.receipts.map(receipt=><li key={receipt.ref}>{receipt.ref} · {exactMoney(receipt.amount)} · settled {observed(receipt.settledAt)} · observed {observed(receipt.observedAt)} · evidence {receipt.evidenceRef}</li>)}</ul> : <p>No original paid receipt was supplied. Accepted terms alone do not prove payment.</p>}<p>Read only. This review cannot create a new commitment or change current commission-only policy.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close historical terms</Button>
     </Dialog>
     <Dialog open={dialog === "recovery"} title="Source recovery and human takeover" onClose={() => setDialog(null)}><SettlementExceptions record={record} /><p>Preserve the original request and receipt. Ask the listed source owner to reconcile an uncertain native result before any retry. This dialog has not sent a takeover request or created a provider action.</p><FinanceSourceLink record={record} kind="evidence" label="Open original source evidence" /><Button variant="secondary" onClick={() => setDialog(null)}>Close recovery</Button></Dialog>
     <FinancialEvidenceDialog record={dialog === "evidence" ? record : null} onClose={() => setDialog(null)} />
     <SettlementMatchDialog data={data} record={record} open={dialog === "match"} onClose={() => setDialog(null)} />
   </>;
+}
+
+function sampleEvidence(fact: {state:string;evidenceRef:string|null;observedAt:string|null;reasonCode:string|null}|null|undefined, value:string|null) {
+  if(!fact)return "Unknown · independent source observation not supplied";
+  return `${fact.state==="known"?value:fact.state==="notApplicable"?"N/A":"Unknown"}${fact.reasonCode?` · ${reasonText(fact.reasonCode)}`:""} · observed ${observed(fact.observedAt)} · evidence ${fact.evidenceRef??"Unknown"}`;
 }

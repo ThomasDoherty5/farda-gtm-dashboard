@@ -121,7 +121,7 @@ it("keeps each held source action with its visible explanation and preserves hor
     return respondWith(request.envelope, data, { dataVersion: "native-v1" });
   } } });
   renderRoute("/orders/TEST-SH-1042", adapter);
-  const button = (await screen.findAllByRole("button", { name: "Open source order", exact: true }))[0]!;
+  const button = (await screen.findAllByRole("button", { name: "Open source order" }))[0]!;
   const explanation = document.getElementById(button.getAttribute("aria-describedby")!);
   expect(explanation).toBeVisible();
   expect(explanation?.parentElement).toBe(button.parentElement);

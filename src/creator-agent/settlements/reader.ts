@@ -82,8 +82,16 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
         if (rate.state === "known" && (rate.value < 0 || rate.value > 100 || Date.parse(rate.observedAt) > observed)) fail("SETTLEMENT_RATE_INVALID", 502);
       for (const rate of r.rates) if (rate.eligibleProducts?.state === "known" && Date.parse(rate.eligibleProducts.observedAt) > observed)
         fail("SETTLEMENT_RATE_SCOPE_INVALID", 502);
+      for (const sample of r.samples) {
+        for (const value of [sample.cost, sample.acceptance, sample.stock, sample.fulfillment])
+          if (value?.observedAt && Date.parse(value.observedAt) > observed) fail("SETTLEMENT_SAMPLE_INVALID", 502);
+        if (sample.cost.state === "known" && sample.cost.value.currency !== r.currency) fail("SETTLEMENT_SAMPLE_INVALID", 502);
+        for (const value of [sample.acceptance, sample.fulfillment])
+          if (value?.state === "known" && value.value.eventAt && Date.parse(value.value.eventAt) > Date.parse(value.observedAt))
+            fail("SETTLEMENT_SAMPLE_INVALID", 502);
+      }
       const receipts = new Map(r.receipts.map(v => [v.ref, v]));
-      if (receipts.size !== r.receipts.length || new Set(r.adjustments.map(v => v.ref)).size !== r.adjustments.length || new Set(r.candidates.map(v=>v.ref)).size!==r.candidates.length || new Set(r.rates.map(v=>v.lane)).size!==r.rates.length)
+      if (receipts.size !== r.receipts.length || new Set(r.adjustments.map(v => v.ref)).size !== r.adjustments.length || new Set(r.candidates.map(v=>v.ref)).size!==r.candidates.length || new Set(r.rates.map(v=>v.lane)).size!==r.rates.length || new Set(r.samples.map(v=>v.ref)).size!==r.samples.length)
         fail("SETTLEMENT_DUPLICATE_EVIDENCE", 502);
       for (const receipt of r.receipts) {
         if (receipt.componentRef !== r.componentRef || receipt.amount.currency !== r.currency || Date.parse(receipt.settledAt) > Date.parse(receipt.observedAt) || Date.parse(receipt.observedAt) > observed) fail("SETTLEMENT_RECEIPT_INVALID", 502);
@@ -138,7 +146,10 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       rates:r.rates.map(v=>({...v,activePct:fact(v.activePct),proposedPct:fact(v.proposedPct),eligibleProducts:v.eligibleProducts?fact(v.eligibleProducts):null,termsVersion:a("version",v.termsVersion)})),
       historical:r.historical?{...r.historical,termsRef:alias("terms",r.historical.termsRef),termsVersion:alias("version",r.historical.termsVersion),contractRef:alias("contract",r.historical.contractRef),invoiceRef:alias("invoice",r.historical.invoiceRef),deliverableRef:alias("deliverable",r.historical.deliverableRef),approvalRef:a("approval",r.historical.approvalRef),fundingRef:a("funding",r.historical.fundingRef)}:null,
       candidates:r.candidates.map(v=>({...v,ref:alias("candidate",v.ref),statementRef:alias("statement",v.statementRef),componentRef:alias("component",v.componentRef),evidenceRef:alias("evidence",v.evidenceRef)})),
-      samples:r.samples.map(v=>({...v,ref:alias("sample",v.ref),cost:fact(v.cost),evidenceRef:a("evidence",v.evidenceRef)})),
+      samples:r.samples.map(v=>({...v,ref:alias("sample",v.ref),cost:fact(v.cost),evidenceRef:a("evidence",v.evidenceRef),
+        acceptance:v.acceptance?fact(v.acceptance):null,
+        stock:v.stock?.state==="known"?{...fact(v.stock),value:{...v.stock.value,homeRef:alias("home",v.stock.value.homeRef),skuRef:alias("sku",v.stock.value.skuRef)}}:v.stock?fact(v.stock):null,
+        fulfillment:v.fulfillment?.state==="known"?{...fact(v.fulfillment),value:{...v.fulfillment.value,shipmentRef:a("shipment",v.fulfillment.value.shipmentRef)}}:v.fulfillment?fact(v.fulfillment):null})),
       exceptions:r.exceptions.map(v=>({...v,ref:alias("exception",v.ref),evidenceRef:a("evidence",v.evidenceRef)})),
       links:r.links.map(v=>{
         if(v.state!=="verified" || !v.url || !v.validUntil || Date.parse(v.validUntil)<=now() || !v.observedAt || Date.parse(v.observedAt)>now()) return {...v,targetRef:null,state:v.state==="verified"?"expired":v.state,url:null};

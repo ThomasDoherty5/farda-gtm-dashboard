@@ -19,6 +19,18 @@ export const moneyFactSchema = settlementFact(settlementMoneySchema);
 export const settlementStateTotalsSchema=z.object({held:moneyFactSchema,disputed:moneyFactSchema,awaitingProvider:moneyFactSchema,paid:moneyFactSchema}).strict();
 export const numberFactSchema = settlementFact(z.number().finite());
 export const textFactSchema = settlementFact(settlementRef);
+// Independent sample observations; a summary state never supplies missing acceptance, stock or shipment evidence.
+export const sampleAcceptanceFactSchema = settlementFact(z.object({
+  state: z.enum(["pending", "accepted", "rejected"]), eventAt: settlementInstant.nullable(),
+}).strict().refine(value => value.state === "pending" || value.eventAt !== null, { message: "A decided acceptance needs its source event time" }));
+export const sampleStockFactSchema = settlementFact(z.object({
+  homeRef: settlementRef, skuRef: settlementRef, availableUnits: count, reservedUnits: count,
+}).strict());
+export const sampleFulfillmentFactSchema = settlementFact(z.object({
+  state: z.enum(["notShipped", "labelCreated", "carrierAccepted", "shipped", "delivered", "returned", "lost"]),
+  shipmentRef: settlementRef.nullable(), eventAt: settlementInstant.nullable(),
+}).strict().refine(value => value.state === "notShipped" || value.shipmentRef !== null && value.eventAt !== null,
+  { message: "A shipment milestone needs its source shipment identity and event time" }));
 export const settlementStateSchema = z.enum(["estimated", "earned", "held", "disputed", "approved", "billed", "awaitingCreator", "awaitingProvider", "merchantPaid", "creatorPaid", "failed", "adjusted", "reconciled", "requested", "executed", "reversed", "unknown"]);
 export const balanceKeys = ["estimated", "earned", "held", "disputed", "approved", "billed", "merchantPaid", "creatorPaid", "outstanding", "adjusted"] as const;
 export const balancesSchema = z.object({ estimated: moneyFactSchema, earned: moneyFactSchema, held: moneyFactSchema, disputed: moneyFactSchema,
@@ -59,7 +71,8 @@ export const settlementRecordSchema = z.object({
   candidates: z.array(z.object({ ref: settlementRef, statementRef: settlementRef, componentRef: settlementRef, amount: settlementMoneySchema,
     periodStart: settlementInstant, periodEnd: settlementInstant, evidenceRef: settlementRef, problem: z.enum(["duplicate", "conflict", "currency", "identity"]).nullable() }).strict()).max(100),
   samples: z.array(z.object({ ref: settlementRef, state: z.enum(["requested", "accepted", "reserved", "shipped", "delivered", "rejected", "unknown"]),
-    quantity: count.nullable(), cost: moneyFactSchema, evidenceRef: settlementRef.nullable() }).strict()).max(100),
+    quantity: count.nullable(), cost: moneyFactSchema, evidenceRef: settlementRef.nullable(),
+    acceptance: sampleAcceptanceFactSchema.nullish(), stock: sampleStockFactSchema.nullish(), fulfillment: sampleFulfillmentFactSchema.nullish() }).strict()).max(100),
   exceptions: z.array(z.object({ ref: settlementRef, reason: settlementReasonSchema, owner: z.enum(["Finance", "Creator", "Provider", "Operations"]),
     deadline: settlementInstant.nullable(), evidenceRef: settlementRef.nullable() }).strict()).max(100),
   links: z.array(sourceLinkSchema).max(12),

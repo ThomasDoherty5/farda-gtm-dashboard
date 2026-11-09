@@ -13,6 +13,57 @@ function setup(edit?:(snapshot:SettlementSnapshot)=>void){const db=new DatabaseS
   const source:SettlementSource={...fixture.source,async read(request){const s=await fixture.source.read(request) as SettlementSnapshot;edit?.(s);return s;}};
   const reader=createSettlementReader({db,scope,secret:"fictional-private-reference-key",bindings:{source},now:fixture.now});return{db,...fixture,source,reader};}
 describe("native settlement source projection",()=>{
+  it("preserves independent fictional sample acceptance and stock without inferring fulfillment from its summary",async()=>{
+    const w=setup(),sample=w.records[1]!.samples[0]!;sample.state="delivered";
+    const result=await w.reader.read("commissionLedger",{provider:"tiktok"},actor);
+    if(result.data.kind!=="native-commission-ledger")throw Error();
+    const projected=result.data.records[0]!.samples[0]!;
+    expect(result.data.source.synthetic).toBe(true);
+    expect(projected.acceptance).toMatchObject({state:"known",value:{state:"accepted",eventAt:new Date(w.now()).toISOString()}});
+    expect(projected.stock).toMatchObject({state:"known",value:{availableUnits:8,reservedUnits:1}});
+    expect(projected.fulfillment).toEqual(w.unknown);
+    for(const privateRef of [sample.ref,sample.evidenceRef!,"fixture-sample-acceptance-evidence","fixture-sample-stock-evidence","fixture-sample-home","fixture-sample-sku"])
+      expect(JSON.stringify(projected)).not.toContain(privateRef);
+  });
+  it("leaves missing sample observations unknown and aliases an independently evidenced shipment",async()=>{
+    const w=setup(),sample=w.records[1]!.samples[0]!;
+    sample.acceptance=undefined;sample.stock=undefined;
+    sample.fulfillment={state:"known",value:{state:"shipped",shipmentRef:"private-sample-shipment",eventAt:new Date(w.now()).toISOString()},evidenceRef:"private-shipment-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};
+    const result=await w.reader.read("commissionLedger",{provider:"tiktok"},actor);
+    if(result.data.kind!=="native-commission-ledger")throw Error();
+    const projected=result.data.records[0]!.samples[0]!;
+    expect(projected.acceptance).toBeNull();expect(projected.stock).toBeNull();
+    expect(projected.fulfillment).toMatchObject({state:"known",value:{state:"shipped",shipmentRef:expect.any(String)}});
+    expect(JSON.stringify(projected)).not.toContain("private-sample-shipment");expect(JSON.stringify(projected)).not.toContain("private-shipment-evidence");
+  });
+  it("rejects ambiguous duplicate sample identities before a detail control can select conflicting evidence",async()=>{
+    const w=setup(),record=w.records[1]!,duplicate=structuredClone(record.samples[0]!);
+    if(duplicate.stock?.state!=="known")throw Error();duplicate.stock.value.availableUnits=0;record.samples.push(duplicate);
+    await expect(w.reader.read("commissionLedger",{provider:"tiktok"},actor)).rejects.toMatchObject({code:"SETTLEMENT_DUPLICATE_EVIDENCE",status:502});
+  });
+  it.each(["cost","acceptance","stock","fulfillment"] as const)("rejects future sample %s observations",async field=>{
+    const w=setup(),sample=w.records[1]!.samples[0]!;
+    sample.fulfillment={state:"known",value:{state:"notShipped",shipmentRef:null,eventAt:null},evidenceRef:"fictional-unshipped-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};
+    sample[field]!.observedAt=new Date(w.now()+1).toISOString();
+    await expect(w.reader.read("commissionLedger",{provider:"tiktok"},actor)).rejects.toMatchObject({code:"SETTLEMENT_SAMPLE_INVALID",status:502});
+  });
+  it.each(["acceptance","fulfillment"] as const)("rejects sample %s events after their source observation",async field=>{
+    const w=setup(),sample=w.records[1]!.samples[0]!;
+    sample.fulfillment={state:"known",value:{state:"shipped",shipmentRef:"fictional-shipment",eventAt:new Date(w.now()).toISOString()},evidenceRef:"fictional-shipment-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};
+    const fact=sample[field];if(fact?.state!=="known")throw Error();fact.value.eventAt=new Date(w.now()+1).toISOString();
+    await expect(w.reader.read("commissionLedger",{provider:"tiktok"},actor)).rejects.toMatchObject({code:"SETTLEMENT_SAMPLE_INVALID",status:502});
+  });
+  it.each(["acceptanceEvent","shipmentEvent","shipmentIdentity","evidence","negativeStock","currency"] as const)("rejects incomplete or malformed sample %s evidence at the source boundary",async invalid=>{
+    const w=setup(),sample=w.records[1]!.samples[0]!;
+    sample.fulfillment={state:"known",value:{state:"delivered",shipmentRef:"fictional-shipment",eventAt:new Date(w.now()).toISOString()},evidenceRef:"fictional-shipment-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};
+    if(invalid==="acceptanceEvent" && sample.acceptance?.state==="known")sample.acceptance.value.eventAt=null;
+    if(invalid==="shipmentEvent")sample.fulfillment.value.eventAt=null;
+    if(invalid==="shipmentIdentity")sample.fulfillment.value.shipmentRef=null;
+    if(invalid==="evidence")sample.fulfillment.evidenceRef="";
+    if(invalid==="negativeStock" && sample.stock?.state==="known")sample.stock.value.availableUnits=-1;
+    if(invalid==="currency" && sample.cost.state==="known")Reflect.set(sample.cost.value,"currency","JPY");
+    await expect(w.reader.read("commissionLedger",{provider:"tiktok"},actor)).rejects.toMatchObject({code:"SETTLEMENT_SOURCE_INVALID",status:502});
+  });
   it("keeps independent eligible-product rate scopes and aliases their evidence without inferring missing scope",async()=>{
     const w=setup(),standard=w.records[1]!.rates[0]!;
     standard.eligibleProducts={state:"known",value:"Fictional bottle variants A and B",evidenceRef:"private-product-scope-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};

@@ -27,7 +27,7 @@ export function originalLayoutOperationsSource(viewKey: OperationsReadViewKey, f
   if (viewKey === "shippingException") Object.assign(r,{home:"H2",shippingCost:known(money(675)),shippingCostContext:"$5.95 label + $0.80 packaging",owner:"Fulfillment · Home H2",supportCase:"TEST-ISS-021",nativeEvents:[event("labelCreated",0),event("carrierAccepted",1),event("shipped",2),event("carrierLost",3)]});
   if (viewKey === "returnDetail") {
     Object.assign(r,{home:"H3",orderKey:"SHOP-TEST-1028",selected:{disposition:"restock",resolution:"refund",reason:"Fictional inspected return"},inspection:{receiptRef:"TEST-INSP-028",resellable:true,units:1},refundAmount:money(3499),nativeEvents:[event("returnAuthorized",0),event("returnReceived",1),event("returnInspected",2)]});
-    if (resolved) { snapshot.version="layout-resolved-v2"; Object.assign(r,{state:"resolved",nativeEvents:["returnReceived","inventoryRestocked","refundSettled","accountingPosted","caseClosed"].map(event),resolved:{chain:[],refunded:money(3499),returnedUnits:1,restockedUnits:1,retainedUnits:1,replacement:"Not selected",caseRef:"TEST-ISS-018"}}); }
+    if (resolved) { snapshot.version="layout-resolved-v2"; Object.assign(r,{state:"resolved",nativeEvents:["returnReceived","inventoryRestocked","refundSettled","accountingPosted","caseClosed"].map(event),resolved:{chain:[{outcome:"Refund settled",receipt:"TEST-RC-2",confirmedAt:"2026-11-06T11:42:00.000Z"}],refunded:money(3499),returnedUnits:1,restockedUnits:1,retainedUnits:1,replacement:"Not selected",caseRef:"TEST-ISS-018"}}); }
   }
   if (viewKey === "fulfillmentAnalytics") {
     r.reportingScope = { home: "all", startAt: "2026-10-16T00:00:00.000Z", endAt: "2026-10-30T00:00:00.000Z", timezone: "UTC", basis: "eventAt" };

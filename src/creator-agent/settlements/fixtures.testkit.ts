@@ -20,7 +20,10 @@ export function settlementSourceFixture(scope:SettlementScope,clock=Date.parse("
       rates:provider==="tiktok"?[{lane:"standard",activePct:unknown,proposedPct:unknown,activeFrom:null,proposedFrom:null,termsVersion:null},{lane:"shopAds",activePct:unknown,proposedPct:unknown,activeFrom:null,proposedFrom:null,termsVersion:null}]:[],
       historical:provider==="externalManual"?{acceptedAt:iso(),termsRef:"terms-fixture",termsVersion:"terms-v1",contractRef:"contract-fixture",invoiceRef:"invoice-fixture",deliverableRef:"deliverable-fixture",acceptedAmount:{minorUnits:15000,currency:"USD"},payoutOwner:"externalManual",approvalRef:null,fundingRef:null,reviewDeadline:null}:null,
       candidates:provider==="collabs"?[{ref:"candidate-one",statementRef:"statement-one",componentRef:id+"-component",amount:{minorUnits:9000,currency:"USD"},periodStart:"2026-10-01T00:00:00Z",periodEnd:"2026-11-01T00:00:00Z",evidenceRef:"statement-evidence",problem:null}]:[],
-      samples:[],exceptions:[],links:[{kind:"order",targetRef:null,state:"missing",url:null,observedAt:null,validUntil:null}]};
+      samples:provider==="tiktok"?[{ref:"fixture-sample",state:"accepted",quantity:1,cost:money(500),evidenceRef:"fixture-sample-request-evidence",
+        acceptance:{state:"known",value:{state:"accepted",eventAt:iso()},evidenceRef:"fixture-sample-acceptance-evidence",observedAt:iso(),reasonCode:null},
+        stock:{state:"known",value:{homeRef:"fixture-sample-home",skuRef:"fixture-sample-sku",availableUnits:8,reservedUnits:1},evidenceRef:"fixture-sample-stock-evidence",observedAt:iso(),reasonCode:null},
+        fulfillment:unknown}]:[],exceptions:[],links:[{kind:"order",targetRef:null,state:"missing",url:null,observedAt:null,validUntil:null}]};
   }
   const records=[record("collabs-one","collabs"),record("tiktok-one","tiktok"),record("payable-one","externalManual")];
   const snapshot=(request:SettlementSourceRequest):SettlementSnapshot=>{

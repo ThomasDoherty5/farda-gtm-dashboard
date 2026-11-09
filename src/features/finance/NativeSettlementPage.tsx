@@ -8,7 +8,7 @@ import { Button, LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { Kpi, KpiRow } from "@/components/Kpi";
-import { ContextCard, FactList, PageHeader, Panel } from "@/components/Panels";
+import { ContextCard, FactList, GateRows, PageHeader, Panel } from "@/components/Panels";
 import { RecordShell } from "@/features/operations/RecordShell";
 import { displayReference, FinanceGrant, FinancialEvidenceDialog, NativeMoneyKpi, FinanceSourceLink, moneyFact, NativeFinanceTabs, observed, reasonText, stateText } from "./NativeFinance";
 import { SettlementMatchDialog } from "./NativeStatementMatch";
@@ -31,7 +31,7 @@ function NativeSettlementBody({ data, record }: { data: NativeSettlement; record
   return record.provider === "tiktok" ? <NativeTikTokSettlement data={data} record={record} /> : <NativeCollabsSettlement data={data} record={record} />;
 }
 function NativeCollabsSettlement({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
-  const [dialog, setDialog] = useState<"match" | "evidence" | "identity" | "crosswalk" | "exceptions" | null>(null);
+  const [dialog, setDialog] = useState<"match" | "evidence" | "identity" | "crosswalk" | "exceptions" | "activation" | null>(null);
   return <>
     <PageHeader id="settlement-title" title="Follow the money." subtitle={<span className={native.reference}>{displayReference(record.ref)} · {record.provider} · {record.accountRef}</span>}>
       <FinanceSourceLink record={record} kind="payout" label="Open native payout" /><Button aria-haspopup="dialog" onClick={() => setDialog("match")}>Match statement</Button>
@@ -54,18 +54,26 @@ function NativeCollabsSettlement({ data, record }: { data: NativeSettlement; rec
         ["QuickBooks entry", record.accounting.qboRef ?? "Unknown", record.accounting.state, <FinanceSourceLink key="ledger" record={record} kind="ledger" label="Open ledger source" />],
       ]} />
     </Panel>
-    <Panel large roomy title="Source exceptions" subtitle="Each reported exception stays with its provider and source owner.">
-      <SettlementExceptions record={record} />
-      <div className={styles.actionsRow}><Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("exceptions")}>Review provider failure</Button><LinkButton variant="ghost" to="/finance/commissions">Back to commissions</LinkButton></div>
+    <Panel large roomy title="Separate exception scenarios" subtitle="These are reference scenarios, not assertions about this settlement. Inspect each source observation with its provider and owner.">
+      <GateRows label="Alternative settlement exception scenarios" rows={[
+        { badge: <Badge tone="warning" width={140}>Activation pending</Badge>, title: "Creator payout activation", text: "Creator setup incomplete; this does not mean billed or paid" },
+        { badge: <Badge tone="violet" width={140}>Deadline owned</Badge>, title: "Holding / dispute review", text: "Review before the source hold expires; configurable source terms" },
+        { badge: <Badge tone="warning" width={140}>Needs recovery</Badge>, title: "Billing or payout failure", text: "Inspect native reason and receipt; never trigger a second external payout" },
+        { badge: <Badge tone="warning" width={140}>Reconcile first</Badge>, title: "Partial or post-hold refund", text: "Unverified behavior stays an exception until the source adjustment is matched" },
+      ]} />
+      {record.exceptions.length > 0 && <SettlementExceptions record={record} />}
+      <div className={styles.actionsRow}><Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 254 }} onClick={() => setDialog("activation")}>View activation exception</Button><Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 242 }} onClick={() => setDialog("exceptions")}>Review provider failure</Button><LinkButton variant="ghost" style={{ minWidth: 220 }} to="/finance/commissions">Back to commissions</LinkButton></div>
     </Panel>
     <FinancialEvidenceDialog record={dialog === "evidence" ? record : null} onClose={() => setDialog(null)} />
     <CrosswalkDialog record={record} open={dialog === "identity" || dialog === "crosswalk"} onClose={() => setDialog(null)} />
-    <Dialog open={dialog === "exceptions"} title="Provider exceptions and recovery" onClose={() => setDialog(null)}><SettlementExceptions record={record} /><p>Keep the original provider correlation and immutable receipts. An unknown result must be reconciled by the source owner before another request; this review cannot pay or retry a payout.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close recovery</Button></Dialog>
+    <Dialog open={dialog === "activation"} title="Creator payout activation evidence" onClose={() => setDialog(null)}><FactList label="Activation source context" rows={[["Settlement", record.ref], ["Current financial state", stateText[record.state]], ["Provider payee", record.crosswalk.payeeRef ?? "Unknown"]]} /><SettlementExceptions record={record} only="CREATOR_ACTIVATION" /><p>Activation, billing and creator payment are independent facts. This read-only review does not activate an account or release a payout.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close activation evidence</Button></Dialog>
+    <Dialog open={dialog === "exceptions"} title="Provider exceptions and recovery" onClose={() => setDialog(null)}><SettlementExceptions record={record} only="PROVIDER_FAILURE" /><p>Keep the original provider correlation and immutable receipts. An unknown result must be reconciled by the source owner before another request; this review cannot pay or retry a payout.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close recovery</Button></Dialog>
     <SettlementMatchDialog data={data} record={record} open={dialog === "match"} onClose={() => setDialog(null)} />
   </>;
 }
-export function SettlementExceptions({ record }: { record: SettlementRecord }) {
-  return record.exceptions.length ? <ul className={native.evidence}>{record.exceptions.map(exception => <li key={exception.ref}><Badge tone="warning">{reasonText(exception.reason)}</Badge> {exception.ref} · owner {exception.owner} · deadline {observed(exception.deadline)} · evidence {exception.evidenceRef ?? "Unknown"}</li>)}</ul> : <p>No exception observations were returned. This does not establish provider health or completed settlement.</p>;
+export function SettlementExceptions({ record, only }: { record: SettlementRecord; only?: SettlementRecord["exceptions"][number]["reason"] }) {
+  const exceptions = only ? record.exceptions.filter(exception => exception.reason === only) : record.exceptions;
+  return exceptions.length ? <ul className={native.evidence}>{exceptions.map(exception => <li key={exception.ref}><Badge tone="warning">{reasonText(exception.reason)}</Badge> {exception.ref} · owner {exception.owner} · deadline {observed(exception.deadline)} · evidence {exception.evidenceRef ?? "Unknown"}</li>)}</ul> : <p>No {only === "CREATOR_ACTIVATION" ? "creator-activation " : only === "PROVIDER_FAILURE" ? "provider-failure " : ""}exception observations were returned. This does not establish provider health or completed settlement.</p>;
 }
 export function CrosswalkDialog({ record, open, onClose }: { record: SettlementRecord; open: boolean; onClose: () => void }) {
   return <Dialog open={open} title="Payee identity and crosswalk" onClose={onClose}><FactList label="Provider payee crosswalk" rows={[["Provider", record.provider], ["Account", record.accountRef], ["Settlement", record.ref], ["Canonical creator", record.creatorRef], ["Native identity", record.nativeRef ?? "Unknown"], ["Payee", record.crosswalk.payeeRef ?? "Unknown"], ["Order", record.crosswalk.orderRef ?? "Unknown"], ["State", record.crosswalk.state], ["Evidence", record.crosswalk.evidenceRefs.join(", ") || "Unknown"], ["Observed", observed(record.crosswalk.observedAt)]]} /><p>Read-only evidence. Viewing this crosswalk does not merge an ambiguous identity or confirm a financial match.</p><Button variant="secondary" onClick={onClose}>Close crosswalk</Button></Dialog>;

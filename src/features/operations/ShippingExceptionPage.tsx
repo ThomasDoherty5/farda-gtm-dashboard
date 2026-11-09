@@ -59,7 +59,7 @@ export function ShippingExceptionPage() {
           </KpiRow>
           <TwoColumns>
             <Panel title="Carrier timeline" subtitle="Event time and sync time are different" roomy>
-              {demo ? <Steps label="Carrier timeline" steps={e.events} /> : <NativeEventTimeline events={e.nativeEvents} expected={[...(e.carrierState === "Lost" ? ["carrierLost" as const] : e.carrierState === "Returned" ? ["carrierReturned" as const] : []), "shipped", "carrierAccepted", "labelCreated", ...(e.carrierState === "Delivered" || e.nativeEvents?.some(event => event.kind === "delivered") ? ["delivered" as const] : [])]} />}
+              {demo ? <Steps label="Carrier timeline" steps={e.events} /> : <NativeEventTimeline events={e.nativeEvents} expected={[...(e.carrierState === "Lost" ? ["carrierLost" as const] : e.carrierState === "Returned" ? ["carrierReturned" as const] : []), "shipped", "carrierAccepted", "labelCreated", ...(e.nativeEvents?.some(event => event.kind === "delivered") ? ["delivered" as const] : [])]} />}
               <Divider />
               <Note>{e.postingClockNote}</Note>
             </Panel>

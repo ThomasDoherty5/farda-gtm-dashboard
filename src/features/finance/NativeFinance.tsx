@@ -5,6 +5,7 @@ import type { NativeCommissionLedger, NativePayable, NativeSettlement, Settlemen
 import { Kpi } from "@/components/Kpi";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
+import { DataTable } from "@/components/DataTable";
 import { Dialog } from "@/components/Dialog";
 import { FactList, PageHeader } from "@/components/Panels";
 import { SectionTabs } from "@/components/SectionTabs";
@@ -72,6 +73,16 @@ export function FinancialEvidenceDialog({ record, onClose }: { record: Settlemen
       {record.receipts.length ? <ul className={styles.evidence}>{record.receipts.map(receipt => <li key={receipt.ref}>{receipt.ref} · {exactMoney(receipt.amount)} · settled {observed(receipt.settledAt)} · observed {observed(receipt.observedAt)} · {receipt.evidenceRef}</li>)}</ul> : <p>No paid receipt was returned. This does not prove payment or nonpayment.</p>}
       <h3>Append-only adjustments</h3>
       {record.adjustments.length ? <ul className={styles.evidence}>{record.adjustments.map(adjustment => <li key={adjustment.ref}>{adjustment.ref} · {adjustment.reason} · {exactMoney(adjustment.amount)} · original receipt {adjustment.receiptRef} · effective {observed(adjustment.effectiveAt)} · {adjustment.evidenceRef}</li>)}</ul> : <p>No adjustment evidence was returned.</p>}
+      <h3>Payee and order crosswalk</h3>
+      <FactList label="Financial evidence crosswalk" rows={[["Payee", record.crosswalk.payeeRef ?? "Unknown"], ["Order", record.crosswalk.orderRef ?? "Unknown"], ["Crosswalk state", record.crosswalk.state], ["Evidence", record.crosswalk.evidenceRefs.join(", ") || "Unknown"], ["Observed", observed(record.crosswalk.observedAt)]]} />
+      <h3>Statement candidates and differences</h3>
+      {record.candidates.length ? <DataTable caption="Read-only statement differences" columns={[{label:"Statement / component"},{label:"Candidate amount"},{label:"Source net accrued"},{label:"Candidate minus source"},{label:"Period / evidence"}]} rows={record.candidates.map(candidate=>[
+        `${candidate.statementRef} / ${candidate.componentRef}`, exactMoney(candidate.amount), record.netAccrued ? moneyFact(record.netAccrued) : "Unknown",
+        statementDifference(record,candidate), `${observed(candidate.periodStart)} – ${observed(candidate.periodEnd)} · ${candidate.evidenceRef}${candidate.problem ? ` · Unresolved: ${candidate.problem}` : ""}`,
+      ])} /> : <p>No statement candidates were supplied. A zero difference or confirmed match cannot be inferred.</p>}
+      <h3>Accounting and reconciliation context</h3>
+      <FactList label="Financial accounting context" rows={[["State",record.accounting.state],["QuickBooks posting",record.accounting.qboRef??"Unknown"],["Accounting policy",record.accounting.policyRef??"Unknown"],["Policy version",record.accounting.policyVersion??"Unknown"],["Accounting evidence",record.accounting.evidenceRef??"Unknown"]]} />
+      <p>A candidate difference is arithmetic on the same source component and currency, not a confirmed accounting match. Review the exact approval preview before posting; settlement must not book a second commission expense.</p>
       <p>Viewing this evidence does not confirm a match, change an original receipt or create a payment.</p>
       <FinanceSourceLink record={record} kind="evidence" label="Open source evidence" />
     </div>}
@@ -86,3 +97,11 @@ export function NativeMoneyKpi({ label, fact, context }: { label: string; fact: 
 }
 /** Short display reference only; full source identifiers remain in the evidence dialog and exact links. */
 export const displayReference = (ref: string) => ref.length > 32 ? `…${ref.slice(-12)}` : ref;
+
+function statementDifference(record: SettlementRecord, candidate: SettlementRecord["candidates"][number]): string {
+  const net=record.netAccrued;
+  if(candidate.componentRef!==record.componentRef || net?.state!=="known" || candidate.amount.currency!==net.value.currency) return "Unknown · comparable source basis unavailable";
+  const difference=BigInt(candidate.amount.minorUnits)-BigInt(net.value.minorUnits);
+  const absolute=difference<0n?-difference:difference;
+  return `${net.value.currency} ${difference<0n?"−":""}${(absolute/100n).toLocaleString("en-US")}.${String(absolute%100n).padStart(2,"0")}`;
+}
