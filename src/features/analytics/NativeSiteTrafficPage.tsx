@@ -28,6 +28,11 @@ const stateNote = (metric: TrafficCountView | TrafficRateView) => metric.reasonC
 const segmentText = (segment: TrafficPublicSegment) => segment.kind === "all" ? "All storefront traffic" : `${segment.channel ?? "Unattributed"} · ${segment.campaign ?? "unknown"}`;
 const stamp = (value: string | null) => value ?? "Unknown";
 const periodText = (data: NativeSiteTrafficView) => data.period ? `${data.period.startDay} to ${data.period.endDayExclusive} (end exclusive), ${data.period.timezone}` : "Reporting window and timezone pending";
+const accessText = (data: NativeSiteTrafficView) => data.capability.state === "unsupported"
+  ? "The connected source does not support the required Shopify traffic report. Sessions and conversion remain unavailable."
+  : data.capability.state === "unconfigured"
+    ? "Qualified Shopify account and reporting access pending."
+    : "Qualified traffic reporting access is available; imported evidence is evaluated separately.";
 
 export function retainedTrafficEvidence(data: NativeSiteTrafficView): NativeSiteTrafficView {
   const retained = structuredClone(data);
@@ -89,7 +94,8 @@ function TrafficBody({ data, openSource, selectSegment }: { data: NativeSiteTraf
   const scale = Math.max(1, ...observations.map(row => row.metric.value ?? 0));
   const pending = data.imports.firstActualImport.state === "pending";
   return <>
-    <Notice tone={data.provenance.synthetic ? "violet" : "warning"} title={data.provenance.synthetic ? "Fictional test evidence · each metric keeps its own cohort" : data.capability.state === "ready" ? "Source evidence · each metric keeps its own cohort" : "Shopify traffic source pending"}>
+    <Notice tone={data.provenance.synthetic ? "violet" : "warning"} title={data.capability.state === "unsupported" ? "Shopify traffic access unsupported" : data.capability.state === "unconfigured" ? "Shopify traffic source pending" : data.provenance.synthetic ? "Fictional test evidence · each metric keeps its own cohort" : "Source evidence · each metric keeps its own cohort"}>
+      {data.capability.state !== "ready" && <>{accessText(data)}{data.provenance.synthetic ? " This is fictional test evidence." : ""}{" "}</>}
       {periodText(data)}. Coverage: {data.coverage.state}; freshness: {data.freshness.state}. {pending ? "First validated actual import is still pending." : "A validated actual import is recorded."}
     </Notice>
     <KpiGrid>
@@ -156,7 +162,8 @@ export function TrafficDefinitions({ data, showDaily = false }: { data: NativeSi
   return <>
     <dl className={styles.defs} style={{ overflowWrap: "anywhere" }}>
       <div><dt>Selection and window</dt><dd>{periodText(data)}. {data.selectedSegment ? segmentText(data.selectedSegment) : "Segment unavailable"}. Coverage: {data.coverage.state}.</dd></div>
-      <div><dt>Source</dt><dd>{definition ? `${definition.provider} · ${definition.transport} · ${definition.accountRef}` : "Qualified Shopify account and reporting access pending."}</dd></div>
+      <div><dt>Source</dt><dd>{definition ? `${definition.provider} · ${definition.transport} · ${definition.accountRef}` : "Qualified Shopify account and report identity unavailable."}</dd></div>
+      {data.capability.state !== "ready" && <div><dt>Reporting access</dt><dd>{accessText(data)}</dd></div>}
       <div><dt>Store conversion</dt><dd>Shopify storefront-origin orders divided by matching storefront sessions. TikTok Shop and TikTok-origin Shopify mirrors are excluded. {rateText(data.rates.storeOrderConversion)}; {stateNote(data.rates.storeOrderConversion)}.</dd></div>
       <div><dt>Session rates</dt><dd>Cart rate: sessions with cart additions ÷ storefront sessions. Checkout completion: sessions completing checkout ÷ sessions reaching checkout. Repeated product-view or cart events never replace these denominators.</dd></div>
       <div><dt>Provider session conversion</dt><dd>{rateText(data.rates.providerConversion)}: converted sessions ÷ storefront sessions, separate from the order-count ratio. {stateNote(data.rates.providerConversion)}.</dd></div>
@@ -167,7 +174,7 @@ export function TrafficDefinitions({ data, showDaily = false }: { data: NativeSi
         <div><dt>Provider counter IDs</dt><dd style={{ overflowWrap: "anywhere" }}>{definition.counterIds.sessions}; {definition.counterIds.cartSessions}; {definition.counterIds.checkoutSessions}; {definition.counterIds.completedCheckoutSessions}. Session unit: {definition.counterIds.sessionUnit}; repeated-event unit: {definition.counterIds.eventUnit}.</dd></div></>}
     </dl>
     <p>Support and returns use their own delivered-unit cohorts; ratings use their own all-time source. No traffic total substitutes for those denominators.</p>
-    {showDaily && (data.days.length ? <Table caption="Imported storefront daily aggregates" columns={[{ label: "Calendar day", width: 160 }, { label: "Sessions", width: 120 }, { label: "Coverage", width: 120 }, { label: "Source as of", width: 240 }, { label: "Revision", width: 100 }]} rows={data.days.map(row => ({ key: `${row.day}:${row.segment.segmentRef}`, cells: [row.day, row.counters.sessions === null ? "Unknown" : count(row.counters.sessions), row.coverage, row.sourceAsOf, String(row.revision)] }))} /> : <p>No daily source aggregates have been imported for this selection.</p>)}
+    {showDaily && (data.days.length ? <div style={{ width: "100%", minWidth: 0 }}><Table caption="Imported storefront daily aggregates" columns={[{ label: "Calendar day", width: 160 }, { label: "Sessions", width: 120 }, { label: "Coverage", width: 120 }, { label: "Source as of", width: 240 }, { label: "Revision", width: 100 }]} rows={data.days.map(row => ({ key: `${row.day}:${row.segment.segmentRef}`, cells: [row.day, row.counters.sessions === null ? "Unknown" : count(row.counters.sessions), row.coverage, row.sourceAsOf, String(row.revision)] }))} /></div> : <p>No daily source aggregates have been imported for this selection.</p>)}
   </>;
 }
 

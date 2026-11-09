@@ -63,6 +63,29 @@ test("source denial in an open evidence dialog removes protected figures and dai
   await expect(page.getByText("16,000", { exact: true })).toHaveCount(0);
 });
 
+test("unsupported reporting access is distinct from unconfigured access in the page and definitions", async ({ page }) => {
+  fixture.state.capabilityState = "unsupported";
+  await page.goto("/analytics/customer-journey");
+  await expect(page.getByText("Shopify traffic access unsupported", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("metric-sessions")).toHaveText("Unknown");
+  await expect(page.getByTestId("metric-conversion")).toHaveText("N/A");
+  await page.getByRole("button", { name: "Cohort definitions", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("does not support the required Shopify traffic report");
+  await expect(page.getByRole("dialog")).not.toContainText("Qualified Shopify account and reporting access pending");
+  fixture.state.capabilityTransform = value => ({ ...value, definition: structuredClone(fixture.state.report.definition) });
+  await page.getByRole("button", { name: "Refresh source", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Shopify Analytics");
+  await expect(page.getByRole("dialog")).toContainText("does not support the required Shopify traffic report");
+  await page.keyboard.press("Escape");
+  fixture.state.capabilityState = "unconfigured";
+  fixture.state.capabilityTransform = null;
+  await page.reload();
+  await expect(page.getByText("Shopify traffic source pending", { exact: true })).toBeVisible();
+  await expect(page.getByText("Shopify traffic access unsupported", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Cohort definitions", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Qualified Shopify account and reporting access pending");
+});
+
 test("expired publication leases retain labeled historical counts and withhold conversion", async ({ page }) => {
   await importSource(); await page.clock.install(); await page.goto("/analytics/customer-journey"); await expect(page.getByTestId("metric-conversion")).toHaveText("1.625%");
   await page.clock.fastForward(301_000);
@@ -113,6 +136,11 @@ test("complete original-layout adaptation at three widths, keyboard definitions 
   await page.setViewportSize({ width: 390, height: 1000 });
   expect(await page.getByRole("dialog").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const dailyRegion = page.getByRole("region", { name: "Imported storefront daily aggregates" });
+  expect(await dailyRegion.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  await dailyRegion.evaluate(element => { element.scrollLeft = element.scrollWidth; });
+  expect(await dailyRegion.evaluate(element => element.scrollLeft > 0)).toBe(true);
+  await dailyRegion.evaluate(element => { element.scrollLeft = 0; });
   await page.screenshot({ path: info.outputPath("traffic-source-dialog-mobile.png"), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await screenReaderCheckpoint(page, "traffic-daily-table-headers", page.getByRole("region", { name: "Imported storefront daily aggregates" }), ["Imported storefront daily aggregates", "Calendar day", "Sessions", "Revision"], "KP_Enter");
