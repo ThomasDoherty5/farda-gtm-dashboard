@@ -169,8 +169,13 @@ describe("J13 finite source composition with actual canonical approvals and jobs
 
   it("keeps expired batch receipts and original uncertain recovery readable under current source permission", async () => {
     const w = world(), originalCommand = await w.command(1), run = await w.queue(1);
-    w.state.uncertain.add(w.packet.rows[0]!.recipientRef); await w.dispatch.execute(run.runRef);
-    const original = w.state.calls[0]!, calls = w.state.calls.length, before = await w.bulk.read(w.filters, w.principal);
+    const target = w.packet.rows[0]!.recipientRef, item = w.packet.groups[1]!.draft!.items.find(candidate => candidate.targetRef === target)!;
+    w.state.uncertain.add(target); await w.dispatch.execute(run.runRef);
+    const original = w.state.calls.find(call => call.intent.approval.itemRef === item.itemRef)!, calls = w.state.calls.length, before = await w.bulk.read(w.filters, w.principal);
+    const uncertain = w.dispatch.read(run.runRef, false);
+    expect(uncertain.run.items.find(row => row.itemKey === original.dispatchKey)).toMatchObject({ state: "reconcile", attempts: 1, result: null });
+    expect(uncertain.items.find(row => row.dispatchKey === original.dispatchKey)!.receipt).toBeNull();
+    expect(w.state.receipts.has(original.dispatchKey)).toBe(false);
     expect(before.data.rowReceipts).toHaveLength(11);
     w.a.state.now = Date.parse(w.packet.expiresAt);
     expect(before.assertCurrent).toThrow("BULK_SOURCE_STALE");

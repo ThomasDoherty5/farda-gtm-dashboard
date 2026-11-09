@@ -109,7 +109,7 @@ export function bulkFixture(options: { path?: string; timestamp?: number; assert
       a.db.prepare("INSERT OR IGNORE INTO fictional_bulk_grants VALUES(?,?,?)").run(request.dispatchKey, dimension, need.quantity);
       grants.push({ grantRef: `fictional-grant-${digest([request.dispatchKey, dimension])}`, issuerRef: "fictional-source-owner", allocationVersion: "v1", scope,
         dispatchKey: request.dispatchKey, dimension, resourceRef: need.resourceRef, quantity: need.quantity, unit: need.unit, currency: need.currency,
-        observedAt: a.at(), validUntil: a.until(), exclusive: true,
+        observedAt: a.at(), validUntil: dimension === "quota" ? packet.validUntil : a.until(), exclusive: true,
         ...(dimension === "quota" ? { quotaBasis: { publishedLimit: 100, operatingLimit: 80, allocatedTotal: total + (old ? 0 : need.quantity), windowRef: "fictional-quota-window", windowStart: packet.observedAt, windowEnd: packet.validUntil, sharedAcrossRoutes: true as const } } : {}) });
     }
     return grants;

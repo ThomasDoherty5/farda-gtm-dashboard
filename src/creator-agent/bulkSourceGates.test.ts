@@ -36,7 +36,7 @@ it("actual J04 API and separately verified browser dispatch share the same sourc
         verifiedScopes: b.requiredScopes, connectionHealth: "Authenticated", sourceFreshness: unknownSourceFreshness(), businessEligibility: unknownBusinessEligibility(), reasonCodes: [] };
       receipts.set(proof.receiptRef, proof); await ledger.verify(capabilityIdForBinding(b), proof.receiptRef, 1);
     }
-    for (const b of [apiBinding, browserBinding]) ledger.register({ binding: b, ownerRef: "fictional-source-owner", costBasis: { state: "unknown", reasonCode: "FICTIONAL_COST" } }, 0);
+    for (const b of [apiBinding, browserBinding]) ledger.register({ binding: b, ownerRef: "owner:fictional-source-owner", costBasis: { state: "unknown", reasonCode: "FICTIONAL_COST" } }, 0);
     await verify(apiBinding);
     a.db.exec("CREATE TABLE fictional_route_quota(window_ref TEXT, dispatch_key TEXT, PRIMARY KEY(window_ref,dispatch_key))");
     let windowRef = "fictional-window-1", windowStart = a.at(), windowEnd = a.until();
@@ -75,7 +75,7 @@ it("actual J04 API and separately verified browser dispatch share the same sourc
     const lease = () => ({ scope, observedAt: a.at(), validUntil: a.until() });
     const authority: RuntimeAuthority = {
       resolveActivation: async () => ({ ...lease(), receiptRef: "receipt:fictional-runtime", registrationRef: registration.registrationRef, registrationHash: digest(registration), sourceVersion: "v1", triggerRef: "fictional-schedule", triggerVersion: "v1", toolApprovalRef: "fictional-machine-approval", migration: { state: "notApplicable", policyVersion: a.policy.version } }), assertActivation: () => {},
-      prepareWindow: async ({ window }) => ({ ...lease(), receiptRef: "receipt:fictional-window", sourceVersion: "v1", registrationHash: digest(registration), window, kind: "approved", intents: [browserIntent] }), assertWindow: () => {},
+      prepareWindow: async ({ window }) => ({ ...lease(), receiptRef: `receipt:fictional-window-${a.state.now}`, sourceVersion: "v1", registrationHash: digest(registration), window, kind: "approved", intents: [browserIntent] }), assertWindow: () => {},
       resolvePreflight: async () => { throw new Error("Approved dispatch owns preflight."); }, assertCurrent: () => {},
       resolveTakeover: async () => { throw new Error("No takeover is authorized."); }, assertTakeover: () => {},
     };
@@ -84,14 +84,27 @@ it("actual J04 API and separately verified browser dispatch share the same sourc
     runtime.install(registration.registrationRef, 0, machine);
     const event = { registrationRef: registration.registrationRef, registrationVersion: 1, intendedAt: a.at(), triggerEventRef: "fictional-scheduled-event" };
     const scheduled = await runtime.fire(event, machine);
-    await expect(runtime.work({ runRef: scheduled.run.runId }, machine)).rejects.toMatchObject({ executionCertainty: "notApplied" });
-    expect(calls).toEqual(["api"]); await verify(browserBinding);
+    expect(ledger.requireReady(browserBinding)).toMatchObject({ state: "Unverified", allowed: false });
+    // Quota resolution precedes capability assertion: the full source pool is the first blocker.
     await expect(runtime.work({ runRef: scheduled.run.runId }, machine)).rejects.toMatchObject({ code: "SOURCE_RATE_LIMITED", status: 429, executionCertainty: "notApplied" });
     expect(calls).toEqual(["api"]); expect(a.db.prepare("SELECT count(*) n FROM fictional_route_quota").get()?.n).toBe(1);
-    expect(guard.read(scheduled.run.runId, false).run.items[0]!.attempts).toBe(0);
+    const originalKey = guard.read(scheduled.run.runId, false).dispatchKey;
+    const deferred = guard.read(scheduled.run.runId, false).run.items.find(item => item.itemKey === originalKey)!;
+    expect(deferred).toMatchObject({ state: "retryWait", attempts: 0, dueAt: new Date(a.state.now + 1000).toISOString(), reasonCode: "SOURCE_RATE_LIMITED" });
+    await runtime.work({ runRef: scheduled.run.runId }, machine);
+    expect(guard.read(scheduled.run.runId, false).run.items.find(item => item.itemKey === originalKey)).toEqual(deferred);
+    expect(calls).toEqual(["api"]);
     // Only an explicit source reset supplies a new pool. The route, run and intent stay fixed.
     a.state.now += 1000; windowRef = "fictional-window-2"; windowStart = a.at(); windowEnd = a.until();
-    runtime = new JobRuntime(a.db, runtimeOptions); await runtime.work({ runRef: scheduled.run.runId }, machine);
+    runtime = new JobRuntime(a.db, runtimeOptions);
+    await expect(runtime.work({ runRef: scheduled.run.runId }, machine)).rejects.toMatchObject({ code: "NOT_VERIFIED", executionCertainty: "notApplied" });
+    expect(calls).toEqual(["api"]);
+    expect(guard.read(scheduled.run.runId, false).run.items.find(item => item.itemKey === originalKey)).toMatchObject({ state: "held", attempts: 0, reasonCode: "NOT_VERIFIED" });
+    expect(ledger.requireReady(browserBinding)).toMatchObject({ state: "Unverified", allowed: false });
+    await verify(browserBinding);
+    expect(ledger.requireReady(browserBinding)).toMatchObject({ state: "Ready", allowed: true });
+    await runtime.work({ runRef: scheduled.run.runId }, machine);
+    expect(guard.read(scheduled.run.runId, false).dispatchKey).toBe(originalKey);
     expect(calls).toEqual(["api", "browser"]); expect(guard.read(api.runRef, false).receipt).toEqual(originalReceipt);
     expect((await runtime.fire(event, machine)).run.runId).toBe(scheduled.run.runId);
     await runtime.work({ runRef: scheduled.run.runId }, machine); expect(calls).toEqual(["api", "browser"]);

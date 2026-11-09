@@ -49,15 +49,21 @@ it("invitation can be approved without accepted terms while activation cannot",a
     expect(w.packet.groups[0]!.draft!.gates.acceptedTerms.state).toBe("notApplicable");
     const invitation=await w.approve();expect(invitation.current.state).toBe("approved");
     w.packet.groups[0]!.kind="activation";w.packet.groups[0]!.draft!.phase="activation";w.packet.capacity[0]!.kind="actionQuota";w.packet.capacity.push({...w.packet.capacity[0]!,kind:"activeCollaborations",unit:"collaboration"});w.seal();
-    await expect(w.repo.preparePreview(await w.command(),w.principal,"fictional-unaccepted-activation")).rejects.toThrow(/ACCEPTED_TERMS/);
+    await expect(w.repo.preparePreview(await w.command(),w.principal,"fictional-unaccepted-activation")).rejects.toThrow("GATE_ACCEPTEDTERMS_REQUIRED");
     expect(w.state.calls).toHaveLength(0);
   }finally{w.a.db.close();}
 });
 
 it("source confirmation reconciles the original uncertain sample receipt without a second invocation",async()=>{
   const w=bulkFixture();try{
-    const run=await w.queue(1);w.state.uncertain.add(w.packet.rows[0]!.recipientRef);await w.dispatch.execute(run.runRef);
-    const original=w.state.calls[0]!,calls=w.state.calls.length;
+    const run=await w.queue(1),target=w.packet.rows[0]!.recipientRef;
+    const item=w.packet.groups[1]!.draft!.items.find(candidate=>candidate.targetRef===target)!;
+    w.state.uncertain.add(target);await w.dispatch.execute(run.runRef);
+    const original=w.state.calls.find(call=>call.intent.approval.itemRef===item.itemRef)!,calls=w.state.calls.length;
+    const uncertain=w.dispatch.read(run.runRef,false);
+    expect(uncertain.run.items.find(row=>row.itemKey===original.dispatchKey)).toMatchObject({state:"reconcile",attempts:1,result:null});
+    expect(uncertain.items.find(row=>row.dispatchKey===original.dispatchKey)!.receipt).toBeNull();
+    expect(w.state.receipts.has(original.dispatchKey)).toBe(false);
     w.state.receipts.set(original.dispatchKey,{receiptRef:"fictional-original-sample-confirmed",dispatchKey:original.dispatchKey,payloadHash:original.intent.approval.payloadHash,handlerRef:original.intent.handlerRef,providerBindingHash:original.providerBindingHash,sourceEffect:"localArtifact",observedAt:w.a.at()});
     w.restart();const recovered=await w.dispatch.reconcile(run.runRef);expect(recovered.items.every(item=>item.receipt)).toBe(true);expect(w.state.calls).toHaveLength(calls);
     const data=(await w.bulk.read(w.filters,w.principal)).data;expect(data.sampleCommitments).toMatchObject({remainingUnits:0,remainingMinor:0});expect(data.aggregateCounts.uncertain).toBe(0);

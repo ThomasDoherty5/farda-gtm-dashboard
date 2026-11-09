@@ -65,9 +65,9 @@ it("actual preflight throttle persists a deferred row and honors the source dela
 
 it("a throttle without an authoritative delay stays held instead of inventing a reset",async()=>{
   const w=bulkFixture();try{
-    const run=await w.queue();w.resources.resolveGrants=async()=>{throw new DispatchError("SOURCE_RATE_LIMITED",429);};
+    const run=await w.queue(),firstKey=run.items[0]!.dispatchKey;w.resources.resolveGrants=async()=>{throw new DispatchError("SOURCE_RATE_LIMITED",429);};
     await expect(w.dispatch.execute(run.runRef)).rejects.toMatchObject({code:"SOURCE_RATE_LIMITED"});
-    expect(w.dispatch.read(run.runRef,false).run.items[0]).toMatchObject({state:"held",attempts:0,reasonCode:"SOURCE_RATE_LIMITED"});
+    expect(w.dispatch.read(run.runRef,false).run.items.find(item=>item.itemKey===firstKey)).toMatchObject({state:"held",attempts:0,reasonCode:"SOURCE_RATE_LIMITED"});
     expect((await w.bulk.read(w.filters,w.principal)).data.aggregateCounts).toMatchObject({snapshot:24,blocked:1,deferred:0,ready:23});
     expect(w.state.calls).toHaveLength(0);
   }finally{w.a.db.close();}
