@@ -74,6 +74,10 @@ it("renders the completed native return chain from independent confirmed events,
     expect(within(chain).getByText(`source-${kind}`, { exact: false })).toBeVisible();
   }
   expect(within(chain).getByText("Inventory quarantined")).toBeVisible();
+  const mirrorRow = within(chain).getByRole("row", { name: /Mirrors refreshed/ });
+  expect(mirrorRow).toHaveTextContent("Unknown · independent mirror refresh receipt not supplied");
+  expect(mirrorRow).not.toHaveTextContent("verified-caseClosed");
+  expect(mirrorRow).not.toHaveTextContent("2026");
   expect(screen.queryByText("Unverified legacy success")).not.toBeInTheDocument();
   expect(screen.queryByText("legacy-unverified-receipt")).not.toBeInTheDocument();
 });

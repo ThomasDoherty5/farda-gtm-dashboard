@@ -53,7 +53,7 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
         <GateRows label="Historical funding and review" rows={[
           { badge: <Badge tone="warning">Source approval</Badge>, title: "Invitation funding", text: historical?.fundingRef ?? "Unknown · no historical funding evidence returned" },
           { badge: <Badge tone="violet">Source deadline</Badge>, title: "Content review round", text: observed(historical?.reviewDeadline ?? null) },
-          { badge: <Badge>Historical version</Badge>, title: "Accepted terms", text: historical?.termsVersion ?? "Unknown · no accepted historical terms returned" },
+          { badge: <Badge>New review state</Badge>, title: "Revision / resubmission", text: "Unknown · native review rounds, evidence and deadlines were not supplied. Track each round independently; accepted terms do not establish a resubmission." },
           { badge: <Badge>Observe + reconcile</Badge>, title: "Provider release", text: "No duplicate manual payout after provider funding" },
         ]} />
         <Button variant="secondary" style={{ alignSelf: "flex-start", minWidth: 240 }} aria-haspopup="dialog" onClick={() => setDialog("history")}>Review historical terms</Button>

@@ -102,7 +102,7 @@ it("withholds even a verified external link on synthetic financial evidence", as
   const held = screen.getByRole("button", { name: "Current affiliate terms" });
   const reason = document.getElementById(held.getAttribute("aria-describedby")!);
   expect(reason).toBeVisible();
-  expect(reason).toHaveTextContent("Source link unavailable. Refresh source access.");
+  expect(reason).toHaveTextContent("Source link unavailable; refresh access.");
   expect(reason?.parentElement).toBe(held.parentElement);
 });
 it("renders source execution only from its independent event", async () => {
@@ -185,10 +185,13 @@ it("shows original paid receipts inside historical TikTok terms without creating
   const {source,payable}=fixture(),record=source.records.find(item=>item.provider==="tiktok")!;
   record.historical=payable.record!.historical;
   const h=harness({...payable,kind:"native-settlement",record},"/finance/settlements/tiktok-one"),user=userEvent.setup();
+  expect(await screen.findByText("Revision / resubmission")).toBeVisible();
+  expect(screen.getByText(/Unknown · native review rounds, evidence and deadlines were not supplied/)).toBeVisible();
   await user.click(await screen.findByRole("button",{name:"Review historical terms"}));
   const dialog=screen.getByRole("dialog",{name:"Historical accepted terms"});
   expect(dialog).toHaveTextContent("tiktok-one-receipt");
   expect(dialog).toHaveTextContent("Original source receipts");
+  expect(dialog).toHaveTextContent(record.historical!.termsVersion);
   expect(dialog).toHaveTextContent("Read only");
   expect(h.requests).toHaveLength(0);
 });
