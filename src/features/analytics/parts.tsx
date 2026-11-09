@@ -10,6 +10,8 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import type { Provenance } from "@/fixtures/analytics";
+import { z } from "zod";
+import { sourceStatusSchema, type SourceStatus } from "@/adapter/viewSchemas/analytics";
 import styles from "./Analytics.module.css";
 
 export const usd = (m: Money) => formatMoney(m);
@@ -150,6 +152,28 @@ export function Table({ caption, columns, rows, tight = false, cell12 = false, t
  * Loading, failure, stale, partial and empty states shared by every analytics read. Stale and partial data stays
  * visible but is labeled; an empty source answer is not shown as zero.
  */
+const SOURCE_NAMES: Record<SourceStatus["source"], string> = { orders: "Orders", adPlatforms: "Ad platforms", sessions: "Storefront sessions", support: "Support and reviews" };
+const SOURCE_STATE_WORDS: Record<SourceStatus["state"], string> = {
+  current: "current", noChange: "current, no change", partial: "partial", stale: "stale", error: "sync failed", neverSynced: "never synced",
+  unconfigured: "not connected", unavailable: "could not be read", invalid: "returned unverified data",
+};
+/** Each served source's own state. A source that is not connected is shown as such; its figures read N/A, never zero. */
+export function SourceStates({ sources }: { sources: SourceStatus[] | undefined }) {
+  const attention = (sources ?? []).filter((s) => s.state !== "current" && s.state !== "noChange");
+  if (!attention.length) return null;
+  return (
+    <Alert state="warning" title="Some sources are not current" testId="source-states">
+      <p>{attention.map((s) => `${SOURCE_NAMES[s.source]}: ${SOURCE_STATE_WORDS[s.state]}`).join(" · ")}. Figures that depend on them read N/A, not zero.</p>
+    </Alert>
+  );
+}
+/** Only a served read's per-source states. Other views use a "sources" field for different rows (the launch snapshot), so the shape is checked. */
+const sourcesOf = (data: unknown) => {
+  if (!data || typeof data !== "object" || !("sources" in data)) return undefined;
+  const parsed = z.array(sourceStatusSchema).safeParse((data as { sources: unknown }).sources);
+  return parsed.success ? parsed.data : undefined;
+};
+
 export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }: { query: UseQueryResult<ReadResponse<D>, Error>; subject: string; emptyTitle: string; emptyBody: string; children: (data: D, res: ReadResponse<D>) => ReactNode }) {
   const res = query.data;
   const freshness = res?.sourceFreshness[0];
@@ -167,6 +191,7 @@ export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }
           <p>{res.coverage.expectedCount === null ? `${res.coverage.observedCount ?? "Unknown"} source records observed; total coverage is unknown.` : `${res.coverage.observedCount ?? "Unknown"} of ${res.coverage.expectedCount} source records are available.`} Totals cover only those records.</p>
         </Alert>
       )}
+      <SourceStates sources={sourcesOf(res?.data)} />
       {query.isPlaceholderData && <span role="status" className="visually-hidden">Updating results…</span>}
       {res && (res.data && res.dataState !== "empty" ? <div style={{ display: "contents" }} aria-busy={query.isPlaceholderData || undefined}>{children(res.data, res)}</div> : <EmptyState state="Empty" title={emptyTitle}><p>{emptyBody}</p></EmptyState>)}
     </>

@@ -25,6 +25,7 @@ export function rightsLabel(a: { rights: RightsState; expiresInDays: number | nu
     case "cleared": return "Cleared";
     case "expiring": return a.expiresInDays === null ? "Expiring" : `Expires in ${a.expiresInDays}d`;
     case "notGranted": return "Not granted";
+    case "expired": return "Expired";
     case "unknown": return "Unknown";
   }
 }

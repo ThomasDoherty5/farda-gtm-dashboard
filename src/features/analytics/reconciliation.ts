@@ -1,16 +1,16 @@
-import type { AttributionData, CustomerJourneyData, PaidMediaData } from "@/fixtures/analytics";
+import type { AttributionData, CustomerJourneyDemoData, PaidMediaData } from "@/fixtures/analytics";
 import type { MonitorPost } from "@/fixtures/monitor";
-import type { OverviewData } from "@/fixtures/overview";
+import type { OverviewOriginalData } from "@/fixtures/overview";
 
 /** One place a figure appears. `value` is the exact number (cents for money), so cells compare without rounding. */
 export type MatrixCell = { page: string; route: string; value: number | null; note?: string };
 export type MatrixRow = { metric: string; unit: "usd" | "count"; cells: MatrixCell[]; status: "matches" | "differs" | "unknown"; reason: string | null };
 
 export type ReconciliationInputs = {
-  overview: OverviewData;
+  overview: OverviewOriginalData;
   attribution: AttributionData;
   paidMedia: PaidMediaData;
-  journey: CustomerJourneyData;
+  journey: CustomerJourneyDemoData;
   posts: MonitorPost[];
 };
 

@@ -104,6 +104,8 @@ import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type Runtim
 import { createSourcingPlanReader, SourcingError } from "./sourcing/reader.ts";
 import { SOURCING_PLAN_VIEW, sourcingPlanFilters } from "./sourcing/contract.ts";
 import type { SourcingPlanSourceReader } from "./sourcing/source.ts";
+import { analyticsFilters, analyticsPeriodSchema, analyticsViewKeys, createAnalyticsReader, isAnalyticsViewKey } from "./analytics/reader.ts";
+import { AnalyticsError, type AnalyticsSources } from "./analytics/sources.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -139,6 +141,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   operationsControlAuthority?: OperationsControlAuthoritySource;
   operationsCanonical?: {source:OperationsCanonicalSource;owners:ReadonlyMap<OperationsCanonicalKind,OperationsOwnerRegistration>};
   sourcingPlanSource?: SourcingPlanSourceReader;
+  /** THO-293 analytics source readers (orders, ad platforms, sessions, support). Absent readers read as unconfigured, never demo data. */
+  analyticsSources?: AnalyticsSources; analyticsTimezone?: string;
   /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
   commercialPolicy?: CommercialPolicySource;
   recruitmentSource?: RecruitmentSource;
@@ -206,6 +210,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
   let sourcingPlan: ReturnType<typeof createSourcingPlanReader>;
+  let analytics: ReturnType<typeof createAnalyticsReader>;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
   let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
   let mediaDomain: MediaComposition | undefined;
@@ -282,6 +287,8 @@ export function createAgentServer(options: AgentServerOptions) {
     sourcingPlan = createSourcingPlanReader({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       source: options.sourcingPlanSource, now: options.operations?.now });
+    analytics = createAnalyticsReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
+      sources: options.analyticsSources, now: options.operations?.now, timezone: options.analyticsTimezone });
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -492,6 +499,9 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
     readBase.extend({ viewKey: z.literal(SOURCING_PLAN_VIEW), filters: sourcingPlanFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
+    // THO-293 analytics reads: strict per-view filters and an event-time period or null, through the shared read path.
+    ...analyticsViewKeys.filter(viewKey => viewKey !== "customerJourney").map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: analyticsFilters[viewKey],
+      period: analyticsPeriodSchema, sort: z.array(z.never()).max(0) })),
   ]);
   const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
   const requestIds = new WeakMap<IncomingMessage, string>();
@@ -809,6 +819,7 @@ export function createAgentServer(options: AgentServerOptions) {
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
           importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
         dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
+        analyticsReads: Object.fromEntries((["orders", "adPlatforms", "sessions", "support"] as const).map(key => [key, options.analyticsSources?.[key] ? "injected" : "notConnected"])),
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
           dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
@@ -919,6 +930,15 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: "ready", data, sourceFreshness: [],
             coverage: { expectedCount: data.items.length, observedCount: data.items.length, missingCount: 0, complete: true,
               reasonCodes: [] }, capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+        }
+        if (isAnalyticsViewKey(input.viewKey)) {
+          // Authenticated, admitted and scope-checked above like every other read; errors use the shared envelope.
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const result = await analytics.read(input.viewKey, input.filters, input.period);
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.dataState, data: result.data, sourceFreshness: result.sourceFreshness, coverage: result.coverage,
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -1375,6 +1395,7 @@ export function createAgentServer(options: AgentServerOptions) {
       if (error instanceof SourcingError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
+      if (error instanceof AnalyticsError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
