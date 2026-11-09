@@ -1,8 +1,13 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import type { ProvenanceValue, ReadResponse } from "@/adapter/contract";
+import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
 import { staleReasonText } from "@/adapter/freshness";
 import { useScope } from "@/adapter/scope";
+import { useSourceLease } from "@/adapter/useSourceLease";
+import type { NativeOverviewSummary } from "@/creator-agent/analytics/views";
+import { NativeOverview } from "./NativeOverview";
+import { ReportingPeriodForm, reportingRoute, useReportingPeriod } from "@/features/analytics/reportingPeriod";
+import { nativePeriod } from "@/features/analytics/NativeAnalyticsEvidence";
 import { useView } from "@/adapter/useView";
 import { Alert } from "@/components/Alert";
 import { Badge } from "@/components/Badge";
@@ -40,10 +45,14 @@ const pct = (part: number, whole: number) => (whole === 0 ? 0 : (100 * part) / w
 /** Performance overview (Figma source 10:217, owner THO-293). */
 export function OverviewPage() {
   const { adapter } = useScope();
-  const query = useView<Record<string, never>, OverviewData>("overviewSummary", {});
+  const selectedPeriod = useReportingPeriod();
+  const query = useView<Record<string, never>, OverviewData | NativeOverviewSummary>("overviewSummary", {}, selectedPeriod);
   const [dialog, setDialog] = useState<"period" | "export" | null>(null);
   const demo = adapter.kind === "demo";
-  const period = query.data?.data?.periodLabel ?? null;
+  const report = query.isError ? null : query.data?.data;
+  const native = report?.datasetKey === "analytics-native" ? report : null;
+  const expired = useSourceLease(native?.provenance.validUntil);
+  const period = native && !expired ? nativePeriod(native) : report && "periodLabel" in report ? report.periodLabel : null;
 
   return (
     <section aria-labelledby="overview-title" data-figma-source="10:217" className={styles.page}>
@@ -52,21 +61,23 @@ export function OverviewPage() {
           <h1 id="overview-title">Overview</h1>
           <p>Every channel. Every creator. One clear picture.</p>
         </div>
-        <Button variant="secondary" className={styles.periodButton} aria-haspopup="dialog" onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" className={styles.periodButton} aria-haspopup="dialog" onClick={() => setDialog("period")}>{native ? "Reporting period" : "Last 30 days"}</Button>
         <Button className={styles.exportButton} aria-haspopup="dialog" onClick={() => setDialog("export")}>Export report</Button>
       </div>
       {query.isPending && <SkeletonCard label="Loading overview…" />}
-      {query.isError && <ViewError error={query.error} subject="The overview" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && <Body res={query.data as ReadResponse<OverviewData>} demo={demo} />}
+      {query.isError && <ViewError error={query.error} subject="The overview" hasPriorData={false} onRetry={() => void query.refetch()} />}
+      {expired && <EmptyState state="Error" title="Reporting access lease expired" alert><p>Refresh to verify current access before viewing reporting evidence.</p><Button onClick={() => void query.refetch()}>Refresh reporting evidence</Button></EmptyState>}
+      {!query.isError && !expired && query.data && (native ? <NativeOverview data={native} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body res={query.data as ReadResponse<OverviewData>} demo={demo} />)}
 
       <Dialog open={dialog === "period"} title="A consistent reporting window." badge={demo ? "Demo" : undefined} onClose={() => setDialog(null)}>
-        <p>{demo ? `This demo uses ${period ?? "one fixed window"}. ` : ""}Keep the same period across revenue, costs and attribution. A live implementation applies the chosen date range to every panel and labels incomplete periods.</p>
-        <LinkButton to="/analytics/attribution">View analytics workspace</LinkButton>
+        <p>{period ? `${demo ? "This demo uses" : "The source-selected period is"} ${period}. ` : "Reporting window Unknown. "}Keep the same period across revenue, costs and attribution. Incomplete source periods stay labeled.</p>
+        {!demo && dialog === "period" && <ReportingPeriodForm onApplied={() => setDialog(null)} />}
+        <LinkButton to={reportingRoute("/analytics/attribution", selectedPeriod)}>View analytics workspace</LinkButton>
         <Button variant="secondary" onClick={() => setDialog(null)}>{demo ? "Keep demo period" : "Close"}</Button>
       </Dialog>
       <Dialog open={dialog === "export"} title="Report preview" badge={demo ? "Demo" : undefined} onClose={() => setDialog(null)}>
         <p>{demo ? `The demo period is ${period ?? "one fixed window"}. Metrics are illustrative, and no file is generated. ` : "Export isn't connected yet, and no file is generated. "}Production exports retain the period, source freshness, and metric definitions.</p>
-        <LinkButton to="/analytics/attribution">View performance report</LinkButton>
+        <LinkButton to={reportingRoute("/analytics/attribution", native?.period ?? selectedPeriod)}>View performance report</LinkButton>
         <LinkButton to="/finance/close/2026-10">View month-end package</LinkButton>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close preview</Button>
       </Dialog>
@@ -193,7 +204,7 @@ function Kpis({ data }: { data: OverviewData }) {
   );
 }
 
-function SalesByChannel({ data }: { data: OverviewData }) {
+export function SalesByChannel({ data }: { data: { daily: OverviewData["daily"]; channels: { key: string; label: string; netReceipts: Money | null; orders: number | null }[] } }) {
   const { daily, channels } = data;
   const fmt = (v: number | null) => exactOrNa(v);
   const max = useMemo(() => axisMax(daily.flatMap((d) => [d.shopify, d.tiktok]).filter((v): v is number => v !== null), 20_000), [daily]);
@@ -236,8 +247,8 @@ function SalesByChannel({ data }: { data: OverviewData }) {
         </tbody>
       </table></div>
       <div className={styles.chartTotals}>
-        {shopify && <span className={styles.totalShopify} style={{ whiteSpace: "pre" }}>{`${shopify.label}  ${formatMoney(shopify.netReceipts)}`}</span>}
-        {tiktok && <span className={styles.totalTiktok} style={{ whiteSpace: "pre" }}>{`${tiktok.label}  ${formatMoney(tiktok.netReceipts)}`}</span>}
+        {shopify && <span className={styles.totalShopify} style={{ whiteSpace: "pre" }}>{`${shopify.label}  ${(shopify.netReceipts ? formatMoney(shopify.netReceipts) : "Unknown")}`}</span>}
+        {tiktok && <span className={styles.totalTiktok} style={{ whiteSpace: "pre" }}>{`${tiktok.label}  ${(tiktok.netReceipts ? formatMoney(tiktok.netReceipts) : "Unknown")}`}</span>}
         <span className={styles.totalsSpace} />
         <Link to="/analytics/attribution" className={styles.textLink}>View channel report →</Link>
       </div>

@@ -2,7 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
-import { lifecycleSourceFixture, lifecycleTestScope } from "../src/creator-agent/lifecycle/fixtures.testkit.ts";
+import { lifecycleSourceFixture, lifecycleTestSource, lifecycleTestScope } from "../src/creator-agent/lifecycle/fixtures.testkit.ts";
 import { LifecycleError } from "../src/creator-agent/lifecycle/source.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
 import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
@@ -18,7 +18,7 @@ const options = { databasePath: ":memory:", workspaceId: lifecycleTestScope.work
 test("seven native lifecycle views use actual HTTP and SQLite, with locked gates, source states, keyboard and responsive evidence", async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   let snapshot: ReturnType<typeof lifecycleSourceFixture> | null = lifecycleSourceFixture(lifecycleTestScope, Date.now()), denied = false;
-  const app = createAgentServer({ ...options, lifecycleSource: async () => { if (denied) throw new LifecycleError("FORBIDDEN", 403); return structuredClone(snapshot); } });
+  const app = createAgentServer({ ...options, lifecycleSource: lifecycleTestSource(async () => { if (denied) throw new LifecycleError("FORBIDDEN", 403); return structuredClone(snapshot); }, Date.now) });
   await listen(app);
   const dir = process.env.FARDA_LIFECYCLE_PROOF_DIR ?? testInfo.outputPath("lifecycle-evidence"); mkdirSync(dir, { recursive: true });
   const audit: unknown[] = [];
@@ -90,7 +90,7 @@ test("seven native lifecycle views use actual HTTP and SQLite, with locked gates
 
 test("a malformed acknowledgment and failed read survive reload with the original key until exact durable readback", async ({ page }) => {
   const snapshot = lifecycleSourceFixture(lifecycleTestScope, Date.now());
-  const app = createAgentServer({ ...options, lifecycleSource: async () => structuredClone(snapshot) }); await listen(app);
+  const app = createAgentServer({ ...options, lifecycleSource: lifecycleTestSource(async () => structuredClone(snapshot), Date.now) }); await listen(app);
   let writes = 0, blockReadback = true;
   try {
     await login(page);
@@ -114,7 +114,7 @@ test("a malformed acknowledgment and failed read survive reload with the origina
 
 test("an absent original request after reload remains held rather than issuing a new save", async ({ page }) => {
   const snapshot = lifecycleSourceFixture(lifecycleTestScope, Date.now());
-  const app = createAgentServer({ ...options, lifecycleSource: async () => snapshot }); await listen(app);
+  const app = createAgentServer({ ...options, lifecycleSource: lifecycleTestSource(async () => snapshot, Date.now) }); await listen(app);
   try {
     await login(page); await page.goto("/customers/flows/early-access?draftRequestKey=bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb");
     await expect(page.getByRole("heading", { name: "Save outcome needs readback" })).toBeVisible();
@@ -139,7 +139,7 @@ test("no provider binding displays unknown populations and held local forms with
 
 test("a version conflict retains original edits and requires exact terminal rejection before rebasing", async ({ page }) => {
   const snapshot = lifecycleSourceFixture(lifecycleTestScope, Date.now());
-  const app = createAgentServer({ ...options, lifecycleSource: async () => snapshot }); await listen(app);
+  const app = createAgentServer({ ...options, lifecycleSource: lifecycleTestSource(async () => snapshot, Date.now) }); await listen(app);
   const requestedScope = { workspaceId: lifecycleTestScope.workspaceId, accountIds: [lifecycleTestScope.accountId], environment: "sandbox" };
   const headers = { authorization: "Bearer " + SYNTHETIC_REVIEW_TOKEN };
   try {
@@ -160,7 +160,7 @@ test("a version conflict retains original edits and requires exact terminal reje
 
 test("offline save never dispatches on reconnect and can only retry the original request explicitly", async ({ page, context }) => {
   const snapshot = lifecycleSourceFixture(lifecycleTestScope, Date.now());
-  const app = createAgentServer({ ...options, lifecycleSource: async () => snapshot }); await listen(app);
+  const app = createAgentServer({ ...options, lifecycleSource: lifecycleTestSource(async () => snapshot, Date.now) }); await listen(app);
   const writes: string[] = [];
   try {
     await login(page); await page.route("**/v1/save", async route => { writes.push(route.request().postDataJSON().idempotencyKey); await route.continue(); });

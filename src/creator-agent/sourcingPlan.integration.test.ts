@@ -3,274 +3,142 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readResponseSchema } from "@/adapter/contract";
-import { viewSchemas } from "@/adapter/viewSchemas";
-import { adapterErrorBodySchema } from "@/adapter/wire";
-import { createAgentServer, type AgentServerOptions } from "./server";
-import { SOURCING_CLOCK_SKEW_MS, sourcingPlanSchema } from "./sourcing/contract";
-import { sourcingSourceFixture, sourcingTestScope, sourcingTestTime } from "./sourcing/fixtures.testkit";
-import { SourcingError, type SourcingSnapshot } from "./sourcing/source";
-import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
+import { readResponseSchema } from "../adapter/contract.ts";
+import { viewSchemas } from "../adapter/viewSchemas/index.ts";
+import { adapterErrorBodySchema } from "../adapter/wire.ts";
+import { createAgentServer, type AgentServerOptions } from "./server.ts";
+import { nativeSourcingSourceFixture } from "./sourcing/nativeFixtures.testkit.ts";
+import { nativeSourcingPlanSchema } from "./sourcing/views.ts";
+import { NativeSourcingError } from "./sourcing/nativeSource.ts";
+import { sourcingSourceFixture, sourcingTestTime } from "./sourcing/fixtures.testkit.ts";
+import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures.ts";
 
-const apps: ReturnType<typeof createAgentServer>[] = [];
-const dirs: string[] = [];
-const requestedScope = { workspaceId: sourcingTestScope.workspaceId, accountIds: [sourcingTestScope.accountId], environment: "sandbox" };
+const apps: ReturnType<typeof createAgentServer>[] = [], dirs: string[] = [];
 type Auth = "reader" | "reviewer" | "none" | { cookie: string };
-async function start(extra: Partial<AgentServerOptions> = {}, clock = { now: sourcingTestTime }) {
-  const app = createAgentServer({ databasePath: ":memory:", workspaceId: sourcingTestScope.workspaceId, accountId: sourcingTestScope.accountId,
-    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => clock.now }, ...extra });
-  apps.push(app);
-  await new Promise<void>((resolve) => app.server.listen(0, "127.0.0.1", resolve));
-  const address = app.server.address();
-  if (!address || typeof address === "string") throw new Error("Expected a local test service");
+async function start(configured = true, extra: Partial<AgentServerOptions> = {}, sourceFixture = nativeSourcingSourceFixture()) {
+  const fixture = sourceFixture, calls = { reads: 0 }, original = fixture.source.read;
+  fixture.source.read = async (binding, signal) => { calls.reads++; return original(binding, signal); };
+  const options: AgentServerOptions = { databasePath: ":memory:", workspaceId: fixture.scope.workspaceId, accountId: fixture.scope.accountId,
+    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: fixture.now }, sourcingPlanSource: configured ? fixture.source : undefined, ...extra };
+  const app = createAgentServer(options); apps.push(app);
+  await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
+  const address = app.server.address(); if (!address || typeof address === "string") throw new Error("Expected local test service");
   const base = `http://127.0.0.1:${address.port}`;
-  const headers = (auth: Auth): Record<string, string> => auth === "none" ? {} : typeof auth === "object" ? { cookie: auth.cookie }
-    : { authorization: "Bearer " + (auth === "reviewer" ? SYNTHETIC_REVIEW_TOKEN : SYNTHETIC_READ_TOKEN) };
+  const requestedScope = { workspaceId: fixture.scope.workspaceId, accountIds: [fixture.scope.accountId], environment: "sandbox" };
   const call = async (path: string, body?: unknown, auth: Auth = "reader") => {
-    const response = await fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { ...headers(auth), "content-type": "application/json" },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const headers = auth === "none" ? {} : typeof auth === "object" ? { cookie: auth.cookie } : { authorization: `Bearer ${auth === "reviewer" ? SYNTHETIC_REVIEW_TOKEN : SYNTHETIC_READ_TOKEN}` };
+    const response = await fetch(base + path, { method: body === undefined ? "GET" : "POST", headers: { ...headers, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     return { status: response.status, body: await response.json(), headers: response.headers };
   };
-  const envelope = (overrides: Record<string, unknown> = {}) => ({ schemaVersion: "2026-11-02.proposed", operation: "readView", requestId: "synthetic-sourcing-plan-read",
-    requestedScope, viewKey: "sourcingPlan", filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 }, ...overrides });
+  const envelope = (overrides: Record<string, unknown> = {}) => ({ schemaVersion: "2026-11-02.proposed", operation: "readView", requestId: "synthetic-sourcing-plan-read", requestedScope, ...fixture.request, ...overrides });
   const read = (overrides: Record<string, unknown> = {}, auth: Auth = "reader") => call("/v1/read", envelope(overrides), auth);
-  return { app, call, read, base };
+  return { fixture, calls, options, app, requestedScope, call, read };
 }
-afterEach(async () => {
-  for (const app of apps.splice(0)) await app.close();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
+afterEach(async () => { for (const app of apps.splice(0)) await app.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 const planEnvelope = readResponseSchema(viewSchemas.sourcingPlan!);
-/** D-14: every refusal is the server's shared error envelope, carrying the full canonical body and nothing else. */
-function expectCanonicalError(body: Record<string, unknown>, code: string, status: number) {
-  expect(adapterErrorBodySchema.strict().parse(body)).toMatchObject({ code, requestId: "synthetic-sourcing-plan-read", correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-    retryable: status >= 500, retryAfterMs: null, executionCertainty: "notApplied" });
-  expect(Object.keys(body).sort()).toEqual(["code", "correlationId", "executionCertainty", "message", "requestId", "retryAfterMs", "retryable", ...("fieldErrors" in body ? ["fieldErrors"] : [])].sort());
-  expect(body).not.toHaveProperty("data");
+function canonical(body: Record<string, unknown>, code: string) {
+  expect(adapterErrorBodySchema.strict().parse(body)).toMatchObject({ code, correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/), executionCertainty: "notApplied" });
+  expect(Object.keys(body).sort()).toEqual(["code", "correlationId", "executionCertainty", "message", "requestId", "retryAfterMs", "retryable"]); expect(body).not.toHaveProperty("data");
 }
-const tracked = (snapshot: () => SourcingSnapshot | null) => {
-  const counter = { reads: 0 };
-  return { counter, source: async () => { counter.reads++; return structuredClone(snapshot()); } };
-};
 
-describe("daily sourcing plan reads over HTTP and SQLite", () => {
-  it("answers an honest unconfigured state, and the capabilities say no source is connected", async () => {
-    const { read, call } = await start();
-    const result = await read();
-    expect(result.status).toBe(200);
-    const parsed = planEnvelope.parse(result.body);
-    expect(parsed).toMatchObject({ dataState: "unavailable", coverage: { expectedCount: null, observedCount: null, missingCount: null, complete: false, reasonCodes: ["SOURCING_SOURCE_UNCONFIGURED"] },
-      sourceFreshness: [{ freshnessState: "neverSynced", lastSourceSuccessAt: null }], page: { nextCursor: null, hasMore: false } });
-    expect(sourcingPlanSchema.parse(parsed.data)).toMatchObject({ sourceState: "unconfigured", plan: null, missingReason: "SOURCING_SOURCE_UNCONFIGURED" });
-    expect(parsed.capabilities.every((c) => c.state !== "available")).toBe(true);
-    expect((await call("/v1/capabilities")).body.dailySourcingPlan).toEqual({ sourceAuthority: "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" });
+describe("native daily sourcing over actual HTTP and SQLite", () => {
+  it("fails unconfigured closed with typed metadata and no fabricated plan", async () => {
+    const f = await start(false), result = await f.read(); expect(result.status).toBe(503); canonical(result.body, "SOURCING_SOURCE_UNCONFIGURED");
+    expect((await f.call("/v1/capabilities")).body.dailySourcingPlan).toMatchObject({ sourceAuthority: "notConnected", discoveryExecution: "notConnected", dispatch: "notConnected" });
   });
-
-  it("refuses unauthenticated and out-of-scope reads like every other read view, with no data and without touching the source", async () => {
-    const { counter, source } = tracked(() => sourcingSourceFixture());
-    const { read } = await start({ sourcingPlanSource: source });
-    const anonymous = await read({}, "none");
-    expect(anonymous.status).toBe(401);
-    expect(anonymous.body).not.toHaveProperty("data");
-    for (const scope of [{ ...requestedScope, workspaceId: "synthetic-foreign-workspace" }, { ...requestedScope, accountIds: ["synthetic-foreign-account"] },
-      { ...requestedScope, accountIds: [sourcingTestScope.accountId, "synthetic-foreign-account"] }, { ...requestedScope, environment: "production" }]) {
-      // The shared read union fixes the scope, so a foreign scope is invalid input (400), as on every other /v1/read view.
-      const denied = await read({ requestedScope: scope });
-      expect(denied.status).toBe(400);
-      expectCanonicalError(denied.body, "INVALID_INPUT", 400);
+  it("refuses unauthenticated and foreign scopes before source access", async () => {
+    const f = await start(); expect((await f.read({}, "none")).status).toBe(401);
+    for (const requestedScope of [{ ...f.requestedScope, workspaceId: "foreign" }, { ...f.requestedScope, accountIds: ["foreign"] }, { ...f.requestedScope, accountIds: [...f.requestedScope.accountIds, "foreign"] }, { ...f.requestedScope, environment: "production" }]) {
+      const result = await f.read({ requestedScope }); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT");
     }
-    expect(counter.reads).toBe(0);
+    expect(f.calls.reads).toBe(0);
   });
-
-  it("serves a happy path through a synthetic reader to reader and reviewer sessions, matching the client schema", async () => {
-    const { source } = tracked(() => sourcingSourceFixture());
-    const { read, call } = await start({ sourcingPlanSource: source });
-    const reviewer = planEnvelope.parse((await read({}, "reviewer")).body);
-    expect(reviewer.scope).toEqual({ ...requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" });
-    expect(reviewer.dataVersion).toMatch(/^sp1-[a-f0-9]{64}$/);
-    const data = sourcingPlanSchema.parse(reviewer.data);
+  it("serves the complete synthetic plan to reviewer and cookie-authenticated reader with no private references", async () => {
+    const f = await start(), first = await f.read({}, "reviewer"); expect(first.status).toBe(200);
+    const reviewer = planEnvelope.parse(first.body), data = nativeSourcingPlanSchema.parse(reviewer.data);
+    expect(data).toMatchObject({ datasetKey: "sourcing-plan-native", provenance: { evidenceStage: "synthetic", synthetic: true } });
     expect(data.plan!.schedule.effectiveState).toBe("active");
-    expect(data.plan!.capacity.map((r) => [r.source, r.kind, r.unit, r.state])).toEqual([
-      ["social-cat", "invitations", "invitations", "current"], ["tiktok-shop", "invitations", "invitations", "unknown"], ["shared", "sampleUnits", "units", "current"],
-      ["shared", "authorizedCost", "minorUnits", "current"],
-      ...(["social-cat", "tiktok-shop"] as const).flatMap((source) => [["collaborationSlots", "slots"], ["apiRequests", "requests"], ["browserActions", "actions"]]
-        .map(([kind, unit]) => [source, kind, unit, "unknown"]))]);
-    expect(reviewer.sourceFreshness[0]).toMatchObject({ freshnessState: "current", lastSourceSuccessAt: new Date(sourcingTestTime).toISOString(), staleReasonCode: null });
+    expect(data.plan!.capacity.map(row => [row.kind, row.unit])).toEqual(expect.arrayContaining([["invitations", "invitations"], ["sampleUnits", "units"], ["authorizedCost", "minorUnits"]]));
+    expect(data.plan!.latestRun!.receiptRefs).toHaveLength(data.plan!.latestRun!.confirmedInvitations.value!);
     expect(reviewer.capabilities).toContainEqual({ actionKind: "requestBatchApproval", state: "held", reasonCodes: ["APPROVAL_SERVICE_NOT_CONNECTED"] });
-
-    const login = await call("/v1/session", undefined, "reader");
-    const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
-    const viaCookie = planEnvelope.parse((await read({}, { cookie })).body);
-    expect(viaCookie.data).toEqual({ ...reviewer.data, observedAt: viaCookie.data!.observedAt });
-    expect(viaCookie.dataVersion).toBe(reviewer.dataVersion);
-    expect(viaCookie.capabilities).toContainEqual({ actionKind: "requestBatchApproval", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] });
+    const login = await f.call("/v1/session"), cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    const reader = planEnvelope.parse((await f.read({}, { cookie })).body);
+    expect(reader.data).toEqual(reviewer.data);
+    // Principal binding is part of the native view version, even when the permitted public plan is the same.
+    expect(reader.dataVersion).not.toBe(reviewer.dataVersion);
+    expect(reader.capabilities).toContainEqual({ actionKind: "requestBatchApproval", state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] });
     const text = JSON.stringify(reviewer);
-    for (const secret of [SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, "synthetic-social-cat-account", "synthetic-invite-receipt-1"]) expect(text).not.toContain(secret);
+    for (const secret of [SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, "synthetic-social-cat-account", "synthetic-invite-receipt-1", "fictional-grant-v1"]) expect(text).not.toContain(secret);
   });
-
-  it("keeps stale, partial and unknown values labeled instead of zero", async () => {
-    const clock = { now: sourcingTestTime };
-    let snapshot = sourcingSourceFixture();
-    const { read } = await start({ sourcingPlanSource: async () => structuredClone(snapshot) }, clock);
-    const partial = planEnvelope.parse((await read()).body);
-    expect(partial.dataState).toBe("partial");
-    const plan = sourcingPlanSchema.parse(partial.data).plan!;
-    expect(plan.steps[3]!.count).toEqual({ value: null, missingReason: "J20_REVIEW_INCOMPLETE" });
+  it("retains partial unknown values and stale source evidence without converting either to zero", async () => {
+    const fixture = nativeSourcingSourceFixture();
+    fixture.state.mutate = packet => { packet.snapshot = { ...sourcingSourceFixture(fixture.scope, sourcingTestTime), version: fixture.state.version }; };
+    const f = await start(true, {}, fixture), partial = planEnvelope.parse((await f.read()).body), plan = nativeSourcingPlanSchema.parse(partial.data).plan!;
+    expect(partial.dataState).toBe("partial"); expect(plan.steps[3]!.count).toEqual({ value: null, missingReason: "J20_REVIEW_INCOMPLETE" });
     expect(plan.capacity[1]).toMatchObject({ state: "unknown", dispatchBlocked: true, remaining: { value: null } });
-    // 5 steps + 10 expected capacity rows + 7 identity counts + 11 setup values + 12 run counts.
     expect(partial.coverage).toMatchObject({ expectedCount: 45, observedCount: 35, missingCount: 10, complete: false });
-
-    // A new source version must also be a newer observation; an equal time under another version is a conflict.
-    clock.now = sourcingTestTime + 1000;
-    snapshot = { ...sourcingSourceFixture(sourcingTestScope, clock.now), version: "synthetic-plan-source-partial", coverage: "partial" };
-    const sourcePartial = planEnvelope.parse((await read()).body);
-    expect(sourcePartial).toMatchObject({ dataState: "partial", sourceFreshness: [{ freshnessState: "partial", staleReasonCode: "SOURCE_COVERAGE_PARTIAL" }] });
-    expect(sourcingPlanSchema.parse(sourcePartial.data).plan!.schedule.effectiveState).toBe("draft");
-
-    clock.now = sourcingTestTime + 2 * 3600_000;
-    const stale = planEnvelope.parse((await read()).body);
-    expect(stale).toMatchObject({ dataState: "stale", coverage: { complete: false }, sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_STALE" }] });
-    expect(sourcingPlanSchema.parse(stale.data).plan!.capacity.every((r) => r.dispatchBlocked)).toBe(true);
+    fixture.state.now += 2 * 3600_000;
+    const stale = planEnvelope.parse((await f.read()).body);
+    expect(stale.dataState).toBe("stale"); expect(stale.coverage.complete).toBe(false);
+    expect(nativeSourcingPlanSchema.parse(stale.data).plan!.capacity.every(row => row.dispatchBlocked)).toBe(true);
   });
-
-  it("rejects forged filters, cursors and envelope fields through the shared read union before the source is read", async () => {
-    const { counter, source } = tracked(() => sourcingSourceFixture());
-    const { read } = await start({ sourcingPlanSource: source });
-    for (const filters of [{ fixture: "discovery-demo" }, { scenario: "ready" }, { workspaceId: "synthetic-foreign-workspace" }, { sourceAccount: "synthetic-other" }, null]) {
-      const forged = await read({ filters });
-      expect(forged.status).toBe(400);
-      expectCanonicalError(forged.body, "INVALID_INPUT", 400);
-    }
-    for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }]) {
-      const refused = await read(overrides);
-      expect(refused.status).toBe(400);
-      expectCanonicalError(refused.body, "INVALID_INPUT", 400);
-    }
-    const cursor = await read({ page: { cursor: "sc1.synthetic", limit: 50 } });
-    expect(cursor.status).toBe(400);
-    expectCanonicalError(cursor.body, "INVALID_CURSOR", 400);
-    expect(counter.reads).toBe(0);
+  it("rejects forged filters/cursors/envelope fields before reading the source", async () => {
+    const f = await start();
+    for (const filters of [{ fixture: "discovery-demo" }, { scenario: "ready" }, { workspaceId: "foreign" }, { sourceAccount: "other" }, null]) { const result = await f.read({ filters }); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT"); }
+    for (const overrides of [{ period: { preset: "today" } }, { sort: [{ field: "x", direction: "asc" }] }, { injected: true }, { schemaVersion: "2020-01-01" }, { operation: "submitAction" }]) { const result = await f.read(overrides); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT"); }
+    const cursor = await f.read({ page: { cursor: "forged", limit: 50 } }); expect(cursor.status).toBe(400); expect(cursor.body).not.toHaveProperty("data");
+    expect(f.calls.reads).toBe(0);
   });
-
-  it("fails closed on a malformed or denied source, and never answers an empty plan", async () => {
-    let mode: "malformed" | "impossible-date" | "denied" | "foreign" | "valid-date" = "malformed";
-    const { read } = await start({ sourcingPlanSource: async () => {
-      if (mode === "denied") throw new SourcingError("UPSTREAM_DENIED", 403);
-      if (mode === "foreign") return sourcingSourceFixture({ ...sourcingTestScope, workspaceId: "synthetic-foreign-workspace" });
-      const s = sourcingSourceFixture() as unknown as Record<string, unknown>;
-      if (mode === "malformed") return { ...s, capacity: "unknown" };
-      // Only the reset date differs between these two: a real date is served, an impossible one is refused.
-      const snapshot = sourcingSourceFixture();
-      snapshot.capacity[0]!.resetAt = mode === "valid-date" ? "2026-11-30T00:00:00Z" : "2026-11-31T00:00:00Z";
-      return snapshot;
-    } });
-    mode = "valid-date";
-    expect((await read()).status).toBe(200);
-    for (const [next, status, code] of [["malformed", 502, "SOURCE_RESPONSE_INVALID"], ["impossible-date", 502, "SOURCE_RESPONSE_INVALID"],
-      ["denied", 503, "SOURCE_AUTHORITY_DENIED"], ["foreign", 403, "SOURCE_SCOPE_DENIED"]] as const) {
-      mode = next;
-      const result = await read();
-      expect(result.status).toBe(status);
-      expectCanonicalError(result.body, code, status);
+  it("refuses malformed evidence, impossible dates and foreign scope without serializing source prose", async () => {
+    const f = await start();
+    for (const text of ["DM @synthetic.creator now", "synthetic.person@example.test", "https://example.test/profile"]) {
+      f.fixture.state.mutate = packet => { (packet.snapshot.steps[0] as { nextAction: string }).nextAction = text; };
+      const result = await f.read(); expect(result.status).toBe(503); canonical(result.body, "SOURCING_SOURCE_INVALID"); expect(JSON.stringify(result.body)).not.toContain(text);
+      f.fixture.state.mutate = packet => { (packet.snapshot.steps[3]!.count as { value: number | null; missingReason: string | null }).value = null; (packet.snapshot.steps[3]!.count as { missingReason: string | null }).missingReason = text; };
+      const reason = await f.read(); expect(reason.status).toBe(503); canonical(reason.body, "SOURCING_SOURCE_INVALID"); expect(JSON.stringify(reason.body)).not.toContain(text);
+    }
+    f.fixture.state.mutate = packet => { packet.snapshot.capacity[0]!.resetAt = "2026-11-31T00:00:00Z"; };
+    expect((await f.read()).body.code).toBe("SOURCING_SOURCE_INVALID");
+    f.fixture.state.mutate = packet => { packet.snapshot.scope.workspaceId = "foreign"; };
+    const foreign = await f.read(); expect(foreign.status).toBe(403); canonical(foreign.body, "SOURCING_BINDING_MISMATCH");
+  });
+  it("denies revoked source permission with401/403 so the browser clears protected plan data", async () => {
+    for (const status of [401, 403]) {
+      const f = await start(); f.fixture.source.read = async () => { throw new NativeSourcingError("SOURCING_SOURCE_DENIED", status); };
+      const result = await f.read(); expect(result.status).toBe(status); canonical(result.body, "SOURCING_SOURCE_DENIED");
     }
   });
-
-  it("refuses source prose that could carry a handle or address, and never forwards it", async () => {
-    let snapshot: unknown = sourcingSourceFixture();
-    const { read } = await start({ sourcingPlanSource: async () => structuredClone(snapshot) });
-    const personal = ["DM @synthetic.creator now", "synthetic.person@example.test", "https://example.test/synthetic-profile"];
-    for (const text of personal) {
-      const s = sourcingSourceFixture() as unknown as { steps: { nextAction: unknown; count: { value: unknown; missingReason: unknown } }[] };
-      s.steps[0]!.nextAction = text;
-      snapshot = s;
-      const refused = await read();
-      expect(refused.status).toBe(502);
-      expectCanonicalError(refused.body, "SOURCE_RESPONSE_INVALID", 502);
-      expect(JSON.stringify(refused.body)).not.toContain(text);
-      s.steps[0]!.nextAction = "RESOLVE_IDENTITIES"; s.steps[3]!.count.missingReason = text;
-      const again = await read();
-      expect(again.status).toBe(502);
-      expect(JSON.stringify(again.body)).not.toContain(text);
-    }
+  it("refuses future access observations and the exact access lease boundary after await", async () => {
+    const f = await start(); f.fixture.state.mutate = packet => { packet.observedAt = new Date(f.fixture.state.now + 1).toISOString(); };
+    let result = await f.read(); expect(result.status).toBe(409); canonical(result.body, "SOURCING_PUBLICATION_EXPIRED");
+    f.fixture.state.mutate = null; f.fixture.state.afterRead = () => { f.fixture.state.now += 60_000; };
+    result = await f.read(); expect(result.status).toBe(409); canonical(result.body, "SOURCING_PUBLICATION_EXPIRED");
   });
-
-  it("applies the clock-skew tolerance and the maximum age over HTTP", async () => {
-    const clock = { now: sourcingTestTime };
-    let snapshot = sourcingSourceFixture(sourcingTestScope, sourcingTestTime + SOURCING_CLOCK_SKEW_MS);
-    snapshot.validUntil = new Date(sourcingTestTime + 365 * 86_400_000).toISOString();
-    const { read } = await start({ sourcingPlanSource: async () => structuredClone(snapshot) }, clock);
-    const ahead = planEnvelope.parse((await read()).body);
-    expect(sourcingPlanSchema.parse(ahead.data).sourceState).toBe("current");
-    clock.now = sourcingTestTime + 300 * 86_400_000;
-    const aged = planEnvelope.parse((await read()).body);
-    expect(aged).toMatchObject({ dataState: "stale", sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_MAX_AGE_EXCEEDED" }] });
-    snapshot = { ...sourcingSourceFixture(sourcingTestScope, clock.now + SOURCING_CLOCK_SKEW_MS + 1), version: "synthetic-plan-source-future" };
-    const future = await read();
-    expect(future.status).toBe(502);
-    expectCanonicalError(future.body, "SOURCE_RESPONSE_INVALID", 502);
+  it("keeps the original server maximum age even if the data source claims a year-long lease", async () => {
+    const fixture = nativeSourcingSourceFixture(); fixture.state.now += 27 * 3600_000;
+    fixture.state.mutate = packet => { packet.snapshot.validUntil = new Date(sourcingTestTime + 365 * 86400_000).toISOString(); };
+    const f = await start(true, {}, fixture), response = await f.read(); expect(response.status).toBe(200);
+    const body = planEnvelope.parse(response.body); expect(body.dataState).toBe("stale");
+    expect(nativeSourcingPlanSchema.parse(body.data)).toMatchObject({ missingReason: "SOURCE_MAX_AGE_EXCEEDED", plan: { schedule: { effectiveState: "draft" } } });
   });
-
-  it("persists the source head in SQLite so a regressed snapshot is refused after a restart", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "farda-sourcing-")); dirs.push(dir);
-    const databasePath = join(dir, "agent.sqlite");
-    const newer = { ...sourcingSourceFixture(sourcingTestScope, sourcingTestTime + 60_000), version: "synthetic-plan-source-v2" };
-    const first = await start({ databasePath, sourcingPlanSource: async () => structuredClone(newer) }, { now: sourcingTestTime + 120_000 });
-    expect((await first.read()).status).toBe(200);
+  it("preserves immutable source material and rejects regressed observations after SQLite restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "farda-native-sourcing-")); dirs.push(dir); const databasePath = join(dir, "agent.sqlite");
+    const newer = nativeSourcingSourceFixture({ now: () => sourcingTestTime + 60_000 }); newer.state.version = "fictional-plan-v2";
+    const first = await start(true, { databasePath }, newer); expect((await first.read()).status).toBe(200);
     await first.app.close(); apps.splice(apps.indexOf(first.app), 1);
-    const second = await start({ databasePath, sourcingPlanSource: async () => sourcingSourceFixture() }, { now: sourcingTestTime + 120_000 });
-    const regressed = await second.read();
-    expect(regressed.status).toBe(409);
-    expectCanonicalError(regressed.body, "SOURCE_VERSION_CHANGED", 409);
+    const older = nativeSourcingSourceFixture(); older.state.now = sourcingTestTime + 120_000;
+    const second = await start(true, { databasePath }, older), result = await second.read(); expect(result.status).toBe(409); canonical(result.body, "SOURCING_SOURCE_CHANGED");
   });
-
-  it("goes through the shared per-principal read admission, refusing over the limit with the shared envelope and no source read", async () => {
-    const { counter, source } = tracked(() => sourcingSourceFixture());
-    const { read } = await start({ sourcingPlanSource: source });
-    for (let i = 0; i < 120; i++) expect((await read()).status).toBe(200);
-    const limited = await read();
-    expect(limited.status).toBe(429);
-    expect(limited.headers.get("retry-after")).toMatch(/^[1-9]\d*$/);
-    expect(adapterErrorBodySchema.strict().parse(limited.body)).toMatchObject({ code: "RATE_LIMITED", requestId: null, retryable: true,
-      retryAfterMs: expect.any(Number), executionCertainty: "notApplied" });
-    // Admission refuses before the body is read, so neither the request id nor the source is touched.
-    expect(limited.body).not.toHaveProperty("data");
-    expect(counter.reads).toBe(120);
-    // Admission is per principal: the reviewer is still admitted.
-    expect((await read({}, "reviewer")).status).toBe(200);
+  it("rechecks actual caller and source permission at final publication", async () => {
+    const f = await start(); f.fixture.state.afterRead = () => { f.options.readToken = "synthetic-rotated-reader-token-00000000000000000"; };
+    expect((await f.read()).status).toBe(401);
+    const g = await start(); g.fixture.state.afterRead = () => { g.fixture.state.allowed = false; };
+    const result = await g.read(); expect(result.status).toBe(403); expect(result.body).not.toHaveProperty("data");
   });
-
-  it("judges the lease over HTTP at the response time it reports", async () => {
-    // The clock advances 1ms per reading once the source has answered, and the lease ends 2ms after the source time.
-    const clock = { now: sourcingTestTime, ticking: false };
-    const snapshot = sourcingSourceFixture();
-    snapshot.validUntil = new Date(sourcingTestTime + 2).toISOString();
-    const { read } = await start({ operations: { now: () => clock.ticking ? ++clock.now : clock.now },
-      sourcingPlanSource: async () => { clock.ticking = true; return structuredClone(snapshot); } });
-    const result = planEnvelope.parse((await read()).body);
-    const data = sourcingPlanSchema.parse(result.data);
-    // A current answer is current at the time it reports; otherwise it is stale and the schedule is not active.
-    if (data.sourceState === "current") expect(Date.parse(data.observedAt)).toBeLessThan(Date.parse(data.validUntil!));
-    else expect(result).toMatchObject({ dataState: "stale", data: { plan: { schedule: { effectiveState: "draft" } } } });
-
-    // The lease lapses while the source is awaited: the response is stale over HTTP.
-    clock.ticking = false; clock.now = sourcingTestTime + 10;
-    const lapsing = { ...sourcingSourceFixture(sourcingTestScope, sourcingTestTime + 10), version: "synthetic-plan-source-lapsing" };
-    lapsing.validUntil = new Date(sourcingTestTime + 11).toISOString();
-    const second = await start({ operations: { now: () => clock.now }, sourcingPlanSource: async () => { clock.now = sourcingTestTime + 12; return structuredClone(lapsing); } });
-    expect(planEnvelope.parse((await second.read()).body)).toMatchObject({ dataState: "stale", sourceFreshness: [{ freshnessState: "error", staleReasonCode: "SOURCE_STALE" }] });
-  });
-
-  it("answers a source refusing the server's credential as an upstream outage, not as the caller being forbidden", async () => {
-    const { read } = await start({ sourcingPlanSource: async () => { throw new SourcingError("UPSTREAM_DENIED", 401); } });
-    const refused = await read();
-    expect(refused.status).toBe(503);
-    expectCanonicalError(refused.body, "SOURCE_AUTHORITY_DENIED", 503);
-  });
-
-  it("leaves every other read view on the shared read union", async () => {
-    const { read } = await start();
-    expect((await read({ viewKey: "discoverySummary" })).body.data.kind).toBe("agent-sourcing");
-    expect((await read({ viewKey: "sourcingPlanX" })).status).toBe(400);
+  it("shares per-principal read admission and leaves unrelated views with their existing owners", async () => {
+    const f = await start(); for (let index = 0; index < 120; index++) expect((await f.read()).status).toBe(200);
+    const limited = await f.read(); expect(limited.status).toBe(429); expect(limited.headers.get("retry-after")).toMatch(/^[1-9]\d*$/); expect(limited.body).toMatchObject({ code: "RATE_LIMITED", requestId: null, executionCertainty: "notApplied" }); expect(f.calls.reads).toBe(120);
+    expect((await f.read({}, "reviewer")).status).toBe(200);
+    const g = await start(false); expect((await g.read({ viewKey: "discoverySummary" })).body.data.kind).toBe("agent-sourcing"); expect((await g.read({ viewKey: "sourcingPlanX" })).status).toBe(400);
   });
 });

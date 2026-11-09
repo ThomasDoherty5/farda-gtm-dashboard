@@ -16,6 +16,7 @@ import { nativeBulkViewSchema } from "../../creator-agent/bulk/views.ts";
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
+import { nativeSourcingPlanSchema } from "../../creator-agent/sourcing/views.ts";
 import { nativeInvitationViewSchema, nativeRecruitmentBatchSchema } from "../../creator-agent/recruitment/contract.ts";
 import { scorecardPreviewSchema } from "../../creator-agent/scorecardPreview.ts";
 import { livePipelineSchema } from "../../creator-agent/funnelContract.ts";
@@ -216,5 +217,5 @@ export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,
   /** The served daily plan detail (THO-287). Strict: unknown counts carry a reason and unlike capacity units never merge. */
-  sourcingPlan: sourcingPlanSchema,
+  sourcingPlan: z.union([nativeSourcingPlanSchema, sourcingPlanSchema]),
 };

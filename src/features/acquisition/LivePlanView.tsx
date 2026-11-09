@@ -1,4 +1,7 @@
 import type { ReadResponse } from "@/adapter/contract";
+import { AdapterError } from "@/adapter/errors";
+import { useSourceLease } from "@/adapter/useSourceLease";
+import type { NativeSourcingPlan } from "@/creator-agent/sourcing/views";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -41,13 +44,19 @@ const time = (iso: string | null, empty: string) => iso ? <time dateTime={iso}>{
 export function LivePlanView() {
   const query = useView<Record<string, never>, SourcingPlan>("sourcingPlan", FILTERS);
   const res = query.data;
-  const data = res?.data ?? null;
+  const data = query.isError ? null : res?.data ?? null;
+  const native = data?.datasetKey === "sourcing-plan-native" ? data as NativeSourcingPlan : null;
+  const expired = useSourceLease(native?.provenance.validUntil);
+  const unconfigured = query.error instanceof AdapterError && query.error.body.code === "SOURCING_SOURCE_UNCONFIGURED";
   return <>
     <div className={styles.actions}><LinkButton variant="secondary" to="/creators/discovery" style={{ minWidth: 190 }}>Back to the daily plan</LinkButton></div>
-    <ReadState res={res} subject="Daily sourcing plan" only={["stale", "partial"]} />
+    <ReadState res={query.isError || expired ? undefined : res} subject="Daily sourcing plan" only={["stale", "partial"]} />
     {query.isPending && <SkeletonCard label="Loading the daily sourcing plan…" />}
-    {query.isError && <ViewError error={query.error} subject="Daily sourcing plan" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
-    {res && data && (data.plan ? <PlanDetail res={res} data={data} plan={data.plan} /> : <NoSource data={data} />)}
+    {query.isError && (unconfigured ? <EmptyState state="Error" title="Daily sourcing source not connected" alert><p>No qualified daily sourcing source is connected. Schedules, capacity and run counts remain Unknown.</p><Button onClick={() => void query.refetch()}>Refresh sourcing evidence</Button></EmptyState> : <ViewError error={query.error} subject="Daily sourcing plan" onRetry={() => void query.refetch()} />)}
+    {expired && <EmptyState state="Error" title="Sourcing access lease expired" alert><p>Refresh to verify current access before viewing plan evidence.</p><Button onClick={() => void query.refetch()}>Refresh sourcing evidence</Button></EmptyState>}
+    {native && !expired && <p className={styles.small} role="status">{native.provenance.synthetic ? "Synthetic owner evidence · sandbox" : "Source-owned plan evidence"}. Read only; this does not start discovery or authorize an invitation.</p>}
+    {res && data && !expired && (data.plan ? <PlanDetail res={res} data={data} plan={data.plan} /> : <NoSource data={data} />)}
+    {native && !expired && <Button variant="secondary" onClick={() => void query.refetch()} loading={query.isFetching}>Refresh sourcing evidence</Button>}
   </>;
 }
 

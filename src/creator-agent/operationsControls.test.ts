@@ -6,18 +6,18 @@ import {join} from "node:path";
 import {AgentStore} from "./store.ts";
 import {createOperations} from "./operations.ts";
 import {createProviderHealth} from "./providerHealth.ts";
-import {createOperationsControls,OperationsControlError,type OperationsControlSource} from "./operationsControls.ts";
+import {createOperationsControls,OperationsControlError,type OperationsSourceResult} from "./operationsControls.ts";
 import {operationsControlSourceSchema} from "./operationsControlsSchema.ts";
-import {controlSourceFixture,controlTestJob,controlTestScope as scope,controlTestTime} from "./operationsControlsFixtures.ts";
+import {controlSourceFixture,controlSourceProvider,controlTestJob,controlTestScope as scope,controlTestTime} from "./operationsControlsFixtures.ts";
 const clean:(()=>void)[]=[];afterEach(()=>{for(const c of clean.splice(0))c();});
 function setup(path=":memory:"){
  const store=new AgentStore(path,scope),now={value:Date.parse(controlTestTime)},ops=createOperations(store.database,scope,{now:()=>now.value});
  if(!store.database.prepare("SELECT 1 FROM job_heads").get())ops.jobs.register(controlTestJob,0);
  const health=createProviderHealth(store.database,scope,ops.ledger,ops.jobs,{now:()=>now.value}),source=controlSourceFixture();
- const provider:OperationsControlSource={read:async()=>structuredClone(source)};
+ const authority={permitted:true};const provider=controlSourceProvider(()=>source,()=>now.value,()=>authority.permitted);
  const input={db:store.database,scope,secret:"synthetic-server-only-controls-key",ledger:ops.ledger,jobs:ops.jobs,health,source:provider,now:()=>now.value};
  const service=createOperationsControls(input);clean.push(()=>{ops.close();store.close();});
- return {store,now,ops,health,source,provider,input,service};
+ return {store,now,ops,health,source,provider,input,service,authority};
 }
 async function request(s:ReturnType<typeof setup>,kind="task",key="synthetic-request"){
  const section=kind==="repair"?"reconciliation":"runs",r=await s.service.read({section},"agent-reviewer","reviewer"),a=r.data.actions.find(x=>x.kind===kind)!;
@@ -56,10 +56,10 @@ describe("native operations review controls",()=>{
   expect(s.store.database.prepare("SELECT count(*) n FROM operations_control_requests").get()?.n).toBe(0);
  });
  it("revalidates source membership across awaited reads and local job versions after the last await",async()=>{
-  const s=setup(),a=await request(s);let calls=0;
-  s.provider.read=async()=>{calls++;const result=structuredClone(s.source);if(calls===2){result.tasks=[];}return result;};
+  const s=setup(),a=await request(s),read=s.provider.read;let calls=0;
+  s.provider.read=async binding=>{calls++;const result=await read(binding) as OperationsSourceResult;if(calls===2){result.snapshot!.tasks=[];}return result;};
   await expect(propose(s,a)).rejects.toMatchObject({code:"SOURCE_CHANGED"});
-  s.provider.read=async()=>{if(++calls===4)s.ops.jobs.register({...controlTestJob,version:2},1);return structuredClone(s.source);};
+  s.provider.read=async binding=>{if(++calls===4)s.ops.jobs.register({...controlTestJob,version:2},1);return read(binding);};
   await expect(propose(s,a)).rejects.toMatchObject({code:"STALE_VERSION"});
   expect(s.store.database.prepare("SELECT count(*) n FROM operations_control_requests WHERE json_extract(receipt,'$.state')='recorded'").get()?.n).toBe(0);
  });
@@ -116,7 +116,7 @@ describe("native operations review controls",()=>{
   if(kind==="private-preview")raw.reports[0].preview=[{label:"pending-reviews",value:"synthetic-private-secret"}];
   if(kind==="private-destination")raw.reports[0].destination="synthetic-customer@example.test";
   if(kind==="currency")raw.conflicts[0].sourceValue.currency="EUR";
-  s.provider.read=async()=>raw;
+  const read=s.provider.read;s.provider.read=async binding=>({...await read(binding) as OperationsSourceResult,snapshot:raw});
   await expect(s.service.read({section:"reconciliation"},"agent-reader","reader")).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
  });
  it("projects only safe labels and aliases from free source titles and account identifiers",async()=>{
@@ -152,5 +152,48 @@ describe("native operations review controls",()=>{
   const dir=mkdtempSync(join(tmpdir(),"controls-test-"));clean.push(()=>rmSync(dir,{recursive:true,force:true}));const path=join(dir,"controls.db");
   const first=setup(path),a=await request(first),receipt=await propose(first,a);const close=clean.pop()!;close();
   const reopened=setup(path);expect(await propose(reopened,a)).toEqual(receipt);
+ });
+ it.each(["permission","revision","lease"])("withholds captured legacy evidence after %s changes during its read",async kind=>{
+  const s=setup(),read=s.provider.read;s.provider.read=async binding=>{const result=await read(binding);
+   if(kind==="permission")s.authority.permitted=false;if(kind==="revision")s.source.revision="changed-source";if(kind==="lease")s.now.value+=60_000;return result;};
+  await expect(s.service.read({section:"reconciliation"},"agent-reader","reader")).rejects.toMatchObject({code:kind==="permission"?"SOURCE_SCOPE_DENIED":kind==="revision"?"SOURCE_CHANGED":"SOURCE_AUTHORITY_EXPIRED"});
+ });
+ it.each(["scope","principal","filter","revision","future","expired"])("rejects an inexact legacy read grant: %s",async kind=>{
+  const s=setup(),read=s.provider.read;s.provider.read=async binding=>{const result=await read(binding) as OperationsSourceResult;
+   if(kind==="scope")result.authority.binding.scope.accountId="foreign";
+   if(kind==="principal")result.authority.binding.principalRef="agent-reviewer";
+   if(kind==="filter")result.authority.binding.requestDigest="0".repeat(64);
+   if(kind==="revision")result.authority.sourceVersion="other";
+   if(kind==="future")result.authority.observedAt=new Date(s.now.value+1).toISOString();
+   if(kind==="expired")result.authority.validUntil=new Date(s.now.value).toISOString();return result;};
+  await expect(s.service.read({section:"reconciliation"},"agent-reader","reader")).rejects.toMatchObject({code:["future","expired"].includes(kind)?"SOURCE_AUTHORITY_EXPIRED":kind==="revision"?"SOURCE_RESPONSE_INVALID":"SOURCE_SCOPE_DENIED"});
+ });
+ it.each(["missing","async","nonvoid"])("rejects a %s source current assertion",async kind=>{
+  const s=setup();if(kind==="missing")Object.assign(s.provider,{assertCurrent:undefined});
+  if(kind==="async")s.provider.assertCurrent=async()=>{};if(kind==="nonvoid")s.provider.assertCurrent=()=>"not-a-fence";
+  await expect(s.service.read({section:"reconciliation"},"agent-reader","reader")).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID",status:502});
+ });
+ it("keeps stale source facts distinct from a current access lease and rejects expired publication",async()=>{
+  const s=setup();s.now.value+=16*60_000;const result=await s.service.read({section:"reconciliation"},"agent-reader","reader");
+  expect(result.data.sourceState).toBe("stale");expect(result.stale).toBe(true);expect(result.data.records.length).toBeGreaterThan(0);
+  s.now.value+=60_000;expect(result.assertCurrent).toThrow("SOURCE_AUTHORITY_EXPIRED");
+ });
+ it("requires current read permission for the original proposal receipt and never replaces its key",async()=>{
+  const s=setup(),a=await request(s),receipt=await propose(s,a);s.authority.permitted=false;
+  await expect(propose(s,a)).rejects.toMatchObject({code:"SOURCE_SCOPE_DENIED",status:403});
+  s.authority.permitted=true;expect(await propose(s,a)).toEqual(receipt);
+  expect(s.store.database.prepare("SELECT COUNT(*) n FROM operations_control_requests").get()?.n).toBe(1);
+ });
+ it.each(["read","assert"])("normalizes external %s errors without leaking private metadata",async stage=>{
+  const s=setup(),reject=()=>{throw new OperationsControlError("PRIVATE_OWNER_CODE",409,"private-source-version");};
+  if(stage==="read")s.provider.read=async()=>reject();else s.provider.assertCurrent=reject;
+  const error=await s.service.read({section:"reconciliation"},"agent-reader","reader").catch((caught:unknown)=>caught);
+  expect(error).toMatchObject({code:"SOURCE_CHANGED",status:409,currentVersion:undefined});expect(JSON.stringify(error)).not.toMatch(/PRIVATE_OWNER_CODE|private-source-version/);
+ });
+ it("prevents a local proposal after caller revocation during source resolution",async()=>{
+  const s=setup(),a=await request(s),read=s.provider.read;let permitted=true;
+  s.provider.read=async binding=>{const result=await read(binding);permitted=false;return result;};
+  await expect(s.service.propose(a,"agent-reviewer","reviewer",{assertCurrent(){if(!permitted)throw new OperationsControlError("CALLER_REVOKED",401);}})).rejects.toMatchObject({code:"OPERATIONS_CALLER_DENIED",status:401,executionCertainty:"notApplied"});
+  expect(s.store.database.prepare("SELECT COUNT(*) n FROM operations_control_requests").get()?.n).toBe(0);
  });
 });

@@ -6,27 +6,30 @@ import { join } from "node:path";
 import { AgentStore } from "../store.ts";
 import { digest } from "../config.ts";
 import { createLifecycleService } from "./repository.ts";
-import { LifecycleError, lifecycleSnapshotSchema, type LifecycleSourceReader } from "./source.ts";
-import { lifecycleSourceFixture, lifecycleTestScope as scope, lifecycleTestSecret as secret, lifecycleTestTime } from "./fixtures.testkit.ts";
+import { LifecycleError, lifecycleSnapshotSchema } from "./source.ts";
+import { lifecycleSourceFixture, lifecycleTestSource, lifecycleTestScope as scope, lifecycleTestSecret as secret, lifecycleTestTime } from "./fixtures.testkit.ts";
 import { draftPayloadSchema, flowResourceSchema, type FlowKey, type NativeEmailFlow, type SaveDraftInput } from "./contract.ts";
 
 const stores: AgentStore[] = [];
-function setup(sourceOverride?: LifecycleSourceReader, path = ":memory:") {
+function setup(sourceOverride?: () => Promise<unknown | null>, path = ":memory:") {
   const store = new AgentStore(path, scope); stores.push(store);
   let clock = lifecycleTestTime;
   const source = lifecycleSourceFixture();
-  const reader: LifecycleSourceReader = sourceOverride ?? (async () => structuredClone(source));
-  const service = createLifecycleService({ db: store.database, scope, secret, source: reader, now: () => clock });
+  const reader = lifecycleTestSource(sourceOverride ?? (async () => structuredClone(source)), () => clock);
+  const ownedService = createLifecycleService({ db: store.database, scope, secret, source: reader, now: () => clock });
+  // Existing assertions concern the exact persisted receipt; the source-fence
+  // regression suite separately tests publication of the bound result.
+  const service = { ...ownedService, saveDraft: async (...args: Parameters<typeof ownedService.saveDraft>) => (await ownedService.saveDraft(...args)).receipt };
   return { store, service, source, reader, time: () => clock, setTime: (value: number) => { clock = value; },
     advanceVersion: (version: string) => { clock++; source.version = version; source.observedAt = new Date(clock).toISOString(); } };
 }
 afterEach(() => { for (const store of stores.splice(0)) store.close(); });
-async function flowView(service: ReturnType<typeof createLifecycleService>, flow: FlowKey = "early-access", draftRequestKey?: string): Promise<NativeEmailFlow> {
+async function flowView(service: Pick<ReturnType<typeof createLifecycleService>, "read">, flow: FlowKey = "early-access", draftRequestKey?: string): Promise<NativeEmailFlow> {
   const { data } = await service.read("emailFlow", { flow, ...(draftRequestKey ? { draftRequestKey } : {}) }, "agent-reviewer");
   if (data.kind !== "source-email-flow") throw new Error("Wrong view");
   return data;
 }
-async function request(service: ReturnType<typeof createLifecycleService>, key = "synthetic-save", flow: Exclude<FlowKey, "setup"> = "early-access"): Promise<SaveDraftInput> {
+async function request(service: Pick<ReturnType<typeof createLifecycleService>, "read">, key = "synthetic-save", flow: Exclude<FlowKey, "setup"> = "early-access"): Promise<SaveDraftInput> {
   const view = await flowView(service, flow), config = view.sourceConfig!;
   const entry = config.entryEvents[0]!, timing = config.timingRules[0]!, template = config.templates[0]!;
   return { resourceKind: "configurationDraft", resourceRef: `flow-${flow}`, expectedVersion: view.draftVersion, idempotencyKey: key,

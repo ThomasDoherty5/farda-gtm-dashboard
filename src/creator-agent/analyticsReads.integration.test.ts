@@ -3,257 +3,137 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { readResponseSchema } from "../adapter/contract";
-import { analyticsViewSchemas } from "../adapter/viewSchemas/analytics";
-import { createAgentServer, type AgentServerOptions } from "./server";
-import { analyticsTestScope, analyticsTestTime, analyticsTestTimezone, ordersFixture, syntheticAnalyticsSources } from "./analytics/fixtures.testkit";
-import type { AnalyticsSourceRequest, AnalyticsSources } from "./analytics/sources";
-import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
+import { readResponseSchema } from "../adapter/contract.ts";
+import { analyticsViewSchemas } from "../adapter/viewSchemas/analytics.ts";
+import { createAgentServer, type AgentServerOptions } from "./server.ts";
+import { nativeAnalyticsFixture } from "./analytics/nativeFixtures.testkit.ts";
+import { nativeAnalyticsViewKeys, type NativeAnalyticsViewKey } from "./analytics/contract.ts";
+import { NativeAnalyticsError } from "./analytics/nativeSource.ts";
+import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures.ts";
 
-const apps: ReturnType<typeof createAgentServer>[] = [];
-const dirs: string[] = [];
-const requestedScope = { workspaceId: analyticsTestScope.workspaceId, accountIds: [analyticsTestScope.accountId], environment: "sandbox" };
+const apps: ReturnType<typeof createAgentServer>[] = [], dirs: string[] = [];
 const CANONICAL = ["code", "correlationId", "executionCertainty", "message", "requestId", "retryAfterMs", "retryable"];
-const served = ["overviewSummary", "attribution", "paidMedia", "customerJourney"] as const;
-
-/** Actual HTTP service over a temporary SQLite file, with counted synthetic readers. */
-async function start(extra: Partial<AgentServerOptions> = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "farda-analytics-")); dirs.push(dir);
-  const app = createAgentServer({ databasePath: join(dir, "agent.sqlite"), workspaceId: analyticsTestScope.workspaceId, accountId: analyticsTestScope.accountId,
-    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => analyticsTestTime }, analyticsTimezone: analyticsTestTimezone, ...extra });
-  apps.push(app);
+async function start(configured = true) {
+  const fixture = nativeAnalyticsFixture(), calls: string[] = [], original = fixture.source.read;
+  fixture.source.read = async (binding, signal) => { calls.push(binding.request.viewKey); return original(binding, signal); };
+  const dir = mkdtempSync(join(tmpdir(), "farda-native-analytics-")); dirs.push(dir);
+  const options: AgentServerOptions = { databasePath: join(dir, "agent.sqlite"), workspaceId: fixture.scope.workspaceId, accountId: fixture.scope.accountId,
+    readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: fixture.now }, analyticsSource: configured ? fixture.source : undefined };
+  const app = createAgentServer(options); apps.push(app);
   await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
-  const address = app.server.address();
-  if (!address || typeof address === "string") throw new Error("Expected a local test service");
+  const address = app.server.address(); if (!address || typeof address === "string") throw new Error("Expected local test service");
+  const requestedScope = { workspaceId: fixture.scope.workspaceId, accountIds: [fixture.scope.accountId], environment: "sandbox" };
+  const envelope = (key: NativeAnalyticsViewKey, overrides: Record<string, unknown> = {}) => ({ schemaVersion: "2026-11-02.proposed", operation: "readView", requestId: "synthetic-analytics-read", requestedScope, ...fixture.request(key), ...overrides });
   const post = async (body: unknown, token: string | null = SYNTHETIC_READ_TOKEN) => {
-    const response = await fetch(`http://127.0.0.1:${address.port}/v1/read`, { method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: "Bearer " + token } : {}) }, body: JSON.stringify(body) });
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/read`, { method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, any> }; // eslint-disable-line @typescript-eslint/no-explicit-any
   };
-  const envelope = (viewKey: string, filters: unknown = {}, overrides: Record<string, unknown> = {}) => ({ schemaVersion: "2026-11-02.proposed", operation: "readView",
-    requestId: "synthetic-analytics-read", requestedScope, viewKey, filters, period: null, sort: [], page: { cursor: null, limit: 50 }, ...overrides });
-  const capabilities = async () => (await fetch(`http://127.0.0.1:${address.port}/v1/capabilities`, { headers: { authorization: "Bearer " + SYNTHETIC_READ_TOKEN } })).json();
-  return { post, envelope, capabilities };
+  return { fixture, calls, options, app, requestedScope, envelope, post };
 }
-function counted(sources: AnalyticsSources = syntheticAnalyticsSources()) {
-  const calls: string[] = [];
-  const wrapped = Object.fromEntries(Object.entries(sources).map(([key, read]) => [key, async (request: AnalyticsSourceRequest) => { calls.push(key); return read!(request); }]));
-  return { calls, sources: wrapped as AnalyticsSources };
-}
-/** The shared API error envelope (apiErrorEnvelope.ts): public metadata only, a fresh correlation id, never data. */
-const expectCanonical = (body: Record<string, unknown>, code: string) => {
-  expect(Object.keys(body).sort()).toEqual(CANONICAL);
-  expect(body).toMatchObject({ code, retryAfterMs: null, executionCertainty: "notApplied" });
-  expect(body.correlationId).toMatch(/^[0-9a-f-]{36}$/);
-  expect(typeof body.message).toBe("string");
-  expect(body).not.toHaveProperty("data");
+const canonical = (body: Record<string, unknown>, code: string) => {
+  expect(Object.keys(body).sort()).toEqual(CANONICAL); expect(body).toMatchObject({ code, executionCertainty: "notApplied" });
+  expect(body.correlationId).toMatch(/^[0-9a-f-]{36}$/); expect(typeof body.message).toBe("string"); expect(body).not.toHaveProperty("data");
 };
-afterEach(async () => {
-  for (const app of apps.splice(0)) await app.close();
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
+afterEach(async () => { for (const app of apps.splice(0)) await app.close(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
-describe("THO-293 analytics reads through the authenticated creator-agent service", () => {
-  it("denies unauthenticated and wrong-scope reads through the shared read path before any source is read", async () => {
-    const { calls, sources } = counted();
-    const { post, envelope } = await start({ analyticsSources: sources });
-    expect((await post(envelope("overviewSummary"), null)).status).toBe(401);
-    expect((await post(envelope("overviewSummary"), "synthetic-wrong-token-000000000000000000")).status).toBe(401);
-    for (const scope of [{ ...requestedScope, workspaceId: "foreign-workspace" }, { ...requestedScope, accountIds: ["foreign-account"] },
-      { ...requestedScope, accountIds: [analyticsTestScope.accountId, "foreign-account"] }, { ...requestedScope, environment: "production" }, { ...requestedScope, environment: "demo" }]) {
-      for (const view of served) {
-        const result = await post(envelope(view, {}, { requestedScope: scope }));
-        expect(result.status).toBe(400);
-        expectCanonical(result.body, "INVALID_INPUT");
-        expect(result.body.requestId).toBe("synthetic-analytics-read");
-      }
+describe("all seven native analytics keys through actual authenticated HTTP and SQLite", () => {
+  it("refuses unauthenticated/wrong-scope reads before touching any source", async () => {
+    const f = await start();
+    expect((await f.post(f.envelope("overviewSummary"), null)).status).toBe(401);
+    expect((await f.post(f.envelope("overviewSummary"), "wrong-token")).status).toBe(401);
+    for (const requestedScope of [{ ...f.requestedScope, workspaceId: "foreign" }, { ...f.requestedScope, accountIds: ["foreign"] }, { ...f.requestedScope, accountIds: [...f.requestedScope.accountIds, "foreign"] }, { ...f.requestedScope, environment: "production" }, { ...f.requestedScope, environment: "demo" }]) {
+      for (const key of nativeAnalyticsViewKeys) { const result = await f.post(f.envelope(key, { requestedScope })); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT"); }
     }
-    expect(calls).toEqual([]);
+    expect(f.calls).toEqual([]);
   });
-
-  it("consumes the shared per-principal read admission", async () => {
-    const { calls, sources } = counted();
-    const { post, envelope } = await start({ analyticsSources: sources });
-    // The shared transport admission (apiRequestLimits.ts) allows 120 reads per principal per minute; analytics reads count against it.
-    for (let i = 0; i < 120; i++) {
-      const view = served[i % served.length]!;
-      expect((await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}))).status).toBe(200);
-    }
-    const sourceCalls = calls.length;
-    const limited = await post(envelope("overviewSummary"));
-    expect(limited.status).toBe(429);
-    // Admission is refused before the body is read, exactly as for every other read.
-    expect(limited.body).toMatchObject({ code: "RATE_LIMITED", requestId: null, retryable: true, executionCertainty: "notApplied" });
-    expect(calls.length).toBe(sourceCalls);
-    // Another principal has its own allowance.
-    expect((await post(envelope("overviewSummary"), SYNTHETIC_REVIEW_TOKEN)).status).toBe(200);
-  });
-
-  it("does not hold or reroute launch views: launchControl answers from its own service, the rest keep the shared schema", async () => {
-    const { post, envelope } = await start();
-    const control = await post(envelope("launchControl", {}));
-    // With no readiness source injected, main's launch control answers its own typed state, never this module's hold.
-    expect(control.body.code).toBe("READINESS_SOURCE_UNCONFIGURED");
-    for (const view of ["launchSnapshot", "launchReconciliation", "campaignFunnel", "metricDictionary"]) {
-      const result = await post(envelope(view, {}));
-      expect(result.status).toBe(400);
-      expectCanonical(result.body, "INVALID_INPUT");
-    }
-  });
-
-  it("returns 200 with each source's unconfigured, never-synced state and N/A figures when no reader is connected", async () => {
-    const { post, envelope, capabilities } = await start();
-    for (const view of served) {
-      const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}));
-      expect(result.status).toBe(200);
-      expect(readResponseSchema(analyticsViewSchemas[view]!).safeParse(result.body).success).toBe(true);
-      expect(result.body.dataState).toBe("partial");
-      expect(result.body.data.sources.every((x: { state: string; reasonCode: string }) => x.state === "unconfigured" && x.reasonCode === "SOURCE_UNCONFIGURED")).toBe(true);
-      expect(result.body.sourceFreshness.every((f: { freshnessState: string; lastSourceSuccessAt: unknown }) => f.freshnessState === "neverSynced" && f.lastSourceSuccessAt === null)).toBe(true);
-      expect(result.body.coverage).toMatchObject({ observedCount: 0, complete: false });
-      expect(JSON.stringify(result.body.data)).not.toMatch(/"state":"known"/);
-    }
-    expect((await capabilities()).analyticsReads).toEqual({ orders: "notConnected", adPlatforms: "notConnected", sessions: "notConnected", support: "notConnected" });
-  });
-
-  it("serves every view in its contract schema from synthetic readers, to reader and reviewer alike", async () => {
-    const { calls, sources } = counted();
-    const { post, envelope, capabilities } = await start({ analyticsSources: sources });
-    expect((await capabilities()).analyticsReads).toEqual({ orders: "injected", adPlatforms: "injected", sessions: "injected", support: "injected" });
-    for (const view of served) for (const token of [SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN]) {
-      const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}), token);
-      expect(result.status).toBe(200);
-      const parsed = readResponseSchema(analyticsViewSchemas[view]!).safeParse(result.body);
+  it("serves every registered key with strict native synthetic metadata to reader and reviewer", async () => {
+    const f = await start();
+    for (const key of nativeAnalyticsViewKeys) for (const token of [SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN]) {
+      const result = await f.post(f.envelope(key), token);
+      expect(result.status, `${key}: ${JSON.stringify(result.body)}`).toBe(200);
+      const parsed = readResponseSchema(analyticsViewSchemas[key]!).safeParse(result.body);
       expect(parsed.success, JSON.stringify(parsed.error?.issues.slice(0, 3))).toBe(true);
-      expect(result.body).toMatchObject({ requestId: "synthetic-analytics-read", dataState: "ready", capabilities: [],
-        scope: { ...requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, page: { nextCursor: null, hasMore: false } });
-      expect(result.body.dataVersion).toMatch(/^an1-[a-f0-9]{64}$/);
-      expect(result.body.sourceFreshness.every((f: { freshnessState: string }) => f.freshnessState === "current")).toBe(true);
-      expect(JSON.stringify(result.body)).not.toMatch(/synthetic-(shopify|tiktok|meta)-|synthetic-(storefront|support)-|token/);
+      expect(result.body).toMatchObject({ requestId: "synthetic-analytics-read", scope: { ...f.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, page: { nextCursor: null, hasMore: false }, data: { datasetKey: "analytics-native", viewKey: key, provenance: { evidenceStage: "synthetic", synthetic: true } } });
+      expect(result.body.dataVersion).toMatch(/^analytics-v1-[a-f0-9]{64}$/);
+      expect(JSON.stringify(result.body.data)).not.toMatch(/fictional-|synthetic-shopify|cust-shopify|permissionVersion|principalRef/);
+      expect(JSON.stringify(result.body)).not.toContain(SYNTHETIC_READ_TOKEN);
     }
-    const overview = (await post(envelope("overviewSummary"))).body;
-    expect(overview.data.orders.value).toBe(400);
-    expect(overview.data.netReceipts.value).toEqual({ minorUnits: 1_259_600, currency: "USD" });
-    expect(overview.data.measures.find((m: { key: string }) => m.key === "aov").value).toBe(3149);
-    // The same answer twice has the same data version; a different window changes it.
-    expect((await post(envelope("overviewSummary"))).body.dataVersion).toBe(overview.dataVersion);
-    const week = await post(envelope("overviewSummary", { preset: "last7Days" }));
-    expect(week.body.dataVersion).not.toBe(overview.dataVersion);
-    expect(week.body.data.daily).toHaveLength(7);
-    expect(calls).toContain("sessions");
+    const first = (await f.post(f.envelope("overviewSummary"))).body;
+    expect(first.data.orders.value).toBe(400); expect(first.data.netReceipts.value).toEqual({ minorUnits: 1259600, currency: "USD" });
+    expect(first.data.measures.find((row: { metricId: string }) => row.metricId === "aov").result.value).toBe(3149);
+    expect((await f.post(f.envelope("overviewSummary"))).body.dataVersion).toBe(first.dataVersion);
+    const period = { startAt: "2026-10-25T00:00:00.000Z", endAt: "2026-11-01T00:00:00.000Z", timezone: "UTC", basis: "eventTime" };
+    const week = await f.post(f.envelope("overviewSummary", { period })); expect(week.status).toBe(200); expect(week.body.data.daily).toHaveLength(7); expect(week.body.dataVersion).not.toBe(first.dataVersion);
   });
-
-  it("reports stale, partial and unknown sources with server-computed freshness instead of zero", async () => {
-    const base = syntheticAnalyticsSources();
-    let mode: "stale" | "partial" | "never" | "ok" = "stale";
-    const orders = async (request: AnalyticsSourceRequest) => {
-      const s = ordersFixture(request);
-      if (mode === "stale") s.feeds[0]!.lastSuccessAt = new Date(analyticsTestTime - 16 * 60_000).toISOString();
-      if (mode === "partial") s.feeds[1]!.coverage = "partial";
-      if (mode === "never") s.feeds[1] = { ...s.feeds[1]!, lastSuccessAt: null, syncState: "error", orders: [] };
-      return s;
+  it("returns typed unavailable for an unconfigured source and keeps readiness and195 on their own owners", async () => {
+    const f = await start(false);
+    for (const key of nativeAnalyticsViewKeys) { const result = await f.post(f.envelope(key)); expect(result.status).toBe(503); canonical(result.body, "ANALYTICS_SOURCE_UNCONFIGURED"); }
+    expect((await f.post(f.envelope("overviewSummary", { viewKey: "launchControl", filters: {} }))).body.code).toBe("READINESS_SOURCE_UNCONFIGURED");
+    const traffic = await f.post(f.envelope("overviewSummary", { viewKey: "customerJourney", filters: { period: null, segment: { kind: "all" } } }));
+    expect(traffic.status).toBe(200); expect(traffic.body.data.datasetKey).toBe("site-traffic-native"); expect(traffic.body.data.capability.state).toBe("unconfigured");
+    expect(f.calls).toEqual([]);
+  });
+  it("consumes shared per-principal admission without a source read after the limit", async () => {
+    const f = await start();
+    for (let index = 0; index < 120; index++) expect((await f.post(f.envelope("metricDictionary"))).status).toBe(200);
+    const limited = await f.post(f.envelope("overviewSummary")); expect(limited.status).toBe(429); expect(limited.body).toMatchObject({ code: "RATE_LIMITED", requestId: null, retryable: true, executionCertainty: "notApplied" });
+    expect(f.calls).toHaveLength(120); expect((await f.post(f.envelope("overviewSummary"), SYNTHETIC_REVIEW_TOKEN)).status).toBe(200);
+  });
+  it("keeps partial/stale and missing values distinct from known zero through the wire schema", async () => {
+    const f = await start();
+    f.fixture.state.mutate = snapshot => { if (snapshot.viewKey !== "overviewSummary") return; const owner = snapshot.owners.find(row => row.owner === "commerceOrders")!; owner.coverage = "partial"; for (const feed of snapshot.facts.orders!.snapshot.feeds) { feed.orders = []; feed.coverage = "partial"; } };
+    const partial = await f.post(f.envelope("overviewSummary")); expect(partial.status).toBe(200); expect(partial.body).toMatchObject({ dataState: "partial", coverage: { complete: false }, data: { orders: { state: "unknown", value: null } } });
+    f.fixture.state.mutate = snapshot => { if (snapshot.viewKey !== "overviewSummary") return; const owner = snapshot.owners.find(row => row.owner === "commerceOrders")!; owner.sourceAsOf = new Date(f.fixture.state.now - 16 * 60000).toISOString(); for (const feed of snapshot.facts.orders!.snapshot.feeds) { feed.orders = []; feed.lastSuccessAt = owner.sourceAsOf; } };
+    const stale = await f.post(f.envelope("overviewSummary")); expect(stale.status).toBe(200); expect(stale.body).toMatchObject({ dataState: "stale", coverage: { complete: false }, data: { orders: { state: "unknown", value: null } } });
+    expect(readResponseSchema(analyticsViewSchemas.overviewSummary!).safeParse(stale.body).success).toBe(true);
+    f.fixture.state.mutate = snapshot => { if (snapshot.viewKey === "overviewSummary") for (const feed of snapshot.facts.orders!.snapshot.feeds) feed.orders = []; };
+    expect((await f.post(f.envelope("overviewSummary"))).body.data.orders).toMatchObject({ state: "known", value: 0 });
+  });
+  it("rejects forged filters and envelope fields before any source call", async () => {
+    const f = await start();
+    const cases = [{ filters: { scenario: "happy" } }, { filters: { fixture: "FX-01" } }, { filters: { workspaceId: "other" } }, { viewKey: "paidMedia", filters: { platform: "google", rights: "all" } }, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "observationTime" } }, { sort: [{ field: "orders", direction: "desc" }] }, { schemaVersion: "2020-01-01" }, { adapterOverride: "demo" }, { requestId: "" }];
+    for (const overrides of cases) { const result = await f.post(f.envelope("overviewSummary", overrides)); expect(result.status).toBe(400); canonical(result.body, "INVALID_INPUT"); }
+    expect(f.calls).toEqual([]);
+  });
+  it("fails malformed/source-scope/denial closed without private strings and retains unrelated routes", async () => {
+    const f = await start();
+    f.fixture.state.mutate = snapshot => { snapshot.owners[0]!.requestDigest = "a".repeat(64); };
+    let result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(403); canonical(result.body, "ANALYTICS_BINDING_MISMATCH");
+    f.fixture.state.mutate = snapshot => { snapshot.permissionVersion = ""; };
+    result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(503); canonical(result.body, "ANALYTICS_SOURCE_INVALID");
+    f.fixture.state.mutate = null; f.fixture.state.allowed = false;
+    result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(403); canonical(result.body, "ANALYTICS_SOURCE_DENIED");
+    f.fixture.state.allowed = true;
+    expect((await f.post(f.envelope("overviewSummary", { viewKey: "discoverySummary" }))).status).toBe(200);
+    expect((await f.post(f.envelope("overviewSummary", { viewKey: "noSuchView" }))).status).toBe(400);
+  });
+  it("rejects source revocation, version change and exact lease expiry during an awaited read", async () => {
+    for (const mode of ["permission", "source", "lease"] as const) {
+      const f = await start(); f.fixture.state.afterRead = () => { if (mode === "permission") f.fixture.state.allowed = false; else if (mode === "source") f.fixture.state.sourceVersion = "changed"; else f.fixture.state.now += 60000; };
+      const result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(mode === "permission" ? 403 : 409); expect(result.body).not.toHaveProperty("data");
+    }
+  });
+  it("judges data freshness after await while a separate current read grant remains valid", async () => {
+    const f = await start();
+    f.fixture.state.mutate = snapshot => {
+      snapshot.validUntil = new Date(f.fixture.state.now + 10 * 60000).toISOString();
+      for (const owner of snapshot.owners) owner.validUntil = snapshot.validUntil;
+      if (snapshot.viewKey !== "overviewSummary") return;
+      const owner = snapshot.owners.find(row => row.owner === "commerceOrders")!; owner.sourceAsOf = new Date(f.fixture.state.now - 14 * 60000).toISOString();
+      for (const feed of snapshot.facts.orders!.snapshot.feeds) feed.lastSuccessAt = owner.sourceAsOf;
     };
-    const { post, envelope } = await start({ analyticsSources: { ...base, orders, adPlatforms: undefined } });
-    const stale = await post(envelope("overviewSummary"));
-    expect(stale.body.dataState).toBe("stale");
-    expect(stale.body.sourceFreshness[0]).toMatchObject({ freshnessState: "error", staleReasonCode: "SOURCE_STALE" });
-    expect(stale.body.sourceFreshness.at(-1)).toMatchObject({ freshnessState: "neverSynced", staleReasonCode: "SOURCE_UNCONFIGURED" });
-    mode = "partial";
-    const partial = await post(envelope("attribution"));
-    expect(partial.body.dataState).toBe("partial");
-    expect(partial.body.coverage).toMatchObject({ complete: false, expectedCount: 4 });
-    mode = "never";
-    const never = await post(envelope("overviewSummary"));
-    expect(never.status).toBe(200);
-    expect(never.body.data.orders).toMatchObject({ state: "unknown", value: null, reasonCode: "ORDER_FEED_NEVER_SYNCED" });
-    expect(never.body.data.daily.every((d: { tiktok: unknown }) => d.tiktok === null)).toBe(true);
-    expect(readResponseSchema(analyticsViewSchemas.overviewSummary!).safeParse(never.body).success).toBe(true);
-    const paid = await post(envelope("paidMedia", { rights: "all", platform: "all" }));
-    expect(paid.status).toBe(200);
-    expect(paid.body.data.sources).toEqual([{ source: "adPlatforms", state: "unconfigured", reasonCode: "SOURCE_UNCONFIGURED" }]);
+    f.fixture.state.afterRead = () => { f.fixture.state.now += 2 * 60000; };
+    const result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(200); expect(result.body.dataState).toBe("stale");
+    expect(result.body.data.measures.find((row: { metricId: string }) => row.metricId === "aov").result.state).toBe("unknown");
   });
-
-  it("refuses a requestedScope naming a foreign workspace, account and environment at once with 400 INVALID_INPUT and no source call", async () => {
-    const { calls, sources } = counted();
-    const { post, envelope } = await start({ analyticsSources: sources });
-    const foreign = { workspaceId: "foreign-workspace", accountIds: ["foreign-account"], environment: "production" };
-    for (const view of served) {
-      const result = await post(envelope(view, view === "paidMedia" ? { rights: "all", platform: "all" } : {}, { requestedScope: foreign }));
-      expect(result.status).toBe(400);
-      expectCanonical(result.body, "INVALID_INPUT");
-      expect(result.body.requestId).toBe("synthetic-analytics-read");
-    }
-    expect(calls).toEqual([]);
+  it("rechecks the actual reader credential after captured-source await", async () => {
+    const f = await start(); f.fixture.state.afterRead = () => { f.options.readToken = "synthetic-rotated-reader-token-00000000000000000"; };
+    const result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(401); expect(result.body).not.toHaveProperty("data");
   });
-
-  it("answers 503 SOURCE_TIME_UNVERIFIED in the shared envelope when the service clock is not finite after the source await", async () => {
-    let t = analyticsTestTime;
-    const orders = async (request: AnalyticsSourceRequest) => { const s = ordersFixture(request); t = NaN; return s; };
-    const { post, envelope } = await start({ operations: { now: () => t }, analyticsSources: { ...syntheticAnalyticsSources(), orders } });
-    const result = await post(envelope("overviewSummary"));
-    expect(result.status).toBe(503);
-    expectCanonical(result.body, "SOURCE_TIME_UNVERIFIED");
-    expect(result.body.retryable).toBe(true);
-  });
-
-  it("judges freshness over HTTP at projection time when the order limit passes during the source await", async () => {
-    let t = analyticsTestTime;
-    const orders = async (request: AnalyticsSourceRequest) => {
-      const s = ordersFixture(request);
-      for (const feed of s.feeds) feed.lastSuccessAt = new Date(analyticsTestTime - 14 * 60_000).toISOString();
-      t += 2 * 60_000;
-      return s;
-    };
-    const { post, envelope } = await start({ operations: { now: () => t }, analyticsSources: { ...syntheticAnalyticsSources(), orders } });
-    const result = await post(envelope("overviewSummary"));
-    expect(result.status).toBe(200);
-    expect(result.body.dataState).toBe("stale");
-    expect(result.body.data.sources[0]).toEqual({ source: "orders", state: "stale", reasonCode: "SOURCE_STALE" });
-  });
-
-  it("refuses forged filters, periods and envelopes with a canonical validation error and no source access", async () => {
-    const { calls, sources } = counted();
-    const { post, envelope } = await start({ analyticsSources: sources });
-    // Envelope, filter and period shape are refused by the shared read schema; period rules that need the clock by the reader.
-    const forged: [string, unknown, Record<string, unknown>, string][] = [
-      ["overviewSummary", { scenario: "happy" }, {}, "INVALID_INPUT"], ["overviewSummary", { fixture: "FX-01-happy-read" }, {}, "INVALID_INPUT"],
-      ["attribution", { workspaceId: "other" }, {}, "INVALID_INPUT"],
-      ["paidMedia", { rights: "all", platform: "google" }, {}, "INVALID_INPUT"], ["customerJourney", { preset: "allTime" }, {}, "INVALID_INPUT"],
-      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-12-01", timezone: "UTC", basis: "eventTime" } }, "VALIDATION_FAILED"],
-      ["overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "observationTime" } }, "INVALID_INPUT"],
-      ["overviewSummary", { preset: "last7Days" }, { period: { startAt: "2026-10-01", endAt: "2026-10-02", timezone: "UTC", basis: "eventTime" } }, "VALIDATION_FAILED"],
-      ["overviewSummary", {}, { sort: [{ field: "orders", direction: "desc" }] }, "INVALID_INPUT"], ["overviewSummary", {}, { page: { cursor: "next", limit: 50 } }, "INVALID_CURSOR"],
-      ["overviewSummary", {}, { schemaVersion: "2020-01-01" }, "INVALID_INPUT"], ["overviewSummary", {}, { adapterOverride: "demo" }, "INVALID_INPUT"],
-      ["overviewSummary", {}, { requestId: "" }, "INVALID_INPUT"],
-    ];
-    for (const [view, filters, overrides, code] of forged) {
-      const result = await post(envelope(view, filters, overrides));
-      expect(result.status, JSON.stringify([view, filters, overrides])).toBe(400);
-      expectCanonical(result.body, code);
-    }
-    expect(calls).toEqual([]);
-    // Valid explicit period is accepted.
-    const explicit = await post(envelope("overviewSummary", {}, { period: { startAt: "2026-10-01", endAt: "2026-10-31", timezone: analyticsTestTimezone, basis: "eventTime" } }));
-    expect(explicit.status).toBe(200);
-    expect(explicit.body.data.window).toEqual({ start: "2026-10-01", end: "2026-10-31", timezone: analyticsTestTimezone });
-  });
-
-  it("degrades a malformed source to its own invalid state, refuses a foreign source scope, and keeps other read models routed as before", async () => {
-    let answer: unknown = null;
-    const { post, envelope } = await start({ analyticsSources: { ...syntheticAnalyticsSources(), orders: async request => answer ?? ordersFixture(request) } });
-    answer = { scope: analyticsTestScope, window: { start: "2026-10-08", end: "2026-11-06", timezone: analyticsTestTimezone }, feeds: [{ feedRef: "x", observedAt: "2026-13-01T00:00:00Z" }] };
-    const malformed = await post(envelope("overviewSummary"));
-    expect(malformed.status).toBe(200);
-    expect(malformed.body.data.sources[0]).toEqual({ source: "orders", state: "invalid", reasonCode: "SOURCE_RESPONSE_INVALID" });
-    expect(malformed.body.data.orders).toMatchObject({ state: "unknown", value: null, reasonCode: "ORDERS_SOURCE_INVALID" });
-    expect(malformed.body.data.measures.find((m: { key: string }) => m.key === "paidMediaSpend").value).toBe(650_000);
-    answer = { ...ordersFixture({ scope: analyticsTestScope, window: { start: "2026-10-08", end: "2026-11-06", timezone: analyticsTestTimezone } }), scope: { ...analyticsTestScope, workspaceId: "foreign" } };
-    const foreign = await post(envelope("overviewSummary"));
-    expect(foreign.status).toBe(403);
-    expectCanonical(foreign.body, "SOURCE_SCOPE_DENIED");
-    answer = null;
-    expect((await post(envelope("overviewSummary"))).status).toBe(200);
-    expect((await post(envelope("discoverySummary"))).status).toBe(200);
-    expect((await post(envelope("noSuchView"))).status).toBe(400);
+  it("normalizes upstream exception metadata and refuses a broken service clock", async () => {
+    const f = await start(); f.fixture.source.read = async () => { throw new NativeAnalyticsError("private-person@example.test", 403); };
+    let result = await f.post(f.envelope("overviewSummary")); expect(result.status).toBe(503); canonical(result.body, "ANALYTICS_SOURCE_UNAVAILABLE"); expect(JSON.stringify(result.body)).not.toContain("private-person");
+    const g = await start(); g.fixture.state.afterRead = () => { g.fixture.state.now = NaN; };
+    result = await g.post(g.envelope("overviewSummary")); expect(result.status).toBe(500); canonical(result.body, "ANALYTICS_INVALID_CLOCK");
   });
 });

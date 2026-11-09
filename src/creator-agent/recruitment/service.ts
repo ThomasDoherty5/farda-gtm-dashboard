@@ -99,14 +99,17 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
       fail("RECRUITMENT_SOURCE_STALE");
     if (!source) fail("INTEGRATION_PENDING", 503);
     try { assertSynchronousVoid(() => source!.assertCurrent(structuredClone(request), structuredClone(snapshot), timestamp)); }
-    catch (error) { if (error instanceof RecruitmentError) throw error; fail("RECRUITMENT_SOURCE_CHANGED"); }
+    catch (error) { if (error instanceof RecruitmentError && [401,403].includes(error.status)) fail("RECRUITMENT_SOURCE_SCOPE_DENIED",error.status); fail("RECRUITMENT_SOURCE_CHANGED"); }
     assertActor(request.actor, principal);
   }
   async function readSource(request: RecruitmentSourceRequest, principal: ApprovalPrincipal) {
     if (!source) return fail("INTEGRATION_PENDING", 503);
     let raw: unknown;
     try { raw = await boundedSourceRead(()=>source.read(structuredClone(request)),undefined,timeoutMs); }
-    catch (error) { if (error instanceof RecruitmentError) throw error; if(error instanceof ActionServiceError)return fail(error.code,error.status);return fail("RECRUITMENT_SOURCE_UNAVAILABLE", 503); }
+    catch (error) { if (error instanceof RecruitmentError && [401,403].includes(error.status)) return fail("RECRUITMENT_SOURCE_SCOPE_DENIED",error.status);
+      if(error instanceof RecruitmentError && error.status===409)return fail("RECRUITMENT_SOURCE_CHANGED");
+      if(error instanceof ActionServiceError && ["SOURCE_READ_TIMEOUT","REQUEST_CANCELLED"].includes(error.code))return fail(error.code,error.status);
+      return fail("RECRUITMENT_SOURCE_UNAVAILABLE", 503); }
     const parsed = request.kind === "invitation" ? invitationSourceSchema.safeParse(raw) : recruitmentBatchSourceSchema.safeParse(raw);
     if (!parsed.success) return fail("RECRUITMENT_SOURCE_INVALID", 502);
     const snapshot = freeze(structuredClone(parsed.data));
@@ -306,22 +309,26 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
       sourceRef:snapshot.sourceRef,sourceVersion:snapshot.sourceVersion,offerManifestHash:record.manifestHash,creatorRef:creator.ref,creatorId:creator.creatorId,
       productRef:product.ref,productVersion:record.terms.manifest.productRevision,programRef:product.programRef,templateRef:template.ref,templateVersion:template.version,claimsVersion:template.claimsVersion};
   }
-  async function saveInvitation(raw:unknown,input:ApprovalPrincipal,requestKey:string):Promise<Projection<InvitationSaveReceipt>> {
+  async function saveInvitation(raw:unknown,input:ApprovalPrincipal,requestKey:string,assertCallerCurrent?:()=>void):Promise<Projection<InvitationSaveReceipt>> {
+    const assertCaller=()=>{if(!assertCallerCurrent)return;try{assertSynchronousVoid(assertCallerCurrent);}
+      catch(error){throw new RecruitmentError("RECRUITMENT_CALLER_DENIED",error instanceof RecruitmentError&&[401,403].includes(error.status)?error.status:403);}};
+    assertCaller();
     const parsed=invitationSaveSchema.safeParse(structuredClone(raw));if(!parsed.success)return fail("RECRUITMENT_DRAFT_INVALID",422);
     const request=freeze(parsed.data),principal=principalSchema.parse(input),repo=options.drafts;
     if(!repo)return fail("RECRUITMENT_DRAFTS_UNCONFIGURED",503);
     const filters={context:"recruitment" as const,draftId:request.draftId,creatorId:request.terms.creatorId,offerId:request.terms.offerId,offerVersion:request.terms.offerVersion};
-    const lookup=await readInvitation({...filters,requestKey},principal);lookup.assertCurrent();
+    const lookup=await readInvitation({...filters,requestKey},principal);assertCaller();lookup.assertCurrent();assertCaller();
     const old=repo.exact(request,principal,requestKey);
     if(old){const recovery=lookup;recovery.assertCurrent();
-      if(digest(recovery.data.requestRecovery?.receipt)!==digest(old))return fail("RECRUITMENT_RECORD_CHANGED");return {data:old,assertCurrent:recovery.assertCurrent};}
-    const loaded=await loadInvitation(filters,principal),basis=exactBasis(loaded,request.terms);
+      if(digest(recovery.data.requestRecovery?.receipt)!==digest(old))return fail("RECRUITMENT_RECORD_CHANGED");
+      const assertCurrent=()=>{assertCaller();recovery.assertCurrent();assertCaller();};assertCurrent();return {data:old,assertCurrent};}
+    const loaded=await loadInvitation(filters,principal);assertCaller();const basis=exactBasis(loaded,request.terms);
     // The repository's transaction uses this source/offer fence, but the expected draft revision changes on save.
-    const fence=()=>{assertSource(loaded.request,loaded.snapshot,principal);if(digest(options.offers.readOffer(request.terms.offerId))!==digest(loaded.record))fail("RECRUITMENT_OFFER_CHANGED");
-      if(loaded.commercial)assertSynchronousVoid(()=>loaded.commercial!.assertCurrent());if(Date.parse(loaded.data.validUntil)<=now())fail("RECRUITMENT_SOURCE_STALE");assertSource(loaded.request,loaded.snapshot,principal);};
+    const fence=()=>{assertCaller();assertSource(loaded.request,loaded.snapshot,principal);if(digest(options.offers.readOffer(request.terms.offerId))!==digest(loaded.record))fail("RECRUITMENT_OFFER_CHANGED");
+      if(loaded.commercial)assertSynchronousVoid(()=>loaded.commercial!.assertCurrent());if(Date.parse(loaded.data.validUntil)<=now())fail("RECRUITMENT_SOURCE_STALE");assertSource(loaded.request,loaded.snapshot,principal);assertCaller();};
     const data=repo.save(request,principal,loaded.data.actorRef,requestKey,basis,fence),fingerprint=digest(data);
     const assertCurrent=()=>{try{fence();if(digest(repo.lookup(request.draftId,principal,requestKey))!==fingerprint)fail("RECRUITMENT_RECORD_CHANGED");}
-      catch(error){if(error instanceof RecruitmentError)throw new RecruitmentError(error.code,error.status,"applied",error.currentVersion);throw new RecruitmentError("RECRUITMENT_SAVE_READBACK_UNVERIFIED",409,"applied");}};
+      catch(error){if(error instanceof RecruitmentError)throw new RecruitmentError(error.code,error.status,error.code==="RECRUITMENT_CALLER_DENIED"?"uncertain":"applied",error.currentVersion);throw new RecruitmentError("RECRUITMENT_SAVE_READBACK_UNVERIFIED",409,"applied");}};
     assertCurrent();return {data,assertCurrent};
   }
   async function loadSaved(draftId:string,version:string,principal:ApprovalPrincipal){

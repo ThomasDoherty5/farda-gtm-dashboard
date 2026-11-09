@@ -14,6 +14,8 @@
  * - The helpers below are repeated in the sibling files on purpose, so each file stands alone.
  */
 import { z } from "zod";
+import { nativeOverviewSummarySchema, nativeAttributionSchema, nativePaidMediaSchema, nativeLaunchSnapshotSchema,
+  nativeLaunchReconciliationSchema, nativeCampaignFunnelSchema, nativeMetricDictionarySchema } from "../../creator-agent/analytics/views.ts";
 import { freshnessStateSchema, moneySchema, provenanceValueSchema, valueStateSchema } from "../contract";
 import { nativeReadinessViewSchema } from "../../creator-agent/actions/views";
 import { nativeSiteTrafficViewSchema } from "../../creator-agent/siteTraffic/views";
@@ -317,13 +319,13 @@ export const metricDictionarySchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
-  launchReconciliation: launchReconciliationSchema,
-  overviewSummary: overviewSummarySchema,
-  launchSnapshot: launchSnapshotSchema,
+  launchReconciliation: z.union([nativeLaunchReconciliationSchema, launchReconciliationSchema]),
+  overviewSummary: z.union([nativeOverviewSummarySchema, overviewSummarySchema]),
+  launchSnapshot: z.union([nativeLaunchSnapshotSchema, launchSnapshotSchema]),
   launchControl: z.union([nativeReadinessViewSchema, launchControlSchema]),
-  attribution: attributionSchema,
-  paidMedia: paidMediaSchema,
-  campaignFunnel: campaignFunnelSchema,
+  attribution: z.union([nativeAttributionSchema, attributionSchema]),
+  paidMedia: z.union([nativePaidMediaSchema, paidMediaSchema]),
+  campaignFunnel: z.union([nativeCampaignFunnelSchema, campaignFunnelSchema]),
   customerJourney: z.union([nativeSiteTrafficViewSchema, customerJourneySchema]),
-  metricDictionary: metricDictionarySchema,
+  metricDictionary: z.union([nativeMetricDictionarySchema, metricDictionarySchema]),
 };

@@ -2,6 +2,8 @@ import { useId, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
 import { staleReasonText } from "@/adapter/freshness";
+import { ReportingPeriodForm } from "./reportingPeriod";
+import { useSourceLease } from "@/adapter/useSourceLease";
 import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Button, LinkButton } from "@/components/Button";
@@ -175,12 +177,17 @@ const sourcesOf = (data: unknown) => {
 };
 
 export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }: { query: UseQueryResult<ReadResponse<D>, Error>; subject: string; emptyTitle: string; emptyBody: string; children: (data: D, res: ReadResponse<D>) => ReactNode }) {
-  const res = query.data;
+  const candidate = query.data?.data;
+  const native = candidate && typeof candidate === "object" && "datasetKey" in candidate && candidate.datasetKey === "analytics-native";
+  const provenance = native && "provenance" in candidate ? candidate.provenance as { validUntil: string } : null;
+  const expired = useSourceLease(provenance?.validUntil);
+  const res = native && (query.isError || expired) ? undefined : query.data;
   const freshness = res?.sourceFreshness[0];
   return (
     <>
       {query.isPending && <SkeletonCard label={`Loading ${subject.toLowerCase()}…`} />}
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
+      {expired && <EmptyState state="Error" title="Reporting access lease expired" alert><p>Refresh to verify current access before viewing reporting evidence.</p><Button onClick={() => void query.refetch()}>Refresh reporting evidence</Button></EmptyState>}
       {res?.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
           <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
@@ -207,7 +214,8 @@ export function PeriodDialog({ open, onClose, period }: { open: boolean; onClose
   const demo = useIsDemo();
   return (
     <Dialog open={open} title="A consistent reporting window." badge={demo ? "Demo" : undefined} onClose={onClose}>
-      <p>{demo ? `This demo uses ${period ?? "one fixed window"}. ` : ""}Keep the same period across revenue, costs and attribution. A live implementation applies the chosen date range to every panel and labels incomplete periods.</p>
+      <p>{demo ? `This demo uses ${period ?? "one fixed window"}. ` : `Current source window: ${period ?? "Unknown"}. `}Keep the same period across revenue, costs and attribution. Incomplete source periods stay labeled.</p>
+      {!demo && open && <ReportingPeriodForm onApplied={onClose} />}
       <Button variant="secondary" onClick={onClose}>{demo ? "Keep demo period" : "Close"}</Button>
     </Dialog>
   );

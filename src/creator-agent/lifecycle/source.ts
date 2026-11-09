@@ -28,7 +28,30 @@ export const lifecycleSnapshotSchema = z.object({
   if (s.flows.some(f => f.evidence.some(e => e.observedAt && Date.parse(e.observedAt) > Date.parse(s.observedAt)))) c.addIssue({ code: "custom", message: "Evidence cannot postdate its source observation." });
 });
 export type LifecycleSnapshot = z.infer<typeof lifecycleSnapshotSchema>;
-export type LifecycleSourceReader = (scope: OperationsScope) => Promise<unknown | null>;
+export type LifecycleReadBinding = {
+  scope: OperationsScope;
+  principalRef: "agent-reader" | "agent-reviewer";
+  operation: "read" | "save";
+  requestDigest: string;
+};
+// Access authority is separate from data freshness: a current grant may expose a
+// visibly stale historic aggregate, but may never authorize a new send.
+export const lifecycleSourceResultSchema = z.object({
+  snapshot: lifecycleSnapshotSchema.nullable(),
+  authority: z.object({
+    scope: z.object({ workspaceId: refSchema, accountId: refSchema, environment: z.literal("sandbox") }).strict(),
+    principalRef: z.enum(["agent-reader", "agent-reviewer"]),
+    operation: z.enum(["read", "save"]), requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    sourceVersion: refSchema.nullable(), permissionVersion: refSchema,
+    observedAt: instantSchema, validUntil: instantSchema,
+  }).strict(),
+}).strict();
+export type LifecycleSourceResult = z.infer<typeof lifecycleSourceResultSchema>;
+export type LifecycleSourceReader = {
+  read(binding: LifecycleReadBinding, signal?: AbortSignal): Promise<unknown>;
+  assertCurrent(result: LifecycleSourceResult, binding: LifecycleReadBinding, now: number): void;
+};
+export type LifecycleCallerBoundary = { assertCurrent(): void; signal?: AbortSignal };
 
 export class LifecycleError extends Error {
   readonly code: string;

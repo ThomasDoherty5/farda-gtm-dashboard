@@ -27,3 +27,17 @@ Draft revisions and request receipts are immutable. A SQLite transaction appends
 An absent request lookup is only an observation. It returns `state: unknown`, and cannot authorize a fresh-key replacement while a delayed original may still arrive. Only exact original replay or readback is safe. A recorded receipt or durable rejected receipt can resolve uncertainty. A newer draft never substitutes for that request's proof. Historical receipts remain historical when current policy changes. Source denial clears protected data; an unconfigured or unavailable source preserves readable local drafts while new saves remain held.
 
 History returns the latest 20 revisions with an exact total and explicit truncation. Old request receipts remain retrievable by exact scoped key. Source-version fingerprints detect conflicting reused versions and regressed observations without creating a second business ledger. The injected test fixtures are entirely fictional and cannot activate a provider.
+
+
+The read source is an object with `read(binding, signal)` and a mandatory synchronous
+`assertCurrent(result, binding, now)`. Each response binds scope, principal, operation,
+request digest, source version, permission version and a bounded access lease. This
+access lease is distinct from the aggregate freshness: a permitted stale aggregate
+may be displayed as stale, but cannot authorize a fresh draft basis. Exceptions are
+mapped to finite public error codes; no owner exception details are published.
+
+`saveDraft` returns `{ receipt, assertCurrent }`; the HTTP caller must execute the
+assertion immediately before publishing. The optional caller boundary is rechecked
+before source observation, inside the local write transaction and at publication.
+A postcommit refusal returns `uncertain` and preserves the immutable original
+receipt for authorized readback. It never authorizes a replacement key or send.

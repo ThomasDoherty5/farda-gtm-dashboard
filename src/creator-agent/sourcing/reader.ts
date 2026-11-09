@@ -10,7 +10,7 @@ import { SourcingError, sourcingSnapshotSchema, type SourcingPlanSourceReader, t
 
 export { SourcingError } from "./source.ts";
 type Role = "reader" | "reviewer";
-type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: SourcingPlanSourceReader; now?: () => number; sourceTimeoutMs?: number };
+type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: SourcingPlanSourceReader; now?: () => number; sourceTimeoutMs?: number; assertCurrent?: () => void };
 /** `validUntil` is the earlier of the source's lease and the server's maximum age. */
 type SourceRead = { snapshot: SourcingSnapshot | null; state: SourcingPlan["sourceState"]; reason: string | null; validUntil: string | null };
 /** A parsed, in-scope snapshot. Its clock checks, persistence and lease are all decided at projection time, never before. */
@@ -71,6 +71,7 @@ export function createSourcingPlanReader(options: Options) {
   /** Records the source head. Runs only after the snapshot passed its clock check, so a refused snapshot never becomes the head. */
   function persist({ snapshot: s, factsHash }: Observation) {
     tx(() => {
+      options.assertCurrent?.();
       const previous = db.prepare("SELECT facts_hash FROM sourcing_plan_source_versions WHERE version=?").get(s.version);
       if (previous && previous.facts_hash !== factsHash) fail("SOURCE_VERSION_CHANGED", 409);
       const head = db.prepare("SELECT version,observed_at FROM sourcing_plan_source_head WHERE id=1").get();
@@ -78,6 +79,7 @@ export function createSourcingPlanReader(options: Options) {
       if (head && head.version !== s.version && Date.parse(String(head.observed_at)) === Date.parse(s.observedAt)) fail("SOURCE_VERSION_CHANGED", 409);
       db.prepare("INSERT OR IGNORE INTO sourcing_plan_source_versions VALUES(?,?)").run(s.version, factsHash);
       db.prepare("INSERT INTO sourcing_plan_source_head VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,observed_at=excluded.observed_at").run(s.version, s.observedAt);
+      options.assertCurrent?.();
     });
   }
 

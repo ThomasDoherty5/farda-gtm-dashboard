@@ -81,7 +81,7 @@ export class InvitationDraftRepository {
     try {
       assertSynchronousVoid(assertCurrent);
       const prior = this.exact(request, principal, key);
-      if (prior) { this.db.exec("COMMIT"); return prior; }
+      if (prior) { assertSynchronousVoid(assertCurrent); this.db.exec("COMMIT"); return prior; }
       const current = this.readStored(request.draftId, principal);
       if ((current?.draft.version ?? null) !== request.expectedVersion)
         throw new RecruitmentError("STALE_VERSION", 409, "notApplied", current?.draft.version);
@@ -95,6 +95,7 @@ export class InvitationDraftRepository {
       assertSynchronousVoid(assertCurrent);
       this.db.prepare("INSERT INTO recruitment_invitation_drafts VALUES(?,?,?)").run(request.draftId, revision, JSON.stringify({ ownerPrincipalRef: principal.principalRef, basis: bound, draft }));
       this.db.prepare("INSERT INTO recruitment_invitation_saves VALUES(?,?,?,?,?)").run(this.key(principal, key), digest(request), request.draftId, principal.principalRef, JSON.stringify(receipt));
+      assertSynchronousVoid(assertCurrent);
       this.db.exec("COMMIT"); return receipt;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }

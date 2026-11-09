@@ -68,7 +68,7 @@ export function NativeOperationsControls({section,taskOpen=false,onTaskClose,pla
  const mine=params.get("controlMine")==="true";
  const query=useView<OperationsControlFilters,NativeOperationsControl>("operationsControl",{section,...(jobRef?{jobRef}:{}),...(section==="runs"?{...(platform?{platform}:{}),...(q?{q}:{}),...(mine?{mine:true}:{})}:{})});
  const data=query.data?.data;
- const validUntil=data?.namedActor?.validUntil;
+ const validUntil=data?.readAccess?.validUntil??data?.namedActor?.validUntil;
  const rootKey=canonical(scopeKey(ctx));
  // Newly returned source data (or a new scope) clears a prior expiry notice; its own lease is then timed below.
  const [expiryBasis,setExpiryBasis]=useState({data,rootKey});
@@ -120,7 +120,7 @@ function ControlsBody({data,res,refresh,taskOpen,onTaskClose,planOpen,onPlanClos
   </Notice>
   {data.section==="team"&&<Split>
    <Panel title="Who can do what" note="Application and provider roles are separate" headingId="native-role-matrix">
-    <DetailRows rows={[["Current application role",data.role],["Current principal",data.actorRef],["Named person",data.namedActor?.personRef??"Unverified"],["Verified person roles",data.namedActor?.state==="verified"?data.namedActor.roles.join(", "):"Unavailable"],["Authority valid until",data.namedActor?.validUntil??"Unavailable"],["Read scoped evidence","Allowed"],["Create canonical preview",actions.some(a=>a.allowed)?"Allowed for the exact listed targets":"Held pending source authority"],["Provider approval or execution","Separate verified authority required"]]}/>
+    <DetailRows rows={[["Current application role",data.role],["Current principal",data.actorRef],["Named person",data.namedActor?.personRef??"Unverified"],["Verified person roles",data.namedActor?.state==="verified"?data.namedActor.roles.join(", "):"Unavailable"],["Read authority valid until",data.readAccess?.validUntil??data.namedActor?.validUntil??"Local-only / unavailable"],["Read scoped evidence","Allowed"],["Create canonical preview",actions.some(a=>a.allowed)?"Allowed for the exact listed targets":"Held pending source authority"],["Provider approval or execution","Separate verified authority required"]]}/>
     <Small>A reviewer session does not establish founder, provider administrator, finance or task-owner authority.</Small>
    </Panel>
    <Panel title="Owner coverage" headingId="native-owner-coverage"><p>{data.sourceState==="notConnected"?"Owner and backup coverage is unknown.":data.records.length+" source role records received; unknown owners remain explicit."}</p>

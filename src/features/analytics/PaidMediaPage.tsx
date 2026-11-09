@@ -1,3 +1,9 @@
+import type { NativePaidMedia as NativePaidData } from "@/creator-agent/analytics/views";
+import { NativePaidMedia } from "./NativePaidMedia";
+import { nativePeriod } from "./NativeAnalyticsEvidence";
+import { useReportingPeriod } from "./reportingPeriod";
+import { useScope } from "@/adapter/scope";
+import { useSourceLease } from "@/adapter/useSourceLease";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { PaidMediaFilters } from "@/adapter/demoAnalytics";
@@ -24,23 +30,31 @@ const RIGHTS_TONE: Record<RightsState, BadgeTone> = { cleared: "success", expiri
 /** Paid media (Figma source 30:349, owner THO-293, CTRL-204 to CTRL-206). Media spend is never counted as creator content fees. */
 export function PaidMediaPage() {
   const [search, setSearch] = useSearchParams();
-  const filters: PaidMediaFilters = { rights: allowed(RIGHTS, search.get("rights")) as PaidMediaFilters["rights"], platform: allowed(PLATFORMS, search.get("platform")) as PaidMediaFilters["platform"] };
-  const query = useView<PaidMediaFilters, PaidMediaData>("paidMedia", filters, null, { keepPrevious: true });
+  const { adapter } = useScope();
+  const filters: PaidMediaFilters = { rights: (adapter.kind === "demo" ? allowed(RIGHTS, search.get("rights")) : search.get("rights") ?? "all") as PaidMediaFilters["rights"], platform: (adapter.kind === "demo" ? allowed(PLATFORMS, search.get("platform")) : search.get("platform") ?? "all") as PaidMediaFilters["platform"] };
+  const period = useReportingPeriod(), cursor = adapter.kind === "demo" ? null : search.get("asset-cursor");
+  const query = useView<PaidMediaFilters, PaidMediaData | NativePaidData>("paidMedia", filters, period, { keepPrevious: true, ...(adapter.kind === "demo" ? {} : { page: { cursor, limit: 25 } }) });
+  const value = query.data?.data, expired = useSourceLease(value?.datasetKey === "analytics-native" ? value.provenance.validUntil : undefined);
+  const visible = query.isError || expired ? null : value;
+  const native = visible?.datasetKey === "analytics-native" ? visible : null;
+  const legacy = visible && visible.datasetKey !== "analytics-native" ? visible : null;
+  const assetPage = (nextCursor: string | null) => setSearch(prev => { const next = new URLSearchParams(prev); if (nextCursor) next.set("asset-cursor", nextCursor); else next.delete("asset-cursor"); return next; });
+  const clearFilters = () => setSearch(prev => { const next = new URLSearchParams(prev); for (const key of ["rights", "platform", "asset-cursor"]) next.delete(key); return next; });
   const [dialog, setDialog] = useState<"period" | "source" | null>(null);
   const setFilter = (key: "rights" | "platform", value: string) =>
-    setSearch((prev) => { const next = new URLSearchParams(prev); if (value === "all") next.delete(key); else next.set(key, value); return next; });
+    setSearch((prev) => { const next = new URLSearchParams(prev); next.delete("asset-cursor"); if (value === "all") next.delete(key); else next.set(key, value); return next; });
   return (
     <section aria-labelledby="paid-media-title" data-figma-source="30:349" className={styles.page}>
       <PageHeader id="paid-media-title" title="See what earns the click." subtitle="Paid media · spend, attention, conversion signals and permission to use each asset.">
-        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{adapter.kind === "demo" ? "Last 30 days" : "Reporting period"}</Button>
         <Button style={{ minWidth: 192 }} aria-haspopup="dialog" onClick={() => setDialog("source")}>Open ad source</Button>
       </PageHeader>
       <ViewShell query={query} subject="Paid media" emptyTitle="No paid media data" emptyBody="The source responded, but nothing matches this period.">
-        {(data) => <Body data={data} filters={filters} setFilter={setFilter} clear={() => setSearch({})} />}
+        {(data) => data.datasetKey === "analytics-native" ? <NativePaidMedia data={data} filters={filters} setFilter={setFilter} clear={clearFilters} next={() => assetPage(data.pagination.nextCursor)} first={() => assetPage(null)} paged={Boolean(cursor)} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body data={data} filters={filters} setFilter={setFilter} clear={clearFilters} />}
       </ViewShell>
-      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={query.data?.data?.periodLabel ?? null} />
-      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }, ...(query.data?.data?.channels ?? []).map(c => ({ label: c.label + " attribution window", value: c.attributionWindow ? c.attributionWindow.label + " · " + c.attributionWindow.sourceRef : "Unknown · not supplied by the source" }))]}>
-        <p>{query.data?.data?.datasetKey === "paid-media-demo" ? "These are illustrative platform reports." : "Each reporting window comes from its platform report."}</p>
+      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={native ? nativePeriod(native) : legacy?.periodLabel ?? null} />
+      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }, ...(legacy?.channels ?? []).map(c => ({ label: c.label + " attribution window", value: c.attributionWindow ? c.attributionWindow.label + " · " + c.attributionWindow.sourceRef : "Unknown · not supplied by the source" }))]}>
+        <p>{legacy?.datasetKey === "paid-media-demo" ? "These are illustrative platform reports." : "Each reporting window comes from its platform report."}</p>
       </HandoffDialog>
     </section>
   );

@@ -167,7 +167,7 @@ export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
   automationRuns: z.union([savedRunsSchema, automationRunsSchema]),
   scheduleDetail: z.union([nativeScheduleDetailSchema, scheduleDetailSchema]),
   channelCapabilities: z.union([savedBindingsSchema, channelCapabilitiesSchema]),
-  nightlyReconciliation: nightlyReconciliationSchema,
+  nightlyReconciliation: z.union([nativeOperationsControlSchema, nightlyReconciliationSchema]),
 };
 
 export const settingsActionSchemas = { proposeOperationsReview: { payload: operationsReviewPayload }, refreshOperationsHealth: { payload: operationsHealthPayload } };

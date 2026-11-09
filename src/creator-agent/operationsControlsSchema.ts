@@ -105,6 +105,7 @@ export const nativeOperationsControlSchema=z.object({kind:z.literal("native-oper
   healthTargets:z.array(z.object({targetRef:opaque,title:text,allowed:z.boolean(),reasonCodes:z.array(ref)}).strict()).max(100),
   localCoverage:z.object({returned:n,total:n,partial:z.boolean()}).strict(),
   runFilterEvidence:z.object({matched:n,unknownPlatform:n,assignment:z.enum(["named-principal-unverified","named-principal-verified"])}).strict(),
+  readAccess:z.object({kind:z.enum(["namedAuthority","sourceGrant"]),validUntil:instant}).strict().nullable().optional(),
   namedActor:z.object({state:z.enum(["verified","unavailable"]),personRef:ref.nullable(),roles:z.array(z.enum(["founder","operator","reviewer","finance","viewer"])),observedAt:instant.nullable(),validUntil:instant.nullable()}).strict().optional(),
   canonicalActions:z.array(action.extend({items:z.array(z.object({itemRef:ref,targetRef:ref,units:n,spendMinor:n}).strict()).min(1).max(100),effect:z.literal("previewOnly")})).max(200).optional(),
   canonicalReconciliation:z.object({requestKey:ref,state:z.enum(["recorded","pending","absent","rejected","unverified"]),approvalRef:ref.nullable(),manifestRef:ref.nullable(),version:ref.nullable(),executionCertainty:z.enum(["notApplied","applied","uncertain"])}).strict().nullable().optional(),

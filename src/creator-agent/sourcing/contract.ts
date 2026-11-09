@@ -115,7 +115,7 @@ const latestRunView = z.object({
   attempts: observedCountSchema, distinctOpportunities: observedCountSchema, confirmedInvitations: observedCountSchema, receiptRefs: z.array(refSchema).max(500),
 }).strict();
 
-export const sourcingPlanSchema = z.object({
+export const sourcingPlanShape = {
   kind: z.literal("agent-sourcing-plan"),
   observedAt: instantSchema, sourceAsOf: instantSchema.nullable(), sourceVersion: refSchema.nullable(), validUntil: instantSchema.nullable(),
   freshness: z.enum(["current", "stale", "unknown"]), coverage: z.enum(["complete", "partial", "unknown"]), sourceState: z.enum(sourceStates), missingReason: text.nullable(),
@@ -126,7 +126,8 @@ export const sourcingPlanSchema = z.object({
     /** Every reason nothing may dispatch from this plan. Reading the plan never dispatches. */
     dispatchHoldReasons: z.array(text).min(1).max(30),
   }).strict().nullable(),
-}).strict().superRefine((v, c) => {
+};
+export const sourcingPlanSchema = z.object(sourcingPlanShape).strict().superRefine((v, c) => {
   if ((v.plan === null) !== (v.sourceState === "unconfigured" || v.sourceState === "unavailable")) c.addIssue({ code: "custom", message: "Only a read source has a plan." });
   if (v.plan === null && v.missingReason === null) c.addIssue({ code: "custom", message: "A missing plan needs its reason." });
   if (v.plan && v.plan.steps.some((s, i) => s.step !== stepKeys[i])) c.addIssue({ code: "custom", message: "Plan steps are fixed and ordered." });

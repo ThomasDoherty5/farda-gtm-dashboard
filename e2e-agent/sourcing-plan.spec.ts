@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { createAgentServer, type AgentServerOptions } from "../src/creator-agent/server.ts";
 import { sourcingSourceFixture, sourcingTestScope } from "../src/creator-agent/sourcing/fixtures.testkit.ts";
-import { SourcingError, type SourcingSnapshot } from "../src/creator-agent/sourcing/source.ts";
+import type { SourcingSnapshot } from "../src/creator-agent/sourcing/source.ts";
+import { nativeSourcingSourceFixture } from "../src/creator-agent/sourcing/nativeFixtures.testkit.ts";
+import { screenReaderCheckpoint } from "./support/screen-reader.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
 
 async function listen(app: ReturnType<typeof createAgentServer>) {
@@ -22,13 +24,15 @@ async function accessible(page: Page) {
   await page.setViewportSize({ width: 1440, height: 1000 });
 }
 
-test("the daily plan detail reads the served sourcing plan over actual HTTP and SQLite, and states every source condition honestly", async ({ page }) => {
+test("the daily plan detail reads the served sourcing plan over actual HTTP and SQLite, and states every source condition honestly", async ({ page }, info) => {
   test.setTimeout(180_000);
   const directory = mkdtempSync(join(tmpdir(), "farda-sourcing-browser-"));
   const options: AgentServerOptions = { databasePath: join(directory, "agent.sqlite"), workspaceId: sourcingTestScope.workspaceId, accountId: sourcingTestScope.accountId,
     readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN };
-  let snapshot: SourcingSnapshot = sourcingSourceFixture(sourcingTestScope, Date.now() - 1000), denied = false;
-  let app = createAgentServer({ ...options, sourcingPlanSource: async () => { if (denied) throw new SourcingError("UPSTREAM_DENIED", 403); return structuredClone(snapshot); } });
+  let snapshot: SourcingSnapshot = sourcingSourceFixture(sourcingTestScope, Date.now() - 1000);
+  const fixture = nativeSourcingSourceFixture({ now: Date.now });
+  fixture.state.mutate = packet => { packet.snapshot = structuredClone(snapshot); packet.snapshot.version = fixture.state.version; packet.validUntil = new Date(Date.now() + 600_000).toISOString(); };
+  let app = createAgentServer({ ...options, sourcingPlanSource: fixture.source });
   await listen(app);
   try {
     await login(page);
@@ -48,20 +52,26 @@ test("the daily plan detail reads the served sourcing plan over actual HTTP and 
     // This session is a reader: the reason names the role and does not imply a reviewer could request approval today.
     await expect(page.getByText("Requires the reviewer role. Batch approval is also not connected yet, so no role can request it here today.")).toBeVisible();
     await accessible(page);
+    await expect(page.getByText(/Synthetic owner evidence · sandbox/)).toBeVisible();
+    for (const width of [1440, 1024, 390]) {
+      await page.setViewportSize({ width, height: 1000 }); await page.evaluate(() => document.fonts.ready);
+      await page.screenshot({ path: info.outputPath(`native-sourcing-plan-${width}.png`), fullPage: true });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await screenReaderCheckpoint(page, "sourcing-native-capacity-table", page.getByRole("region", { name: "Source capacity in native units" }), ["Source capacity", "Remaining", "Dispatch"], "KP_Enter");
 
     // The source claims active, but a closed browser session keeps the schedule a draft.
     snapshot = { ...sourcingSourceFixture(sourcingTestScope, Date.now() - 500), version: "synthetic-plan-source-v2" };
-    snapshot.sources[1]!.session = "closed";
+    snapshot.sources[1]!.session = "closed"; fixture.state.version = "fictional-plan-v2";
     await page.reload();
     await expect(page.getByTestId("live-plan-schedule")).toContainText("Draft · not active · source claims active");
     await expect(page.getByTestId("live-plan-schedule-holds")).toContainText("BROWSER_SESSION_CLOSED:tiktok-shop");
 
-    // The source refusing the server's own credential is an upstream outage: the page says the data is unavailable,
-    // never that this user has no access, and shows no plan it could not read.
-    denied = true;
-    await page.reload();
-    await expect(page.getByText("Data unavailable")).toBeVisible();
-    await expect(page.getByText("No access to this account")).toHaveCount(0);
+    // A source-owned current principal denial removes protected plan evidence.
+    fixture.state.allowed = false;
+    await page.getByRole("button", { name: "Refresh sourcing evidence", exact: true }).click();
+    await expect(page.getByText("No access to this account")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await expect(page.getByTestId("live-plan-versions")).toHaveCount(0);
   } finally { await app.close(); }
@@ -73,7 +83,7 @@ test("the daily plan detail reads the served sourcing plan over actual HTTP and 
     await login(page);
     await page.goto("/creators/discovery?view=plan");
     await expect(page.getByText("Daily sourcing source not connected")).toBeVisible();
-    await expect(page.getByText(/SOURCING_SOURCE_UNCONFIGURED/)).toBeVisible();
+    await expect(page.getByText(/Schedules, capacity and run counts remain Unknown/)).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(0);
     await accessible(page);
   } finally { await app.close(); rmSync(directory, { recursive: true, force: true }); }
