@@ -46,13 +46,13 @@ export function NativeFinanceTabs({ current, payout }: { current: "commissions" 
 }
 
 /** The service validates destinations; the browser additionally withdraws an expired link. */
-export function FinanceSourceLink({ record, kind, label, current = true, targetRef }: { record: SettlementRecord; kind: SettlementRecord["links"][number]["kind"]; label: string; current?: boolean; targetRef?: string }) {
+export function FinanceSourceLink({ record, kind, label, current = true, targetRef, compact = false }: { compact?: boolean; record: SettlementRecord; kind: SettlementRecord["links"][number]["kind"]; label: string; current?: boolean; targetRef?: string }) {
   const synthetic = useContext(SyntheticSource);
   const matches = record.links.filter(link => link.kind === kind && (targetRef === undefined || link.targetRef === targetRef));
   const link = matches.length === 1 ? matches[0] : undefined;
   const leased = useSourceLease(link?.validUntil);
   const safe = !synthetic && current && leased && link?.state === "verified" && link.url && /^https:\/\//i.test(link.url);
-  const reason = matches.length > 1 ? "Source links conflict. Ask the source owner." : "Source link unavailable. Refresh source access.";
+  const reason = matches.length > 1 ? "Source links conflict. Ask the source owner." : compact ? "Source link unavailable; refresh access." : "Source link unavailable. Refresh source access.";
   return safe ? <LinkButton variant="secondary" to={link.url!} target="_blank" rel="noopener noreferrer">{label}<span className="visually-hidden"> (external source, opens in a new tab)</span></LinkButton>
     : <FinancialHeldButton reason={reason}>{label}</FinancialHeldButton>;
 }

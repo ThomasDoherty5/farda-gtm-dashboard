@@ -126,7 +126,26 @@ it("keeps each held source action with its visible explanation and preserves hor
   expect(explanation).toBeVisible();
   expect(explanation?.parentElement).toBe(button.parentElement);
   const panel = screen.getByRole("region", { name: "Refunds have their own lifecycle" });
-  expect(within(panel).getAllByRole("listitem")).toHaveLength(4);
-  for (const label of ["Return received", "Refund settled", "Replacement created", "Replacement shipped"]) expect(within(panel).getByText(label)).toBeVisible();
-  expect(within(panel).getAllByText("Unknown · no independent source receipt was returned.")).toHaveLength(4);
+  expect(within(panel).getAllByRole("listitem")).toHaveLength(6);
+  for (const label of ["Refund requested", "Refund settled", "Return received", "Stock reconciled", "Replacement created", "Replacement shipped"]) expect(within(panel).getByText(label)).toBeVisible();
+  expect(within(panel).getAllByText("Unknown · no independent source receipt was returned.")).toHaveLength(6);
+});
+
+
+it("keeps refund request unknown after a settled refund and retains both independently supplied inventory outcomes", async () => {
+  const data = operationsRecord("orderDetail");
+  data.provenance = { ...(data.provenance as object), validUntil: "2099-01-01T00:00:00Z", version: "native-v1" };
+  data.nativeEvents = ["refundSettled", "inventoryQuarantined", "inventoryRestocked"].map(kind => ({ kind, state: "confirmed", eventAt: "2026-11-06T11:50:00Z", observedAt: "2026-11-06T11:55:00Z", receiptRef: `independent-${kind}`, sourceRef: `source-${kind}`, reasonCode: null }));
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read") throw new Error("No native effect");
+    return respondWith(request.envelope, data, { dataVersion: "native-v1" });
+  } } });
+  renderRoute("/orders/TEST-SH-1042", adapter);
+  const panel = await screen.findByRole("region", { name: "Refunds have their own lifecycle" });
+  expect(within(panel).getByText("Refund requested").closest("li")).toHaveTextContent("Unknown");
+  expect(within(panel).getByText("Stock reconciled").closest("li")).toHaveTextContent("independent-inventoryQuarantined");
+  expect(within(panel).getByText("Stock reconciled").closest("li")).toHaveTextContent("independent-inventoryRestocked");
+  expect(within(panel).getByText("Stock reconciled").closest("li")).toHaveTextContent("Reconciliation unknown");
+  expect(within(panel).getByText("Stock reconciled").className).toMatch(/neutral/);
+  expect(within(panel).getByText("Replacement created").closest("li")).toHaveTextContent("Unknown");
 });

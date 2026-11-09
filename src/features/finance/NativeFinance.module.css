@@ -23,3 +23,9 @@
 @media (max-width: 767px) { .cohortFacts > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .historicalTerms { display: block; margin-top: var(--space-4); overflow-wrap: anywhere; }
+
+/* Keep desktop evidence controls in one header row; narrower layouts wrap safely. */
+.panelHeader > :last-child { flex: 0 0 auto; flex-wrap: nowrap; align-items: flex-start; }
+@media (max-width: 1024px) {
+  .panelHeader > :last-child { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
+}

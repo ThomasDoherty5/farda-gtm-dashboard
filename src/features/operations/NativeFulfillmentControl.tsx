@@ -18,15 +18,15 @@ type Payload = { kind: FulfillmentKind; targetRef: string; planRef: string; reas
 export function NativeFulfillmentControl({ kind, targetRef, label, inline = false }: { inline?: boolean; kind: FulfillmentKind; targetRef: string | null; label: string }) {
   const ctx = useScope();
   const [open, setOpen] = useState(false);
-  if (inline) return targetRef ? <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} /> : <HeldReturnFields reason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action." />;
-  if (!targetRef) return <HeldOperationButton disabledReason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action.">{label}</HeldOperationButton>;
+  if (inline) return targetRef ? <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} /> : <HeldReturnFields reason="Source plan authority unavailable. Refresh before preparing an action." />;
+  if (!targetRef) return <HeldOperationButton disabledReason="Source plan authority unavailable. Refresh before preparing an action.">{label}</HeldOperationButton>;
   return <><Button aria-haspopup="dialog" onClick={() => setOpen(true)}>{label}</Button><Dialog open={open} title={kind === "returnTask" ? "Prepare the source return plan" : "Record the next step"} onClose={() => setOpen(false)}>{open && <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} />}<Button variant="secondary" onClick={() => setOpen(false)}>Close plan review</Button></Dialog></>;
 }
 function HeldReturnFields({ reason }: { reason: string }) {
   return <div className={styles.stack}>
-    <SelectField label="Disposition" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source disposition unavailable"}]} helpText="Quarantine damaged or unverified stock. A source-inspected quantity is required." />
-    <SelectField label="Resolution" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source remedy unavailable"}]} helpText="Refund or a distinct replacement requires an exact source-reviewed plan." />
-    <TextField label="Reason" value="" onChange={() => undefined} disabled helpText="No customer conversation text is copied here. Source authority is unavailable." />
+    <SelectField label="Disposition" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source disposition unavailable"}]} helpText="Quarantine damaged or unverified stock." />
+    <SelectField label="Resolution" value="" onChange={() => undefined} disabled options={[{value:"",label:"Source remedy unavailable"}]} helpText="Refund or replacement requires a source-reviewed plan." />
+    <TextField label="Reason" value="" onChange={() => undefined} disabled helpText="Do not copy customer details or conversation text." />
     <HeldOperationButton disabledReason={reason}>Preview exact source plan</HeldOperationButton>
   </div>;
 }

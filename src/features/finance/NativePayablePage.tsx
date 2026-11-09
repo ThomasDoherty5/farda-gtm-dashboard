@@ -40,10 +40,10 @@ function PayableBody({ record, data }: { record: SettlementRecord; data: NativeP
   ];
   return <>
     <PageHeader id="payable-title" title="Direct content fees end with proof." subtitle={<span className={native.reference}>{displayReference(record.ref)} · {displayReference(record.creatorRef)} · {history ? exactMoney(history.acceptedAmount) : "Accepted amount unknown"}</span>}>
-      <FinanceSourceLink record={record} kind="ledger" label="Open ledger source" />
-      <FinanceSourceLink record={record} kind="approval" label="Founder review" />
+      <FinanceSourceLink compact record={record} kind="ledger" label="Open ledger source" />
+      <FinanceSourceLink compact record={record} kind="approval" label="Founder review" />
     </PageHeader>
-    <ContextCard title="Existing payable · accepted historical terms" actions={<><FinanceSourceLink record={record} kind="currentOffer" label="Current affiliate terms" /><LinkButton variant="secondary" style={{ alignSelf: "flex-start" }} to="/creators/pipeline">Full acquisition funnel</LinkButton></>}>
+    <ContextCard title="Existing payable · accepted historical terms" actions={<><FinanceSourceLink compact record={record} kind="currentOffer" label="Current affiliate terms" /><LinkButton variant="secondary" style={{ alignSelf: "flex-start" }} to="/creators/pipeline">Full acquisition funnel</LinkButton></>}>
       {history ? `The accepted ${exactMoney(history.acceptedAmount)} obligation remains subject to its original terms, approval and source evidence.` : "Accepted historical terms were not supplied. Do not infer an amount or create a new commitment."} This is not a new acquisition offer or a second payment of provider-settled commission. <span className={native.historicalTerms}>Contract {history?.contractRef ?? "Unknown"} · accepted terms {history?.termsRef ?? "Unknown"} · version {history?.termsVersion ?? "Unknown"}</span>
     </ContextCard>
     <div className={styles.paymentRow}><Badge tone="warning">{stateText[record.state]}</Badge><p className={native.reference}>Invoice reference {history?.invoiceRef ?? "Unknown"}</p><span className={styles.spacer} /><Badge>{data.source.synthetic ? "Synthetic payable" : "Historical payable"}</Badge></div>
@@ -58,11 +58,11 @@ function PayableBody({ record, data }: { record: SettlementRecord; data: NativeP
         <Note>Preserve the original accepted liability and paid receipts. Provider-settled commissions never create another manual payment here.</Note>
       </Panel>
       <div className={styles.stackCol}>
-        <section className={styles.dark} aria-labelledby="native-founder-title"><h2 id="native-founder-title">A founder releases this step.</h2><p className={styles.bodyText}>The source approval must identify this creator, exact amount, currency, invoice and payment purpose. Viewing an approval does not release payment.</p><FinanceSourceLink record={record} kind="approval" label="Open Slack approval" /><span><Badge tone="warning">Execution held</Badge></span><p className={styles.smallText}>Current payment execution is not authorized by this screen. Expiry or changed terms require source review.</p></section>
+        <section className={styles.dark} aria-labelledby="native-founder-title"><h2 id="native-founder-title">A founder releases this step.</h2><p className={styles.bodyText}>The source approval must identify this creator, exact amount, currency, invoice and payment purpose. Viewing an approval does not release payment.</p><FinanceSourceLink compact record={record} kind="approval" label="Open Slack approval" /><span><Badge tone="warning">Execution held</Badge></span><p className={styles.smallText}>Current payment execution is not authorized by this screen. Expiry or changed terms require source review.</p></section>
         <Panel title="Handle exceptions explicitly." testId="native-payment-recovery">
           <FactList wide labelWidth={197} label="Exception handling" rows={[["Rejected", "Retain the reason; do not pay"], ["Failed", "Review original provider evidence"], ["Outcome unknown", "Reconcile the original request before retry"], ["Partial settlement", moneyFact(record.balances.outstanding)], ["Refund / reversal", `${record.adjustments.length} source adjustments returned`]]} />
           <Button variant="secondary" aria-haspopup="dialog" onClick={() => setEvidenceOpen(true)}>Inspect source evidence</Button>
-          <FinanceSourceLink record={record} kind="evidence" label="Open source evidence" />
+          <FinanceSourceLink compact record={record} kind="evidence" label="Open source evidence" />
         </Panel>
       </div>
     </div>

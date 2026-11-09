@@ -66,7 +66,7 @@ export function ShippingExceptionPage() {
             <Panel title="Resolve in the source" subtitle="Operator action required">
               <FactList label="Exception ownership" rows={[["Owner", e.owner], ["Order key", e.orderKey], ["Alert", e.alert], ["Support case", e.supportCase]]} />
               <Divider />
-              <ol className={styles.checklist}>{e.steps.map((step, i) => <li key={step}>{i + 1}. {step}</li>)}</ol>
+              <ol className={styles.checklist}>{(e.steps.length ? e.steps : ["Confirm the carrier outcome in its source record", "Review the exact source refund or replacement plan", "Record the approved decision and new source identifiers", "Verify the independent mirror and source receipts"]).map((step, i) => <li key={step}>{i + 1}. {step}</li>)}</ol>
               {demo ? <Button aria-haspopup="dialog" style={{ minWidth: 238, alignSelf: "flex-start" }} onClick={() => setSource("Open the case in Intercom")}>Open case in Intercom</Button> : <OperationsSourceLink data={e} kind="support" targetRef={e.supportCase} label="Open source support case" />}
             </Panel>
           </TwoColumns>

@@ -31,17 +31,21 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  await new Promise(resolve=>setTimeout(resolve,500));
  // An OS keyboard event reaches Orca's Where Am I command, rather than a CDP/AX snapshot.
  const osKeys:string[]=[],columns=key==="KP_Enter"?await focus.getByRole("columnheader").count():0;
- const tableOrdinal=columns?await focus.evaluate(element=>{
+ const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+ const tableTarget=columns?await focus.evaluate(element=>{
    const target=element.matches("table")?element:element.querySelector("table");
-   return Array.from(document.querySelectorAll("table")).filter(table=>table.getClientRects().length>0).indexOf(target as HTMLTableElement)+1;
- }):0;
+   const tables=Array.from(document.querySelectorAll("table")).filter(table=>table.getClientRects().length>0);
+   return {index:tables.indexOf(target as HTMLTableElement),captions:tables.map(table=>table.caption?.textContent?.trim()??""),columns:tables.map(table=>table.querySelectorAll("thead th").length)};
+ }):null;
  const press=async(command:string)=>{await run("xdotool",["key","--clearmodifiers",command]);osKeys.push(command);};
- const browseFromStart=async()=>{
+ const requireTime=(deadline:number,wait:number)=>{if(Date.now()+wait>=deadline)throw new Error("Orca navigation exhausted the remaining speech checkpoint budget");};
+ const browseFromStart=async(deadline=Infinity)=>{
    // A prior form may leave focus mode active. Establish browse mode from
    // Orca's own announcement before actual document navigation.
    // https://help.gnome.org/orca/commands_reading.html
    let mode="";
    for(let attempt=0;attempt<3&&mode!=="Browse mode";attempt++){
+     requireTime(deadline,1000);
      const modeOffset=statSync(log).size;
      await press("KP_Insert+a");
      // Orca treats a rapid second press as sticky mode, not another toggle.
@@ -49,19 +53,45 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      await expect.poll(()=>{
        mode=[...readFileSync(log).subarray(modeOffset).toString("utf8").matchAll(/SPEECH OUTPUT: '(Browse mode|Focus mode)(?: is sticky\.)?'/g)].at(-1)?.[1]??"";
        return mode;
-     },{timeout:5000,message:"Actual Orca browse/focus mode announcement"}).toMatch(/^(Browse|Focus) mode$/);
+     },{timeout:Math.max(1,Math.min(5000,deadline-Date.now())),message:"Actual Orca browse/focus mode announcement"}).toMatch(/^(Browse|Focus) mode$/);
    }
    expect(mode).toBe("Browse mode");
+   requireTime(deadline,500);
    await press("ctrl+Home");await new Promise(resolve=>setTimeout(resolve,500));
  };
- const inspectHeaders=async()=>{
-   // DOM focus does not move Orca's caret into its table. DOM geometry
-   // supplies only its ordinal, never the spoken evidence.
+ const inspectHeaders=async(deadline=Infinity)=>{
+   // After dialog focus return, Ctrl+Home can leave Orca's structural table
+   // cursor at a different table. The a6a2 trace selected the two-column
+   // contribution table instead of the seven-column ledger on every retry.
+   // DOM captions guide read-only navigation; only a NEW Orca announcement
+   // confirms the target before reading its headers. Never supply speech text.
    // https://help.gnome.org/orca/commands_structural_navigation.html
-   expect(tableOrdinal).toBeGreaterThan(0);
-   await browseFromStart();
-   for(let table=0;table<tableOrdinal;table++){await press("t");await new Promise(resolve=>setTimeout(resolve,1000));}
+   if(!tableTarget||tableTarget.index<0)throw new Error("No visible target table for Orca header inspection");
+   const captions=tableTarget.captions.map(normalize),targetCaption=captions[tableTarget.index];
+   expect(targetCaption,"A named table is required for actual Orca targeting").toBeTruthy();
+   expect(captions.filter(caption=>caption===targetCaption),"Orca table targeting requires a unique caption").toHaveLength(1);
+   await browseFromStart(deadline);
+   let announced=-1,command="t";
+   for(let move=0;move<Math.min(captions.length+1,12)&&announced!==tableTarget.index;move++){
+     requireTime(deadline,1000);
+     const tableOffset=statSync(log).size;
+     await press(command);await new Promise(resolve=>setTimeout(resolve,1000));
+     announced=-1;let candidate=-1;
+     for(const line of readFileSync(log).subarray(tableOffset).toString("utf8").split("\n")){
+       const utterance=line.match(/SPEECH OUTPUT: '(.*)'(?: \{|$)/)?.[1];
+       if(!utterance)continue;
+       const said=normalize(utterance),index=captions.findIndex(caption=>caption!==""&&(said===caption||said===`${caption} caption`||said===`${caption} table`));
+       const dimensions=said.match(/^table with \d+ rows? (\d+) columns?$/);
+       if(dimensions)announced=candidate>=0&&Number(dimensions[1])===tableTarget.columns[candidate]?candidate:-1;
+       // Pair adjacent speech utterances, and let a later table announcement
+       // invalidate an earlier match from this command's output window.
+       candidate=index;
+     }
+     if(announced>=0)command=announced>tableTarget.index?"shift+t":"t";
+   }
+   expect(announced,"Actual Orca caption must identify the target table before header traversal").toBe(tableTarget.index);
    for(let column=0;column<columns;column++){
+     requireTime(deadline,1000);
      const command=column===0?"alt+shift+Home":"alt+shift+Right";
      await press(command);
      await new Promise(resolve=>setTimeout(resolve,1000));
@@ -78,17 +108,18 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  let lineMoves=0,statusPresented=false;
  if(columns)await inspectHeaders();
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
- const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+ const speechTimeout=key==="KP_Add"||readLines?60000:20000,speechDeadline=Date.now()+speechTimeout;
  await expect.poll(async()=>{
    const text=normalize(speech().join(" ")),missing=words.filter(word=>!text.includes(normalize(word)));
    // Chromium may finish publishing the AT-SPI document after DOM focus and
    // the first inspection. Repeat only the read-only Where Am I command;
    // never repeat Return, a transition callback, or a business action.
    if(missing.length&&key==="KP_Enter"){
+     requireTime(speechDeadline,500);
      await page.bringToFront();await run("xdotool",["windowactivate","--sync",activeWindow]);
      await focus.focus();await new Promise(resolve=>setTimeout(resolve,500));
      await run("xdotool",["key","--clearmodifiers",key]);
-     osKeys.push(key);if(columns)await inspectHeaders();
+     osKeys.push(key);if(columns)await inspectHeaders(speechDeadline);
    }
    if(missing.length&&readLines&&lineMoves<40){
      // A finite read-only traversal replaces the non-starting Say All command.
@@ -108,8 +139,9 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
        await new Promise(resolve=>setTimeout(resolve,1000));
      }
    }
-   return missing;
- },{timeout:key==="KP_Add"||readLines?60000:20000,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
+   const latest=normalize(speech().join(" "));
+   return words.filter(word=>!latest.includes(normalize(word)));
+ },{timeout:speechTimeout,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
  appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
 }

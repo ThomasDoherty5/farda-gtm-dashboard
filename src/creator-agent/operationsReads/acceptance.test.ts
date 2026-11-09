@@ -67,7 +67,7 @@ it("requires a separate authoritative receipt and time for each confirmed event"
   expect(nativeFulfillmentEventSchema.safeParse(event).success).toBe(true);
   for(const patch of [{receiptRef:null},{sourceRef:null},{eventAt:null},{eventAt:"2026-11-06T12:00:00.000Z"}])expect(nativeFulfillmentEventSchema.safeParse({...event,...patch}).success).toBe(false);
 });
-it.each(["returnAuthorized","returnInspected","carrierLost","carrierReturned"] as const)("projects source-confirmed %s only with its own valid receipt and observation",async kind=>{
+it.each(["returnAuthorized","returnInspected","refundRequested","carrierLost","carrierReturned"] as const)("projects source-confirmed %s only with its own valid receipt and observation",async kind=>{
   const event={kind,state:"confirmed",eventAt:"2026-11-06T11:00:00.000Z",observedAt,receiptRef:`fictional-${kind}-receipt`,sourceRef:`fictional-${kind}-source`,reasonCode:null};
   const result=await reader({...overview(),nativeEvents:[event]}).service.read("operationsOverview",filters,principal);
   expect(result.data).toMatchObject({nativeEvents:[event]});result.assertCurrent();

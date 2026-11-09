@@ -81,7 +81,7 @@ function OperationsOverviewPage() {
         </div>
       )}
       {/* A partial or stale read is said in words, not only by a badge. */}
-      <ReadState res={query.data} subject="Operations" only={["partial"]} />
+      <ReadState res={query.data} subject="Operations" only={["partial"]} partialSummary={adapter.kind === "demo" ? undefined : "The visible queue is incomplete. Independently reported source totals can exceed these returned rows. Missing values remain unknown or N/A, never zero."} />
       {query.isPending && <SkeletonCard label="Loading operations…" />}
       {query.isError && <ViewError error={query.error} subject="Operations" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&

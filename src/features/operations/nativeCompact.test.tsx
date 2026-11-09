@@ -170,3 +170,14 @@ it("keeps the source-bound period editor in the workspace menu and restores its 
   await user.click(screen.getByRole("button", { name: "Cancel period change" }));
   expect(menu).toHaveFocus();
 });
+
+
+it("distinguishes independently reported source totals from a partial visible queue", async () => {
+  state.layout = "mobile";
+  const h = source(true);
+  renderRoute("/operations", h.adapter);
+  const notice = await screen.findByTestId("view-partial");
+  expect(notice).toHaveTextContent("The visible queue is incomplete");
+  expect(notice).toHaveTextContent("Independently reported source totals can exceed these returned rows");
+  expect(notice).not.toHaveTextContent("Totals below cover only what was read");
+});

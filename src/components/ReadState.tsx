@@ -12,7 +12,7 @@ const when = (iso: string | null | undefined) =>
  */
 type Kind = "stale" | "partial" | "empty";
 
-export function ReadState({ res, subject, only }: { res: ReadResponse<unknown> | undefined; subject: string; /** Limit to these states, where the page already draws its own notice for the others. */ only?: Kind[] }) {
+export function ReadState({ res, subject, only, partialSummary }: { partialSummary?: string; res: ReadResponse<unknown> | undefined; subject: string; /** Limit to these states, where the page already draws its own notice for the others. */ only?: Kind[] }) {
   if (!res) return null;
   const shows = (k: Kind) => !only || only.includes(k);
   if (res.dataState === "stale" && shows("stale")) {
@@ -27,7 +27,7 @@ export function ReadState({ res, subject, only }: { res: ReadResponse<unknown> |
     const { expectedCount: expected, observedCount: seen } = res.coverage;
     return (
       <Alert state="warning" title="Some data is missing" testId="view-partial">
-        <p>{expected !== null && seen !== null ? `${subject} covers ${seen} of ${expected} expected rows.` : `How much of ${subject.toLowerCase()} is covered is unknown.`} Totals below cover only what was read, and values that weren't read show as unknown or N/A, never zero.</p>
+        <p>{expected !== null && seen !== null ? `${subject} covers ${seen} of ${expected} expected rows.` : `How much of ${subject.toLowerCase()} is covered is unknown.`} {partialSummary ?? "Totals below cover only what was read, and values that weren't read show as unknown or N/A, never zero."}</p>
       </Alert>
     );
   }

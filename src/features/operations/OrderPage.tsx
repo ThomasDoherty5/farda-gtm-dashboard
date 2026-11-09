@@ -75,7 +75,7 @@ export function OrderPage() {
             </TwoColumns>
             {(demo ? o.refundPath.length > 0 : true) && (
               <Panel id="refund-lifecycle" title="Refunds have their own lifecycle" subtitle="A refund does not automatically mean stock is resellable.">
-                {!demo ? <NativeEventTimeline horizontal events={o.nativeEvents} expected={["returnReceived", "refundSettled", "replacementCreated", "replacementShipped"]} /> : <ol className={styles.refundStates} aria-label="Refund lifecycle">
+                {!demo ? <><NativeEventTimeline horizontal stockReconciliation events={o.nativeEvents} expected={["refundRequested", "refundSettled", "returnReceived"]} /><Note>Stock reconciliation requires its own restock or quarantine receipt; a refund does not establish either outcome.</Note><h3>Replacement evidence</h3><NativeEventTimeline horizontal events={o.nativeEvents} expected={["replacementCreated", "replacementShipped"]} /></> : <ol className={styles.refundStates} aria-label="Refund lifecycle">
                   {o.refundPath.map((step) => (
                     <li key={step.key}>
                       <span><Badge tone={step.reached ? "success" : "neutral"}>{step.label}<span className="visually-hidden">{step.reached ? " · reached" : " · not reached"}</span></Badge></span>

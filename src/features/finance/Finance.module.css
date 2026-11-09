@@ -27,7 +27,7 @@
 .rateKpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-16); margin: 0; padding: 0; list-style: none; }
 .chips li > span { display: flex; }
-.actionsRow { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.actionsRow { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }
 .paymentRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .paymentRow p { margin: 0; color: var(--color-muted); }
 .paymentRow .spacer { flex: 0 1 420px; height: 1px; }

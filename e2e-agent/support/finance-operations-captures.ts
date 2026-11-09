@@ -13,6 +13,17 @@ export async function captureFinanceOperations(page: Page, nodeId: FinanceOperat
   await page.setViewportSize({ width, height });
   await page.evaluate(async () => { await document.fonts.ready; window.scrollTo(0, 0); });
   await expect(page.getByRole("main")).toBeVisible();
+  // The responsive React branch commits after the viewport resize. Measure that branch,
+  // not the preceding desktop DOM at mobile width (which inflates full-page allocation).
+  if (nodeId === "12:653") await expect(page.getByRole("heading", { name: "Ship next", exact: true })).toBeVisible();
+  if (nodeId === "12:708") await expect(page.getByRole("heading", { name: "Ready to leave home", exact: true })).toBeVisible();
+  let previous = "", stable = 0;
+  await expect.poll(async () => {
+    const current = await page.evaluate(() => JSON.stringify([innerWidth, innerHeight, document.documentElement.scrollWidth, document.documentElement.scrollHeight, document.querySelector("main")?.getBoundingClientRect().height]));
+    stable = current === previous ? stable + 1 : 0;
+    previous = current;
+    return stable;
+  }, { message: "Capture the committed responsive layout at stable full-page geometry", intervals: [100, 100, 100] }).toBeGreaterThanOrEqual(2);
   const geometry = await page.evaluate(() => ({
     viewport: { width: innerWidth, height: innerHeight },
     content: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },

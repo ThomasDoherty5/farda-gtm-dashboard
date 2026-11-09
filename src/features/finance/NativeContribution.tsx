@@ -33,7 +33,7 @@ export function NativeContribution({ data }: { data: NativeCommissionLedger }) {
     return { label, fact, total, top: 258 - high * scale, height: amount * scale, left: `${index * (1248 / 7 + 16 / 7) / 1248 * 100}%`, width: `${(1248 - 6 * 16) / 7 / 1248 * 100}%` };
   });
   const table = <DataTable caption="Source contribution components" columns={[{ label: "Component" }, { label: "Source amount" }, { label: "Evidence" }, { label: "Observed" }]} rows={items.map(([label, fact]) => [label, fact ? moneyFact(fact) : "Unknown · source component not supplied", fact?.evidenceRef ?? "Unknown", observed(fact?.observedAt ?? null)])} />;
-  return <Panel id="contribution" roomy header={<div className={finance.headRow}>
+  return <Panel id="contribution" roomy header={<div className={`${finance.headRow} ${styles.panelHeader}`}>
     <SectionHeading id="contribution" large title="Contribution after creator costs" subtitle={`${data.currency ?? "Unknown currency"} · currency, cohort and accounting policy must agree.`} />
     <div className={styles.filters} aria-label="Contribution view"><Button variant="secondary" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart</Button><Button variant="secondary" aria-pressed={mode === "table"} onClick={() => setMode("table")}>Accessible table</Button><Button variant="secondary" aria-haspopup="dialog" onClick={() => setEvidenceOpen(true)}>Cohort evidence</Button></div>
   </div>}>
