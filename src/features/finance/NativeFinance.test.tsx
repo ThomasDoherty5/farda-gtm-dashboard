@@ -123,3 +123,18 @@ it("holds export when its persisted original marker is malformed instead of mint
   expect(h.requests).toHaveLength(0);
   expect(sessionStorage.getItem(JSON.stringify(["native-ledger-export-v1", "farda", "tester", "sandbox", "w", "a"]))).toBe("{damaged");
 });
+
+it("keeps each native TikTok product scope explicit and does not infer an absent lane scope", async () => {
+  const { source, payable } = fixture();
+  const record = source.records.find(item => item.provider === "tiktok")!;
+  record.rates[0]!.eligibleProducts = { state: "known", value: "Fictional source-approved product set A", evidenceRef: "product-scope-evidence", observedAt: "2026-11-07T12:00:00Z", reasonCode: null };
+  record.rates[1]!.eligibleProducts = null;
+  const data: NativeSettlement = { ...payable, kind: "native-settlement", record };
+  const h = harness(data, `/finance/settlements/${record.ref}`);
+  const standard = await screen.findByRole("region", { name: "Standard commission" });
+  expect(within(standard).getByText("Eligible products")).toBeVisible();
+  expect(within(standard).getByText("Fictional source-approved product set A")).toBeVisible();
+  expect(within(screen.getByRole("region", { name: "Shop Ads commission" })).getByText("Unknown · source product scope not supplied")).toBeVisible();
+  expect(within(standard).getByText("Effective time")).toBeVisible();
+  expect(h.requests).toHaveLength(0);
+});

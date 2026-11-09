@@ -47,6 +47,7 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
   function freeze<T>(value:T):T { if(value && typeof value==="object") { Object.freeze(value);for(const child of Object.values(value))freeze(child); }return value; }
   db.exec("CREATE TABLE IF NOT EXISTS settlement_observation_hashes(scope_key TEXT NOT NULL, identity TEXT NOT NULL, version TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(scope_key,identity,version))");
   db.exec("CREATE TABLE IF NOT EXISTS settlement_receipt_hashes(scope_key TEXT NOT NULL, identity TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(scope_key,identity))");
+  db.exec("CREATE TABLE IF NOT EXISTS settlement_adjustment_hashes(scope_key TEXT NOT NULL, identity TEXT NOT NULL, body_hash TEXT NOT NULL, PRIMARY KEY(scope_key,identity))");
   const alias = (kind: string, value: string) => kind + "-" + createHmac("sha256", secret).update(JSON.stringify(["settlement-alias.v1", scope, kind, value])).digest("hex").slice(0, 24);
   const ref = (kind: "settlement" | "payable", id: string) => "sf1-" + sealOperationsToken(scope, secret, "settlement-record.v1", { kind, id });
   function open(refValue: string, kind: "settlement" | "payable") {
@@ -69,6 +70,7 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       s.complete && s.total === null || s.nextCursor && !s.records.length || s.records.length === 0 && s.nextCursor) fail("SETTLEMENT_COVERAGE_INVALID", 502);
     if (new Set(s.records.map(r => r.ref)).size !== s.records.length) fail("SETTLEMENT_DUPLICATE_RECORD", 502);
     if (request.target && (s.records.length > 1 || s.records.some(r => r.ref !== request.target))) fail("SETTLEMENT_RECORD_MISMATCH", 502);
+    const adjustmentHashes=new Map<string,string>();
     for (const r of s.records) {
       if (s.currency && r.currency !== s.currency) fail("SETTLEMENT_CURRENCY_MISMATCH", 502);
       if (s.viewKey === "payableDetail" && (r.provider !== "externalManual" || !r.historical || r.historical.payoutOwner !== "externalManual") ||
@@ -78,6 +80,8 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       for (const key of balanceKeys.filter(k => k !== "adjusted")) if (r.balances[key].state === "known" && r.balances[key].value!.minorUnits < 0) fail("SETTLEMENT_BALANCE_INVALID", 502);
       for (const rate of [r.commissionRatePct, r.feeRatePct, ...r.rates.flatMap(v => [v.activePct, v.proposedPct])])
         if (rate.state === "known" && (rate.value < 0 || rate.value > 100 || Date.parse(rate.observedAt) > observed)) fail("SETTLEMENT_RATE_INVALID", 502);
+      for (const rate of r.rates) if (rate.eligibleProducts?.state === "known" && Date.parse(rate.eligibleProducts.observedAt) > observed)
+        fail("SETTLEMENT_RATE_SCOPE_INVALID", 502);
       const receipts = new Map(r.receipts.map(v => [v.ref, v]));
       if (receipts.size !== r.receipts.length || new Set(r.adjustments.map(v => v.ref)).size !== r.adjustments.length || new Set(r.candidates.map(v=>v.ref)).size!==r.candidates.length || new Set(r.rates.map(v=>v.lane)).size!==r.rates.length)
         fail("SETTLEMENT_DUPLICATE_EVIDENCE", 502);
@@ -87,7 +91,13 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
         const prior=db.prepare("SELECT body_hash FROM settlement_receipt_hashes WHERE scope_key=? AND identity=?").get(scopeKey,identity);
         if(prior && prior.body_hash!==hash)fail("SETTLEMENT_IMMUTABLE_RECEIPT_CONFLICT");
       }
-      for (const adjustment of r.adjustments) if (!receipts.has(adjustment.receiptRef) || adjustment.amount.currency !== r.currency || Date.parse(adjustment.effectiveAt)>Date.parse(adjustment.observedAt) || Date.parse(adjustment.observedAt)>observed) fail("SETTLEMENT_ADJUSTMENT_INVALID", 502);
+      for (const adjustment of r.adjustments) {
+        if (!receipts.has(adjustment.receiptRef) || adjustment.amount.currency !== r.currency || Date.parse(adjustment.effectiveAt)>Date.parse(adjustment.observedAt) || Date.parse(adjustment.observedAt)>observed) fail("SETTLEMENT_ADJUSTMENT_INVALID", 502);
+        const identity=digest([r.provider,r.accountRef,adjustment.ref]),hash=digest(adjustment);
+        const prior=adjustmentHashes.get(identity)??db.prepare("SELECT body_hash FROM settlement_adjustment_hashes WHERE scope_key=? AND identity=?").get(scopeKey,identity)?.body_hash;
+        if(prior && prior!==hash)fail("SETTLEMENT_IMMUTABLE_ADJUSTMENT_CONFLICT");
+        adjustmentHashes.set(identity,hash);
+      }
       for (const fact of r.facts) if (fact.amount && fact.amount.currency !== r.currency || fact.eventAt && Date.parse(fact.eventAt)>Date.parse(fact.observedAt) || Date.parse(fact.observedAt)>observed) fail("SETTLEMENT_FACT_INVALID", 502);
       for (const candidate of r.candidates) if (candidate.componentRef!==r.componentRef || candidate.amount.currency!==r.currency || Date.parse(candidate.periodStart)>=Date.parse(candidate.periodEnd)) fail("SETTLEMENT_CANDIDATE_INVALID",502);
       if (r.historical && (r.historical.acceptedAmount.currency!==r.currency || Date.parse(r.historical.acceptedAt)>observed || r.historical.acceptedAmount.minorUnits<0)) fail("SETTLEMENT_OBLIGATION_INVALID",502);
@@ -108,6 +118,7 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
     if (prior && prior.body_hash !== hash) fail("SETTLEMENT_SOURCE_CONFLICT", 409);
     db.prepare("INSERT OR IGNORE INTO settlement_observation_hashes VALUES(?,?,?,?)").run(scopeKey, identity, s.version, hash);
     for(const r of s.records)for(const receipt of r.receipts)db.prepare("INSERT OR IGNORE INTO settlement_receipt_hashes VALUES(?,?,?)").run(scopeKey,digest([r.provider,r.accountRef,receipt.ref]),digest(receipt));
+    for(const [identity,hash] of adjustmentHashes)db.prepare("INSERT OR IGNORE INTO settlement_adjustment_hashes VALUES(?,?,?)").run(scopeKey,identity,hash);
   }
   function fact<T extends { evidenceRef: string | null }>(v: T): T { return { ...v, evidenceRef: v.evidenceRef ? alias("evidence", v.evidenceRef) : null }; }
   function project(r: SettlementRecord, suppliedRef?: string, synthetic=false): SettlementRecord {
@@ -124,7 +135,7 @@ export function createSettlementReader(options: { db: DatabaseSync; scope: Settl
       adjustments:r.adjustments.map(v=>({...v,ref:alias("adjustment",v.ref),receiptRef:alias("receipt",v.receiptRef),evidenceRef:alias("evidence",v.evidenceRef)})),
       crosswalk:{...r.crosswalk,payeeRef:a("payee",r.crosswalk.payeeRef),orderRef:a("order",r.crosswalk.orderRef),evidenceRefs:r.crosswalk.evidenceRefs.map(v=>alias("evidence",v))},
       accounting:{...r.accounting,qboRef:a("accounting",r.accounting.qboRef),policyRef:a("policy",r.accounting.policyRef),policyVersion:a("version",r.accounting.policyVersion),evidenceRef:a("evidence",r.accounting.evidenceRef)},
-      rates:r.rates.map(v=>({...v,activePct:fact(v.activePct),proposedPct:fact(v.proposedPct),termsVersion:a("version",v.termsVersion)})),
+      rates:r.rates.map(v=>({...v,activePct:fact(v.activePct),proposedPct:fact(v.proposedPct),eligibleProducts:v.eligibleProducts?fact(v.eligibleProducts):null,termsVersion:a("version",v.termsVersion)})),
       historical:r.historical?{...r.historical,termsRef:alias("terms",r.historical.termsRef),termsVersion:alias("version",r.historical.termsVersion),contractRef:alias("contract",r.historical.contractRef),invoiceRef:alias("invoice",r.historical.invoiceRef),deliverableRef:alias("deliverable",r.historical.deliverableRef),approvalRef:a("approval",r.historical.approvalRef),fundingRef:a("funding",r.historical.fundingRef)}:null,
       candidates:r.candidates.map(v=>({...v,ref:alias("candidate",v.ref),statementRef:alias("statement",v.statementRef),componentRef:alias("component",v.componentRef),evidenceRef:alias("evidence",v.evidenceRef)})),
       samples:r.samples.map(v=>({...v,ref:alias("sample",v.ref),cost:fact(v.cost),evidenceRef:a("evidence",v.evidenceRef)})),

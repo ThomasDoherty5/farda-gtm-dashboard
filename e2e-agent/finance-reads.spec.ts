@@ -77,6 +77,15 @@ test("native ledger and every settlement frame retain evidence, held authority a
   await expect(page.getByRole("table", { name: "Commission and historical obligation records", exact: true }).getByRole("row")).toHaveCount(5);
   await expect(page.getByRole("table", { name: "Commission and historical obligation records", exact: true })).toContainText("Awaiting provider");
   await captureFinanceOperations(page, "65:1037");
+  const accessibleTable = page.getByRole("button", { name: "Accessible table", exact: true });
+  await accessibleTable.click();
+  await expect(accessibleTable).toHaveAttribute("aria-pressed", "true");
+  await screenReaderCheckpoint(page, "native-contribution-table-control", accessibleTable, ["Accessible table"]);
+  await expect(page.getByRole("table", { name: "Source contribution components", exact: true })).toBeVisible();
+  const chart = page.getByRole("button", { name: "Chart", exact: true });
+  await chart.click();
+  await expect(chart).toHaveAttribute("aria-pressed", "true");
+  await screenReaderCheckpoint(page, "native-contribution-chart-control", chart, ["Chart"]);
   const ledger = page.getByRole("region", { name: "Commission and historical obligation records" });
   await screenReaderCheckpoint(page, "native-ledger-table-headers", ledger, ["Record", "Gross earned", "Reversed", "Net accrued", "Current source state", "Next action"]);
   const exportButton = page.getByRole("button", { name: "Export ledger", exact: true });

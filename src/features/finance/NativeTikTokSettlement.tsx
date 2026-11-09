@@ -26,7 +26,7 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
     const rate = record.rates.find(item => item.lane === key);
     return <section className={styles.lane} data-tone={tone} aria-labelledby={`native-rate-${key}`}><h3 id={`native-rate-${key}`}>{title}</h3><p className={styles.footnote}>{key === "standard" ? "Organic / native affiliate context" : "Eligible ad-driven order context"}</p>
       <div className={styles.rateKpis}><Kpi label="Active native rate" context={rate?.activePct.state === "known" ? "Exact source component" : rate ? reasonText(rate.activePct.reasonCode ?? "NOT_OBSERVED") : "Source component not supplied"}>{rateText(rate?.activePct)}</Kpi><Kpi label="Proposed rate" context={rate?.proposedPct.state === "known" ? "Not active until source-effective" : rate ? reasonText(rate.proposedPct.reasonCode ?? "NOT_OBSERVED") : "Source component not supplied"}>{rateText(rate?.proposedPct)}</Kpi></div>
-      <FactList wide labelWidth={237} gap={12} label={`${title} facts`} rows={[["Active from", observed(rate?.activeFrom ?? null)], ["Proposed from", observed(rate?.proposedFrom ?? null)], ["Terms version", rate?.termsVersion ?? "Unknown"], ["Rate owner", "TikTok Shop native record"]]} />
+      <FactList wide labelWidth={237} gap={12} label={`${title} facts`} rows={[["Effective time", `Active: ${observed(rate?.activeFrom ?? null)} · Proposed: ${observed(rate?.proposedFrom ?? null)} · Terms: ${rate?.termsVersion ?? "Unknown"}`], ["Eligible products", rate?.eligibleProducts?.state === "known" ? rate.eligibleProducts.value : rate?.eligibleProducts?.state === "notApplicable" ? "N/A" : "Unknown · source product scope not supplied"], ["Rate owner", "TikTok Shop native record"]]} />
     </section>;
   };
   return <>

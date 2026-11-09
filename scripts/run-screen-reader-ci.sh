@@ -52,7 +52,7 @@ orca --version > "$out/versions.txt"
 speech-dispatcher --version >> "$out/versions.txt"
 node --version >> "$out/versions.txt"
 set +e
-node node_modules/playwright/cli.js test -c playwright.agent.config.ts --headed --workers=1 e2e-agent/action-review.spec.ts e2e-agent/lifecycle.spec.ts e2e-agent/monitor-evidence.spec.ts e2e-agent/stock-support.spec.ts e2e-agent/finance-reads.spec.ts e2e-agent/operations-reads.spec.ts > "$out/browser.log" 2>&1
+node node_modules/playwright/cli.js test -c playwright.agent.config.ts --headed --workers=1 e2e-agent/action-review.spec.ts e2e-agent/lifecycle.spec.ts e2e-agent/monitor-evidence.spec.ts e2e-agent/stock-support.spec.ts e2e-agent/finance-reads.spec.ts e2e-agent/operations-reads.spec.ts e2e-agent/fulfillment-canonical.spec.ts > "$out/browser.log" 2>&1
 browser_status=$?
 set -e
 kill -INT "$record_pid" 2>/dev/null || true

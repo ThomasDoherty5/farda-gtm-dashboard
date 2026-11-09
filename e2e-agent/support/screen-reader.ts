@@ -67,10 +67,15 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      await new Promise(resolve=>setTimeout(resolve,1000));
    }
  };
- // Say All reads source-status text from the real document. It does not
- // assume an initial live region will announce itself after navigation.
- if(key==="KP_Add")await browseFromStart();
- await press(key);
+ // Read source-status text from the real document, not an assumed initial live announcement.
+ // Orca 46.1's recorded KP_Add checkpoint produced only '+' and no document speech.
+ // For line reading, use actual heading/caret navigation; never type the expected text.
+ // https://help.gnome.org/orca/howto_documents.html
+ const readLines=key==="Down";
+ if(key==="KP_Add"||readLines)await browseFromStart();
+ if(readLines){await press("h");await new Promise(resolve=>setTimeout(resolve,500));}
+ if(!readLines)await press(key);
+ let lineMoves=0;
  if(columns)await inspectHeaders();
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
  const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
@@ -85,8 +90,14 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
      await run("xdotool",["key","--clearmodifiers",key]);
      osKeys.push(key);if(columns)await inspectHeaders();
    }
+   if(missing.length&&readLines&&lineMoves<40){
+     // A finite read-only traversal replaces the non-starting Say All command.
+     // Preserve the original 60s ceiling and require the actual Orca utterance.
+     await press("Down");lineMoves++;
+     await new Promise(resolve=>setTimeout(resolve,1000));
+   }
    return missing;
- },{timeout:key==="KP_Add"?60000:20000,intervals:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
+ },{timeout:key==="KP_Add"||readLines?60000:20000,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);
  await new Promise(resolve=>setTimeout(resolve,1800));
  appendFileSync(proof,JSON.stringify({name,startedAt:start,finishedAt:Date.now(),url:new URL(page.url()).pathname,osKey:key,osKeys,expected:words,utterances:speech(),source:"Actual Orca AT-SPI speech output; fictional native HTTP/SQLite fixture"})+"\n");
 }

@@ -1,3 +1,4 @@
+import { screenReaderCheckpoint } from "./support/screen-reader.ts";
 import AxeBuilder from "@axe-core/playwright";
 import { expect,test,type Page,type TestInfo } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
@@ -80,6 +81,7 @@ for(const kind of ["shippingDecision","returnTask"] as const){
     page.on("request",request=>{if(new URL(request.url()).pathname==="/v1/action")sent.push(fulfillmentPreviewAction.parse(request.postDataJSON()));});
     await page.goto(pathFor(kind));const dialog=await choosePlan(page,kind);
     await capture(page,info,`${kind}-source-plan`);
+    await screenReaderCheckpoint(page, `${kind}-canonical-plan-preview`, dialog.getByRole("button", {name:"Preview exact source plan",exact:true}), ["Preview exact source plan"]);
     await dialog.getByRole("button",{name:"Preview exact source plan",exact:true}).click();
     const approval=dialog.getByRole("link",{name:"Review exact approval manifest",exact:true});await expect(approval).toBeVisible();
     await expect.poll(w.count).toBe(1);expect(w.intentCount()).toBe(1);expect(sent).toHaveLength(1);
@@ -93,6 +95,7 @@ for(const kind of ["shippingDecision","returnTask"] as const){
     // A test-only authenticated reviewer request must reach the duplicate-plan fence, not fail the browser CSRF boundary first.
     const repeated=await page.request.post("/v1/action",{headers:{authorization:"Bearer "+SYNTHETIC_REVIEW_TOKEN},data:{...sent[0]!,requestId:"fresh-key-negative",idempotencyKey:"another-browser-key"}});
     expect(repeated.status()).toBe(409);expect((await repeated.json()).code).toBe("FULFILLMENT_PLAN_ALREADY_PROPOSED");expect(w.count()).toBe(1);
+    await screenReaderCheckpoint(page, `${kind}-canonical-approval-handoff`, approval, ["Review exact approval manifest"]);
     await approval.click();await expect(page.getByRole("table",{name:"Exact approved manifest",exact:true})).toBeVisible();
     await expect(page.getByRole("button",{name:"Queue selected approved items",exact:true})).toBeDisabled();
     expect(w.f.state.effects).toBe(0);
@@ -118,6 +121,7 @@ for(const kind of ["shippingDecision","returnTask"] as const){
     expect(await safeMarker(page)).toEqual(marker);expect(sent).toHaveLength(1);expect(w.count()).toBe(1);expect(w.intentCount()).toBe(1);
     expect(w.f.state.ownerReads).toBe(ownerReads);expect(w.f.state.effects).toBe(0);
     await capture(page,info,`${kind}-original-recovered`);
+    await screenReaderCheckpoint(page, `${kind}-original-recovery-control`, recovered.getByRole("button", {name:"Check original request",exact:true}), ["Check original request"]);
     w.f.state.denied=true;
     await recovered.getByRole("button",{name:"Check original request",exact:true}).click();
     await expect(page.getByRole("link",{name:"Review exact approval manifest",exact:true})).toHaveCount(0);

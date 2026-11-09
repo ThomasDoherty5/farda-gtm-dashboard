@@ -13,6 +13,19 @@ function setup(edit?:(snapshot:SettlementSnapshot)=>void){const db=new DatabaseS
   const source:SettlementSource={...fixture.source,async read(request){const s=await fixture.source.read(request) as SettlementSnapshot;edit?.(s);return s;}};
   const reader=createSettlementReader({db,scope,secret:"fictional-private-reference-key",bindings:{source},now:fixture.now});return{db,...fixture,source,reader};}
 describe("native settlement source projection",()=>{
+  it("keeps independent eligible-product rate scopes and aliases their evidence without inferring missing scope",async()=>{
+    const w=setup(),standard=w.records[1]!.rates[0]!;
+    standard.eligibleProducts={state:"known",value:"Fictional bottle variants A and B",evidenceRef:"private-product-scope-evidence",observedAt:new Date(w.now()).toISOString(),reasonCode:null};
+    const result=await w.reader.read("commissionLedger",{provider:"tiktok"},actor);
+    if(result.data.kind!=="native-commission-ledger")throw Error();
+    expect(result.data.records[0]!.rates[0]!.eligibleProducts).toMatchObject({state:"known",value:"Fictional bottle variants A and B"});
+    expect(result.data.records[0]!.rates[1]!.eligibleProducts).toBeNull();
+    expect(JSON.stringify(result.data)).not.toContain("private-product-scope-evidence");
+  });
+  it("rejects future product-scope evidence rather than applying a rate to an unverified product set",async()=>{
+    const w=setup();w.records[1]!.rates[0]!.eligibleProducts={state:"known",value:"Fictional future scope",evidenceRef:"future-scope-evidence",observedAt:new Date(w.now()+1).toISOString(),reasonCode:null};
+    await expect(w.reader.read("commissionLedger",{provider:"tiktok"},actor)).rejects.toMatchObject({code:"SETTLEMENT_RATE_SCOPE_INVALID"});
+  });
   it("withdraws a shorter permissioned source-link lease before publication even when the snapshot is still current",async()=>{
     const w=setup(snapshot=>{snapshot.synthetic=false;const record=snapshot.records[0]!;record.links=[{kind:"order",targetRef:record.orderRef,state:"verified",url:"https://commerce.example.test/orders/fictional",observedAt:snapshot.observedAt,validUntil:new Date(Date.parse(snapshot.observedAt)+1000).toISOString()}];});
     const reader=createSettlementReader({db:w.db,scope,secret:"fictional-private-reference-key",bindings:{source:w.source,permittedLinkOrigins:["https://commerce.example.test"]},now:w.now});
@@ -32,6 +45,7 @@ describe("native settlement source projection",()=>{
   it.each(["partial","negative","future"] as const)("rejects %s whole-snapshot state balances",async invalid=>{
     const w=setup(snapshot=>{const fact={state:"known" as const,value:{minorUnits:invalid==="negative"?-1:100,currency:"USD" as const},evidenceRef:"fictional-balance",observedAt:invalid==="future"?new Date(Date.parse(snapshot.observedAt)+1).toISOString():snapshot.observedAt,reasonCode:null};
       snapshot.stateTotals={held:fact,disputed:fact,awaitingProvider:fact,paid:fact};if(invalid==="partial"){snapshot.complete=false;snapshot.state="partial";}});
+    if(invalid==="partial")w.state.partial=true;
     await expect(w.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_STATE_TOTALS_UNVERIFIED"});
   });
   it("retains a final publication fence after the read and refuses a changed principal",async()=>{
@@ -84,7 +98,31 @@ describe("native settlement source projection",()=>{
     await expect(w.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_IMMUTABLE_RECEIPT_CONFLICT"});});
   it("allows an appended source adjustment while leaving original receipt unchanged",async()=>{const w=setup();await w.reader.read("commissionLedger",{},actor);const before=structuredClone(w.records[0]!.receipts);w.state.version="fixture-ledger-v2";
     w.records[0]!.adjustments.push({ref:"adjustment-new",receiptRef:before[0]!.ref,amount:{minorUnits:-300,currency:"USD"},effectiveAt:before[0]!.settledAt,observedAt:before[0]!.observedAt,reason:"refund",evidenceRef:"adjustment-proof"});
-    const r=await w.reader.read("commissionLedger",{},actor);if(r.data.kind!=="native-commission-ledger")throw Error();expect(r.data.records[0]!.adjustments).toHaveLength(1);expect(w.records[0]!.receipts).toEqual(before);});
+    const r=await w.reader.read("commissionLedger",{},actor);if(r.data.kind!=="native-commission-ledger")throw Error();expect(r.data.records[0]!.adjustments).toHaveLength(1);
+    const adjustment=structuredClone(w.records[0]!.adjustments[0]!);w.state.version="fixture-ledger-v3";
+    w.records[0]!.adjustments.push({...adjustment,ref:"adjustment-appended",amount:{minorUnits:100,currency:"USD"},reason:"correction",evidenceRef:"appended-adjustment-proof"});
+    const appended=await w.reader.read("commissionLedger",{},actor);if(appended.data.kind!=="native-commission-ledger")throw Error();
+    expect(appended.data.records[0]!.adjustments).toHaveLength(2);expect(w.records[0]!.adjustments[0]).toEqual(adjustment);expect(w.records[0]!.receipts).toEqual(before);});
+  it.each(["amount","reason","evidence","receipt"] as const)("holds an immutable adjustment's changed %s across source revisions and reader recreation",async field=>{
+    const w=setup(),record=w.records[0]!,receipt=record.receipts[0]!;
+    record.receipts.push({...structuredClone(receipt),ref:"another-fictional-receipt"});
+    record.adjustments.push({ref:"adjustment-original",receiptRef:receipt.ref,amount:{minorUnits:-300,currency:"USD"},effectiveAt:receipt.settledAt,observedAt:receipt.observedAt,reason:"refund",evidenceRef:"original-adjustment-proof"});
+    await w.reader.read("commissionLedger",{},actor);w.state.version="fixture-ledger-v2";
+    const adjustment=record.adjustments[0]!;
+    if(field==="amount")adjustment.amount.minorUnits--;
+    else if(field==="reason")adjustment.reason="correction";
+    else if(field==="evidence")adjustment.evidenceRef="changed-adjustment-proof";
+    else adjustment.receiptRef="another-fictional-receipt";
+    const restarted=createSettlementReader({db:w.db,scope,secret:"fictional-private-reference-key",bindings:{source:w.source},now:w.now});
+    await expect(restarted.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_IMMUTABLE_ADJUSTMENT_CONFLICT",status:409});
+  });
+  it("rejects conflicting adjustment identities within one provider/account snapshot",async()=>{
+    const w=setup(),record=w.records[0]!,receipt=record.receipts[0]!;
+    record.adjustments.push({ref:"adjustment-shared",receiptRef:receipt.ref,amount:{minorUnits:-300,currency:"USD"},effectiveAt:receipt.settledAt,observedAt:receipt.observedAt,reason:"refund",evidenceRef:"adjustment-proof"});
+    const other=structuredClone(record);other.ref="another-fictional-record";other.adjustments[0]!.amount.minorUnits--;
+    w.records.push(other);
+    await expect(w.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_IMMUTABLE_ADJUSTMENT_CONFLICT",status:409});
+  });
   it("holds conflicting facts under the same source version",async()=>{const w=setup();await w.reader.read("commissionLedger",{},actor);w.records[0]!.balances.billed=w.money(9000);await expect(w.reader.read("commissionLedger",{},actor)).rejects.toMatchObject({code:"SETTLEMENT_SOURCE_CONFLICT"});});
   it("rejects unsafe monetary precision, future evidence and a false complete count",async()=>{for(const edit of [(s:SettlementSnapshot)=>{s.records[0]!.receipts[0]!.amount.minorUnits=Number.MAX_SAFE_INTEGER+1;},(s:SettlementSnapshot)=>{s.records[0]!.facts[0]!.observedAt="2099-01-01T00:00:00Z";},(s:SettlementSnapshot)=>{s.total=4;}]){
     const w=setup(edit);await expect(w.reader.read("commissionLedger",{},actor)).rejects.toBeDefined();}});

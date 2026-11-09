@@ -103,7 +103,7 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     let reads = 0;
     const { read } = await start({ operationsReadSource: async () => { reads++; return operationsSnapshot(viewKey); } });
     expect((await read(viewKey, operationsReadTestFilters[viewKey], { cursor: "sc1.synthetic-cursor" })).body).toMatchObject({ code: "INVALID_CURSOR" });
-    for (const extra of [{ scenario: "stale" }, { fixture: "x" }, { home: "H1" }]) {
+    for (const extra of [{ scenario: "stale" }, { fixture: "x" }, { unknownFilter: "x" }, { home: "H4" }]) {
       const refused = await read(viewKey, { ...operationsReadTestFilters[viewKey], ...extra });
       expect(refused.status).toBe(400);
       expect(refused.body).toMatchObject({ code: "INVALID_INPUT" });
@@ -193,7 +193,8 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
       expect(asReader.text).not.toContain(value);
     const asReviewer = await read("orderCustomer", { orderId: "TEST-SH-1042" }, { token: SYNTHETIC_REVIEW_TOKEN });
     const parsed = readResponseSchema(opsViewSchemas.orderCustomer!).parse(asReviewer.body);
-    expect(Object.keys(asReviewer.body.data).sort()).toEqual(["access", "audit", "datasetKey", "orderRef", "provenance", "revealed", "synthetic"]);
+    expect(Object.keys(asReviewer.body.data).sort()).toEqual(["access", "audit", "datasetKey", "nativeEvents", "orderRef", "provenance", "reportingScope", "revealed", "sourceLinks", "synthetic"]);
+    expect(asReviewer.body.data).toMatchObject({ nativeEvents: [], reportingScope: null, sourceLinks: [] });
     expect(asReviewer.body.data).toMatchObject({ revealed: null, audit: [], access: { state: "denied" } });
     for (const value of [...Object.values(syntheticCustomer), syntheticAuditReason]) expect(asReviewer.text).not.toContain(value);
     expect(parsed.capabilities).toEqual([{ actionKind: "revealCustomerDetails", state: "held", reasonCodes: ["OPERATIONS_ACTIONS_NOT_CONNECTED"] }]);
