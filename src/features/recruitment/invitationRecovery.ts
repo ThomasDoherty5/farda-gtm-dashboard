@@ -30,7 +30,7 @@ export function matchesInvitationAck(ack: SaveResourceResponse<InvitationSaveRec
 }
 export async function recoverInvitation(scope: PendingInvitation["scope"], data: Pick<NativeInvitationView,"requestRecovery"|"actorRef"|"filters">, requestKey: string, pending: PendingInvitation|null) {
   const recovery=data.requestRecovery,receipt=recovery?.receipt;
-  if(recovery?.state!=="recorded"||recovery.requestKey!==requestKey||!receipt||receipt.actorRef!==data.actorRef||receipt.resourceRef!==data.filters.draftId)return null;
+  if(recovery?.state!=="recorded"||recovery.requestKey!==requestKey||!receipt||receipt.actorRef!==data.actorRef||receipt.resourceRef!==data.filters.draftId||receipt.resource.terms.creatorId!==data.filters.creatorId||receipt.resource.terms.offerId!==data.filters.offerId||receipt.resource.terms.offerVersion!==data.filters.offerVersion)return null;
   const payload=invitationSaveSchema.parse({kind:"recruitmentInvitation",draftId:receipt.resourceRef,expectedVersion:receipt.expectedVersion,terms:receipt.resource.terms});
   const candidate:PendingInvitation={scope,actorRef:data.actorRef,requestKey,payload,payloadDigest:await invitationDigest(payload)};
   if(pending&&(canonicalInvitation(candidate)!==canonicalInvitation(pending)))return null;

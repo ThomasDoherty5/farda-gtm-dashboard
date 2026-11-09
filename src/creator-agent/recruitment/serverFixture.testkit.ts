@@ -4,6 +4,7 @@ import { approvalDispatchBinding } from "../approvals/repository.ts";
 import { offerPolicyFixture } from "../offers/policyFixture.testkit.ts";
 import { providerMaterial } from "../offers/policy.ts";
 import { commercialPolicyFixture } from "../commercialPolicy/fixtures.testkit.ts";
+import { RecruitmentSourceError, type RecruitmentSource as QueueSource, type RecruitmentSourceSnapshot as QueueSnapshot } from "../commercialPolicy/recruitment.ts";
 import { assessCreator } from "../policy.ts";
 import { digest } from "../config.ts";
 import { syntheticBinding, syntheticPacket, SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures.ts";
@@ -51,10 +52,29 @@ export function recruitmentServerFixture(databasePath: string, timestamp = Date.
   };
   const drafts = new InvitationDraftRepository(o.store.database, scope, o.now);
   const source = recruitmentSourceFixture(scope, o.now);
+  // Explicit source membership is separate from the offer store. Saving an offer never adds a row.
+  const queueState = { denied: false, version: "fictional-queue-v1", rows: [{ opportunityRef: "fictional-queue-opportunity",
+    creatorId: packet.creatorId, runId: savedAssessment.runId, offerId: offer.offerId, offerVersion: offer.version,
+    phase: "invitation", network: "instagram", route: "inbound" }] as QueueSnapshot["rows"] };
+  function queueSnapshot(principalRef: string, filters: QueueSnapshot["filters"], limit: number): QueueSnapshot {
+    const members = queueState.rows.filter(row => (filters.networks === "both" || row.network === filters.networks) &&
+      (filters.route === "queue" || row.route === filters.route));
+    return { scope, principalRef, filters, sourceRef: "fictional-private-recruitment-queue", sourceVersion: queueState.version,
+      observedAt: new Date(source.state.observedAt).toISOString(), validUntil: new Date(source.state.validUntil).toISOString(),
+      permission: queueState.denied || source.state.denied || !a.humans.get(principalRef)?.active ? "denied" : "permitted",
+      rows: structuredClone(members.slice(0, limit)), total: members.length, complete: members.length <= limit };
+  }
+  const recruitmentSource: QueueSource = { read: async input => queueSnapshot(input.principalRef, input.filters, input.limit),
+    assertCurrent(snapshot, now) {
+      const current = queueSnapshot(snapshot.principalRef, snapshot.filters, Math.max(snapshot.rows.length, 1));
+      if (current.permission === "denied") throw new RecruitmentSourceError("SOURCE_SCOPE_DENIED", 403);
+      if (Date.parse(current.validUntil) <= now || digest(snapshot) !== digest(current))
+        throw new RecruitmentSourceError("RECRUITMENT_SOURCE_CHANGED", 409);
+    } };
   const owner = recruitmentInvitationOwnerFixture({ drafts, offers: o.repo, baseDraft: a.draft, now: o.now });
   const options: AgentServerOptions = { databasePath, workspaceId: scope.workspaceId, accountId: scope.accountId,
     readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, bindings: [binding], operations: { now: o.now },
-    offerAuthority: o.auth, commercialPolicy: o.source.source, recruitmentWorkspace: { source: source.source, invitationOwner: owner.owner },
+    offerAuthority: o.auth, commercialPolicy: o.source.source, recruitmentSource, recruitmentWorkspace: { source: source.source, invitationOwner: owner.owner },
     actionFoundation: { approvals: a.options } };
   const principal = { principalRef: "agent-reviewer" };
   const filters = { context: "recruitment" as const, creatorId: offer.terms.creatorId, offerId: offer.offerId, offerVersion: offer.version };
@@ -82,6 +102,6 @@ export function recruitmentServerFixture(databasePath: string, timestamp = Date.
     { principalRef: principal.principalRef, idempotencyKey: `synthetic-queue-${approvalRef}` });
     return publishBatch(app, approvalRef, run.runRef);
   }
-  return { options, o, a, source, owner, drafts, state, offer, savedAssessment, scope, principal, filters, publishBatch, approveAndQueue,
+  return { options, o, a, source, recruitmentSource, queueState, owner, drafts, state, offer, savedAssessment, scope, principal, filters, publishBatch, approveAndQueue,
     close: () => { o.store.close(); a.db.close(); } };
 }

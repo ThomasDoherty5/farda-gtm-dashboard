@@ -31,7 +31,7 @@ export function invitationFilters(search:URLSearchParams):InvitationFilters|null
 export function NativeInvitationPage() {
   const [search,setSearch]=useSearchParams();const filters=invitationFilters(search);
   return <section aria-labelledby="inv-title" data-figma-source="38:348" className={acquisition.page}>
-    {filters?<InvitationReader filters={filters} search={search} setSearch={setSearch}/>:<><PageTitle id="inv-title" title="One precise request. A verifiable outcome." subtitle="Invalid invitation selection"/><p role="alert">Select an exact creator, offer and version from recruitment. An invalid recovery key cannot authorize a new request.</p><LinkButton to="/creators/social-cat/recruitment">Return to recruitment</LinkButton></>}
+    {filters?<InvitationReader filters={filters} search={search} setSearch={setSearch}/>:<><PageTitle id="inv-title" title="One precise request. A verifiable outcome." subtitle="Invalid invitation selection">{null}</PageTitle><p role="alert">Select an exact creator, offer and version from recruitment. An invalid recovery key cannot authorize a new request.</p><LinkButton to="/creators/social-cat/recruitment">Return to recruitment</LinkButton></>}
   </section>;
 }
 function InvitationReader({filters,search,setSearch}:{filters:InvitationFilters;search:URLSearchParams;setSearch:ReturnType<typeof useSearchParams>[1]}) {
@@ -48,8 +48,8 @@ function InvitationReader({filters,search,setSearch}:{filters:InvitationFilters;
   function selectCreator(creatorId:string) {
     const next=new URLSearchParams(search);next.set("creatorId",creatorId);["offerId","offerVersion","draftId","requestKey","previewRequestKey"].forEach(key=>next.delete(key));setSearch(next);
   }
-  return <><Pending query={query} subject="the source-bound invitation catalog">{data?.kind==="native-invitation"&&query.data&&<InvitationEditor key={JSON.stringify([...scopeKey(ctx),data.actorRef])} data={data} response={query.data} current={current} pending={pending.data??null} requestKey={filters.requestKey??null} previewKey={search.get("previewRequestKey")} previewVersion={search.get("previewVersion")} remember={remember} selectCreator={selectCreator} rememberPreview={(key,version)=>setSearch(old=>{const next=new URLSearchParams(old);next.set("previewRequestKey",key);next.set("previewVersion",version);return next;},{replace:true})} refresh={()=>void query.refetch()}/>}</Pending>
-    {!data&&<PageTitle id="inv-title" title="One precise request. A verifiable outcome." subtitle="Current creator, product, program and template evidence required"/>}</>;
+  return <><Pending query={query} subject="the source-bound invitation catalog">{data?.kind==="native-invitation"&&query.data&&<InvitationEditor key={JSON.stringify([...scopeKey(ctx),data.actorRef,filters.creatorId,filters.offerId,filters.offerVersion,filters.draftId??"new"])} data={data} response={query.data} current={current} pending={pending.data??null} requestKey={filters.requestKey??null} previewKey={search.get("previewRequestKey")} previewVersion={search.get("previewVersion")} remember={remember} selectCreator={selectCreator} rememberPreview={(key,version)=>setSearch(old=>{const next=new URLSearchParams(old);next.set("previewRequestKey",key);next.set("previewVersion",version);return next;},{replace:true})} refresh={()=>void query.refetch()}/>}</Pending>
+    {!data&&<PageTitle id="inv-title" title="One precise request. A verifiable outcome." subtitle="Current creator, product, program and template evidence required">{null}</PageTitle>}</>;
 }
 function initialTerms(data:NativeInvitationView):InvitationTerms|null {
   if(data.draft)return data.draft.terms;
@@ -62,7 +62,7 @@ function InvitationEditor({data,response,current,pending,requestKey,previewKey,p
   const [edit,setEdit]=useState<{terms:InvitationTerms;version:string|null}|null>(null),[error,setError]=useState<string|null>(null),[dialog,setDialog]=useState(false),[shown,setShown]=useState(false),[preparing,setPreparing]=useState(false);
   const [resolved,setResolved]=useState<Awaited<ReturnType<typeof recoverInvitation>>>(null);
   const mounted=useRef(true),latest=useRef({data,current});useLayoutEffect(()=>{latest.current={data,current};});
-  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
+  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
   const scope={workspaceId:response.scope.workspaceId,accountId:response.scope.accountIds[0]??"",environment:"sandbox" as const},scopeId=JSON.stringify(scope);
   const [basis,setBasis]=useState([data,requestKey,pending,scopeId] as const);
   if(basis[0]!==data||basis[1]!==requestKey||basis[2]!==pending||basis[3]!==scopeId){setBasis([data,requestKey,pending,scopeId]);setResolved(null);}

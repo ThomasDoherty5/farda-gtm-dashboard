@@ -47,7 +47,7 @@ export function NativeBatchPage() {
   const current=Boolean(data&&lease&&!query.isError&&!query.isFetching&&!query.isPlaceholderData&&query.data?.dataState==="ready"&&Object.entries(filters).every(([key,value])=>data.filters[key as keyof RecruitmentBatchFilters]===value));
   const setParam=(key:string,value:string)=>{const next=new URLSearchParams(search);if(value==="all")next.delete(key);else next.set(key,value);setSearch(next);};
   return <section aria-labelledby="batch-title" data-figma-source="66:821" className={acquisition.page}>
-    {!data&&<PageTitle id="batch-title" title="Scale the work. Keep control." subtitle="Finite source-bound recruitment work"/>}
+    {!data&&<PageTitle id="batch-title" title="Scale the work. Keep control." subtitle="Finite source-bound recruitment work">{null}</PageTitle>}
     <Pending query={query} subject="the finite recruitment batch">{data?.kind==="native-recruitment-batch"&&query.data&&<NativeBatchBody key={JSON.stringify([scopeKey(ctx),batchId])} data={data} res={query.data} current={current} setParam={setParam} refresh={()=>void query.refetch()}/>}</Pending>
   </section>;
 }
@@ -56,9 +56,10 @@ function NativeBatchBody({data,res,current,setParam,refresh}:{data:NativeRecruit
   const command=useNativeCommand("run",data.run.runRef),[search,setSearch]=useSearchParams();
   const tab=["detail","exceptions","capacity","samples"].includes(search.get("tab")??"")?search.get("tab")!:"detail";
   const setTab=(value:string)=>{const next=new URLSearchParams(search);next.set("tab",value);setSearch(next);};
-  const [selected,setSelected]=useState<{version:string;refs:string[]}>({version:data.run.version,refs:[]});
-  const [cancel,setCancel]=useState<{version:string;refs:string[]}|null>(null),[receipt,setReceipt]=useState<Item|null>(null),[pause,setPause]=useState<string|null>(null);
-  const refs=selected.version===data.run.version?selected.refs:[];
+  const basis=JSON.stringify([data.run.version,data.sourceVersion,data.filters]);
+  const [selected,setSelected]=useState<{version:string;basis:string;refs:string[]}>({version:data.run.version,basis,refs:[]});
+  const [cancel,setCancel]=useState<{version:string;basis:string;refs:string[]}|null>(null),[receipt,setReceipt]=useState<{basis:string;item:Item}|null>(null),[pause,setPause]=useState<string|null>(null);
+  const refs=selected.basis===basis?selected.refs:[];
   const item=(ref:string)=>data.run.items.find(i=>i.itemRef===ref);
   const confirmed=data.run.items.filter(i=>i.receiptRef&&i.observedAt&&i.sourceEffect).length;
   const categories=[{label:"Receipt confirmed",className:styles.sConfirmed,match:(i:Item)=>Boolean(i.receiptRef&&i.observedAt&&i.sourceEffect)},
@@ -74,9 +75,9 @@ function NativeBatchBody({data,res,current,setParam,refresh}:{data:NativeRecruit
   const base={entityRefs:[],expectedVersion:data.run.version,approvalRef:data.run.approvalRef,manifestRef:data.run.manifestRef,runRef:data.run.runRef};
   const hold=(action:string)=>!current?"Refresh current complete source evidence.":nativeBlocked(res,action,command.pending);
   const source=permittedReviewUrl(data.sourceLink,current);
-  const choose=(ref:string,checked:boolean)=>setSelected({version:data.run.version,refs:checked?[...refs,ref]:refs.filter(r=>r!==ref)});
+  const choose=(ref:string,checked:boolean)=>setSelected({version:data.run.version,basis,refs:checked?[...refs,ref]:refs.filter(r=>r!==ref)});
   const submitCancel=()=>{
-    if(!cancel||hold("cancelUnsent")||cancel.version!==data.run.version)return;
+    if(!cancel||hold("cancelUnsent")||cancel.basis!==basis)return;
     void command.submit({...base,expectedVersion:cancel.version,operation:"controlRun",actionKind:"cancelUnsent",payload:{control:"cancel",itemRefs:cancel.refs}});setCancel(null);
   };
   return <>
@@ -93,10 +94,10 @@ function NativeBatchBody({data,res,current,setParam,refresh}:{data:NativeRecruit
       <p className={acquisition.small}>All returned rows are shown. A missing receipt is not proof that an action is unsent. Provider acknowledgment does not imply acceptance, publication or payment.</p>
       <ul className={styles.statusBar} aria-label="Canonical batch outcome counts">{counts.filter(c=>c.count>0).map(c=><li key={c.label} className={`${styles.seg} ${c.className}`} style={{flex:c.count}} aria-label={`${c.label}: ${c.count}`}>{c.count}</li>)}</ul>
       <p className={acquisition.small}>{counts.map(c=>`${c.label}: ${c.count}`).join(" · ")}. Counts describe this exact run, not the whole source population.</p>
-      <div className={styles.buttons}><Button variant="secondary" disabledReason={hold("cancelUnsent")??(!refs.length?"Select exact known-unsent rows first.":null)} onClick={()=>setCancel({version:data.run.version,refs:[...refs]})}>Cancel unsent</Button><LinkButton variant="secondary" to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=execution`}>Inspect live step</LinkButton></div>
+      <div className={styles.buttons}><Button variant="secondary" disabledReason={hold("cancelUnsent")??(!refs.length?"Select exact known-unsent rows first.":null)} onClick={()=>setCancel({version:data.run.version,basis,refs:[...refs]})}>Cancel unsent</Button><LinkButton variant="secondary" to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=execution`}>Inspect live step</LinkButton></div>
       <DataTable caption="Exact finite batch outcomes" minWidth={1040} columns={[{label:"Select unsent"},{label:"Recipient"},{label:"Bound terms"},{label:"Evidence"},{label:"Next action / deadline"},{label:"Outcome"},{label:"Control"}]} rows={data.rows.map(row=>{
         const execution=item(row.itemRef),unsent=knownUnsent(execution);
-        return [<Checkbox key={row.itemRef} label={`Select ${reviewValue(row.recipient,current)}`} checked={refs.includes(row.itemRef)} disabled={!current||!unsent||command.pending} onChange={checked=>choose(row.itemRef,checked)}/>,reviewValue(row.recipient,current),reviewValue(row.terms,current),row.membership==="held"?row.holdReasons.join(" · "):execution?.receiptRef??"No source receipt",`${reviewValue(row.owner,current)} · ${row.deadline?dateTime(row.deadline):"Deadline unknown"}`,batchOutcome(execution),<Button key={row.itemRef} variant="ghost" disabledReason={!execution?"No exact run item is available.":null} onClick={()=>setReceipt(execution??null)}>Inspect item</Button>];
+        return [<Checkbox key={row.itemRef} label={`Select ${reviewValue(row.recipient,current)}`} checked={refs.includes(row.itemRef)} disabled={!current||!unsent||command.pending} onChange={checked=>choose(row.itemRef,checked)}/>,reviewValue(row.recipient,current),reviewValue(row.terms,current),row.membership==="held"?row.holdReasons.join(" · "):execution?.receiptRef??"No source receipt",`${reviewValue(row.owner,current)} · ${row.deadline?dateTime(row.deadline):"Deadline unknown"}`,batchOutcome(execution),<Button key={row.itemRef} variant="ghost" disabledReason={!execution?"No exact run item is available.":null} onClick={()=>setReceipt(execution?{basis,item:execution}:null)}>Inspect item</Button>];
       })}/>
       {!data.rows.length&&<p>No source rows match these filters.</p>}
       <p>Confirmed sends cannot be canceled. Pause stops new work while in-flight work retains its original outcome and reconciliation path.</p>
@@ -110,9 +111,9 @@ function NativeBatchBody({data,res,current,setParam,refresh}:{data:NativeRecruit
     </section>}
     {(tab==="detail"||tab==="capacity")&&<RecruitmentCapacity values={data.capacity} current={current}/>}
     {tab==="samples"&&<RecruitmentSamples values={data.samples} current={current}/>}
-    <div className={styles.buttons}><LinkButton to={`/approvals/${encodeURIComponent(data.approval.approvalRef)}?version=v${data.approval.manifestVersion}`}>Inspect approval manifest</LinkButton><Button variant="secondary" aria-haspopup="dialog" disabledReason={hold("cancelUnsent")??(!refs.length?"Select current known-unsent items first.":null)} onClick={()=>setCancel({version:data.run.version,refs:[...refs]})}>Cancel selected unsent items</Button><Button variant="secondary" onClick={refresh}>Refresh batch evidence</Button>{source?<a href={source} target="_blank" rel="noopener noreferrer">Open permitted source</a>:<span>No currently permitted source link</span>}</div>
+    <div className={styles.buttons}><LinkButton to={`/approvals/${encodeURIComponent(data.approval.approvalRef)}?version=v${data.approval.manifestVersion}`}>Inspect approval manifest</LinkButton><Button variant="secondary" aria-haspopup="dialog" disabledReason={hold("cancelUnsent")??(!refs.length?"Select current known-unsent items first.":null)} onClick={()=>setCancel({version:data.run.version,basis,refs:[...refs]})}>Cancel selected unsent items</Button><Button variant="secondary" onClick={refresh}>Refresh batch evidence</Button>{source?<a href={source} target="_blank" rel="noopener noreferrer">Open permitted source</a>:<span>No currently permitted source link</span>}</div>
     <Dialog open={pause!==null} title="Pause new batch work" onClose={()=>setPause(null)}><p>Pause new work on this exact finite run. In-flight attempts keep their original outcomes and remain eligible for reconciliation.</p><p>Reviewed version: {pause}</p><Button disabledReason={hold("pauseRun")??(pause!==data.run.version?"The run changed. Close and review its current version.":null)} loading={command.busy} onClick={()=>{if(pause===data.run.version&&!hold("pauseRun")){void command.submit({...base,operation:"controlRun",actionKind:"pauseRun",payload:{control:"pause"}});setPause(null);}}}>Confirm pause new work</Button><Button variant="secondary" onClick={()=>setPause(null)}>Keep current work</Button></Dialog>
-    <Dialog open={cancel!==null} title="Review selected unsent cancellation" onClose={()=>setCancel(null)}><p>Only these {cancel?.refs.length??0} selected items will be requested. The server atomically rejects a selection containing in-flight, uncertain or already completed work.</p><ul>{cancel?.refs.map(ref=><li key={ref}>{ref}</li>)}</ul><p>Reviewed version: {cancel?.version}</p><Button disabledReason={hold("cancelUnsent")??(cancel?.version!==data.run.version?"The run changed. Close and review the current selection.":null)} loading={command.busy} onClick={submitCancel}>Request selected cancellation</Button><Button variant="secondary" onClick={()=>setCancel(null)}>Keep current work</Button></Dialog>
-    <Dialog open={receipt!==null} title="Exact item outcome and recovery" onClose={()=>setReceipt(null)}>{receipt&&<NativeRunRecovery data={{items:[receipt]}} current={current}/>}<LinkButton variant="secondary" to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=recovery`}>Open original run recovery</LinkButton><Button variant="secondary" onClick={()=>setReceipt(null)}>Close item evidence</Button></Dialog>
+    <Dialog open={cancel!==null} title="Review selected unsent cancellation" onClose={()=>setCancel(null)}><p>Only these {cancel?.refs.length??0} selected items will be requested. The server atomically rejects a selection containing in-flight, uncertain or already completed work.</p><ul>{cancel?.refs.map(ref=><li key={ref}>{ref}</li>)}</ul><p>Reviewed version: {cancel?.version}</p><Button disabledReason={hold("cancelUnsent")??(cancel?.basis!==basis?"The run or filtered source selection changed. Close and review the current selection.":null)} loading={command.busy} onClick={submitCancel}>Request selected cancellation</Button><Button variant="secondary" onClick={()=>setCancel(null)}>Keep current work</Button></Dialog>
+    <Dialog open={receipt!==null} title="Exact item outcome and recovery" onClose={()=>setReceipt(null)}>{receipt?.basis===basis?<NativeRunRecovery data={{items:[receipt.item]}} current={current}/>:<p role="status">The run or source selection changed. Close and inspect the current item evidence.</p>}<LinkButton variant="secondary" to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=recovery`}>Open original run recovery</LinkButton><Button variant="secondary" onClick={()=>setReceipt(null)}>Close item evidence</Button></Dialog>
   </>;
 }

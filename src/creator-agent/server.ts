@@ -268,7 +268,7 @@ export function createAgentServer(options: AgentServerOptions) {
       authority: options.actionFoundation?.approvals?.sources ?? {}, offers, commercial: commercialProjection,
       drafts: new InvitationDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations?.now),
       actions: { readApproval: (ref, principal) => actionFoundation.service.readApproval(ref, principal), readRun: (ref, principal) => actionFoundation.service.readRun(ref, principal) },
-      records: { readApproval: ref => actionFoundation.approvals.readApproval(ref), readRun: ref => actionFoundation.dispatch.read(ref) },
+      records: { readApproval: ref => actionFoundation.approvals.readApproval(ref), readRun: ref => actionFoundation.dispatch.read(ref, false) },
     });
     let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[]),...(options.fulfillment?[fulfillment.domain]:[]),...(recruitmentWorkspace.domain?[recruitmentWorkspace.domain]:[])]);
     if(settlementLedger)actionBindings={...actionBindings,ledger:settlementLedger};
@@ -933,17 +933,20 @@ export function createAgentServer(options: AgentServerOptions) {
           const result = input.viewKey === "invitationDraft" ? await recruitmentWorkspace.readInvitation(input.filters, principal) : await recruitmentWorkspace.readBatch(input.filters, principal);
           const currentAuth = authorize(req);
           if (!currentAuth || currentAuth.role !== auth.role) return reply(res, currentAuth ? 403 : 401, { code: "RECRUITMENT_AUTHORITY_CHANGED", executionCertainty: "notApplied" });
-          result.assertCurrent();
           const data = result.data;
           const capability = (actionKind: string, allowed: boolean) => ({ actionKind, state: auth.role !== "reviewer" ? "denied" : allowed && data.sourceState === "current" ? "available" : "held", reasonCodes: auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : allowed && data.sourceState === "current" ? [] : ["RECRUITMENT_CURRENT_EVIDENCE_REQUIRED"] });
           const capabilities = data.kind === "native-invitation" ? [capability("saveRecruitmentInvitation", data.canSaveDraft), capability("recruitment.invitation", data.canPreview)]
             : [capability("pauseRun", data.run.control === "active" && !["completed", "cancelled"].includes(data.run.current.state)), capability("cancelUnsent", data.run.control !== "cancelled" && data.run.current.state !== "completed")];
           const count = data.kind === "native-recruitment-batch" ? data.coverage : {returned: 1, total: 1, complete: data.sourceState === "current"};
-          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
             dataState: data.sourceState === "current" ? "ready" : "partial", data, sourceFreshness: [],
             coverage: {expectedCount: count.total, observedCount: count.returned, missingCount: count.total - count.returned, complete: count.complete, reasonCodes: data.reasonCodes},
-            capabilities, page: {nextCursor: null, hasMore: false}, refresh: {nextPollAfterMs: null} });
+            capabilities, page: {nextCursor: null, hasMore: false}, refresh: {nextPollAfterMs: null} };
+          const finalAuth = authorize(req);
+          if (!finalAuth || finalAuth.role !== auth.role) return reply(res, finalAuth ? 403 : 401, {code: "RECRUITMENT_AUTHORITY_CHANGED", executionCertainty: "notApplied"});
+          result.assertCurrent();
+          return reply(res, 200, envelope);
         }
         if (input.viewKey === "batchDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -1003,7 +1006,10 @@ export function createAgentServer(options: AgentServerOptions) {
           const data = original?.kind === "agent-offer" && projection ? { ...original, commercialEligibility: projection.data, ...(recovery ? {saveRecovery: recovery} : {}) } : original;
           const gaps = data?.kind === "agent-offer" ? data.blockers : data?.unknowns ?? [];
           const stale = data?.kind === "agent-offer" && data.assessment !== null && !data.assessmentCurrent;
+          const recoveryHash = recovery ? digest(recovery) : null;
           projection?.assertCurrent();
+          if (input.viewKey === "offerDraft" && input.filters.saveRequest && digest(offers.readSaveRequest(input.filters.offerId, input.filters.saveRequest.expectedVersion, input.filters.saveRequest.requestKey, input.filters.saveRequest.payloadDigest)) !== recoveryHash)
+            throw new OfferPolicyError("OFFER_SAVE_RECOVERY_CHANGED", {status: 409, reasonCodes: ["OFFER_SAVE_RECOVERY_CHANGED"]});
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
             dataState: !data ? "empty" : stale ? "stale" : gaps.length ? "partial" : "ready", data,

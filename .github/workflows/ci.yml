@@ -38,6 +38,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-original-layout-recruitment
+          path: test-results/**/recruitment-original-layout-demo-*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report

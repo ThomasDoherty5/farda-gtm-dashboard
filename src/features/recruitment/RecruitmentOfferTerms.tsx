@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { useView, protectedRead } from "@/adapter/useView";
@@ -31,6 +31,9 @@ export function RecruitmentOfferTerms({offerId,creatorId,sourceCurrent,onVersion
 function TermsEditor({record,response,current,marker,invalidMarker,remember,refresh,onVersion}:{record:OfferView;response:ReadResponse<OfferView>;current:boolean;marker:SaveMarker|null;invalidMarker:boolean;remember:(m:SaveMarker|null)=>void;refresh:()=>void;onVersion:(version:string)=>void}) {
   const [edit,setEdit]=useState<{terms:OfferTerms;version:string}|null>(null),[errors,setErrors]=useState<string[]>([]),[busy,setBusy]=useState(false);
   const original=useRef<{marker:SaveMarker;terms:OfferTerms}|null>(null),save=useSave<OfferTerms,OfferRecord>(),ctx=useScope(),client=useQueryClient();
+  const mounted=useRef(true),latest=useRef({record,current,scope:JSON.stringify(scopeKey(ctx))});
+  useLayoutEffect(()=>{latest.current={record,current,scope:JSON.stringify(scopeKey(ctx))};});
+  useLayoutEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
   const terms=edit?.terms??record.terms,baseVersion=edit?.version??record.version,dirty=!!edit&&canonicalInvitation(terms)!==canonicalInvitation(record.terms);
   const recorded=!!marker&&record.saveRecovery?.state==="recorded"&&record.saveRecovery.requestKey===marker.requestKey&&record.saveRecovery.payloadDigest===marker.payloadDigest&&record.saveRecovery.expectedVersion===marker.expectedVersion&&record.saveRecovery.record?.offerId===record.offerId;
   const canEdit=current&&response.capabilities.some(c=>c.actionKind==="saveOfferDraft"&&c.state==="available");
@@ -50,13 +53,17 @@ function TermsEditor({record,response,current,marker,invalidMarker,remember,refr
     if(busy||save.isPending||!current||!retry&&hold)return;
     const parsed=offerTermsSchema.safeParse(terms);if(!retry&&!parsed.success){setErrors(parsed.error.issues.map(i=>`${i.path.join(".")}: ${i.message}`));return;}
     setBusy(true);setErrors([]);
+    const basis=latest.current;
     try {
       const request=retry?original.current:{marker:{requestKey:crypto.randomUUID(),expectedVersion:baseVersion,payloadDigest:await invitationDigest({id:record.offerId,expected:baseVersion,terms:parsed.success?parsed.data:terms,job:null,operation:"offer-propose"})},terms:parsed.success?parsed.data:terms};
-      if(!request)return;original.current=request;remember(request.marker);
+      if(!request||!mounted.current)return;
+      if(!latest.current.current||latest.current.record!==basis.record||latest.current.scope!==basis.scope){setErrors(["Source permission, scope or selected offer changed while preparing the save. No request was sent."]);return;}
+      original.current=request;remember(request.marker);
       const ack=await protectedRead(client,scopeKey(ctx),request.marker.requestKey,()=>save.mutateAsync({resourceKind:"actionDraft",resourceRef:record.offerId,expectedVersion:request.marker.expectedVersion,payload:request.terms,idempotencyKey:request.marker.requestKey}));
+      if(!mounted.current||latest.current.scope!==basis.scope||latest.current.record.offerId!==basis.record.offerId||latest.current.record.terms.creatorId!==basis.record.terms.creatorId)return;
       if(ack.scope.workspaceId!==response.scope.workspaceId||ack.scope.environment!==response.scope.environment||canonicalInvitation(ack.scope.accountIds)!==canonicalInvitation(response.scope.accountIds)||ack.executionCertainty!=="applied"||ack.resourceRef!==record.offerId||ack.record.offerId!==record.offerId||ack.resourceVersion!==ack.record.version||canonicalInvitation(ack.record.terms)!==canonicalInvitation(request.terms))setErrors(["The acknowledgment did not match the exact offer request. Keep its original key."]);
       refresh();
-    }catch{setErrors(["The original save needs authoritative readback. An absent result does not authorize a new request."]);refresh();}finally{setBusy(false);}
+    }catch{if(mounted.current){setErrors(["The original save needs authoritative readback. An absent result does not authorize a new request."]);refresh();}}finally{if(mounted.current)setBusy(false);}
   }
   const ig=deliverable("instagram"),tt=deliverable("tiktok");
   return <><RecruitmentLeaveGuard dirty={dirty} uncertain={!!marker&&!recorded||invalidMarker}/><h2 id="rec-terms-title" className={acquisition.h2}>Terms, per publishing network.</h2><p className={acquisition.small}>{record.offerId} · {record.version} · local proposal · {record.terms.checkoutRoute}. Edits create a new exact offer revision; existing acceptance does not transfer.</p>

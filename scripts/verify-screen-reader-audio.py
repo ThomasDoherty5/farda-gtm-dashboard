@@ -27,6 +27,7 @@ for flow in ("early-access", "abandoned-checkout", "review-request"):
     for checkpoint in ("locked-policy", "dialog-focus-return", "validation", "save-announcement"):
         expected.add(f"{flow}-{checkpoint}")
 names = [row["name"] for row in rows]
+expected.update({"recruitment-invitation-dialog-focus-return", "recruitment-invitation-invalid-start", "recruitment-finite-outcomes-table"})
 assert len(names) == len(set(names)), "Duplicate speech checkpoints cannot replace missing journeys"
 assert expected <= set(names), f"Missing actual screen-reader checkpoints: {sorted(expected - set(names))}"
 started = int((root / "recording-start-ms.txt").read_text())

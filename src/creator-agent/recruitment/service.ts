@@ -206,7 +206,7 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
         runOriginal.runRef !== snapshot.runRef || runOriginal.revision !== snapshot.runRevision ||
         runOriginal.intent.approval.approvalRef !== snapshot.approvalRef ||
         runOriginal.intent.approval.manifestHash !== snapshot.manifestHash)
-      fail("RECRUITMENT_BATCH_BINDING_CHANGED");
+      return fail("RECRUITMENT_BATCH_BINDING_CHANGED");
     const approval = await boundedSourceRead(()=>options.actions.readApproval(snapshot.approvalRef, principal),undefined,timeoutMs);
     assertSource(request,snapshot,principal);
     const run = await boundedSourceRead(()=>options.actions.readRun(snapshot.runRef, principal),undefined,timeoutMs);
