@@ -10,12 +10,14 @@ import { allocateCosts, aov as aovOf, contributionPerOrder, evaluateCase, period
 import { weekBarHeight, weekTotals, AXIS_MAX_MINOR } from "./attributionMath";
 import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, PeriodDialog, SectionHeading, ViewShell, WorkspaceTabs, count, percent, ratio, usd, usdExact, useIsDemo } from "./parts";
 import styles from "./Analytics.module.css";
+import { NativeTrafficDefinitionRead } from "./NativeSiteTrafficPage";
 
 const axisLabel = (minor: number) => (minor === 0 ? "$0" : `$${minor / 100_000}k`);
 const multiple = (n: number) => `${n.toFixed(2)}×`;
 
 /** Performance attribution (Figma source 14:377, owner THO-293, CTRL-202 and CTRL-203). */
 export function AttributionPage() {
+  const demo = useIsDemo();
   const query = useView<Record<string, never>, AttributionData>("attribution", {});
   const report = query.data?.data;
   const periodLabel = report?.datasetKey === "attribution-observed"
@@ -33,7 +35,7 @@ export function AttributionPage() {
         {(data) => <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
       <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
-      <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
+      <Dialog open={dialog === "definitions"} focusHeading={!demo} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
         {dialog === "definitions" && <Definitions data={query.data?.data ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
@@ -52,6 +54,7 @@ const STATIC_DEFS: [string, string][] = [
 ];
 
 function Definitions({ data }: { data: AttributionData | null }) {
+  const demo = useIsDemo();
   return (
     <div>
       <dl className={styles.defs} data-testid="static-definitions">
@@ -59,6 +62,7 @@ function Definitions({ data }: { data: AttributionData | null }) {
       </dl>
       {data && <PeriodEvidence data={data} />}
       <DictionaryRead />
+      {!demo && <NativeTrafficDefinitionRead />}
     </div>
   );
 }

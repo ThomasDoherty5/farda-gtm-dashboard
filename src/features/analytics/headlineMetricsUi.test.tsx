@@ -95,7 +95,10 @@ describe("definitions dialog keeps its static definitions whatever the dictionar
     await user.click(screen.getByRole("button", { name: "Metric definitions" }));
     const d = within((await screen.findByRole("heading", { name: "Metric definitions", hidden: true })).closest("dialog")!);
     expectStatic(d);
-    expect(await d.findByText(/not connected/)).toBeInTheDocument();
+    // Dictionary and traffic definitions have independent native reads and independent held states.
+    await waitFor(() => expect(d.getAllByText("The live data service is not connected yet.")).toHaveLength(2));
+    const traffic = d.getByRole("region", { name: "Store traffic definitions", hidden: true });
+    expect(within(traffic).getByText("The live data service is not connected yet.")).toBeInTheDocument();
     expect(d.queryByTestId("metric-dictionary")).not.toBeInTheDocument();
   });
 });

@@ -4,11 +4,15 @@ import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { DEMO_RETURN_ID, DEMO_SUPPORT_CASE_ID, type CustomerJourneyData } from "@/fixtures/analytics";
 import { averageRating, niceScale, rate } from "./journeyMath";
-import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, SectionHeading, ViewShell, count, percent, ratio, usd, usdExact } from "./parts";
+import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, MetricText, Notice, PageHeader, SectionHeading, ViewShell, count, percent, ratio, usd, usdExact, useIsDemo } from "./parts";
+import { NativeSiteTrafficPage } from "./NativeSiteTrafficPage";
 import styles from "./Analytics.module.css";
 
 /** Commerce, support and reviews (Figma source 30:721, owner THO-293, CTRL-209). Each metric keeps its own cohort and denominator. */
 export function CustomerJourneyPage() {
+  return useIsDemo() ? <DemoCustomerJourneyPage /> : <NativeSiteTrafficPage />;
+}
+function DemoCustomerJourneyPage() {
   const query = useView<Record<string, never>, CustomerJourneyData>("customerJourney", {});
   const [definitions, setDefinitions] = useState(false);
   const data = query.data?.data ?? null;

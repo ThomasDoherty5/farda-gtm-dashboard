@@ -23,6 +23,8 @@
 !src/creator-agent/settlements/*.ts
 !src/creator-agent/recruitment/
 !src/creator-agent/recruitment/*.ts
+!src/creator-agent/siteTraffic/
+!src/creator-agent/siteTraffic/*.ts
 !src/creator-agent/teamInvitationReads/
 !src/creator-agent/teamInvitationReads/*.ts
 !src/creator-agent/configurations/
