@@ -5,7 +5,10 @@
  * claiming one view key would mean one of them is silently ignored. A view key that is not here has no schema, and
  * the live adapter does not trust an answer it cannot check.
  */
-import type { z } from "zod";
+import { fulfillmentProposalSchema, fulfillmentPreviewPayload } from "../../creator-agent/fulfillmentDomain/contract";
+import { exportViewSchemas } from "../../creator-agent/actions/exportViews";
+import { nativeCommissionLedgerSchema, nativeSettlementSchema, nativePayableSchema } from "./settlements";
+import { z } from "zod";
 import { analyticsViewSchemas } from "./analytics";
 import { approvalActionSchemas, approvalViewSchemas } from "./approvals";
 import { collaborationViewSchemas } from "./collaboration";
@@ -35,8 +38,8 @@ export function mergeSchemas<T>(label: string, parts: Readonly<Record<string, T>
 }
 
 export const viewSchemas: ViewSchemas = mergeSchemas<z.ZodTypeAny>("view key", [
-  analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas,
+  {fulfillmentProposal:fulfillmentProposalSchema}, exportViewSchemas, analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, {...financeViewSchemas,commissionLedger:z.union([nativeCommissionLedgerSchema,financeViewSchemas.commissionLedger!]),settlementDetail:z.union([nativeSettlementSchema,financeViewSchemas.settlementDetail!]),payableDetail:z.union([nativePayableSchema,financeViewSchemas.payableDetail!])},
   lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas,
 ]);
 
-export const actionPayloadSchemas: ActionPayloadSchemas = mergeSchemas<{ payload: z.ZodTypeAny }>("action kind", [approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas]);
+export const actionPayloadSchemas: ActionPayloadSchemas = mergeSchemas<{ payload: z.ZodTypeAny }>("action kind", [{previewFulfillmentDecision:{payload:fulfillmentPreviewPayload}}, approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas]);

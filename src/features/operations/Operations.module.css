@@ -111,3 +111,7 @@
   .compactTabs a { flex: 1 1 96px; }
   .compactTabs a:first-child { flex-basis: 110px; }
 }
+
+.heldControl { display: inline-flex; flex-direction: column; gap: var(--space-4); max-width: 240px; min-width: 0; align-self: flex-start; }
+.heldControl > button { width: 100%; }
+.heldControl > span { font: var(--text-small); }

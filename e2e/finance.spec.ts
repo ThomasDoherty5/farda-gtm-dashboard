@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
@@ -18,13 +19,20 @@ test.describe("settlement screens against Figma at 1440", () => {
     ["66:447", "/finance/settlements/TT-NATIVE-DEMO", 2194],
     ["9:551", "/finance/payables/PAY-0012", 1506],
   ] as const) {
-    test(`${url} is ${height}px tall like ${node}`, async ({ page }) => {
+    test(`${url} is ${height}px tall like ${node}`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width: 1440, height: 400 });
       await page.goto(url);
       await page.evaluate(() => document.fonts.ready);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       await expect(page.getByRole("status").filter({ hasText: "Loading" })).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(height);
+      await page.setViewportSize({ width: 1440, height });
+      await page.evaluate(async () => { await document.fonts.ready; window.scrollTo(0, 0); });
+      const name = `finance-original-layout-demo-${node.replace(":", "-")}`;
+      const imagePath = testInfo.outputPath(`${name}.png`);
+      await page.screenshot({ path: imagePath, fullPage: true, animations: "disabled" });
+      await writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({ nodeId: node, evidenceStage: "demo", viewport: { width: 1440, height }, fullPage: true, contentHeight: await page.evaluate(() => document.documentElement.scrollHeight), providerAuthority: false }));
+      await testInfo.attach(name, { path: imagePath, contentType: "image/png" });
     });
   }
 

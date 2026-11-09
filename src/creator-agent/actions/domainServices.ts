@@ -1,7 +1,9 @@
 import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { digest } from "../config.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
 import { JobRepository, type JobClaim } from "../jobs/repository.ts";
+import { ledgerExportRequestFilters, ledgerExportRequestViewSchema } from "./exportViews.ts";
 import { nativeReadinessViewSchema, readinessRecoveryIntentSchema, readinessPublicReceiptSchema, readinessRequestRecoverySchema, type ReadinessRequestRecovery } from "./views.ts";
 import { ActionServiceError, exportPayloadSchema, exportReceiptSchema, ledgerPageSchema, ledgerSnapshotSchema,
   principalGrantSchema, readinessIntentSchema, readinessLookupSchema, readinessPayloadSchema, readinessReceiptSchema, readinessSnapshotSchema, reference,
@@ -48,7 +50,7 @@ export function createActionDomainServices(options: Options) {
     if (!same(g.scope, scope) || g.principalRef !== actor.principalRef || !g.active || Date.parse(g.observedAt) > time() || Date.parse(g.validUntil) <= time() || Date.parse(g.observedAt) >= Date.parse(g.validUntil)) fail("AUTHORITY_REQUIRED", 403);
     if (!(role === "readiness" ? g.roles.includes("founder") : g.roles.includes("founder") || g.roles.includes("finance"))) fail("AUTHORITY_REQUIRED", 403);
     if (!options.assertAuthority) fail("ACTOR_AUTHORITY_FENCE_UNCONFIGURED", 403);
-    try { options.assertAuthority({ scope, actor: g, slack: null, linearRecords: [] }, time()); }
+    try { assertSynchronousVoid(() => options.assertAuthority!({ scope, actor: g, slack: null, linearRecords: [] }, time())); }
     catch { fail("AUTHORITY_REQUIRED", 403); }
   }
   async function authorize(actor: ActionPrincipal, role: "export" | "readiness") {
@@ -105,7 +107,7 @@ export function createActionDomainServices(options: Options) {
       });
       claimed = true;
       const jobId = alias("export-job", key), sourceGrantRef = alias("export-grant", JSON.stringify([s.permissionVersion, initialGrant.directoryVersion]));
-      const fence = () => { currentGrant(initialGrant, actor, "export"); if (Date.parse(s.validUntil) <= time()) fail("SOURCE_STALE"); ledger.assertCurrent(s, actor, time()); };
+      const fence = () => { currentGrant(initialGrant, actor, "export"); if (Date.parse(s.validUntil) <= time()) fail("SOURCE_STALE"); assertSynchronousVoid(() => ledger.assertCurrent(s, actor, time())); };
       jobs.register({ jobId, version: 1, ownerRef: alias("principal", actor.principalRef), mode: "observe", handler: "export-ledger-snapshot.v1",
         eventType: "authorized-ledger-snapshot", inputSchemaVersion: "job-reference-batch.v1", outputSchemaVersion: "job-local-result.v1",
         policyVersion: alias("permission", s.permissionVersion), modelVersion: null, offerVersion: null, capabilityBinding: null,
@@ -143,7 +145,7 @@ export function createActionDomainServices(options: Options) {
         rowCount: offset, byteLength: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex"), createdAt: iso(), expiresAt: new Date(Math.min(time() + 3_600_000, Date.parse(s.validUntil))).toISOString(), asOf: s.asOf, contentType: "text/csv;charset=utf-8", confersRelease: false });
       jobs.completeLocalArtifact(jobClaim.item.itemId, jobClaim.leaseToken, { schemaVersion: "job-local-result.v1", kind: "reference-recorded", artifactRef, sourceEffect: "none" }, () => {
         currentGrant(grant, actor, "export"); if (Date.parse(s.validUntil) <= time()) fail("SOURCE_STALE");
-        ledger.assertCurrent(s, actor, time());
+        assertSynchronousVoid(() => ledger.assertCurrent(s, actor, time()));
         if (request(key)?.state !== "pending") fail("EXPORT_REQUEST_CHANGED");
         db.prepare("INSERT INTO action_export_artifacts VALUES(?,?,?,?)").run(artifactRef, key, JSON.stringify(s), body);
         db.prepare("UPDATE action_domain_requests SET state='applied',receipt=? WHERE key=? AND state='pending'").run(JSON.stringify(receipt), key);
@@ -165,9 +167,34 @@ export function createActionDomainServices(options: Options) {
     if (!ledger) fail("EXPORT_SOURCE_UNCONFIGURED");
     const current = snapshot(await ledger.current(s, actor), { filters: s.filters, format: "csv" });
     if (!same(current, s)) fail("EXPORT_SNAPSHOT_CHANGED");
-    const grant = await authorize(actor, "export"); currentGrant(grant, actor, "export"); ledger.assertCurrent(s, actor, time());
+    const grant = await authorize(actor, "export"); currentGrant(grant, actor, "export"); assertSynchronousVoid(() => ledger.assertCurrent(s, actor, time()));
     if (Date.parse(receipt.expiresAt) <= time()) fail("EXPORT_EXPIRED", 410);
-    return { receipt, body: String(row.body) };
+    const body=String(row.body);
+    if(Buffer.byteLength(body)!==receipt.byteLength || createHash("sha256").update(body).digest("hex")!==receipt.sha256)fail("EXPORT_ARTIFACT_CORRUPT",502);
+    const assertCurrent=()=>{currentGrant(grant,actor,"export");assertSynchronousVoid(()=>ledger.assertCurrent(s,actor,time()));if(Date.parse(receipt.expiresAt)<=time())fail("EXPORT_EXPIRED",410);};
+    assertCurrent();return { receipt, body, assertCurrent };
+  }
+  async function readExportRequest(raw: unknown, actor: ActionPrincipal) {
+    const input=ledgerExportRequestFilters.parse(raw),grant=await authorize(actor,"export");
+    const key=keyOf("ledger-export",actor,input.requestKey),r=request(key);
+    if(r && r.hash!==digest([scope,actor,input.payload,input.expectedVersion]))fail("MANIFEST_CHANGED");
+    if(!ledger || typeof ledger.assertCurrent!=="function")fail("EXPORT_SOURCE_UNCONFIGURED",409);
+    let receipt: ExportReceipt | null=null;
+    let sourceFence:()=>void;
+    if(r?.state==="applied" && r.receipt){
+      receipt=exportReceiptSchema.parse(JSON.parse(r.receipt));
+      const artifact=await downloadExport(receipt.artifactRef,actor);sourceFence=artifact.assertCurrent;
+    } else {
+      const current=snapshot(await ledger.open(scope,actor,input.payload.filters),input.payload);
+      sourceFence=()=>{if(Date.parse(current.validUntil)<=time())fail("SOURCE_STALE");assertSynchronousVoid(()=>ledger.assertCurrent(current,actor,time()));};
+    }
+    const basis=r?JSON.stringify(r):null;
+    const assertCurrent=()=>{currentGrant(grant,actor,"export");sourceFence();const current=request(key);if((current?JSON.stringify(current):null)!==basis)fail("EXPORT_REQUEST_CHANGED",409);};assertCurrent();
+    const state=!r?"absent":r.state==="applied"&&receipt?"succeeded":r.state==="rejected"?"failed":"pending";
+    const data=ledgerExportRequestViewSchema.parse({kind:"native-ledger-export-request",requestKey:input.requestKey,state,receipt,
+      progress:{processedRows:receipt?.rowCount??null,totalRows:receipt?.rowCount??null},
+      reasonCodes:state==="pending"?["ORIGINAL_EXPORT_IN_PROGRESS"]:state==="failed"?["EXPORT_GENERATION_FAILED"]:state==="absent"?["ORIGINAL_REQUEST_NOT_RECORDED"]:[]});
+    return {data,assertCurrent};
   }
   const facts = (s: ReadinessSnapshot) => { const { observedAt, validUntil, ...rest } = s; void observedAt; void validUntil; return rest; };
   async function readSource(targetRef: string, actor: ActionPrincipal) {
@@ -181,7 +208,7 @@ export function createActionDomainServices(options: Options) {
   const publicReceipt = (r: ReadinessReceipt): ReadinessReceipt => ({ ...r, receiptRef: alias("notion-receipt", r.receiptRef), recordedVersion: alias("notion-version", r.recordedVersion) });
   async function readReadiness(targetRef: string, actor: ActionPrincipal) {
     reference.parse(targetRef); await authorize(actor, "readiness"); const s = await readSource(targetRef, actor), grant = await authorize(actor, "readiness");
-    currentGrant(grant, actor, "readiness"); readiness!.assertCurrent(s, actor, time());
+    currentGrant(grant, actor, "readiness"); assertSynchronousVoid(() => readiness!.assertCurrent(s, actor, time()));
     const version = alias("readiness-view", JSON.stringify([actor.principalRef, facts(s)])), publicTarget = alias("launch", s.targetRef);
     // A frozen public-reference mapping only: it is not a decision and never substitutes for fresh source authority.
     db.prepare("INSERT OR IGNORE INTO action_readiness_view_refs VALUES(?,?,?,?)").run(version, actor.principalRef, publicTarget, JSON.stringify(s));
@@ -226,7 +253,7 @@ export function createActionDomainServices(options: Options) {
     const old = request(key); if (old?.state === "rejected" || old?.receipt && !same(JSON.parse(old.receipt), receipt)) fail("READINESS_RECEIPT_CONFLICT", 502, "applied");
     db.prepare("UPDATE action_domain_requests SET state='applied',receipt=? WHERE key=?").run(JSON.stringify(receipt), key);
     const grant = await authorize(actor, "readiness"), current = await readSource(intent.targetRef, actor);
-    currentGrant(grant, actor, "readiness"); readiness.assertCurrent(current, actor, time());
+    currentGrant(grant, actor, "readiness"); assertSynchronousVoid(() => readiness.assertCurrent(current, actor, time()));
     return publicReceipt(receipt);
   }
   async function recordReadiness(targetRef: string, raw: unknown, expectedVersion: string, actor: ActionPrincipal, idempotencyKey: string): Promise<ReadinessReceipt> {
@@ -240,7 +267,7 @@ export function createActionDomainServices(options: Options) {
         if (old.state === "rejected") fail("READINESS_NOT_APPLIED");
         // Current source permission must remain valid, but a later source version does not erase the historical receipt.
         const source = await readSource(targetRef, actor);
-        currentGrant(currentActor, actor, "readiness"); readiness!.assertCurrent(source, actor, time());
+        currentGrant(currentActor, actor, "readiness"); assertSynchronousVoid(() => readiness!.assertCurrent(source, actor, time()));
         if (old.state === "applied" && old.receipt) return publicReceipt(readinessReceiptSchema.parse(JSON.parse(old.receipt)));
         return await reconcileReadiness(readinessIntentSchema.parse(JSON.parse(old.intent)), key, actor);
       }
@@ -252,7 +279,7 @@ export function createActionDomainServices(options: Options) {
         expectedVersion, sourceBasis: digest(facts(s)), payloadDigest: digest(payload), payload, confersRelease: false });
       tx(() => {
         headCurrent("readiness", targetRef, expectedVersion);
-        readiness!.assertCurrent(current, actor, time()); currentGrant(grant, actor, "readiness");
+        assertSynchronousVoid(() => readiness!.assertCurrent(current, actor, time())); currentGrant(grant, actor, "readiness");
         const prior = request(key); if (prior) fail(prior.hash === hash ? "OUTCOME_UNCERTAIN" : "MANIFEST_CHANGED", 409);
         if (db.prepare("SELECT key FROM action_domain_requests WHERE kind='readiness' AND target=? AND state IN ('pending','acknowledged')").get(targetRef)) fail("READINESS_PRIOR_OUTCOME_UNCERTAIN", 409);
         db.prepare("INSERT INTO action_domain_requests VALUES(?,?,?,?,?,'pending',?,NULL,?)").run(key, actor.principalRef, "readiness", targetRef, hash, JSON.stringify(intent), time());
@@ -279,7 +306,7 @@ export function createActionDomainServices(options: Options) {
       const original = readinessIntentSchema.parse(JSON.parse(stored.intent));
       if (!same(original.scope, scope) || original.principalRef !== actor.principalRef || original.requestKey !== requestKey || original.payloadDigest !== digest(original.payload) || stored.hash !== digest([scope, actor, original.targetRef, original.expectedVersion, original.payload])) fail("READINESS_RECEIPT_CONFLICT", 502);
       const current = await readSource(original.targetRef, actor);
-      currentGrant(grant, actor, "readiness"); readiness!.assertCurrent(current, actor, time());
+      currentGrant(grant, actor, "readiness"); assertSynchronousVoid(() => readiness!.assertCurrent(current, actor, time()));
       // Reconstruct only from the exact frozen public view that authorized this input, never today's source version.
       const viewRef = alias("readiness-view", JSON.stringify([actor.principalRef, factsFromOriginal()]));
       function factsFromOriginal() {
@@ -309,7 +336,7 @@ export function createActionDomainServices(options: Options) {
       }
       // Every awaited reconciliation is followed by fresh source and actor authorization before returning rationale or receipts.
       const latestGrant = await authorize(actor, "readiness"), source = await readSource(original.targetRef, actor);
-      currentGrant(latestGrant, actor, "readiness"); readiness!.assertCurrent(source, actor, time());
+      currentGrant(latestGrant, actor, "readiness"); assertSynchronousVoid(() => readiness!.assertCurrent(source, actor, time()));
       const latest = request(key)!;
       if (latest.state === "applied" && latest.receipt) {
         const rawReceipt = readinessReceiptSchema.parse(JSON.parse(latest.receipt));
@@ -327,5 +354,5 @@ export function createActionDomainServices(options: Options) {
       return readinessRequestRecoverySchema.parse({ requestKey, state: "pending", intent, receipt: null, terminalProof: null, reasonCodes: reasonCodes.length ? reasonCodes : ["OUTCOME_UNCERTAIN"] });
     } catch (e) { rethrow(e, key); }
   }
-  return { exportLedger, downloadExport, readReadiness, recordReadiness, recordReadinessFromView, recoverReadinessRequest };
+  return { exportLedger, downloadExport, readExportRequest, readReadiness, recordReadiness, recordReadinessFromView, recoverReadinessRequest };
 }

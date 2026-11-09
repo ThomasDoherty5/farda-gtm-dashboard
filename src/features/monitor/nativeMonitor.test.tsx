@@ -78,3 +78,20 @@ describe("native watchlist review controls",()=>{
     await waitFor(()=>expect(screen.queryByText("conversation-a")).not.toBeInTheDocument());expect(screen.getByText(/Message context denied/)).toBeInTheDocument();
   });
 });
+
+it("exposes the complete visible partial-source message as the atomic status name", async () => {
+  const data = nativeContentSchema.parse({kind:"saved-content-monitor",observedAt:"2026-11-06T10:00:00Z",sourceState:"partial",
+    sourceAsOf:"2026-11-06T09:59:00Z",sourceVersion:"source-synthetic",latestRunRef:null,membershipComplete:false,
+    posts:[],total:0,views:null,rate:null,orders:null,net:null,window:"last-30",metricBasis:null});
+  const adapter=createLiveAdapter("sandbox",{transport:{async send(request){
+    if(request.kind!=="read" || request.envelope.viewKey!=="contentMonitor")throw new Error("Unexpected operation");
+    return respondWith(request.envelope,data,{dataVersion:"synthetic-partial-v1"});
+  }}});
+  renderRoute("/content",adapter);
+  const status = await screen.findByRole("status", {name:/^Partial source coverage/});
+  expect(status).toHaveAccessibleName(status.textContent!);
+  expect(status).toHaveTextContent("Intake coverage is partial.");
+  expect(status).toHaveTextContent("Source as of");
+  expect(status).toHaveTextContent("Saved ledger read");
+  expect(status).toHaveAttribute("aria-atomic", "true");
+});

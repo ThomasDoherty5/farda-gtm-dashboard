@@ -1,0 +1,80 @@
+import { useState } from "react";
+import { useParams } from "react-router-dom";
+import { useView } from "@/adapter/useView";
+import { scopeKey, useScope } from "@/adapter/scope";
+import type { NativeSettlement, SettlementRecord } from "@/creator-agent/settlements/contract";
+import { Badge } from "@/components/Badge";
+import { Button, LinkButton } from "@/components/Button";
+import { DataTable } from "@/components/DataTable";
+import { Dialog } from "@/components/Dialog";
+import { Kpi, KpiRow } from "@/components/Kpi";
+import { ContextCard, FactList, GateRows, PageHeader, Panel } from "@/components/Panels";
+import { RecordShell } from "@/features/operations/RecordShell";
+import { displayReference, FinanceGrant, FinancialEvidenceDialog, NativeMoneyKpi, FinanceSourceLink, moneyFact, NativeFinanceTabs, observed, reasonText, stateText } from "./NativeFinance";
+import { SettlementMatchDialog } from "./NativeStatementMatch";
+import { NativeTikTokSettlement } from "./NativeTikTokSettlement";
+import styles from "./Finance.module.css";
+import native from "./NativeFinance.module.css";
+
+export function NativeSettlementPage() {
+  const { settlementId = "" } = useParams(), ctx = useScope();
+  const query = useView<{ settlementId: string }, NativeSettlement>("settlementDetail", { settlementId });
+  const refresh = () => { void query.refetch(); };
+  return <RecordShell query={query} id="settlement-title" title="Settlement" subject="settlement" figma={query.data?.data?.record?.provider === "tiktok" ? "66:447" : "66:252"}>{(response, data) => data.kind === "native-settlement" ?
+    <FinanceGrant data={data} response={response} refresh={refresh} titleId="settlement-title" title="Settlement">
+      {data.record ? <NativeSettlementBody key={JSON.stringify([...scopeKey(ctx), data.record.ref, data.record.version])} data={data} record={data.record} /> : <><PageHeader id="settlement-title" title="Settlement" /><p>No source settlement was returned for this address.</p></>}
+    </FinanceGrant> : <><PageHeader id="settlement-title" title="Settlement" /><p role="alert">A qualified native settlement was not returned. Refresh source evidence before reviewing this record.</p></>
+  }</RecordShell>;
+}
+
+function NativeSettlementBody({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
+  return record.provider === "tiktok" ? <NativeTikTokSettlement data={data} record={record} /> : <NativeCollabsSettlement data={data} record={record} />;
+}
+function NativeCollabsSettlement({ data, record }: { data: NativeSettlement; record: SettlementRecord }) {
+  const [dialog, setDialog] = useState<"match" | "evidence" | "identity" | "crosswalk" | "exceptions" | "activation" | null>(null);
+  return <>
+    <PageHeader id="settlement-title" title="Follow the money." subtitle={<span className={native.reference}>{displayReference(record.ref)} · {record.provider} · {record.accountRef}</span>}>
+      <FinanceSourceLink record={record} kind="payout" label="Open native payout" /><Button aria-haspopup="dialog" onClick={() => setDialog("match")}>Match statement</Button>
+    </PageHeader>
+    <NativeFinanceTabs current="payouts" payout={record} />
+    <ContextCard title="Existing provider obligations" actions={<LinkButton variant="secondary" to="/creators/pipeline">Full acquisition funnel</LinkButton>}>Honor earned amounts, preserve original paid receipts and record later reversals as adjustments. Existing accepted obligations remain with their source owner.</ContextCard>
+    <ContextCard title="Settlement is not a second payment">The provider owns billing and creator payout. Farda reviews the exact source evidence and accounting match; this lane cannot create a duplicate manual Pay task.</ContextCard>
+    <Panel large spacious title={`${stateText[record.state]}. Accounting ${record.accounting.state}.`} subtitle="Financial events and accounting status are separate source facts." testId="native-settlement-facts">
+      <KpiRow><NativeMoneyKpi label="Creator cash paid" context="Independent source balance" fact={record.balances.creatorPaid} /><NativeMoneyKpi label="Merchant invoice" context="Billed does not mean creator paid" fact={record.balances.billed} /><NativeMoneyKpi label="Processing fee" context="Source amount; no assumed percentage" fact={record.fee} /><Kpi label="Ledger reconciliation" context="No second commission expense or payment">{record.accounting.state}</Kpi></KpiRow>
+      <div className={styles.lanes}>
+        <section className={styles.lane} data-tone="violet" aria-labelledby="native-provider-lane"><h3 id="native-provider-lane">Provider-owned lane</h3><FactList wide labelWidth={232} gap={12} rows={[["Earned", moneyFact(record.balances.earned)], ["Held", moneyFact(record.balances.held)], ["Disputed", moneyFact(record.balances.disputed)], ["Merchant paid", moneyFact(record.balances.merchantPaid)], ["Creator paid", moneyFact(record.balances.creatorPaid)]]} /><FinanceSourceLink record={record} kind="evidence" label="Inspect source receipt" /></section>
+        <section className={styles.lane} data-tone="subtle" aria-labelledby="native-accounting-lane"><h3 id="native-accounting-lane">Farda accounting lane</h3><FactList wide labelWidth={237} gap={12} rows={[["Accounting policy", data.accountingPolicy.state === "verified" ? data.accountingPolicy.reference ?? "Reference not supplied" : "Unknown"], ["Cash event", moneyFact(record.balances.creatorPaid)], ["Processing fee", moneyFact(record.fee)], ["QBO posting", record.accounting.qboRef ?? "Unknown"]]} /><Button aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Review matching evidence</Button></section>
+      </div>
+    </Panel>
+    <Panel large roomy title="Identity first, then accounting." subtitle="An unmatched source record stays in review. Inspect the account, payee and original evidence before requesting a match.">
+      <DataTable caption="Source identity and matching" minWidth={1248} columns={[{ label: "Record", width: "310px" }, { label: "Observed value", width: "470px" }, { label: "Match status", width: "260px" }, { label: "Action", width: "208px" }]} rows={[
+        ["Commission component", record.componentRef, record.crosswalk.state, <Button key="identity" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("identity")}>Review identity</Button>],
+        ["Order-line crosswalk", record.crosswalk.orderRef ?? "Unknown", record.crosswalk.state, <Button key="crosswalk" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("crosswalk")}>Open crosswalk</Button>],
+        ["Provider receipt", `${record.receipts.length} source receipts`, "Inspect original evidence", <Button key="receipt" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Inspect receipt</Button>],
+        ["QuickBooks entry", record.accounting.qboRef ?? "Unknown", record.accounting.state, <FinanceSourceLink key="ledger" record={record} kind="ledger" label="Open ledger source" />],
+      ]} />
+    </Panel>
+    <Panel large roomy title="Separate exception scenarios" subtitle="These are reference scenarios, not assertions about this settlement. Inspect each source observation with its provider and owner.">
+      <GateRows label="Alternative settlement exception scenarios" rows={[
+        { badge: <Badge tone="warning" width={140}>Activation pending</Badge>, title: "Creator payout activation", text: "Creator setup incomplete; this does not mean billed or paid" },
+        { badge: <Badge tone="violet" width={140}>Deadline owned</Badge>, title: "Holding / dispute review", text: "Review before the source hold expires; configurable source terms" },
+        { badge: <Badge tone="warning" width={140}>Needs recovery</Badge>, title: "Billing or payout failure", text: "Inspect native reason and receipt; never trigger a second external payout" },
+        { badge: <Badge tone="warning" width={140}>Reconcile first</Badge>, title: "Partial or post-hold refund", text: "Unverified behavior stays an exception until the source adjustment is matched" },
+      ]} />
+      {record.exceptions.length > 0 && <SettlementExceptions record={record} />}
+      <div className={styles.actionsRow}><Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 254 }} onClick={() => setDialog("activation")}>View activation exception</Button><Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 242 }} onClick={() => setDialog("exceptions")}>Review provider failure</Button><LinkButton variant="ghost" style={{ minWidth: 220 }} to="/finance/commissions">Back to commissions</LinkButton></div>
+    </Panel>
+    <FinancialEvidenceDialog record={dialog === "evidence" ? record : null} onClose={() => setDialog(null)} />
+    <CrosswalkDialog record={record} open={dialog === "identity" || dialog === "crosswalk"} onClose={() => setDialog(null)} />
+    <Dialog open={dialog === "activation"} title="Creator payout activation evidence" onClose={() => setDialog(null)}><FactList label="Activation source context" rows={[["Settlement", record.ref], ["Current financial state", stateText[record.state]], ["Provider payee", record.crosswalk.payeeRef ?? "Unknown"]]} /><SettlementExceptions record={record} only="CREATOR_ACTIVATION" /><p>Activation, billing and creator payment are independent facts. This read-only review does not activate an account or release a payout.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close activation evidence</Button></Dialog>
+    <Dialog open={dialog === "exceptions"} title="Provider exceptions and recovery" onClose={() => setDialog(null)}><SettlementExceptions record={record} only="PROVIDER_FAILURE" /><p>Keep the original provider correlation and immutable receipts. An unknown result must be reconciled by the source owner before another request; this review cannot pay or retry a payout.</p><Button variant="secondary" onClick={() => setDialog(null)}>Close recovery</Button></Dialog>
+    <SettlementMatchDialog data={data} record={record} open={dialog === "match"} onClose={() => setDialog(null)} />
+  </>;
+}
+export function SettlementExceptions({ record, only }: { record: SettlementRecord; only?: SettlementRecord["exceptions"][number]["reason"] }) {
+  const exceptions = only ? record.exceptions.filter(exception => exception.reason === only) : record.exceptions;
+  return exceptions.length ? <ul className={native.evidence}>{exceptions.map(exception => <li key={exception.ref}><Badge tone="warning">{reasonText(exception.reason)}</Badge> {exception.ref} · owner {exception.owner} · deadline {observed(exception.deadline)} · evidence {exception.evidenceRef ?? "Unknown"}</li>)}</ul> : <p>No {only === "CREATOR_ACTIVATION" ? "creator-activation " : only === "PROVIDER_FAILURE" ? "provider-failure " : ""}exception observations were returned. This does not establish provider health or completed settlement.</p>;
+}
+export function CrosswalkDialog({ record, open, onClose }: { record: SettlementRecord; open: boolean; onClose: () => void }) {
+  return <Dialog open={open} title="Payee identity and crosswalk" onClose={onClose}><FactList label="Provider payee crosswalk" rows={[["Provider", record.provider], ["Account", record.accountRef], ["Settlement", record.ref], ["Canonical creator", record.creatorRef], ["Native identity", record.nativeRef ?? "Unknown"], ["Payee", record.crosswalk.payeeRef ?? "Unknown"], ["Order", record.crosswalk.orderRef ?? "Unknown"], ["State", record.crosswalk.state], ["Evidence", record.crosswalk.evidenceRefs.join(", ") || "Unknown"], ["Observed", observed(record.crosswalk.observedAt)]]} /><p>Read-only evidence. Viewing this crosswalk does not merge an ambiguous identity or confirm a financial match.</p><Button variant="secondary" onClick={onClose}>Close crosswalk</Button></Dialog>;
+}

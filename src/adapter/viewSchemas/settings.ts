@@ -12,9 +12,9 @@
  * - These views hold no money, so the minor-unit rules do not apply; counts reject negatives and fractions.
  */
 import { z } from "zod";
-import { nativeOperationsControlSchema, operationsReviewPayload, operationsHealthPayload } from "@/creator-agent/operationsControlsSchema";
-import { nativeScheduleDetailSchema } from "@/creator-agent/scheduleCadence";
-import { savedBindingsSchema, savedRunsSchema } from "@/creator-agent/operationsView";
+import { nativeOperationsControlSchema, operationsReviewPayload, operationsHealthPayload } from "../../creator-agent/operationsControlsSchema.ts";
+import { nativeScheduleDetailSchema } from "../../creator-agent/scheduleCadence.ts";
+import { savedBindingsSchema, savedRunsSchema } from "../../creator-agent/operationsView.ts";
 
 const count = z.number().int().nonnegative();
 const tone = z.enum(["neutral", "violet", "success", "warning", "danger"]);
@@ -47,14 +47,36 @@ export const connectionsOverviewSchema = z.object({
   observedLabel: z.string(),
 });
 
-export const teamPermissionsSchema = z.object({
+const demoTeamPermissionsSchema = z.object({
   matrix: z.array(z.object({ capability: z.string(), founder: z.string(), operator: z.string(), viewer: z.string() })),
   owners: z.array(pair),
   gaps: count,
   steps: z.array(step),
   launch: z.array(pair),
   sourceRoles: z.array(z.object({ source: z.string(), providerRole: z.string() })),
-});
+}).strict();
+
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    const provenance = value.provenance;
+    if (!provenance) {
+      ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
+      return;
+    }
+    if (value.synthetic !== (provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (provenance.eventAt && Date.parse(provenance.eventAt) > Date.parse(provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeTeamPermissionsSchema = nativeRecord(demoTeamPermissionsSchema, "team-permissions-native");
+export const teamPermissionsSchema = z.union([nativeTeamPermissionsSchema, demoTeamPermissionsSchema]);
 
 const runNext = z.object({ label: z.string(), variant: z.enum(["primary", "secondary", "ghost"]), to: z.string().optional(), dialog: z.string().optional() });
 

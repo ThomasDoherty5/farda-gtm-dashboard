@@ -19,11 +19,11 @@
  * contract's `moneySchema` narrowed to non-negative whole minor units.
  */
 import { z } from "zod";
-import { actionResponseSchema, actionStateSchema, environmentSchema, executionModeSchema, moneySchema, sourceRefSchema } from "../contract";
-import { nativeApprovalViewSchema, nativeRunViewSchema } from "../../creator-agent/actions/views";
-import { safeRuntimeRunSchema } from "../../creator-agent/jobs/runtimeViews";
-import { exportPayloadSchema, readinessPayloadSchema, reference } from "../../creator-agent/actions/contract";
-import { previewPayload } from "../../creator-agent/actions/wire";
+import { actionResponseSchema, actionStateSchema, environmentSchema, executionModeSchema, moneySchema, sourceRefSchema } from "../contract.ts";
+import { nativeApprovalViewSchema, nativeRunViewSchema } from "../../creator-agent/actions/views.ts";
+import { safeRuntimeRunSchema } from "../../creator-agent/jobs/runtimeViews.ts";
+import { exportPayloadSchema, readinessPayloadSchema, reference } from "../../creator-agent/actions/contract.ts";
+import { previewPayload } from "../../creator-agent/actions/wire.ts";
 
 const nonBlank = z.string().trim().min(1);
 const iso = z.string().datetime({ offset: true });

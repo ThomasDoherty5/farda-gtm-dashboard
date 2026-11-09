@@ -29,6 +29,15 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-original-layout-finance
+          path: |
+            test-results/**/finance-original-layout-demo-*.png
+            test-results/**/finance-original-layout-demo-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report
@@ -37,7 +46,7 @@ jobs:
 
   agent-browser:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,6 +57,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Check finance control geometry before the complete browser suite
+        run: npm run test:e2e:agent -- e2e-agent/finance-reads.spec.ts --grep 'native ledger header controls remain inside their panels'
       - run: npm run test:e2e:agent
       - uses: actions/upload-artifact@v7
         if: always()
@@ -57,5 +68,7 @@ jobs:
             test-results/agent/**/*.png
             test-results/agent/**/monitor-evidence/native-browser-proof.json
             test-results/agent/**/stock-support-evidence/accessibility.json
+            test-results/agent/finance-operations/capture-manifest.json
+            test-results/agent/**/attachments/header-geometry-*.json
           if-no-files-found: ignore
           retention-days: 7

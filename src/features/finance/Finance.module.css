@@ -27,7 +27,7 @@
 .rateKpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); margin: 0; }
 .chips { display: flex; flex-wrap: wrap; gap: var(--space-16); margin: 0; padding: 0; list-style: none; }
 .chips li > span { display: flex; }
-.actionsRow { display: flex; flex-wrap: wrap; gap: var(--space-12); }
+.actionsRow { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--space-12); }
 .paymentRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-12); }
 .paymentRow p { margin: 0; color: var(--color-muted); }
 .paymentRow .spacer { flex: 0 1 420px; height: 1px; }
@@ -40,7 +40,7 @@
 .stageNote { font: var(--text-small); color: var(--color-muted); }
 .payGrid { display: grid; grid-template-columns: minmax(0, 760fr) minmax(0, 516fr); gap: var(--space-20); align-items: start; }
 .payGrid > * { min-width: 0; }
-.dark { display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-ink); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-onDark); }
+.dark { --color-muted: var(--color-onDark); display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-24); background: var(--color-ink); border: 1px solid var(--color-border); border-radius: var(--space-24); color: var(--color-onDark); }
 .dark h2 { margin: 0; font: var(--text-h2); }
 .dark p { margin: 0; }
 .dark .bodyText { font: var(--text-body); }
@@ -92,3 +92,9 @@
 .bigValue { margin: 0; font: var(--text-metric); }
 @media (max-width: 1179px) { .analytics { grid-template-columns: minmax(0, 1fr); } .kpiStack { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); } }
 @media (max-width: 767px) { .chartGap { display: none; } .badgeRow { flex-wrap: wrap; } }
+
+.lane > button, .lane > span { align-self: flex-start; }
+
+.rateLanes .lane h3 { font: var(--text-h2); }
+
+.dark button[aria-disabled="true"] { color: var(--color-ink); }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
@@ -36,6 +36,7 @@ const reasons={transfer:["low-stock","order-shortage","sample-shortage","rebalan
 const options=(items:string[])=>[{value:"",label:"Choose an option"},...items.map(value=>({value,label:value.replaceAll("-"," ")}))];
 
 export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=false}:{data:NativeStock|NativeSupport;res:ReadResponse<unknown>;portalTarget?:HTMLElement|null;hideTrigger?:boolean}){
+  const invalidId=useId();
   const stock=data.kind==="source-stock",ctx=useScope(),client=useQueryClient(),action=useAction<StockIntent>();
   const filters=stock?data.selected:{caseId:data.caseId};
   const localKey="stock-support-request:"+canonical([scopeKey(ctx),data.actorRef,data.kind,stock?null:data.caseId]);
@@ -120,8 +121,8 @@ export function StockSupportProposal({data,res,portalTarget=null,hideTrigger=fal
         <SelectField label="From" value={from} onChange={setFrom} options={options([...new Set([...(data.selected.home?[data.selected.home]:["H1","H2","H3"]),...(pending&&"from" in pending.payload?[pending.payload.from]:[])])])} />
         <SelectField label="To" value={to} onChange={setTo} options={options(["H1","H2","H3"])} /><TextField label="Units" value={units} onChange={setUnits}/></>}
         <SelectField label="Reason" value={reason} onChange={setReason} options={options(stock?reasons.transfer:reasons.support)} />
-        {invalid&&<p role="alert">{invalid}</p>}{action.error&&<ActionError error={action.error}/>}
-        <Button type="submit" loading={busy||action.isPending} disabledReason={formHold??(pending&&!absent?"Reconcile the original request first.":null)}>Save proposal for review</Button>
+        {invalid&&<p id={invalidId} role="alert">{invalid}</p>}{action.error&&<ActionError error={action.error}/>}
+        <Button type="submit" aria-describedby={invalid?invalidId:undefined} loading={busy||action.isPending} disabledReason={formHold??(pending&&!absent?"Reconcile the original request first.":null)}>Save proposal for review</Button>
         <Button variant="secondary" onClick={close}>Return to record</Button>
       </form></Dialog>
     <Dialog open={discard} title="Discard proposal edits?" onClose={()=>setDiscard(false)}><Button onClick={()=>setDiscard(false)}>Keep editing</Button><Button onClick={()=>{setDiscard(false);setOpen(false);}}>Discard edits</Button></Dialog>

@@ -9,6 +9,12 @@ import wave
 root = pathlib.Path(sys.argv[1])
 rows = [json.loads(line) for line in (root / "checkpoints.jsonl").read_text().splitlines()]
 expected = {
+    "shippingDecision-canonical-plan-preview", "returnTask-canonical-plan-preview",
+    "shippingDecision-canonical-approval-handoff", "returnTask-canonical-approval-handoff",
+    "shippingDecision-original-recovery-control", "returnTask-original-recovery-control",
+    "native-contribution-table-control", "native-contribution-chart-control",
+    "native-contribution-cohort-dialog", "native-contribution-cohort-focus-return", "native-ledger-table-headers", "native-ledger-export-focus-return", "native-payable-evidence-focus-return",
+    "native-dispatch-table-headers", "native-customer-denial-focus-return",
     "approval-exact-source-review", "canonical-receipt-navigation",
     "immutable-history-navigation", "original-outcome-recovery-control",
     "consent-table-alternative", "activation-cohort-dialog",

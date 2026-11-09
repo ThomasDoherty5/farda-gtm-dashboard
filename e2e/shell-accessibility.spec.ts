@@ -24,7 +24,7 @@ test("Menu and More retain the selected home, view and record identity", async (
     expect(new URL(page.url()).searchParams.get("home")).toBe("H2");
     const card = page.getByRole("listitem").filter({ hasText: "TEST-SH-1044" });
     await card.getByRole("link", { name: "View source record" }).click();
-    await expect(page).toHaveURL(/\/orders\/TEST-SH-1044$/);
+    await expect(page).toHaveURL(url => url.pathname === "/orders/TEST-SH-1044" && url.searchParams.get("home") === "H2");
     await expect(page.getByRole("heading", { level: 1 })).toContainText("TEST-SH-1044");
     await page.goBack();
     expect(new URL(page.url()).searchParams.get("home")).toBe("H2");

@@ -15,11 +15,11 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
-import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
-import { livePipelineSchema } from "@/creator-agent/funnelContract";
-import { agentSourcingSchema, nativeRecruitmentViewSchema } from "@/creator-agent/readViews";
-import { provenanceValueSchema } from "../contract";
-import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
+import { scorecardPreviewSchema } from "../../creator-agent/scorecardPreview.ts";
+import { livePipelineSchema } from "../../creator-agent/funnelContract.ts";
+import { agentSourcingSchema, nativeRecruitmentViewSchema } from "../../creator-agent/readViews.ts";
+import { provenanceValueSchema } from "../contract.ts";
+import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives.ts";
 
 /* ---------- recruitmentQueue ---------- */
 
@@ -47,8 +47,8 @@ const recruitmentQueue = z.object({
 
 /* ---------- invitationDraft ---------- */
 
-const invitationDraft = z.object({
-  datasetKey: text,
+const demoInvitationDraft = z.object({
+  datasetKey: z.literal("invitation-demo"),
   creators: z.array(z.object({ handle: text, suppression: z.enum(["clear", "suppressed"]), identity: z.literal("resolved") })),
   products: z.array(z.object({ name: text, listing: z.literal("unverified") })),
   program: z.object({ maxCommissionPct: percent, maxValidityDays: z.number().int().positive(), label: text }),
@@ -59,7 +59,29 @@ const invitationDraft = z.object({
   draftVersion: text,
   automateInvitations: z.literal("off"),
   sampleRequest: z.object({ id: text, handle: text, nativeDeadline: text, lastRead: text }),
-});
+}).strict();
+
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    const provenance = value.provenance;
+    if (!provenance) {
+      ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
+      return;
+    }
+    if (value.synthetic !== (provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (provenance.eventAt && Date.parse(provenance.eventAt) > Date.parse(provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeInvitationDraftSchema = nativeRecord(demoInvitationDraft, "invitation-native");
+const invitationDraft = z.union([nativeInvitationDraftSchema, demoInvitationDraft]);
 
 /* ---------- batchDetail ---------- */
 

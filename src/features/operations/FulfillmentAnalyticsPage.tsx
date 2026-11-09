@@ -1,4 +1,7 @@
+import { NativeOperationsGrant } from "./NativeOperationsGrant";
+import { operationsEvidenceLabel, operationsHref, operationsContext } from "./nativeRead";
 import { useSearchParams } from "react-router-dom";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { LinkButton } from "@/components/Button";
@@ -28,39 +31,45 @@ export function FulfillmentAnalyticsPage() {
 
 function FulfillmentOverview() {
   const [search, setSearch] = useSearchParams();
+  const { adapter } = useScope();
   const days = search.get("days") === "7" ? 7 : 14;
-  const query = useView<{ days: number }, FulfillmentAnalytics>("fulfillmentAnalytics", { days });
+  const filters: Record<string, string | number> = { days };
+  if (adapter.kind !== "demo") for (const name of ["home", "startAt", "endAt", "timezone"]) { const value = search.get(name); if (value !== null) filters[name] = value; }
+  const query = useView<Record<string, string | number>, FulfillmentAnalytics>("fulfillmentAnalytics", filters);
   const data = query.data?.data ?? null;
   return (
     <Page aria-labelledby="fulfillment-title" data-figma-source="12:808">
       <PageHeader id="fulfillment-title" title="Fulfillment overview" subtitle="The full journey from paid to delivered — at a glance.">
         <FilterButton name="Period" bare title="Choose a period" options={PERIODS} value={String(days)} width={172} onChange={(v) => { const next = new URLSearchParams(search); if (v === "14") next.delete("days"); else next.set("days", v); setSearch(next); }} />
-        <LinkButton to="/operations" style={{ minWidth: 200 }}>Open operations</LinkButton>
+        <LinkButton to={operationsHref("/operations", operationsContext(search, data))} style={{ minWidth: 200 }}>Open operations</LinkButton>
       </PageHeader>
       <ReadState res={query.data} subject="Fulfillment analytics" only={["stale"]} />
       {query.isPending && <SkeletonCard label="Loading fulfillment analytics…" />}
       {query.isError && <ViewError error={query.error} subject="Fulfillment analytics" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && !data && <EmptyState state="Empty" title="No fulfillment data yet"><p>The source responded, but no shipments fall in this period.</p></EmptyState>}
-      {data && <Body data={data} partial={query.data?.dataState === "partial"} />}
+      {query.data && !data && (query.data.dataState === "empty" && query.data.coverage.complete ? <EmptyState state="Empty" title="No fulfillment data yet"><p>The source responded, but no shipments fall in this period.</p></EmptyState> : <EmptyState state="Error" title="Fulfillment evidence unavailable" alert><p>Incomplete or stale evidence cannot establish that no shipments exist.</p></EmptyState>)}
+      {data && <NativeOperationsGrant data={data} refresh={() => { void query.refetch(); }}><Body data={data} partial={query.data?.dataState === "partial" || query.data?.dataState === "stale" || adapter.kind !== "demo" && !query.data?.coverage.complete} /></NativeOperationsGrant>}
     </Page>
   );
 }
 
 function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean }) {
+  const [search] = useSearchParams();
+  const context = operationsContext(search, data);
+  const demo = operationsEvidenceLabel(data) === "Demo data";
   const shipped = data.daily.reduce((sum, d) => sum + d.shipped, 0);
-  const best = data.daily.reduce((a, b) => (b.shipped > a.shipped ? b : a));
+  const best = data.daily.reduce<(typeof data.daily)[number] | null>((a, b) => (!a || b.shipped > a.shipped ? b : a), null);
   const prior = data.shippedPrior;
-  const change = prior.state === "known" && prior.value ? `${shipped >= prior.value ? "+" : "−"}${(Math.abs((100 * (shipped - prior.value)) / prior.value)).toFixed(1)}% vs prior ${data.periodDays} days (${prior.value})` : null;
+  const change = !partial && prior.state === "known" && prior.value ? `${shipped >= prior.value ? "+" : "−"}${(Math.abs((100 * (shipped - prior.value)) / prior.value)).toFixed(1)}% vs prior ${data.periodDays} days (${prior.value})` : null;
   const lowHomes = data.stock.filter((s) => s.available < s.threshold);
-  const summary = `Orders shipped and open backlog per day over the last ${data.periodDays} days. ${shipped} shipped in total; best day ${best.label}, ${best.shipped} orders.`;
+  const summary = `Orders shipped and open backlog per day over the last ${data.periodDays} days. ${shipped} shipped in total; ${best ? `best day ${best.label}, ${best.shipped} orders` : "no daily observations returned"}.`;
 
   return (
     <>
-      <p className={styles.meta}>{`Demo data  ·  ${data.source}  ·  Synced ${minutesAgoLabel(data.syncedMinutesAgo)}  ·  ${data.homes} shipping homes`}</p>
-      {partial && <p className={styles.meta} role="status">Some data is missing. Showing {data.periodDays} of 14 days the demo holds; the delivery mix and the prior period weren't read for this period.</p>}
+      <p className={styles.meta}>{`${operationsEvidenceLabel(data)}  ·  ${data.source}  ·  Synced ${minutesAgoLabel(data.syncedMinutesAgo)}  ·  ${data.homes} shipping homes`}</p>
+      {partial && <p className={styles.meta} role="status">Some source data is missing. This view does not establish complete coverage of the selected period.</p>}
       <div className={styles.analytics}>
         <div className={styles.kpiStack}>
-          <Kpi label="Orders shipped" context={change ?? reasonText(prior) ?? ""} testId="metric-Orders shipped">{shipped}</Kpi>
+          <Kpi label={partial ? "Observed shipped orders" : "Orders shipped"} context={partial ? "Observed daily rows only · full-period total unknown" : change ?? reasonText(prior) ?? ""} testId="metric-Orders shipped">{shipped}</Kpi>
           <Kpi label="On-time dispatch" context="Within the 2-day target" testId="metric-On-time dispatch">{figure(data.onTimePct, (p) => `${p}%`)}</Kpi>
           <Kpi label="Awaiting handoff" context={`${data.overdue} overdue · owner action required`} testId="metric-Awaiting handoff">{figure(data.awaitingHandoff, String)}</Kpi>
         </div>
@@ -85,7 +94,7 @@ function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean 
             </table></div>
           </div>
           <Divider />
-          <dl className={styles.best}><dt>Best dispatch day</dt><dd data-testid="best-day">{best.shipped} orders · {best.label.length > 2 ? best.label : `Oct ${best.label}`}</dd></dl>
+          <dl className={styles.best}><dt>Best dispatch day</dt><dd data-testid="best-day">{best ? `${best.shipped} orders · ${operationsEvidenceLabel(data) === "Demo data" && best.label.length <= 2 ? `Oct ${best.label}` : best.label}` : "Unknown · no daily observations"}</dd></dl>
         </Panel>
       </div>
       <HalfColumns>
@@ -105,17 +114,17 @@ function Body({ data, partial }: { data: FulfillmentAnalytics; partial: boolean 
             })}
           </ul>
           {lowHomes.map((s) => <p key={s.home} className={styles.warn}>{homeLabel(s.home)} · {s.available} available · below {s.threshold}-unit threshold</p>)}
-          <LinkButton variant="secondary" to="/inventory" style={{ minWidth: 180, alignSelf: "flex-start" }}>View inventory</LinkButton>
+          <LinkButton variant="secondary" to={operationsHref("/inventory", context)} style={{ minWidth: 180, alignSelf: "flex-start" }}>View inventory</LinkButton>
         </Panel>
         <Panel title="Delivery experience" subtitle={`Share of delivered orders (%) · last ${data.periodDays} days`} roomy testId="delivery">
           <div className={styles.deliveryMetric}><p data-testid="metric-Average transit">{figure(data.avgTransitDays, (d) => `${d} days`)}</p><p>average transit</p></div>
           {data.transit ? (
             <BarRows label="Share of delivered orders by transit time" max={60} gap={20} rows={data.transit.map((t) => ({ label: t.label, value: t.share, warn: t.warn }))} />
           ) : (
-            <p className={styles.meta}>N/A. The demo holds no delivery mix for this period.</p>
+            <p className={styles.meta}>N/A. No delivery mix was supplied for this period.</p>
           )}
           <p className={styles.dangerText}>{data.exceptions.lost + data.exceptions.returned} active exceptions · {data.exceptions.lost} lost, {data.exceptions.returned} returned</p>
-          <LinkButton to="/shipments/TEST-SP-0093/exceptions/TEST-EVT-129" style={{ minWidth: 206, alignSelf: "flex-start" }}>Review exceptions</LinkButton>
+          <LinkButton to={operationsHref(demo ? "/shipments/TEST-SP-0093/exceptions/TEST-EVT-129" : "/operations?view=shipping", context)} style={{ minWidth: 206, alignSelf: "flex-start" }}>Review exceptions</LinkButton>
         </Panel>
       </HalfColumns>
     </>

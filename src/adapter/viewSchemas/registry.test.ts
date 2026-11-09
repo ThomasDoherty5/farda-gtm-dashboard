@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { fulfillmentProposalSchema, fulfillmentPreviewPayload } from "@/creator-agent/fulfillmentDomain/contract";
+import { exportViewSchemas } from "@/creator-agent/actions/exportViews";
 import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
 import { SCHEMA_VERSION, type ReadRequest } from "../contract";
@@ -24,7 +26,8 @@ import { shippingHubViewSchemas } from "./shippingHub";
 import {controlSections,nativeOperationsControlSchema} from "@/creator-agent/operationsControlsSchema";
 import { settingsActionSchemas, settingsViewSchemas } from "./settings";
 
-const AREAS = [analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
+const nativeOnlyViews={...exportViewSchemas,fulfillmentProposal:fulfillmentProposalSchema};
+const AREAS = [nativeOnlyViews,analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
 let n = 0;
 const read = (viewKey: string, filters: unknown = {}): ReadRequest<unknown> => ({
@@ -42,7 +45,7 @@ describe("the view schema registry", () => {
     expect(total).toBeGreaterThan(40);
   });
   it("holds every area's action payload schemas exactly once", () => {
-    const total = [approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas].reduce((sum, a) => sum + Object.keys(a).length, 0);
+    const total = [{previewFulfillmentDecision:{payload:fulfillmentPreviewPayload}}, approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas].reduce((sum, a) => sum + Object.keys(a).length, 0);
     expect(Object.keys(actionPayloadSchemas)).toHaveLength(total);
   });
   it("refuses a key that two areas both claim, instead of ignoring one of them", () => {
@@ -135,7 +138,11 @@ const WITH_RECORD: Record<string, unknown[]> = {
 
 describe("every view the demo can serve passes its own schema through the live adapter", () => {
   const live = createLiveAdapter("sandbox", { transport: served(), retryDelayMs: 0 });
-  const keys = Object.keys(viewSchemas);
+  const keys = Object.keys(viewSchemas).filter(key=>!(key in nativeOnlyViews));
+
+  it.each(Object.keys(nativeOnlyViews))("%s has no demo export or invented recovery receipt",async viewKey=>{
+    await expect(createDemoAdapter().readView({...read(viewKey),requestedScope:{...scope,environment:"demo"}})).rejects.toMatchObject({body:{code:"INTEGRATION_PENDING"}});
+  });
 
   it("reads each registered view that needs no filters, and none is rejected for its shape", async () => {
     let read_ok = 0;

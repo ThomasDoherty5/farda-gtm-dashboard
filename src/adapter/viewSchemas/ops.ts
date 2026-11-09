@@ -16,13 +16,14 @@
  * Money is the contract's `moneySchema` narrowed to non-negative minor units: every money field in this area is a price,
  * a cost or a refund amount, and a negative one is a server bug, not a credit.
  *
- * `datasetKey` is the in-band demo label. It is a plain non-empty string, not a literal, so live data can carry its own key.
- * A live adapter in sandbox or production should refuse a key that names a demo dataset; that is an adapter decision.
+ * Demo and native records have distinct dataset discriminants. Native evidence separately declares whether its source is synthetic.
  */
 import { z } from "zod";
-import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema";
-import { moneySchema, provenanceValueSchema } from "../contract";
-import { receiptBackedResponse } from "./approvals";
+import { approvalRefSchema } from "../../creator-agent/approvals/contract.ts";
+import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema,nativeOperationsShipmentSchema } from "./nativeOperations.ts";
+import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
+import { moneySchema, provenanceValueSchema } from "../contract.ts";
+import { receiptBackedResponse } from "./approvals.ts";
 
 const HOMES = ["H1", "H2", "H3"] as const;
 export const homeSchema = z.enum(HOMES);
@@ -34,7 +35,7 @@ export const nonNegativeMoneySchema = moneySchema.extend({
 
 const count = z.number().int().nonnegative();
 const nonBlank = z.string().trim().min(1);
-const datasetKey = z.string().min(1);
+const datasetKey = z.literal("operations-demo");
 const iso = z.string().datetime({ offset: true });
 
 const pvCount = provenanceValueSchema(count);
@@ -141,7 +142,7 @@ export const shippingExceptionSchema = z.object({
 const transferRequest = z.object({ key: nonBlank, from: homeSchema, to: homeSchema, units: z.number().int().positive(), reason: nonBlank, state: z.string() });
 
 export const inventoryOverviewSchema = z.object({
-  datasetKey,
+  datasetKey: z.literal("inventory-demo"),
   version: nonBlank,
   sku: nonBlank,
   syncedMinutesAgo: count.nullable(),
@@ -196,7 +197,7 @@ const supportCase = z
 
 export const supportWorkspaceSchema = z
   .object({
-    datasetKey,
+    datasetKey: z.literal("support-demo"),
     caseId: nonBlank,
     case: supportCase,
     queue: z.array(supportCase),
@@ -301,17 +302,61 @@ export const opsHealthSchema = z.object({
   integrity: z.object({ shipments: count, duplicatesIgnored: count, outOfOrder: count, stockDecrements: count }),
 });
 
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+  validUntil:z.string().datetime({offset:true}).optional(), version:z.string().min(1).optional(),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ ...nativeOperationsExtensions, datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    const provenance = value.provenance;
+    if (!provenance) {
+      ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
+      return;
+    }
+    if (value.synthetic !== (provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (provenance.eventAt && Date.parse(provenance.eventAt) > Date.parse(provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeOpsReadViewSchemas: Record<string, z.ZodTypeAny> = {
+  operationsOverview: nativeRecord(operationsOverviewSchema.innerType().extend({queue:z.object({rows:z.array(queueRow.extend({sourceFacts:nativeQueueSourceSchema})),total:count}),stock:z.array(nativeStockSummarySchema)}), "operations-native").superRefine((v, ctx) => {
+    if (v.queue.rows.length > v.queue.total) ctx.addIssue({ code: "custom", path: ["queue", "total"], message: "Queue total is smaller than the rows returned" });
+  }),
+  orderDetail: nativeRecord(orderDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {
+    if (v.kind === "sample") for (const field of ["total", "refunded"] as const)
+      if (v[field].state === "known") ctx.addIssue({ code: "custom", path: [field], message: "A sample has no revenue or refund" });
+  }),
+  shippingException: nativeRecord(shippingExceptionSchema.extend({proposalTargetRef:approvalRefSchema.nullable().default(null)}), "operations-native"),
+  returnDetail: nativeRecord(returnDetailSchema.innerType().extend({proposalTargetRef:approvalRefSchema.nullable().default(null),completionVerified:z.boolean().default(false)}), "operations-native").superRefine((v, ctx) => {
+    if ((v.state === "resolved") !== (v.resolved !== null)) ctx.addIssue({ code: "custom", path: ["resolved"], message: "A resolved return carries its receipt chain; an active one does not" });
+    if (v.selected.disposition === "restock" && !v.inspection.resellable) ctx.addIssue({ code: "custom", path: ["selected", "disposition"], message: "Restock needs a resellable inspection" });
+    if(v.inspection.units>v.units || v.resolved && (v.resolved.returnedUnits>v.units || v.resolved.restockedUnits>v.resolved.returnedUnits || v.resolved.restockedUnits>v.inspection.units || v.resolved.restockedUnits>0&&!v.inspection.resellable))ctx.addIssue({code:"custom",message:"Return quantities require consistent received and inspected source evidence."});
+  }),
+  fulfillmentAnalytics: nativeRecord(fulfillmentAnalyticsSchema, "operations-native"),
+  operationsShipping: nativeRecord(operationsShippingSchema.extend({shipments:z.array(nativeOperationsShipmentSchema)}), "operations-native").superRefine((v,ctx)=>{
+    if(new Set(v.shipments.map(row=>row.ref)).size!==v.shipments.length)ctx.addIssue({code:"custom",path:["shipments"],message:"Canonical shipment references must be unique."});
+  }),
+  orderCustomer: nativeRecord(orderCustomerSchema.innerType(), "operations-native").refine(d => d.revealed === null || (d.access.state === "allowed" && d.audit.length > 0), {
+    message: "Details are never shown without allowed access and an audit entry",
+  }),
+  opsHealth: nativeRecord(opsHealthSchema, "operations-native"),
+};
+
 export const opsViewSchemas: Record<string, z.ZodTypeAny> = {
-  operationsOverview: operationsOverviewSchema,
-  orderDetail: orderDetailSchema,
-  shippingException: shippingExceptionSchema,
+  operationsOverview: z.union([operationsOverviewSchema, nativeOpsReadViewSchemas.operationsOverview!]),
+  orderDetail: z.union([orderDetailSchema, nativeOpsReadViewSchemas.orderDetail!]),
+  shippingException: z.union([shippingExceptionSchema, nativeOpsReadViewSchemas.shippingException!]),
   inventoryOverview: z.union([nativeInventorySchema,inventoryOverviewSchema]),
   supportWorkspace: z.union([nativeSupportSchema,supportWorkspaceSchema]),
-  returnDetail: returnDetailSchema,
-  fulfillmentAnalytics: fulfillmentAnalyticsSchema,
-  operationsShipping: operationsShippingSchema,
-  orderCustomer: orderCustomerSchema,
-  opsHealth: opsHealthSchema,
+  returnDetail: z.union([returnDetailSchema, nativeOpsReadViewSchemas.returnDetail!]),
+  fulfillmentAnalytics: z.union([fulfillmentAnalyticsSchema, nativeOpsReadViewSchemas.fulfillmentAnalytics!]),
+  operationsShipping: z.union([operationsShippingSchema, nativeOpsReadViewSchemas.operationsShipping!]),
+  orderCustomer: z.union([orderCustomerSchema, nativeOpsReadViewSchemas.orderCustomer!]),
+  opsHealth: z.union([opsHealthSchema, nativeOpsReadViewSchemas.opsHealth!]),
 };
 
 /* ---------- actions ---------- */

@@ -1,3 +1,5 @@
+import { useScope } from "@/adapter/scope";
+import { NativePayablePage } from "./NativePayablePage";
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
@@ -16,6 +18,11 @@ import styles from "./Finance.module.css";
  * not a new acquisition offer. Approval, execution, settlement, posting and reconciliation are separate steps, and nothing here pays.
  */
 export function PayablePage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoPayablePage /> : <NativePayablePage />;
+}
+
+function DemoPayablePage() {
   const { payableId = "" } = useParams();
   const query = useView<{ payableId: string }, PayableDetail>("payableDetail", { payableId });
   const [source, setSource] = useState<string | null>(null);
@@ -43,7 +50,7 @@ export function PayablePage() {
             <Panel large roomy title="Approval, execution, and reconciliation are separate." testId="lifecycle">
               <ol className={styles.stages} aria-label="Payment lifecycle">
                 {PAYABLE_STAGES.map((st, i) => (
-                  <li key={st.key} className={styles.stage} aria-current={i === idx ? "step" : undefined} data-done={i < idx}>
+                  <li key={st.key} className={styles.stage} aria-current={i === idx ? "step" : undefined} data-done={i < idx} style={st.key === "requested" && i < idx ? { background: "var(--color-subtle)" } : undefined}>
                     <p className={styles.stageTitle}>{st.title}<span className="visually-hidden"> · {i < idx ? "done" : i === idx ? "current step" : "not yet"}</span></p>
                     <p className={styles.stageNote}>{st.note}</p>
                   </li>

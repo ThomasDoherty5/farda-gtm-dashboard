@@ -5,7 +5,7 @@ import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { AdapterError } from "@/adapter/errors";
 import type { FardaAdapter } from "@/adapter/adapter";
 import { fulfillmentDemo, orderDemo, returnDemo } from "@/fixtures/operations";
-import { renderRoute } from "@/test/renderWithAdapter";
+import { renderRoute, scriptedAdapter } from "@/test/renderWithAdapter";
 
 // jsdom has no modal dialogs, so give <dialog> the open state a browser would.
 beforeAll(() => {
@@ -70,9 +70,28 @@ describe("operations overview", () => {
   });
 
   it("shows an empty queue as a known zero, not a failure", async () => {
+    const demo = createDemoAdapter();
+    // The generic demo omits coverage. This case explicitly models a complete, empty synthetic queue.
+    const adapter = scriptedAdapter(async request => {
+      const response = await demo.readView(request);
+      return request.viewKey === "operationsOverview" ? { ...response,
+        coverage: { expectedCount: 0, observedCount: 0, missingCount: 0, complete: true, reasonCodes: [] },
+      } : response;
+    });
+    await open("/operations?scenario=empty", adapter);
+    expect(await screen.findByTestId("metric-To ship")).toHaveTextContent("0");
+    const queue=screen.getByTestId("queue-panel");
+    expect(queue).toHaveTextContent("No eligible dispatch rows were returned for all homes.");
+    expect(queue).toHaveTextContent("The source reports no eligible records in this complete scope.");
+    expect(queue).not.toHaveTextContent(/incomplete|not a known zero/);
+  });
+
+  it("does not claim a complete empty queue when the demo leaves coverage unknown", async () => {
     await open("/operations?scenario=empty");
     expect(await screen.findByTestId("metric-To ship")).toHaveTextContent("0");
-    expect(screen.getByText(/known zero from the warehouse mirror, not a missing read/)).toBeInTheDocument();
+    const queue = screen.getByTestId("queue-panel");
+    expect(queue).toHaveTextContent("Source coverage is incomplete; absence of rows is not a known zero.");
+    expect(queue).not.toHaveTextContent("The source reports no eligible records in this complete scope.");
   });
 
   it("shows a recoverable error when the mirror is unreachable", async () => {
@@ -283,9 +302,13 @@ describe("fulfillment analytics", () => {
   it("says a comparison is not available instead of showing zero", async () => {
     await open("/analytics/fulfillment?days=7");
     expect(await screen.findByTestId("metric-Orders shipped")).toHaveTextContent("177");
-    expect(screen.getByText("The previous period is not in the demo data.")).toBeInTheDocument();
-    expect(screen.getByText(/N\/A\. The demo holds no delivery mix/)).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent(/Showing 7 of 14 days/);
+    const shipped=metric("Orders shipped").closest("dl");
+    expect(shipped).not.toBeNull();
+    expect(shipped).toHaveTextContent("Observed shipped orders");
+    expect(shipped).toHaveTextContent("Observed daily rows only · full-period total unknown");
+    expect(shipped).not.toHaveTextContent(/% vs prior/);
+    expect(screen.getByText("N/A. No delivery mix was supplied for this period.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/does not establish complete coverage of the selected period/);
   });
 
   it("marks the home below its threshold", async () => {

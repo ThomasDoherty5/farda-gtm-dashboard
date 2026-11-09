@@ -48,7 +48,13 @@ function PageReads<T extends Native>({view,filters,kind,render,before}:{view:str
     {!query.isPending && !query.isError && !latest && <p role="status">No matching scoped monitoring record is available. Provider coverage is unknown.</p>}
   </>;
 }
-function SourceStamp({data}:{data:Native}){return <p className={a.small} role="status">{sourceLabels[data.sourceState]} · Source as of {stamp(data.sourceAsOf)} · Saved ledger read {stamp(data.observedAt)}.{!data.membershipComplete&&" Intake coverage is partial."}</p>;}
+function SourceStamp({data}:{data:Native}){
+  const text=`${sourceLabels[data.sourceState]} · Source as of ${stamp(data.sourceAsOf)} · Saved ledger read ${stamp(data.observedAt)}.${!data.membershipComplete?" Intake coverage is partial.":""}`;
+  // Chromium exposes role=status as AT-SPI statusbar. Give that object the
+  // same visible message as its name, so direct status inspection and caret
+  // navigation do not announce an unnamed "statusbar" with blank contents.
+  return <p className={a.small} role="status" aria-label={text} aria-atomic="true">{text}</p>;
+}
 const options=(pairs:[string,string][])=>pairs.map(([value,label])=>({value,label}));
 const sources=options([["all","All intake sources"],["social-cat","Social Cat"],["tiktok-affiliate","TikTok affiliate"]]);
 function useFilters(){
