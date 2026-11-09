@@ -15,7 +15,7 @@ const base = z.object({ entityRefs: z.array(z.never()).max(0), expectedVersion: 
 export const nativeCommandSchema = z.discriminatedUnion("operation", [
   base.extend({ operation: z.literal("requestApproval"), actionKind: z.enum(["requestApproval", "reconcileApproval"]), runRef: z.null(), payload: z.object({}).strict() }),
   base.extend({ operation: z.literal("dispatchApprovedAction"), actionKind: z.literal("dispatchApprovedAction"), runRef: z.null(), payload: z.object({ itemRefs: z.array(ref).min(1).max(100).refine(v => new Set(v).size === v.length) }).strict() }),
-  base.extend({ operation: z.literal("controlRun"), actionKind: z.enum(["pauseRun", "cancelUnsent", "resumeRun"]), runRef: ref, payload: z.object({ control: z.enum(["pause", "cancel", "resume"]) }).strict() }),
+  base.extend({ operation: z.literal("controlRun"), actionKind: z.enum(["pauseRun", "cancelUnsent", "resumeRun"]), runRef: ref, payload: z.object({ control: z.enum(["pause", "cancel", "resume"]), itemRefs: z.array(ref).min(1).max(100).refine(v => new Set(v).size === v.length).optional() }).strict().refine(v => v.itemRefs === undefined || v.control === "cancel", "Only cancellation accepts a finite item selection.") }),
   base.extend({ operation: z.literal("reconcileRun"), actionKind: z.literal("lookup"), runRef: ref, payload: z.object({ request: z.literal("lookup") }).strict() }),
 ]);
 export type NativeCommand = z.infer<typeof nativeCommandSchema>;

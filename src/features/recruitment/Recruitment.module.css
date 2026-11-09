@@ -65,3 +65,11 @@
 .itemsScroll { overflow-x: auto; }
 .itemsScroll:focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; }
 .status { margin: 0; padding: var(--space-12) var(--space-16); background: var(--color-violetSoft); border-radius: var(--space-16); font: var(--text-small); }
+
+/* Source-backed invitation editor retains the original dark message panel. */
+.invitationMessage label { color: var(--color-onDark); }
+.invitationMessage input, .invitationMessage select, .invitationMessage textarea { color: var(--color-ink); }
+.exactTerms { display: grid; gap: var(--space-12); margin: 0; }
+.exactTerms div { min-width: 0; }
+.exactTerms dt { font: var(--text-label); }
+.exactTerms dd { margin: var(--space-8) 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }

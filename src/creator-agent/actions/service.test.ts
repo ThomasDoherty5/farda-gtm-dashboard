@@ -127,6 +127,29 @@ describe("strict shared orchestration with actual J04 and existing SQLite runner
     await expect(w.service.execute({ ...pause, actionKind: "cancelUnsent", payload: { control: "cancel" } }, principal)).rejects.toThrow("DISPATCH_IDEMPOTENCY_KEY_REUSED");
     expect(w.calls()).toBe(0);
   });
+  it("maps scoped opaque selected cancellation to the original run and recovers the exact request",async()=>{
+    const w=setup(2),{dispatchInput}=await w.approved(),queued=await w.service.execute(dispatchInput,principal);
+    const view=await w.service.readRun(queued.runRef!,principal),selected=view.items[0]!.itemRef;
+    const command={...w.base,operation:"controlRun",actionKind:"cancelUnsent",approvalRef:queued.approvalRef,manifestRef:queued.manifestRef,runRef:queued.runRef,
+      expectedVersion:queued.payloadVersion,idempotencyKey:"synthetic-selected-cancel",payload:{control:"cancel",itemRefs:[selected]}};
+    const first=await w.service.execute(command,principal),again=await w.service.execute({...command,requestId:"synthetic-replay"},principal);
+    expect(again).toEqual({...first,requestId:"synthetic-replay"});
+    expect(w.dispatch.read(queued.runRef!).run.counts.cancelled).toBe(1);expect(w.dispatch.read(queued.runRef!).run.control).toBe("active");
+    await expect(w.service.execute({...command,payload:{control:"cancel",itemRefs:[view.items[1]!.itemRef]}},principal)).rejects.toThrow("DISPATCH_IDEMPOTENCY_KEY_REUSED");
+    w.humans.get(principal.principalRef)!.active=false;
+    await expect(w.service.execute(command,principal)).rejects.toMatchObject({status:403,executionCertainty:"applied"});
+    expect(w.calls()).toBe(0);
+  });
+  it("rejects aliased duplicates, foreign selections and item selection on resume",async()=>{
+    const w=setup(2),{dispatchInput}=await w.approved(),queued=await w.service.execute(dispatchInput,principal);
+    const view=await w.service.readRun(queued.runRef!,principal);
+    const command={...w.base,operation:"controlRun",actionKind:"cancelUnsent",approvalRef:queued.approvalRef,manifestRef:queued.manifestRef,runRef:queued.runRef,
+      expectedVersion:queued.payloadVersion,idempotencyKey:"synthetic-invalid-selected",payload:{control:"cancel",itemRefs:["synthetic-foreign"]}};
+    await expect(w.service.execute(command,principal)).rejects.toThrow("EXACT_RUN_ITEM_REQUIRED");
+    await expect(w.service.execute({...command,payload:{control:"cancel",itemRefs:[view.items[0]!.itemRef,w.dispatch.read(queued.runRef!).items[0]!.intent.approval.itemRef]}},principal)).rejects.toThrow("INVALID_ITEM_SELECTION");
+    expect(foundationActionSchema.safeParse({...command,actionKind:"resumeRun",payload:{control:"resume",itemRefs:[view.items[0]!.itemRef]}}).success).toBe(false);
+    expect(w.dispatch.read(queued.runRef!).run.counts.cancelled).toBe(0);
+  });
   it("cannot forge a scoped signed version or select an unrelated manifest item", async () => {
     const w = setup(), { dispatchInput } = await w.approved();
     const forged = dispatchInput.expectedVersion.slice(0, -1) + (dispatchInput.expectedVersion.endsWith("0") ? "1" : "0");

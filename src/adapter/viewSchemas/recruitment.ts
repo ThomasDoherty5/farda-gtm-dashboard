@@ -15,6 +15,7 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
+import { nativeInvitationViewSchema, nativeRecruitmentBatchSchema } from "../../creator-agent/recruitment/contract.ts";
 import { scorecardPreviewSchema } from "../../creator-agent/scorecardPreview.ts";
 import { livePipelineSchema } from "../../creator-agent/funnelContract.ts";
 import { agentSourcingSchema, nativeRecruitmentViewSchema } from "../../creator-agent/readViews.ts";
@@ -81,7 +82,7 @@ function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(sch
 }
 
 export const nativeInvitationDraftSchema = nativeRecord(demoInvitationDraft, "invitation-native");
-const invitationDraft = z.union([nativeInvitationDraftSchema, demoInvitationDraft]);
+const invitationDraft = z.union([nativeInvitationViewSchema, nativeInvitationDraftSchema, demoInvitationDraft]);
 
 /* ---------- batchDetail ---------- */
 
@@ -208,7 +209,7 @@ const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchem
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   recruitmentQueue: z.union([nativeRecruitmentViewSchema, recruitmentQueue]),
   invitationDraft,
-  batchDetail: z.union([scorecardPreviewSchema, batchDetail]),
+  batchDetail: z.union([nativeRecruitmentBatchSchema, scorecardPreviewSchema, batchDetail]),
   pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),
   pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,

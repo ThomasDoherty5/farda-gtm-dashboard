@@ -18,7 +18,10 @@ export const foundationActionSchema = z.discriminatedUnion("operation", [
   base.extend({ operation: z.literal("dispatchApprovedAction"), actionKind: z.literal("dispatchApprovedAction"), approvalRef: reference, manifestRef: reference,
     payload: z.object({ itemRefs: z.array(reference).min(1).max(100).refine(v => new Set(v).size === v.length).optional() }).strict() }),
   base.extend({ operation: z.literal("controlRun"), actionKind: z.enum(["pauseRun", "cancelUnsent", "resumeRun"]), runRef: reference,
-    payload: z.object({ control: z.enum(["pause", "cancel", "resume"]) }).strict() }),
+    payload: z.discriminatedUnion("control",[
+      z.object({control:z.literal("cancel"),itemRefs:z.array(reference).min(1).max(100).refine(v=>new Set(v).size===v.length).optional()}).strict(),
+      z.object({control:z.literal("pause")}).strict(),z.object({control:z.literal("resume")}).strict()
+    ]) }),
   base.extend({ operation: z.literal("reconcileRun"), actionKind: z.enum(["lookup", "recordConfirmedSent", "freshAttempt"]), runRef: reference,
     payload: z.object({ request: z.enum(["lookup", "recordConfirmedSent", "freshAttempt"]) }).strict() }),
 ]);

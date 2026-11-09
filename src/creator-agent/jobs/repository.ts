@@ -381,6 +381,27 @@ export class JobRepository {
       return this.getRun(runId);
     });
   }
+  /** Cancel a finite selection in the existing run, never in-flight or uncertain work. */
+  cancelUnsentItems(runId:string,itemKeys:readonly string[],assertCurrent?:()=>boolean|void,persistControl?:()=>void){
+    if(!itemKeys.length||itemKeys.length>100||new Set(itemKeys).size!==itemKeys.length)throw new JobConflict("INVALID_ITEM_SELECTION");
+    return this.tx(()=>{
+      if(assertCurrent?.()===false)return this.getRun(runId);
+      const run=this.getRun(runId);
+      if(run.definition.handler!=="dispatch-approved.v1"||run.definition.mode!=="executeApproved")throw new JobConflict("APPROVED_DISPATCH_REQUIRED");
+      const rows=itemKeys.map(key=>{
+        const item=run.items.find(i=>i.itemKey===key);if(!item)throw new JobConflict("ITEM_NOT_IN_RUN");
+        const row=this.itemRow(item.itemId);
+        if(!["queued","held","retryWait"].includes(String(row.state))||row.dispatch_started||row.lease_token||row.result)throw new JobConflict("ITEM_NOT_UNSENT");
+        if(this.db.prepare("SELECT 1 FROM job_run_items j JOIN job_runs r ON r.run_id=j.run_id WHERE j.item_id=? AND j.run_id!=? AND r.control!='cancelled' LIMIT 1").get(item.itemId,runId))throw new JobConflict("ITEM_SHARED_WITH_OTHER_RUN");
+        return row;
+      });
+      for(const row of rows){
+        this.db.prepare("UPDATE job_items SET state='cancelled',reason_code='SELECTED_UNSENT_CANCELLED',updated_at=? WHERE item_id=?").run(this.now(),String(row.item_id));
+        this.log(runId,String(row.item_id),"cancelled",{reason:"SELECTED_UNSENT_CANCELLED"});
+      }
+      this.log(runId,null,"cancel-selected-unsent",{count:rows.length});persistControl?.();return this.getRun(runId);
+    });
+  }
   controlRun(runId: string, command: "pause" | "resume" | "cancel", assertCurrent?:()=>boolean|void,persistControl?:()=>void) { if (!["pause", "resume", "cancel"].includes(command)) throw new JobConflict("INVALID_RUN_CONTROL");
     return this.tx(() => { if(assertCurrent?.()===false)return this.getRun(runId); const run = this.db.prepare("SELECT * FROM job_runs WHERE run_id=?").get(runId); if (!run) throw new JobConflict("JOB_RUN_NOT_FOUND"); if (run.control === "cancelled" && command !== "cancel") throw new JobConflict("RUN_CANCELLED");
       this.db.prepare("UPDATE job_runs SET control=? WHERE run_id=?").run(command === "pause" ? "paused" : command === "cancel" ? "cancelled" : "active", runId);
