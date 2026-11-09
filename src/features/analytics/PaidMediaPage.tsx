@@ -1,3 +1,9 @@
+import type { NativePaidMedia as NativePaidData } from "@/creator-agent/analytics/views";
+import { NativePaidMedia } from "./NativePaidMedia";
+import { nativePeriod } from "./NativeAnalyticsEvidence";
+import { useReportingPeriod } from "./reportingPeriod";
+import { useScope } from "@/adapter/scope";
+import { useSourceLease } from "@/adapter/useSourceLease";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { PaidMediaFilters } from "@/adapter/demoAnalytics";
@@ -14,32 +20,41 @@ const RIGHTS = [
   { value: "all", label: "all states" },
   { value: "cleared", label: "cleared" },
   { value: "expiring", label: "expiring" },
+  { value: "expired", label: "expired" },
   { value: "notGranted", label: "not granted" },
   { value: "unknown", label: "unknown" },
 ];
 const allowed = (options: { value: string }[], raw: string | null) => (options.some((o) => o.value === raw) ? (raw as string) : "all");
-const RIGHTS_TONE: Record<RightsState, BadgeTone> = { cleared: "success", expiring: "warning", notGranted: "danger", unknown: "neutral" };
+const RIGHTS_TONE: Record<RightsState, BadgeTone> = { cleared: "success", expiring: "warning", expired: "danger", notGranted: "danger", unknown: "neutral" };
 
 /** Paid media (Figma source 30:349, owner THO-293, CTRL-204 to CTRL-206). Media spend is never counted as creator content fees. */
 export function PaidMediaPage() {
   const [search, setSearch] = useSearchParams();
-  const filters: PaidMediaFilters = { rights: allowed(RIGHTS, search.get("rights")) as PaidMediaFilters["rights"], platform: allowed(PLATFORMS, search.get("platform")) as PaidMediaFilters["platform"] };
-  const query = useView<PaidMediaFilters, PaidMediaData>("paidMedia", filters, null, { keepPrevious: true });
+  const { adapter } = useScope();
+  const filters: PaidMediaFilters = { rights: (adapter.kind === "demo" ? allowed(RIGHTS, search.get("rights")) : search.get("rights") ?? "all") as PaidMediaFilters["rights"], platform: (adapter.kind === "demo" ? allowed(PLATFORMS, search.get("platform")) : search.get("platform") ?? "all") as PaidMediaFilters["platform"] };
+  const period = useReportingPeriod(), cursor = adapter.kind === "demo" ? null : search.get("asset-cursor");
+  const query = useView<PaidMediaFilters, PaidMediaData | NativePaidData>("paidMedia", filters, period, { keepPrevious: true, ...(adapter.kind === "demo" ? {} : { page: { cursor, limit: 25 } }) });
+  const value = query.data?.data, expired = useSourceLease(value?.datasetKey === "analytics-native" ? value.provenance.validUntil : undefined);
+  const visible = query.isError || expired ? null : value;
+  const native = visible?.datasetKey === "analytics-native" ? visible : null;
+  const legacy = visible && visible.datasetKey !== "analytics-native" ? visible : null;
+  const assetPage = (nextCursor: string | null) => setSearch(prev => { const next = new URLSearchParams(prev); if (nextCursor) next.set("asset-cursor", nextCursor); else next.delete("asset-cursor"); return next; });
+  const clearFilters = () => setSearch(prev => { const next = new URLSearchParams(prev); for (const key of ["rights", "platform", "asset-cursor"]) next.delete(key); return next; });
   const [dialog, setDialog] = useState<"period" | "source" | null>(null);
   const setFilter = (key: "rights" | "platform", value: string) =>
-    setSearch((prev) => { const next = new URLSearchParams(prev); if (value === "all") next.delete(key); else next.set(key, value); return next; });
+    setSearch((prev) => { const next = new URLSearchParams(prev); next.delete("asset-cursor"); if (value === "all") next.delete(key); else next.set(key, value); return next; });
   return (
     <section aria-labelledby="paid-media-title" data-figma-source="30:349" className={styles.page}>
       <PageHeader id="paid-media-title" title="See what earns the click." subtitle="Paid media · spend, attention, conversion signals and permission to use each asset.">
-        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{adapter.kind === "demo" ? "Last 30 days" : "Reporting period"}</Button>
         <Button style={{ minWidth: 192 }} aria-haspopup="dialog" onClick={() => setDialog("source")}>Open ad source</Button>
       </PageHeader>
       <ViewShell query={query} subject="Paid media" emptyTitle="No paid media data" emptyBody="The source responded, but nothing matches this period.">
-        {(data) => <Body data={data} filters={filters} setFilter={setFilter} clear={() => setSearch({})} />}
+        {(data) => data.datasetKey === "analytics-native" ? <NativePaidMedia data={data} filters={filters} setFilter={setFilter} clear={clearFilters} next={() => assetPage(data.pagination.nextCursor)} first={() => assetPage(null)} paged={Boolean(cursor)} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body data={data} filters={filters} setFilter={setFilter} clear={clearFilters} />}
       </ViewShell>
-      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={query.data?.data?.periodLabel ?? null} />
-      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }, ...(query.data?.data?.channels ?? []).map(c => ({ label: c.label + " attribution window", value: c.attributionWindow ? c.attributionWindow.label + " · " + c.attributionWindow.sourceRef : "Unknown · not supplied by the source" }))]}>
-        <p>{query.data?.data?.datasetKey === "paid-media-demo" ? "These are illustrative platform reports." : "Each reporting window comes from its platform report."}</p>
+      <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={native ? nativePeriod(native) : legacy?.periodLabel ?? null} />
+      <HandoffDialog open={dialog === "source"} onClose={() => setDialog(null)} title="Ad source" rows={[{ label: "Sources", value: "Meta Ads Manager and TikTok Ads Manager" }, { label: "Link", value: "No verified source link in this build" }, ...(legacy?.channels ?? []).map(c => ({ label: c.label + " attribution window", value: c.attributionWindow ? c.attributionWindow.label + " · " + c.attributionWindow.sourceRef : "Unknown · not supplied by the source" }))]}>
+        <p>{legacy?.datasetKey === "paid-media-demo" ? "These are illustrative platform reports." : "Each reporting window comes from its platform report."}</p>
       </HandoffDialog>
     </section>
   );
@@ -49,9 +64,17 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
   const [asOf, setAsOf] = useState(false);
   const [rights, setRights] = useState<PaidMediaData["assets"][number] | null>(null);
   const [source, setSource] = useState<PaidMediaData["assets"][number] | null>(null);
-  const spend = data.channels.length && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
+  // A total is known only when every input is: served data must cover both platforms, and its media spend (with GMV Max) is the server's.
+  const observed = data.datasetKey === "paid-media-observed";
+  const allPlatforms = !observed || data.channels.length === 2;
+  const served = data.measures?.find((x) => x.key === "paidMediaSpend");
+  const spend = observed ? (served?.state === "known" ? served.value : null)
+    : data.channels.length && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
   const impressions = data.channels.reduce((s, c) => s + c.impressions, 0);
   const clicks = data.channels.reduce((s, c) => s + c.clicks, 0);
+  const totalsKnown = data.channels.length > 0 && allPlatforms;
+  // CPC pairs spend and clicks from the same standard campaigns (GMV Max is excluded from both).
+  const standardSpend = totalsKnown && data.channels.every(c => c.spend) ? data.channels.reduce((sum, c) => sum + c.spend!.minorUnits, 0) : null;
   const acquisition = spend === null || !data.creatorSampleEconomics ? null : spend + data.creatorSampleEconomics.minorUnits;
   const lead = [...data.channels].sort((a, b) => (b.spend?.minorUnits ?? -1) - (a.spend?.minorUnits ?? -1))[0];
   const ranked = [...data.assets].sort((a, b) => b.clicks / b.impressions - a.clicks / a.impressions);
@@ -64,9 +87,9 @@ function Body({ data, filters, setFilter, clear }: { data: PaidMediaData; filter
       </Notice>
       <KpiGrid>
         <KpiCard label="Media spend" context={data.channels.map((c) => `${c.label} ${m(c.spend?.minorUnits)}`).join(" + ")} testId="metric-media-spend">{m(spend)}</KpiCard>
-        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{data.channels.length ? compact(impressions) : "Unknown"}</KpiCard>
-        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{data.channels.length ? compact(clicks) : "Unknown"} / {pctText(clicks, impressions)}</KpiCard>
-        <KpiCard label="Blended CPC" context={`${m(spend)} ÷ ${count(clicks)} clicks`} testId="metric-cpc">{spend !== null && clicks > 0 ? dollars(spend / 100 / clicks) : "N/A"}</KpiCard>
+        <KpiCard label="Impressions" context={data.channels.map((c) => `${compact(c.impressions)} ${c.label}`).join(" + ")} testId="metric-impressions">{totalsKnown ? compact(impressions) : "Unknown"}</KpiCard>
+        <KpiCard label="Clicks / CTR" context={`${count(clicks)} clicks ÷ ${count(impressions)} impressions`} testId="metric-ctr">{totalsKnown ? `${compact(clicks)} / ${pctText(clicks, impressions)}` : "Unknown / N/A"}</KpiCard>
+        <KpiCard label="Blended CPC" context={`${m(standardSpend)} ÷ ${totalsKnown ? count(clicks) : "unknown"} clicks`} testId="metric-cpc">{standardSpend !== null && clicks > 0 ? dollars(standardSpend / 100 / clicks) : "N/A"}</KpiCard>
       </KpiGrid>
       <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
         <Card labelledBy="spend-title" className={styles.card20}>

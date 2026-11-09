@@ -108,6 +108,7 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `shippingException` | `shipmentId`, `exceptionId` | ShippingExceptionDetail | `operations/ShippingExceptionPage` | `demoOps` | native + historical demo + conflict | C-07. The record's `shipmentRef` and `exceptionId` must both match. `recordShippingDecision` held for a reviewer. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/operationsReads/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `OPERATIONS_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `socialCatBoard` | `owner` | SocialCatBoardData | `creators/SocialCatPage` | `demoCreators` | proposed | Uses `keepPrevious`. Demo refuses unknown owners. |
 | `socialCatDashboard` | `network` | SocialCatDashboardData | `creators/SocialCatPage` | `demoCreators` | proposed + conflict | C-05. Uses `keepPrevious`. |
+| `sourcingPlan` | none (empty object, strict) | SourcingPlan (`kind: "agent-sourcing-plan"`) | `acquisition/LivePlanView` | `demoAdapter` (unconfigured) | native read-only projection | THO-287 plan detail on a live adapter. J19 source injected server-side; unconfigured, unavailable, stale and partial states are explicit. |
 | `supportWorkspace` | `caseId`, `scenario?` | SupportWorkspace | `support/SupportPage` | `demoOps` | proposed + conflict | C-06. |
 | `teamPermissions` | none | TeamData | `settings/TeamPage` | `demoSettings` | native + historical demo | The live team screen renders `operationsControl` (section `team`); this read model is what the demo screen reads. Native: no capabilities are carried, so nothing on it can grant a role or assign an owner; keys outside `teamPermissionsSchema` are dropped and a source-supplied capability is refused. Native (THO-367): served by the creator agent at `/v1/read` through `src/creator-agent/teamInvitationReads/`; no `scenario`; with no configured source it answers `503 INTEGRATION_PENDING` (reason `TEAM_PERMISSIONS_SOURCE_UNCONFIGURED`) and no data. Sandbox, unconfigured source; not integration-verified. |
 | `operationsControl` | `section`, optional `targetRef`, reviewer-only `proposalRequestKey`, bounded `q`/`platform`/`mine`, reports-only `jobRef` | NativeOperationsControl | `settings/NativeOperationsControls` | native only | native | Supplemental source-owned team/run/report/capability/reconciliation detail. Existing paged lists and schedule drafts remain authoritative; no duplicate executor or ledger. |
@@ -234,6 +235,13 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `CAPABILITY_UNVERIFIED` | capabilityHold | never raised |
 | `FORBIDDEN` | forbidden | `demoAdapter`, `demoAnalytics`, `demoApprovals`, `demoMonitor`, `demoScorecards`, `useView` |
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
+| `SOURCING_SOURCE_UNCONFIGURED` | unavailable | No qualified sourcing-plan source is bound. |
+| `SOURCING_SOURCE_UNAVAILABLE` | unavailable | The bound sourcing-plan source could not be read. |
+| `SOURCING_SOURCE_INVALID` | unavailable | The source returned an invalid or mismatched sourcing snapshot. |
+| `SOURCING_SOURCE_DENIED` | forbidden | Current source permission was refused; clear protected plan data. |
+| `SOURCING_SOURCE_CHANGED` | conflict | The source basis changed before publication. |
+| `SOURCING_PUBLICATION_EXPIRED` | conflict | The sourcing read grant expired before publication. |
+| `SOURCING_REQUEST_INVALID` | validation | The sourcing-plan request is outside the supported contract. |
 | `CREATOR_IDENTITY_CHANGED` | conflict | An existing offer cannot be rebound to a different creator. |
 | `IDEMPOTENCY_KEY_REUSED` | conflict | The signed-in reviewer retried a command key with different input. |
 | `INVALID_INPUT` | validation | The service rejected an invalid request or schema before writing. |
@@ -251,6 +259,9 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `RECEIPTS_MISSING` | capabilityHold | A source movement lacks its qualifying receipt. |
 | `CASE_HANDOFF_HELD` | capabilityHold | The source case does not currently permit human handoff. |
 | `LIFECYCLE_SOURCE_UNCONFIGURED` | unavailable | No trusted lifecycle source is configured. |
+| `ANALYTICS_SOURCE_UNCONFIGURED` | unavailable | A required THO-293 analytics source (orders or ad platforms) has no injected reader. |
+| `ANALYTICS_SOURCE_UNAVAILABLE` | unavailable | A required analytics source reader failed or answered nothing; retryable. |
+| `ANALYTICS_SOURCE_INVALID` | unavailable | An analytics source answer failed schema, period or time validation; nothing is shown as zero. |
 | `LIFECYCLE_SOURCE_UNAVAILABLE` | unavailable | The configured lifecycle source could not be read. |
 | `LIFECYCLE_SOURCE_INVALID` | unavailable | Source/schema/provenance validation failed. |
 | `LIFECYCLE_SOURCE_CONFLICT` | conflict | Source facts conflict under their version or observation basis. |

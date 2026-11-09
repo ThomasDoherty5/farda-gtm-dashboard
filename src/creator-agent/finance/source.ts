@@ -18,7 +18,7 @@ export type FinancePrincipal = { principalRef: string; role: "reader" | "reviewe
 export type FinanceReadBinding = { scope: OperationsScope; principal: FinancePrincipal; request: FinanceSourceRequest };
 export type FinanceSourceReader = {
   read(scope: OperationsScope, request: FinanceSourceRequest, options: { signal: AbortSignal; principal: FinancePrincipal }): Promise<unknown | null>;
-  /** Synchronously verify the exact principal, scope, request, source version and permission version against current authority.
+  /** Synchronously verify the exact principal, scope, request, source version, permission version and independent readAccess grant against current authority.
    * Returning a promise or any non-void value is a refusal. Coarse roles never authorize customer disclosure. */
   assertCurrent(snapshot: FinanceSnapshot, binding: FinanceReadBinding, now: number): void;
 };

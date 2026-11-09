@@ -11,7 +11,7 @@ import { DispatchGuard } from "../jobs/dispatchGuard.ts";
 import type { DispatchHandler, DispatchIntent } from "../jobs/dispatchSchema.ts";
 import { createRecruitmentService } from "./service.ts";
 import { recruitmentSourceFixture } from "./fixtures.testkit.ts";
-import { recruitmentBatchSourceSchema } from "./source.ts";
+import { recruitmentBatchSourceSchema, RecruitmentError } from "./source.ts";
 import { InvitationDraftRepository } from "./drafts.ts";
 import { invitationFiltersSchema, unknownRecruitmentModels, type InvitationSave } from "./contract.ts";
 import { recruitmentInvitationOwnerFixture } from "./ownerFixture.testkit.ts";
@@ -111,6 +111,13 @@ describe("native recruitment views reuse exact scoped offers and canonical runs"
     w.a.humans.get(principal.principalRef)!.active = true;
     w.source.state.afterRead = () => { w.source.state.denied = true; };
     await expect(w.service.readInvitation(w.filters, principal)).rejects.toMatchObject({ status: 403 });
+  });
+  it.each(["read","assert"])("normalizes private typed owner errors from %s without exposing its raw version",async stage=>{
+    const w=setup(),reject=()=>{throw new RecruitmentError("PRIVATE_OWNER_CODE",409,"notApplied","private-source-identity");};
+    if(stage==="read")w.options.source.read=async()=>reject();else w.options.source.assertCurrent=reject;
+    const error=await w.service.readInvitation(w.filters,principal).catch((caught:unknown)=>caught);
+    expect(error).toMatchObject({code:"RECRUITMENT_SOURCE_CHANGED",status:409,currentVersion:undefined});
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_OWNER_CODE|private-source-identity/);
   });
   it.each(["false", "object", "promise", "rejectedPromise"])("rejects non-synchronous-void source fences: %s", async kind => {
     const w = setup(); w.options.source.assertCurrent = () => (kind === "false" ? false : kind === "object" ? {} : kind === "promise" ? Promise.resolve() : Promise.reject(new Error("synthetic denial"))) as never;
@@ -347,6 +354,12 @@ describe("source-owned sample and provenance boundaries",()=>{
 });
 
 describe("immutable invitation-only draft save and original recovery",()=>{
+  it.each(["async","nonvoid"])("rejects a %s caller fence before any draft write",async kind=>{
+    const w=setup(),request=await draftRequest(w),assertCaller=kind==="async"?async()=>{}:()=>"not-a-fence";
+    await expect(w.service.saveInvitation(request,principal,"bad-caller-fence",assertCaller)).rejects.toMatchObject({code:"RECRUITMENT_CALLER_DENIED",status:403,executionCertainty:"notApplied"});
+    expect(w.o.store.database.prepare("SELECT count(*) n FROM recruitment_invitation_drafts").get()?.n).toBe(0);
+    expect(w.o.store.database.prepare("SELECT count(*) n FROM recruitment_invitation_saves").get()?.n).toBe(0);
+  });
   it("saves one exact scoped revision and returns the original receipt after an offer/source revision changes",async()=>{
     const w=setup(),request=await draftRequest(w),saved=await w.service.saveInvitation(request,principal,"synthetic-save-draft");saved.assertCurrent();
     expect(saved.data).toMatchObject({scope,expectedVersion:null,requestKey:"synthetic-save-draft",sourceEffect:"none",resource:{version:"invitation-v1",terms:request.terms}});

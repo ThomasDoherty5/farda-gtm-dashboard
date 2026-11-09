@@ -5,7 +5,7 @@ import {ApprovalRepository,stableApprovalDraft} from "./approvals/repository.ts"
 import {createOperations} from "./operations.ts";
 import {createProviderHealth} from "./providerHealth.ts";
 import {createOperationsControls} from "./operationsControls.ts";
-import {controlSourceFixture,controlTestJob} from "./operationsControlsFixtures.ts";
+import {controlSourceFixture,controlSourceProvider,controlTestJob} from "./operationsControlsFixtures.ts";
 import {createOperationsControlAuthority,operationsAuthoritySnapshotSchema,OperationsAuthorityError,type OperationsAuthoritySnapshot,type OperationsControlAuthoritySource,type OperationsAuthorityTarget} from "./operationsControlAuthority.ts";
 import {createOperationsControlBridge,operationsIntentPayloadHash,operationsIntentItemHash,operationsCanonicalActionKinds,type OperationsCanonicalSource,type OperationsControlBridge} from "./operationsControlBridge.ts";
 import {DispatchGuard} from "./jobs/dispatchGuard.ts";
@@ -102,7 +102,7 @@ describe("operations controls named source and canonical approval integration",(
     await expect(w.controls.previewCanonical({...input,payload:{...input.payload,reason:"Different task reason"}},principal.principalRef,"reviewer")).rejects.toMatchObject({code:"IDEMPOTENCY_CONFLICT"});expect(w.state.effects).toBe(0);
   });
   it("does not promote a legacy local review into canonical authority",async()=>{
-    const w=setup(),input=await w.request(),oldService=createOperationsControls({db:w.a.db,scope,secret,ledger:w.ops.ledger,jobs:w.ops.jobs,health:w.health,source:{read:async()=>structuredClone(w.snapshot)},now:()=>w.a.state.now});
+    const w=setup(),input=await w.request(),oldService=createOperationsControls({db:w.a.db,scope,secret,ledger:w.ops.ledger,jobs:w.ops.jobs,health:w.health,source:controlSourceProvider(()=>w.snapshot,()=>w.a.state.now),now:()=>w.a.state.now});
     const oldView=await oldService.read({section:"runs"},principal.principalRef,"reviewer"),legacy={...input,expectedVersion:oldView.version,operation:"requestApproval",actionKind:"proposeOperationsReview",payload:{kind:input.payload.kind,targetRef:input.payload.targetRef,reason:input.payload.reason}};
     const old=await oldService.propose(legacy,principal.principalRef,"reviewer");expect(w.controls.canonicalIntents.read(old.actionRef)).toBeNull();
     await expect(w.controls.previewCanonical(input,principal.principalRef,"reviewer")).rejects.toMatchObject({code:"IDEMPOTENCY_CONFLICT"});expect(w.a.db.prepare("SELECT COUNT(*) n FROM approval_manifests").get()?.n).toBe(0);

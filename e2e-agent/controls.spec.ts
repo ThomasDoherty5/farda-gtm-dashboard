@@ -6,8 +6,7 @@ import {unknownBusinessEligibility,unknownSourceFreshness,type ExpectedBinding,t
 import {healthBindingDigest,type HealthObservation} from "../src/creator-agent/providerHealth.ts";
 import {createAgentServer} from "../src/creator-agent/server.ts";
 import {createOperationsControlHttpFixture} from "../src/creator-agent/operationsControlHttp.testkit.ts";
-import {OperationsControlError} from "../src/creator-agent/operationsControls.ts";
-import {controlSourceFixture,controlTestJob,controlTestTime} from "../src/creator-agent/operationsControlsFixtures.ts";
+import {controlSourceFixture,controlSourceProvider,controlTestJob,controlTestTime} from "../src/creator-agent/operationsControlsFixtures.ts";
 import {SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN,SYNTHETIC_SCOPE} from "../src/creator-agent/testFixtures.ts";
 const scope={workspaceId:SYNTHETIC_SCOPE.workspaceId,accountId:SYNTHETIC_SCOPE.accountIds[0]!,environment:"sandbox" as const};
 let app:ReturnType<typeof createAgentServer>,source=controlSourceFixture(scope),denied=false,probeCalls=0,denyDuringProbe=false;
@@ -18,14 +17,14 @@ const healthBinding:ExpectedBinding={...scope,provider:"notion",providerAccountI
 const healthReceipt:VerificationReceipt={receiptRef:"receipt:synthetic",binding:healthBinding,outcome:"Ready",checkedAt:controlTestTime,expiresAt:"2026-11-06T12:10:00Z",verifiedScopes:["read"],connectionHealth:"Authenticated",sourceFreshness:unknownSourceFreshness(),businessEligibility:unknownBusinessEligibility(),reasonCodes:[]};
 const healthObservation:HealthObservation={bindingDigest:healthBindingDigest(healthBinding),checkedAt:controlTestTime,status:"observed",permission:"allowed",session:"authenticated",roleScopePlan:"verified",coverage:"complete",sourceLastSuccess:controlTestTime,sourceUpdatedAt:controlTestTime,mirrorUpdatedAt:null,quotaState:"not_applicable",quotaRemaining:null,deadlineState:"not_applicable",deadline:null};
 // Playwright requires a destructured fixture argument before testInfo.
-// eslint-disable-next-line no-empty-pattern
-test.beforeEach(async({},info)=>{
+test.beforeEach(async({page},info)=>{
  const healthCase=info.title.startsWith("health observation");probeCalls=0;denyDuringProbe=false;
+ if(healthCase)await page.clock.setFixedTime(new Date(controlTestTime));
  source=controlSourceFixture(scope);denied=false;canonical=undefined;
  if(!healthCase){canonical=createOperationsControlHttpFixture({}, {repair:true});app=canonical.app;source=canonical.snapshot;renew();}
  else{app=createAgentServer({databasePath:":memory:",...scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,
   operations:{now:()=>Date.parse(controlTestTime),resolveReceipt:()=>healthReceipt,resolveJobActivation:r=>({approved:true,decisionRef:r.decisionRef,definitionHash:r.definitionHash})},
-   providerHealth:{now:()=>Date.parse(controlTestTime),activationRef:"activation:synthetic",catalog:healthCase?[{binding:healthBinding,ownerRef:"owner:synthetic",documentationRef:"docs:synthetic",documentationCheckedAt:controlTestTime,maxAgeSeconds:60,freshnessBasis:"successful_read",probe:async()=>{probeCalls++;if(denyDuringProbe)denied=true;return structuredClone(healthObservation);}}]:[]},operationsControlSource:{read:async()=>{if(denied)throw new OperationsControlError("SOURCE_SCOPE_DENIED",403);return structuredClone(source);}}});
+   providerHealth:{now:()=>Date.parse(controlTestTime),activationRef:"activation:synthetic",catalog:healthCase?[{binding:healthBinding,ownerRef:"owner:synthetic",documentationRef:"docs:synthetic",documentationCheckedAt:controlTestTime,maxAgeSeconds:60,freshnessBasis:"successful_read",probe:async()=>{probeCalls++;if(denyDuringProbe)denied=true;return structuredClone(healthObservation);}}]:[]},operationsControlSource:controlSourceProvider(()=>source,()=>Date.parse(controlTestTime),()=>!denied)});
  app.operations.jobs.register(controlTestJob,0);}
  if(healthCase){const id=capabilityIdForBinding(healthBinding);app.operations.ledger.register({binding:healthBinding,ownerRef:"owner:synthetic",costBasis:{state:"unknown",reasonCode:"UNKNOWN"}},0);await app.operations.ledger.verify(id,healthReceipt.receiptRef,1);}
  await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});

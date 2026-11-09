@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentServer, type AgentServerOptions } from "./server";
-import { lifecycleSourceFixture, lifecycleTestScope, lifecycleTestTime } from "./lifecycle/fixtures.testkit";
+import { lifecycleSourceFixture, lifecycleTestSource, lifecycleTestScope, lifecycleTestTime } from "./lifecycle/fixtures.testkit";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
@@ -56,8 +56,8 @@ describe("authenticated controls and lifecycle integration", () => {
 
   it("rejects foreign scope and reader request-key lookups before source access", async () => {
     let reads = 0;
-    const { read } = await start({ lifecycleSource: async () => { reads++; return lifecycleSourceFixture(); } });
-    expect((await read("emailFlow", { flow: "early-access" }, false, { ...requestedScope, accountIds: ["foreign-account"] })).status).toBe(400);
+    const { read } = await start({ lifecycleSource: lifecycleTestSource(async () => { reads++; return lifecycleSourceFixture(); }) });
+    expect((await read("emailFlow", { flow: "early-access" }, false, { ...requestedScope, accountIds: ["foreign-account"] })).status).toBe(403);
     expect((await read("emailFlow", { flow: "early-access", draftRequestKey: "private-key" })).status).toBe(403);
     expect((await read("operationsControl", { section: "runs", proposalRequestKey: "private-key" })).status).toBe(403);
     expect(reads).toBe(0);
@@ -65,7 +65,7 @@ describe("authenticated controls and lifecycle integration", () => {
 
   it("persists each allowlisted flow once and returns the exact immutable request receipt without changing the source", async () => {
     const source = lifecycleSourceFixture(), original = structuredClone(source);
-    const { read, call } = await start({ lifecycleSource: async () => source });
+    const { read, call } = await start({ lifecycleSource: lifecycleTestSource(async () => source) });
     for (const flow of ["early-access", "abandoned-checkout", "review-request"]) {
       const before = await read("emailFlow", { flow }, true);
       expect(before.status).toBe(200);
@@ -85,7 +85,7 @@ describe("authenticated controls and lifecycle integration", () => {
   });
 
   it("rejects forged activation/gates and unsupported resources without routing a flow draft into schedules", async () => {
-    const { read, call } = await start({ lifecycleSource: async () => lifecycleSourceFixture() });
+    const { read, call } = await start({ lifecycleSource: lifecycleTestSource(async () => lifecycleSourceFixture()) });
     const before = await read("emailFlow", { flow: "early-access" }, true);
     const request = saveRequest("early-access", before.body.data.sourceConfig, before.body.data.draftVersion, "forged-flow");
     for (const extra of [{ enabled: true }, { recheckConsentBeforeSend: false }, { recipient: "synthetic-recipient" }]) {

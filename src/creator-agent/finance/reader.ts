@@ -85,6 +85,8 @@ export function createFinanceReader(options: Options) {
       if (signal?.aborted) throw new FinanceError("REQUEST_CANCELLED", 499);
       const timestamp = now();
       if (!Number.isFinite(timestamp)) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["SOURCE_TIME_UNVERIFIED"]);
+      if (Date.parse(snapshot.readAccess.observedAt) > timestamp) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["SOURCE_TIME_UNVERIFIED"]);
+      if (Date.parse(snapshot.readAccess.validUntil) <= timestamp) throw new FinanceError("SOURCE_AUTHORITY_DENIED", 403, ["FINANCE_READ_ACCESS_EXPIRED"]);
       try {
         if (!source || typeof source.assertCurrent !== "function") throw new Error("Missing current authority");
         assertSynchronousVoid(() => source.assertCurrent(snapshot, binding, timestamp));
@@ -93,6 +95,10 @@ export function createFinanceReader(options: Options) {
         if (error instanceof FinanceError && error.status === 409) throw new FinanceError("SOURCE_VERSION_CHANGED", 409);
         throw new FinanceError("SOURCE_AUTHORITY_UNVERIFIED", 503);
       }
+      const publicationTime = now();
+      if (!Number.isFinite(publicationTime)) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["SOURCE_TIME_UNVERIFIED"]);
+      if (Date.parse(snapshot.readAccess.observedAt) > publicationTime || Date.parse(snapshot.readAccess.validUntil) <= publicationTime)
+        throw new FinanceError("SOURCE_AUTHORITY_DENIED", 403, ["FINANCE_READ_ACCESS_EXPIRED"]);
     };
   }
 
@@ -106,6 +112,9 @@ export function createFinanceReader(options: Options) {
     const s = await observe(viewKey, f, binding, signal);
     const assertCurrent = fence(s, binding, signal);
     assertCurrent();
+    // Only the independently qualified snapshot grant can authorize browser retention.
+    const projectedRecord = s.record !== null && typeof s.record === "object" && !Array.isArray(s.record)
+      ? { ...s.record, readAccess: { validUntil: s.readAccess.validUntil } } : s.record;
     const capabilities = intents[viewKey].map(c => role === "reviewer" ? { ...c, reasonCodes: [...c.reasonCodes] } : { actionKind: c.actionKind, state: "denied" as const, reasonCodes: ["REVIEWER_REQUIRED"] });
     if (s.record === null) {
       // The source's own statement that nothing exists here. For a named record that is not found; for a list it is empty.
@@ -114,7 +123,7 @@ export function createFinanceReader(options: Options) {
         throw new FinanceError("RECORD_NOT_FOUND", 404);
       }
     } else {
-      const checked = nativeFinanceViewSchemas[viewKey]!.safeParse(s.record);
+      const checked = nativeFinanceViewSchemas[viewKey]!.safeParse(projectedRecord);
       if (!checked.success) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_RECORD_INVALID"]);
       const field = identity[viewKey];
       if (field && (checked.data as Record<string, unknown>)[field] !== f[field]) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_RECORD_ADDRESS_MISMATCH"]);
@@ -124,7 +133,7 @@ export function createFinanceReader(options: Options) {
     const partial = s.coverage.state === "partial";
     const { expectedCount, observedCount } = s.coverage;
     const reasonCodes = [...new Set([...(stale ? ["FINANCE_SOURCE_STALE"] : []), ...s.coverage.reasonCodes])];
-    const data = s.record === null ? null : nativeFinanceViewSchemas[viewKey]!.parse(s.record);
+    const data = s.record === null ? null : nativeFinanceViewSchemas[viewKey]!.parse(projectedRecord);
     if (data && (data as { provenance: { observedAt: string } }).provenance.observedAt !== s.observedAt) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_PROVENANCE_MISMATCH"]);
     const finalFence = () => {
       assertCurrent();

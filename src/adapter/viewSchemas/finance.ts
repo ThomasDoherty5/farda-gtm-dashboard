@@ -183,13 +183,14 @@ export const reportManifestSchema = z.object({
   rows: z.array(z.object({ report: z.string(), period: z.string(), basis: z.string(), source: z.string(), expectedFiles: z.array(z.string()), state: z.literal("Not generated"), generatedAt: z.null(), checksum: z.null(), policyRef: cpaPolicy })),
 });
 
+export const financeReadAccessSchema = z.object({ validUntil: z.string().datetime({ offset: true }) }).strict();
 /** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
 const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
   observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
   sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
 }).strict();
 function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
-  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance, readAccess: financeReadAccessSchema }).strict().superRefine((value, ctx) => {
     const provenance = value.provenance;
     if (!provenance) {
       ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });

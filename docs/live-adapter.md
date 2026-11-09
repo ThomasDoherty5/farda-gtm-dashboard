@@ -1,8 +1,8 @@
 # Live adapter: the front-end half
 
-`src/adapter/liveAdapter.ts` implements `FardaAdapter` over an injected `Transport` (`src/adapter/transport.ts`). **Stage: fixture-complete, front-end half only.** No backend exists to talk to. Nothing here is integration-verified or production-authorized, and the tests prove the front end against test doubles, not against a service.
+`src/adapter/liveAdapter.ts` implements `FardaAdapter` over an injected `Transport` (`src/adapter/transport.ts`). The original front-end tests use test doubles. The authenticated service now exists in `src/creator-agent/server.ts`; its separate HTTP, SQLite, source-family and browser evidence is mapped in [adapter-conformance.md](adapter-conformance.md). Release evidence determines each family's verified stage. An implemented route does not establish a connected provider or production authorization.
 
-The adapter proposes no backend URL, path, header or sign-in flow. The only configuration is the reserved `VITE_FARDA_ADAPTER_BASE_URL`, which `selectAdapter` passes untouched to a host-supplied transport factory. With no factory the default transport sends nothing and every call answers `INTEGRATION_PENDING`, so nothing changes on screen until a real transport is plugged in.
+The adapter keeps provider credentials outside the frontend. `VITE_FARDA_ADAPTER_BASE_URL` selects the configured HTTP transport; the paths and session envelope are recorded in [adapter-decisions.md](adapter-decisions.md). Without a configured transport, reads remain `INTEGRATION_PENDING` and never fall back to demo data.
 
 ## The seam
 

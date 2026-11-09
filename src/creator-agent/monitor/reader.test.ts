@@ -7,9 +7,9 @@ import { createOperations } from "../operations.ts";
 import { digest } from "../config.ts";
 import { evt, fixtureRef } from "../funnelFixtures.testkit.ts";
 import type { FunnelEvent } from "../funnelContract.ts";
-import { createMonitorReader } from "./reader.ts";
+import { createMonitorReader,MonitorError } from "./reader.ts";
 import { nativeContentSchema,nativePostSchema,nativeWatchlistSchema,nativeRunSchema,monitorSnapshotSchema } from "./contract.ts";
-import { addMonitorReviewEvidence,intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
+import { addMonitorReviewEvidence,monitorTestSource,intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
 let now=monitorTime,store:AgentStore,ops:ReturnType<typeof createOperations>,funnel:FunnelRepository,secret:string,snapshot=monitorFixture(),members=intakeFixture();
 const proofs=new Map<string,string>();
 beforeEach(()=>{now=monitorTime;snapshot=monitorFixture();members=intakeFixture();proofs.clear();store=new AgentStore(":memory:",scope);
@@ -17,8 +17,34 @@ beforeEach(()=>{now=monitorTime;snapshot=monitorFixture();members=intakeFixture(
   funnel=new FunnelRepository(store.database,scope,{resolve:async(_scope,_envelope,ref)=>proofs.has(ref)?{...scope,eventHash:proofs.get(ref)!}:null},()=>new Date(now));});
 afterEach(()=>{ops.close();store.close();});
 const open=(connected=true)=>createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},
-  ...(connected?{source:async()=>structuredClone(snapshot)}:{}),now:()=>now});
+  ...(connected?{source:monitorTestSource(()=>snapshot,()=>now)}:{}),now:()=>now});
 const page={limit:100,cursor:null};
+describe("captured monitor source authority",()=>{
+  const using=(source:ReturnType<typeof monitorTestSource>)=>createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},source,now:()=>now});
+  it.each(["denied","revision"] as const)("refuses a captured fresh packet after awaited %s",async(change)=>{
+    let denied=false;const source=monitorTestSource(()=>{if(denied)throw new MonitorError("PRIVATE_OWNER_TOKEN",403);return snapshot;},()=>now),read=source.read;
+    source.read=async(binding,signal)=>{const packet=await read(binding,signal);await Promise.resolve();if(change==="denied")denied=true;else snapshot.version="new-source-revision";return packet;};
+    await expect(using(source).read("contentMonitor",{},page)).rejects.toMatchObject({code:change==="denied"?"MONITOR_SOURCE_DENIED":"MONITOR_SOURCE_CHANGED",status:change==="denied"?403:409});
+  });
+  it.each(["read","assert"] as const)("normalizes private typed %s failures",async(stage)=>{
+    for(const status of [403,409]){const source=monitorTestSource(()=>snapshot,()=>now),error=Object.assign(new MonitorError("PRIVATE_OWNER_TOKEN",status),{currentVersion:"private-owner-version"});
+      if(stage==="read")source.read=async()=>{throw error;};else source.assertCurrent=()=>{throw error;};
+      try{await using(source).read("contentMonitor",{},page);throw new Error("Expected source rejection");}catch(e){expect(e).toMatchObject({code:status===403?"MONITOR_SOURCE_DENIED":"MONITOR_SOURCE_CHANGED",status});expect(e).not.toHaveProperty("currentVersion");expect(String(e)).not.toContain("PRIVATE_OWNER_TOKEN");}}
+  });
+  it("preserves a separate access deadline, rejects expired publication and refuses incomplete absence",async()=>{
+    const source=monitorTestSource(()=>snapshot,()=>now),reader=using(source),result=await reader.read("contentMonitor",{},page);
+    expect(result.data?.readAccess?.validUntil).toBe(new Date(now+15*60_000).toISOString());now+=15*60_000;
+    expect(()=>result.assertCurrent()).toThrow("MONITOR_SOURCE_ACCESS_EXPIRED");
+    for(const state of ["partial","stale"]){snapshot=monitorFixture();snapshot.runs=[];snapshot.coverage=state==="partial"?"partial":"complete";if(state==="stale")now=monitorTime+91*60_000;
+      await expect(reader.read("hourlyRun",{runId:"missing-run"},page)).rejects.toMatchObject({code:"MONITOR_SOURCE_COVERAGE_UNVERIFIED",status:503});}
+    now=monitorTime;snapshot=monitorFixture();snapshot.runs=[];expect((await reader.read("hourlyRun",{runId:"missing-run"},page)).data).toBeNull();
+  });
+  it.each(["missing","async","nonvoid"] as const)("refuses %s current fences",async(kind)=>{
+    const source=monitorTestSource(()=>snapshot,()=>now);
+    Object.assign(source,{assertCurrent:kind==="missing"?undefined:kind==="async"?async()=>undefined:()=>true});
+    await expect(using(source).read("contentMonitor",{},page)).rejects.toBeInstanceOf(MonitorError);
+  });
+});
 function event(id:string,type:FunnelEvent["eventType"],over:Partial<FunnelEvent>={}):FunnelEvent{
   const ref=(name:string,sourceId:string)=>({...fixtureRef(name,sourceId),accountId:scope.accountId});
   return evt(id,type,"fixture-opportunity",5,{creatorRef:ref("notion","canonical-a"),campaignCohortRef:ref("notion","campaign-a"),
@@ -141,7 +167,7 @@ describe("source-backed monitoring views",()=>{
     const cutoff=Date.parse(snapshot.observedAt)+90*60_000;
     now=cutoff-1;
     const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,
-      source:async()=>{now=cutoff;return structuredClone(snapshot);}});
+      source:monitorTestSource(()=>snapshot,()=>now,()=>{now=cutoff;})});
     const result=await reader.read("watchlist",{},page);
     expect(result.stale).toBe(true);
     expect(nativeWatchlistSchema.parse(result.data)).toMatchObject({sourceState:"expired",active:0});
@@ -154,9 +180,7 @@ describe("source-backed monitoring views",()=>{
     expect(detail.publicationHistory.map(h=>h.state)).toEqual(["deleted"]);
   });
   it("anchors an initial snapshot after awaited source verification and never extends an existing cursor lease",async()=>{
-    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,source:async()=>{
-      now+=100;snapshot.observedAt=new Date(now).toISOString();return structuredClone(snapshot);
-    }});
+    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,source:monitorTestSource(()=>snapshot,()=>now,()=>{now+=100;snapshot.observedAt=new Date(now).toISOString();})});
     const first=await reader.read("contentMonitor",{}, {limit:1,cursor:null});
     expect(Date.parse(nativeContentSchema.parse(first.data).observedAt)).toBe(now);
     now+=15*60_000;
@@ -293,7 +317,7 @@ describe("permitted handle search",()=>{
     let data=nativeContentSchema.parse((await open().read("contentMonitor",{q:"test.a"},page)).data);
     expect(data).toMatchObject({total:0,sourceState:"current",views:null});
     snapshot=monitorFixture();
-    const unavailable=createMonitorReader({db:store.database,scope,secret,funnel,now:()=>now,source:async()=>structuredClone(snapshot),
+    const unavailable=createMonitorReader({db:store.database,scope,secret,funnel,now:()=>now,source:monitorTestSource(()=>snapshot,()=>now),
       intake:{monitorMembership:()=>({...members,records:members.records.map(r=>({...r,sourceStatus:"unavailable" as const}))})}});
     expect(nativeContentSchema.parse((await unavailable.read("contentMonitor",{q:"test.a"},page)).data).total).toBe(0);
     snapshot.coverage="partial";

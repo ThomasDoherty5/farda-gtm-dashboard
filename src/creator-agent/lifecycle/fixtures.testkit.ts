@@ -1,6 +1,6 @@
 import type { OperationsScope } from "../operations.ts";
 import { flowKeys, type FlowCatalog } from "./contract.ts";
-import type { LifecycleSnapshot } from "./source.ts";
+import { LifecycleError, type LifecycleSourceReader, type LifecycleSnapshot } from "./source.ts";
 
 /** Fictional server-injected evidence only. No real provider or recipient is contacted. */
 export const lifecycleTestScope: OperationsScope = { workspaceId: "synthetic-lifecycle-workspace", accountId: "synthetic-lifecycle-account", environment: "sandbox" };
@@ -35,4 +35,23 @@ export function lifecycleSourceFixture(scope: OperationsScope = lifecycleTestSco
     activation: { cohort: { ...cohort, ref: "synthetic-device-cohort", unit: "devices" }, delivered: known(100), paired: known(86), weekOne: known(64), pairingFailureEvents: known(6),
       weekOneDefinition: "first-seven-days-after-delivery", privacyApproval: { state: "approved", receipt: "synthetic-privacy-proof" }, laterRetention: [30, 60, 90].map(day => ({ day, state: "proposed" as const })) },
     returnsAwaitingInspection: known(0) };
+}
+
+/** Explicit fictional access grant, independent of the aggregate's observation age.
+ * Tests that exercise revocation replace assertCurrent with a controlled owner. */
+export function lifecycleTestSource(read: () => Promise<unknown | null>, now = () => lifecycleTestTime): LifecycleSourceReader {
+  return {
+    async read(binding) {
+      const snapshot = await read();
+      const time = now();
+      return { snapshot, authority: { ...binding,
+        sourceVersion: snapshot && typeof snapshot === "object" && "version" in snapshot ? snapshot.version : null,
+        permissionVersion: "synthetic-lifecycle-access-v1", observedAt: new Date(time).toISOString(),
+        validUntil: new Date(time + 15 * 60_000).toISOString() } };
+    },
+    assertCurrent(result, binding) {
+      if (result.authority.principalRef !== binding.principalRef || result.authority.requestDigest !== binding.requestDigest)
+        throw new LifecycleError("SOURCE_AUTHORITY_DENIED", 403);
+    },
+  };
 }

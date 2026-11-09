@@ -23,7 +23,15 @@
 !src/creator-agent/settlements/*.ts
 !src/creator-agent/recruitment/
 !src/creator-agent/recruitment/*.ts
+!src/creator-agent/analytics/
+!src/creator-agent/analytics/*.ts
+!src/creator-agent/sourcing/
+!src/creator-agent/sourcing/*.ts
 !src/creator-agent/siteTraffic/
+!src/creator-agent/analytics/
+!src/creator-agent/analytics/*.ts
+!src/creator-agent/sourcing/
+!src/creator-agent/sourcing/*.ts
 !src/creator-agent/siteTraffic/*.ts
 !src/creator-agent/teamInvitationReads/
 !src/creator-agent/teamInvitationReads/*.ts
@@ -40,7 +48,10 @@
 !src/adapter/viewSchemas/settings.ts
 !src/adapter/viewSchemas/recruitment.ts
 !src/adapter/viewSchemas/acquisitionPrimitives.ts
+!src/adapter/viewSchemas/shippingHub.ts
 !src/features/
+!src/features/analytics/
+!src/features/analytics/economicCosts.ts
 !src/features/scorecards/
 !src/features/scorecards/scorecardMath.ts
 !tools/

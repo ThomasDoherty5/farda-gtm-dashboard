@@ -1,6 +1,9 @@
+import type { NativeCampaignFunnel as NativeCampaignData } from "@/creator-agent/analytics/views";
+import { NativeCampaignFunnel } from "./NativeCampaignFunnel";
+import { useScope } from "@/adapter/scope";
+import { useReportingPeriod } from "./reportingPeriod";
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
-import type { CampaignFunnelFilters } from "@/adapter/demoAnalytics";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -19,12 +22,15 @@ export function CampaignFunnelPage() {
   const { campaignId = "" } = useParams();
   const [search, setSearch] = useSearchParams();
   const tab = search.get("tab") ?? "funnel";
-  const cohort = (search.get("cohort") === "launch-a" ? "launch-a" : "first-wave") satisfies CampaignFunnelFilters["cohort"];
-  const query = useView<CampaignFunnelFilters, CampaignFunnelData>("campaignFunnel", { campaignId, cohort });
+  const { adapter } = useScope();
+  const cohort = adapter.kind === "demo" ? (search.get("cohort") === "launch-a" ? "launch-a" : "first-wave") : search.get("cohort") ?? "first-wave";
+  const cohortOptions = COHORTS.some(row => row.value === cohort) ? COHORTS : [...COHORTS, { value: cohort, label: "Requested source cohort" }];
+  const period = useReportingPeriod();
+  const query = useView<{ campaignId: string; cohort: string }, CampaignFunnelData | NativeCampaignData>("campaignFunnel", { campaignId, cohort }, period);
   return (
     <section aria-labelledby="funnel-title" data-figma-source="30:550" className={styles.page}>
       <PageHeader id="funnel-title" title="Turn a plan into a checked cohort." subtitle="Creator campaigns · measured progression, gift capacity and mature posting outcomes.">
-        <ChoiceButton legend="Cohort" title="Choose a campaign cohort" options={COHORTS} value={cohort} width={192} buttonLabel={(c) => c.label}
+        <ChoiceButton legend="Cohort" title="Choose a campaign cohort" options={cohortOptions} value={cohort} width={192} buttonLabel={(c) => c.label}
           onChange={(v) => setSearch((prev) => { const next = new URLSearchParams(prev); if (v === "first-wave") next.delete("cohort"); else next.set("cohort", v); return next; })} />
         <LinkButton to="/campaigns" style={{ minWidth: 192 }}>Open campaigns</LinkButton>
       </PageHeader>
@@ -32,7 +38,7 @@ export function CampaignFunnelPage() {
         <EmptyState state="Empty" title="This tab is not built"><p>Only the funnel and sample allocation view has a design source. No other campaign tab is invented here.</p></EmptyState>
       ) : (
         <ViewShell query={query} subject="The campaign funnel" emptyTitle="No campaign progression for this cohort" emptyBody="The source responded, but no progression is recorded for this cohort. That is not zero contacts.">
-          {(data) => <Body data={data} />}
+          {(data) => data.datasetKey === "analytics-native" ? <NativeCampaignFunnel data={data} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body data={data} />}
         </ViewShell>
       )}
     </section>

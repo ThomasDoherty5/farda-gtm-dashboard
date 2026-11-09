@@ -39,6 +39,19 @@ async function start(extra: TestOptions = {}) {
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); });
 
 describe("authenticated finance and payable reads (THO-303, THO-300)", () => {
+  it("refuses an expired independent access grant over actual HTTP without returning retained finance facts", async () => {
+    let clock = Date.parse(financeTestTime);
+    const snapshot = financeSnapshot("financeDashboard");
+    const { read } = await start({ operations: { now: () => clock }, financeSource: async () => snapshot });
+    const first = await read("financeDashboard", {});
+    expect(first.status).toBe(200);
+    expect(first.body.data.readAccess).toEqual({ validUntil: snapshot.readAccess.validUntil });
+    clock += 15 * 60_000;
+    const expired = await read("financeDashboard", {});
+    expect(expired.status).toBe(403);
+    expect(expired.body).not.toHaveProperty("data");
+    expect(expired.text).not.toContain("Synthetic October");
+  });
   it.each(financeViewKeys)("%s: unconfigured source is a typed INTEGRATION_PENDING error with no data, for reader and reviewer", async viewKey => {
     const { read } = await start();
     for (const token of [SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN]) {
@@ -64,8 +77,8 @@ describe("authenticated finance and payable reads (THO-303, THO-300)", () => {
     for (const scope of [{ ...requestedScope, workspaceId: "foreign-workspace" }, { ...requestedScope, accountIds: ["foreign-account"] },
       { ...requestedScope, environment: "production" }]) {
       const foreign = await read(viewKey, financeTestFilters[viewKey], { scope });
-      expect(foreign.status).toBe(400);
-      expect(foreign.body).toMatchObject({ code: "INVALID_INPUT", executionCertainty: "notApplied" });
+      expect(foreign.status).toBe(403);
+      expect(foreign.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: "notApplied" });
       expect(foreign.body).not.toHaveProperty("data");
     }
     expect(reads).toBe(0);
@@ -106,7 +119,7 @@ describe("authenticated finance and payable reads (THO-303, THO-300)", () => {
     let clock = Date.parse(financeTestTime);
     const { read } = await start({ operations: { now: () => clock }, financeSource: async (_scope, request) => request.viewKey === "commissionLedger"
       ? financeSnapshot("commissionLedger", { coverage: { state: "partial", expectedCount: 4, observedCount: 3, reasonCodes: ["SOURCE_ROWS_DEFERRED"] } })
-      : financeSnapshot(request.viewKey) });
+      : financeSnapshot(request.viewKey, {}, clock) });
     const partial = await read("commissionLedger", {});
     expect(partial.body).toMatchObject({ dataState: "partial", data: { currency: "USD" },
       coverage: { expectedCount: 4, observedCount: 3, missingCount: 1, complete: false, reasonCodes: ["SOURCE_ROWS_DEFERRED"] } });

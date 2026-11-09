@@ -28,6 +28,12 @@ export const financeFilters = {
 export const financeDetailViews: ReadonlySet<FinanceViewKey> = new Set(["periodClose", "closePackage", "settlementDetail", "payableDetail"]);
 
 const instant = z.string().datetime({ offset: true });
+/** Permission observations are independent of the accounting report's age. */
+export const financeMaxReadAccessMs = 15 * 60_000;
+const readAccess = z.object({ observedAt: instant, validUntil: instant }).strict().superRefine((value, ctx) => {
+  const lifetime = Date.parse(value.validUntil) - Date.parse(value.observedAt);
+  if (lifetime <= 0 || lifetime > financeMaxReadAccessMs) ctx.addIssue({ code: "custom", message: "Invalid read-access lease." });
+});
 const count = z.number().int().nonnegative().safe();
 const reasonCode = z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/);
 
@@ -41,6 +47,7 @@ export const financeSnapshotSchema = z.object({
   version: ref,
   principalRef: ref,
   permissionVersion: ref,
+  readAccess,
   observedAt: instant,
   validUntil: instant,
   coverage: z.object({ state: z.enum(["complete", "partial"]), expectedCount: count.nullable(), observedCount: count.nullable(),

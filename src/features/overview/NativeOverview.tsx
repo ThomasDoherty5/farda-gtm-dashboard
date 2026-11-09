@@ -1,0 +1,47 @@
+import { Link } from "react-router-dom";
+import { reportingRoute } from "@/features/analytics/reportingPeriod";
+import type { NativeOverviewSummary } from "@/creator-agent/analytics/views";
+import { Badge } from "@/components/Badge";
+import { LinkButton } from "@/components/Button";
+import { Fact, factText, nativeCount, nativeMoney, nativePercent, nativeMultiple, nativePeriod, NativeAnalyticsEvidence } from "@/features/analytics/NativeAnalyticsEvidence";
+import { SalesByChannel } from "./OverviewPage";
+import styles from "./OverviewPage.module.css";
+
+/** Original overview hierarchy, with owner-computed figures and no source fallback. */
+export function NativeOverview({ data, refresh, refreshing }: { data: NativeOverviewSummary; refresh: () => void; refreshing: boolean }) {
+  const measure = (key: string) => data.measures.find(row => row.metricId === key)?.result;
+  const margin = measure("contributionMargin"), marginValue = margin?.state === "known" ? margin.value : null;
+  const channelLabel = (key: string) => key === "shopify" ? "Shopify" : "TikTok Shop";
+  const channels = data.channels.map(row => ({ key: row.channel === "shopify" ? "shopify" as const : "tiktok" as const, label: channelLabel(row.channel),
+    netReceipts: row.netReceipts.state === "known" ? row.netReceipts.value : null, orders: row.orders.state === "known" ? row.orders.value : null }));
+  const daily = data.daily.map(row => ({ date: row.day,
+    shopify: row.channels.find(c => c.channel === "shopify")?.netReceipts.value?.minorUnits ?? null,
+    tiktok: row.channels.find(c => c.channel === "tiktokShop")?.netReceipts.value?.minorUnits ?? null }));
+  // Chart sizing is presentation only. Source measures supply all business ratios.
+  const trend = data.daily.slice(-5).map(row => row.channels.find(c => c.channel === "shopify")?.netReceipts.value?.minorUnits ?? null);
+  const peak = Math.max(1, ...trend.filter((value): value is number => value !== null));
+  const activityLabels = { reviewed: "Evidence reviewed", qualified: "Qualification recorded", invitationConfirmed: "Invitation confirmed", reply: "Reply observed", termsAccepted: "Terms accepted", contentAccepted: "Content accepted", published: "Publication verified" };
+  return <>
+    <NativeAnalyticsEvidence data={data} refresh={refresh} refreshing={refreshing} />
+    <div className={styles.context}><p>{nativePeriod(data)}</p><span className={styles.contextSpace} /><Badge width={180} to="/launch?view=snapshot">Check launch readiness</Badge></div>
+    <div className={styles.primary}>
+      <div className={styles.kpis}>
+        <div className={`${styles.card} ${styles.kpi} ${styles.hero}`}><dl className={styles.kpiText}><dt>Net receipts</dt><dd data-testid="metric-Net receipts"><Fact fact={data.netReceipts} format={nativeMoney} /></dd><dd className={styles.note}>After refunds · before fees</dd></dl><div className={styles.miniBars} aria-hidden="true">{trend.map((value, index) => value === null ? <span key={index} style={{ height: 0 }} /> : <span key={index} style={{ height: `${Math.max(0, value / peak * 100)}%` }} />)}</div></div>
+        <div className={`${styles.card} ${styles.kpi}`}><dl className={`${styles.kpiText} ${styles.kpiTextWide}`}><dt>Contribution</dt><dd data-testid="metric-Contribution"><Fact fact={data.contribution} format={nativeMoney} /></dd><dd className={styles.note}>Before marketing · {factText(margin, nativePercent)} margin</dd></dl><div className={styles.donut} aria-hidden="true"><svg width="90" height="90" viewBox="0 0 90 90" fill="none"><circle className={styles.donutTrack} cx="45" cy="45" r="39.6" strokeWidth="10.8" /><circle className={styles.donutArc} cx="45" cy="45" r="39.6" strokeWidth="10.8" strokeDasharray={`${Math.max(0, Math.min(100, marginValue ?? 0)) / 100 * 2 * Math.PI * 39.6} ${2 * Math.PI * 39.6}`} transform="rotate(-90 45 45)" /></svg><span>{factText(margin, value => `${Math.round(value)}%`)}</span></div></div>
+        <div className={`${styles.card} ${styles.kpi}`}><dl className={styles.kpiText}><dt>Paid orders</dt><dd data-testid="metric-Paid orders"><Fact fact={data.orders} format={nativeCount} /></dd><dd className={styles.note}>{factText(measure("aov"), value => nativeMoney({ minorUnits: value, currency: "USD" }))} average net receipts</dd></dl><div className={styles.bubbles} aria-label="Order shares by channel"><span className={`${styles.bubble} ${styles.bubbleMain}`}>{factText(measure("shareOrders.shopify"), value => `${Math.round(value)}%`)}</span><span className={`${styles.bubble} ${styles.bubbleSecond}`}>{factText(measure("shareOrders.tiktokShop"), value => `${Math.round(value)}%`)}</span></div></div>
+      </div>
+      <SalesByChannel data={{ channels, daily }} />
+    </div>
+    <div className={styles.secondary}>
+      <section className={styles.card} aria-labelledby="channel-share-title"><h2 id="channel-share-title" className={styles.cardTitle}>Where sales come from</h2>{data.channels.map(row => {
+        const share = measure(`shareNetReceipts.${row.channel}`), value = share?.state === "known" ? share.value : null;
+        return <div className={styles.channel} key={row.channel}><div className={styles.channelAmount}><span>{channelLabel(row.channel)}</span><Fact fact={row.netReceipts} format={nativeMoney} /></div><div className={styles.progress} aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, value ?? 0))}%` }} /></div><p className={styles.note}>{factText(share, nativePercent)} of net receipts</p></div>;
+      })}<p className={styles.note}>{factText(data.orders, nativeCount)} orders · {data.channels.map(row => `${factText(row.orders, nativeCount)} ${channelLabel(row.channel)}`).join(" / ")}</p></section>
+      <section className={styles.card} aria-labelledby="growth-title"><h2 id="growth-title" className={styles.cardTitle}>Growth, with discipline.</h2><dl className={styles.pair}><div><dt>Blended CAC</dt><dd className={styles.value} data-testid="metric-Blended CAC"><Fact fact={measure("blendedCac")} format={value => nativeMoney({ minorUnits: value, currency: "USD" })} /></dd><dd className={styles.note}>{factText(data.marketingSpend, nativeMoney)} / {factText(data.newRetainedCustomers, nativeCount)} new retained customers</dd></div><div><dt>Marketing efficiency</dt><dd className={styles.value} data-testid="metric-Marketing efficiency"><Fact fact={measure("mer")} format={nativeMultiple} /></dd><dd className={styles.note}>Net receipts / marketing spend</dd></div></dl><hr className={styles.divider} /><div className={styles.progress} aria-hidden="true"><span style={{ width: `${Math.max(0, Math.min(100, marginValue ?? 0))}%` }} /></div><p className={styles.violetLabel}>{factText(margin, nativePercent)} contribution before marketing</p><p className={styles.note}>Net receipts less product, shipping, transaction and variable fulfillment costs. Source definition and cost completeness govern this figure.</p><Link to="/analytics/finance" className={styles.textLink}>Explore unit economics →</Link></section>
+      <section className={`${styles.card} ${styles.activity}`} aria-labelledby="activity-title"><div className={styles.activityHead}><h2 id="activity-title" className={styles.cardTitle}>Creator activity</h2><Badge tone="violet" width={132}>Source observed</Badge></div><p className={styles.note}>Same reporting cohort · {data.coverage.state} coverage</p><dl className={styles.creatorMetrics}>
+        <div><dt>Views</dt><dd data-testid="metric-Views"><Fact fact={measure("creatorViews")} format={nativeCount} /></dd></div><div><dt>Engagement rate</dt><dd data-testid="metric-Engagement rate"><Fact fact={measure("creatorEngagementRate")} format={nativePercent} /></dd></div><div><dt>Attributed orders</dt><dd data-testid="metric-Attributed orders"><Fact fact={data.attributedOrders} format={nativeCount} /></dd></div><div><dt>Attributed net sales</dt><dd data-testid="metric-Attributed net sales"><Fact fact={data.attributedNetSales} format={nativeMoney} /></dd></div>
+      </dl><hr className={styles.divider} />{data.activity.map(row => <div key={row.activityRef} className={styles.event}><strong>{activityLabels[row.kind]}</strong><span className={styles.note}>{row.eventAt} · {row.creatorRef ? "Canonical creator evidence" : "Creator identity unavailable"}</span></div>)}{data.activity.length === 0 && <p className={styles.note}>No observed activity rows; this does not establish no activity.</p>}<p className={styles.note}>Observed {data.provenance.observedAt}</p><LinkButton to="/content" className={styles.monitorButton}>View content monitor</LinkButton></section>
+    </div>
+    <footer className={styles.footer}><p>Current source window · mini bars show the final five observed Shopify days.</p><span className={styles.footerSpace} /><p>Definitions and source completeness stay attached to every measure.</p><Link to={reportingRoute("/analytics/attribution", data.period)} className={styles.textLink}>View definitions →</Link></footer>
+  </>;
+}

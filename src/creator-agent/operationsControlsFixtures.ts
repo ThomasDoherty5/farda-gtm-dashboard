@@ -1,8 +1,19 @@
 import type { OperationsControlSnapshot } from "./operationsControlsSchema.ts";
 import type { JobDefinition } from "./jobs/schema.ts";
 import { POLICY_VERSION } from "./assessmentSchema.ts";
+import {digest} from "./config.ts";
+import {OperationsControlError,type OperationsControlSource,type OperationsReadBinding,type OperationsSourceResult} from "./operationsControls.ts";
 export const controlTestScope={workspaceId:"synthetic-controls-workspace",accountId:"synthetic-controls-account",environment:"sandbox" as const};
 export const controlTestTime="2026-11-06T12:00:00.000Z";
+/** Fictional source grant, independent of stale data and canonical action authority. */
+export function controlSourceProvider(current:()=>OperationsControlSnapshot,now:()=>number,permitted:()=>boolean=()=>true):OperationsControlSource{
+  const packet=(binding:OperationsReadBinding):OperationsSourceResult=>{if(!permitted())throw new OperationsControlError("SOURCE_SCOPE_DENIED",403);
+    const snapshot=structuredClone(current()),at=now();return {snapshot,authority:{binding:structuredClone(binding),sourceVersion:snapshot.revision,
+      permissionVersion:"synthetic-control-access-v1",observedAt:new Date(at).toISOString(),validUntil:new Date(at+60_000).toISOString()}};};
+  return {read:async binding=>packet(binding),assertCurrent(result,binding){
+    const live=packet(binding);if(result.authority.permissionVersion!==live.authority.permissionVersion||digest(result.snapshot)!==digest(live.snapshot))throw new OperationsControlError("SOURCE_CHANGED",409);
+  }};
+}
 export const controlTestJob:JobDefinition={jobId:"synthetic-controls-job",version:1,ownerRef:"owner:synthetic",mode:"propose",handler:"draft-reference.v1",
   eventType:"synthetic-control-event",inputSchemaVersion:"job-reference-batch.v1",outputSchemaVersion:"job-local-result.v1",policyVersion:POLICY_VERSION,
   capabilityBinding:null,modelVersion:null,offerVersion:null,budgets:{maxItems:5,maxSteps:20,maxAttempts:2,maxRunMs:10000,leaseMs:5000,maxConcurrency:1,retryBaseMs:0}};

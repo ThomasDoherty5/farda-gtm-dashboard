@@ -15,10 +15,15 @@ const unknown = (reasonCode: string) => ({ state: "unknown", value: null, reason
 const known = (value: unknown) => ({ ...unknown(""), state: "known", value, reasonCode: null });
 const provenance = { kind: "source", evidenceStage: "synthetic", observedAt, eventAt: null,
   sourceId: "synthetic-finance-record", canonicalId: null, provenanceRef: "synthetic-finance-evidence" };
+/** Explicit synthetic permission observation supplied by the fixture clock, not a production grant. */
+export function financeTestReadAccess(at = Date.parse(financeTestTime)) {
+  return { observedAt: new Date(at).toISOString(), validUntil: new Date(at + 15 * 60_000).toISOString() };
+}
 const group = { id: "synthetic-group", grossSales: 10000, netBase: 9000, earned: 900, reversed: 0, state: "paid", evidence: { receipt: "synthetic-paid-receipt", note: "Synthetic immutable receipt" } };
 
 export function financeRecord(viewKey: FinanceViewKey): Record<string, unknown> {
-  const common = { datasetKey: "finance-native", synthetic: true, provenance: { ...provenance }, version: "synthetic-record-v1" };
+  const common = { datasetKey: "finance-native", synthetic: true, provenance: { ...provenance },
+    readAccess: { validUntil: financeTestReadAccess().validUntil }, version: "synthetic-record-v1" };
   switch (viewKey) {
     case "commissionLedger": return { ...common, cohortLabel: "Synthetic October cohort · USD", groups: [{ ...group }],
       economics: { commerceCosts: 1000, historicalFixedFee: 0, samples: 0, processingFeePct: 0 }, orders: { initial: 1, retained: 1, refundedBeforeFulfillment: 0 }, currency: "USD", observedAt };
@@ -38,12 +43,13 @@ export function financeRecord(viewKey: FinanceViewKey): Record<string, unknown> 
       cpa: { state: "notRequested", signedAt: null }, exportState: "none", commissionCohort: { label: "Synthetic cohort", orders: 1, note: "Synthetic" }, landedCost: { complete: true, missingSkus: [] }, differences: [],
       versions: [{ version: "synthetic-v1", figures: { accrual: 900, reversals: 0, netCommissionExpense: 900, creatorPaid: 900, outstandingLiability: 0, pendingRecovery: 0 }, frozen: false, closedAt: null, cpaSignOff: null, reports: [] }],
       adjustment: null, paidReceipts: [{ receipt: "synthetic-paid-receipt", groupId: group.id, amount: money(900), immutable: true }], commissionSplit: [] };
-    case "monthsHistory": return { datasetKey: common.datasetKey, synthetic: true, provenance: common.provenance, months: [{ period: "2026-10", label: "Synthetic October", status: "open", signedRevision: null, signedAt: null, reopenedAt: null, revisions: [], taxNote: "No tax rule asserted" }] };
-    case "reportManifest": return { datasetKey: common.datasetKey, synthetic: true, provenance: common.provenance, manifestId: "synthetic-manifest", period: "2026-10", label: "Synthetic October", policy: { reference: null }, rows: [] };
+    case "monthsHistory": return { datasetKey: common.datasetKey, synthetic: true, provenance: common.provenance, readAccess: common.readAccess, months: [{ period: "2026-10", label: "Synthetic October", status: "open", signedRevision: null, signedAt: null, reopenedAt: null, revisions: [], taxNote: "No tax rule asserted" }] };
+    case "reportManifest": return { datasetKey: common.datasetKey, synthetic: true, provenance: common.provenance, readAccess: common.readAccess, manifestId: "synthetic-manifest", period: "2026-10", label: "Synthetic October", policy: { reference: null }, rows: [] };
   }
 }
-export function financeSnapshot(viewKey: FinanceViewKey, patch: Record<string, unknown> = {}) {
+export function financeSnapshot(viewKey: FinanceViewKey, patch: Record<string, unknown> = {}, accessObservedAt = Date.parse(financeTestTime)) {
   return { scope: { ...financeTestScope }, viewKey, version: "synthetic-finance-v1", principalRef: "agent-reader", permissionVersion: "synthetic-permission-v1", observedAt,
+    readAccess: financeTestReadAccess(accessObservedAt),
     validUntil: "2026-11-07T11:00:00.000Z", coverage: { state: "complete", expectedCount: 1, observedCount: 1, reasonCodes: [] },
     currency: "USD", period: viewKey === "periodClose" || viewKey === "closePackage" ? "2026-10" : null, record: financeRecord(viewKey), ...patch };
 }

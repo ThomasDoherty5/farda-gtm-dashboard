@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { capabilityStateSchema } from "../contract";
+import { capabilityStateSchema } from "../contract.ts";
 
 // Proposed front-end read model; no label executor or provider endpoint is implied.
 const ref = z.string().trim().min(1);
@@ -49,15 +49,36 @@ export const hubShipmentSchema = z.object({
   if (new Set(s.freshness.map(f => f.field)).size !== s.freshness.length) fail("Freshness fields must be unique");
 });
 
-export const shippingHubSchema = z.object({
+export const shippingHubFields = z.object({
   datasetKey: ref, observedAt: iso, reviewValidUntil: iso, sourceLabel: ref,
   shipments: z.array(hubShipmentSchema),
   stock: z.array(z.object({ location: ref, sku: ref, onHand: z.number().int().nonnegative().nullable(), reserved: z.number().int().nonnegative().nullable() })),
   initialSelection: z.array(ref),
-}).strict().superRefine((d, ctx) => {
+}).strict();
+export const shippingHubSchema = shippingHubFields.superRefine((d, ctx) => {
   if (new Set(d.shipments.map(s => s.id)).size !== d.shipments.length) ctx.addIssue({ code: "custom", message: "Shipment IDs must be unique" });
   if (new Set(d.shipments.map(s => s.parcelId)).size !== d.shipments.length) ctx.addIssue({ code: "custom", message: "Parcel IDs must be unique" });
 });
-export const shippingHubViewSchemas = { shippingHub: shippingHubSchema };
+const safeRef = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,239}$/);
+export const shippingHubCoverageSchema = z.object({ state: z.enum(["complete", "partial"]), expectedCount: z.number().int().nonnegative().safe().nullable(),
+  observedCount: z.number().int().nonnegative().safe(), reasonCodes: z.array(z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/)).max(20) }).strict().superRefine((c, ctx) => {
+  if (c.expectedCount !== null && c.observedCount > c.expectedCount || c.state === "complete" && (c.expectedCount === null || c.expectedCount !== c.observedCount) ||
+    c.state === "partial" && c.reasonCodes.length === 0) ctx.addIssue({ code: "custom", message: "Coverage requires exact counts or an explicit partial reason." });
+});
+export const nativeShippingHubSchema = shippingHubFields.extend({
+  datasetKey: z.literal("shipping-hub-native"), viewKey: z.literal("shippingHub"),
+  provenance: z.object({ sourceRef: safeRef, sourceVersion: safeRef, permissionVersion: safeRef,
+    evidenceStage: z.enum(["synthetic", "provider-observed"]), timezone: z.string().min(1).max(100),
+    observedAt: iso, validUntil: iso, coverage: shippingHubCoverageSchema,
+    ownerRefs: z.array(safeRef).min(1).max(4) }).strict(),
+}).superRefine((d, ctx) => {
+  if (!shippingHubSchema.safeParse(Object.fromEntries(Object.entries(d).filter(([key]) => key !== "viewKey" && key !== "provenance"))).success)
+    ctx.addIssue({ code: "custom", message: "Invalid native shipment aggregate." });
+  if (d.initialSelection.length !== 0 || d.shipments.some(s => s.reviewCapability.state === "available"))
+    ctx.addIssue({ code: "custom", message: "A read projection cannot grant label execution or preselect an action." });
+  if (d.provenance.coverage.observedCount !== d.shipments.length) ctx.addIssue({ code: "custom", message: "Observed coverage must reconcile to shipment rows." });
+});
+export type NativeShippingHubData = z.infer<typeof nativeShippingHubSchema>;
+export const shippingHubViewSchemas = { shippingHub: z.union([nativeShippingHubSchema, shippingHubSchema.refine(d => d.datasetKey !== "shipping-hub-native", "Native data requires provenance.")]) };
 export type HubShipment = z.infer<typeof hubShipmentSchema>;
 export type ShippingHubData = z.infer<typeof shippingHubSchema>;

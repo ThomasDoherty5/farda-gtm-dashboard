@@ -1,3 +1,8 @@
+import type { NativeAttribution as NativeAttributionData, NativeMetricDictionary } from "@/creator-agent/analytics/views";
+import { NativeAttribution, NativeDictionary, NativeEconomicEvidence } from "./NativeAttribution";
+import { nativePeriod } from "./NativeAnalyticsEvidence";
+import { useReportingPeriod } from "./reportingPeriod";
+import { useSourceLease } from "@/adapter/useSourceLease";
 import { useState } from "react";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
@@ -18,25 +23,27 @@ const multiple = (n: number) => `${n.toFixed(2)}×`;
 /** Performance attribution (Figma source 14:377, owner THO-293, CTRL-202 and CTRL-203). */
 export function AttributionPage() {
   const demo = useIsDemo();
-  const query = useView<Record<string, never>, AttributionData>("attribution", {});
-  const report = query.data?.data;
-  const periodLabel = report?.datasetKey === "attribution-observed"
+  const period = useReportingPeriod();
+  const query = useView<Record<string, never>, AttributionData | NativeAttributionData>("attribution", {}, period);
+  const value = query.data?.data, expired = useSourceLease(value?.datasetKey === "analytics-native" ? value.provenance.validUntil : undefined);
+  const report = query.isError || expired ? null : value;
+  const periodLabel = report?.datasetKey === "analytics-native" ? nativePeriod(report) : report?.datasetKey === "attribution-observed"
     ? report.reportScope ? `${report.reportScope.period.start} to ${report.reportScope.period.end} (${report.reportScope.period.timezone})` : null
     : report?.periodLabel ?? null;
   const [dialog, setDialog] = useState<"period" | "definitions" | null>(null);
   return (
     <section aria-labelledby="attribution-title" data-figma-source="14:377" className={styles.page}>
       <PageHeader id="attribution-title" title="Every dollar, in perspective." subtitle="Performance · one period, clear attribution, and the economics behind growth.">
-        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{report?.datasetKey === "attribution-observed" ? "Reporting period" : "Last 30 days"}</Button>
+        <Button variant="secondary" style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("period")}>{!demo ? "Reporting period" : "Last 30 days"}</Button>
         <Button style={{ minWidth: 184 }} aria-haspopup="dialog" onClick={() => setDialog("definitions")}>Metric definitions</Button>
       </PageHeader>
       <WorkspaceTabs tabs={LAUNCH_TABS("performance")} />
       <ViewShell query={query} subject="Performance attribution" emptyTitle="No performance data" emptyBody="The source responded, but nothing matches this period.">
-        {(data) => <Body data={data} openDefinitions={() => setDialog("definitions")} />}
+        {(data) => data.datasetKey === "analytics-native" ? <NativeAttribution data={data} refresh={() => void query.refetch()} refreshing={query.isFetching} definitions={() => setDialog("definitions")} /> : <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
       <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
       <Dialog open={dialog === "definitions"} focusHeading={!demo} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
-        {dialog === "definitions" && <Definitions data={query.data?.data ?? null} />}
+        {dialog === "definitions" && <Definitions data={report ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
     </section>
@@ -53,14 +60,14 @@ const STATIC_DEFS: [string, string][] = [
   ["Attribution", "One winning method per order: discount code, then UTM, then platform-reported. Orders with none are unattributed, not assigned."],
 ];
 
-function Definitions({ data }: { data: AttributionData | null }) {
+function Definitions({ data }: { data: AttributionData | NativeAttributionData | null }) {
   const demo = useIsDemo();
   return (
     <div>
       <dl className={styles.defs} data-testid="static-definitions">
         {STATIC_DEFS.map(([t, d]) => <div key={t}><dt>{t}</dt><dd>{d}</dd></div>)}
       </dl>
-      {data && <PeriodEvidence data={data} />}
+      {data && (data.datasetKey === "analytics-native" ? <NativeEconomicEvidence evidence={data.economicEvidence} /> : <PeriodEvidence data={data} />)}
       <DictionaryRead />
       {!demo && <NativeTrafficDefinitionRead />}
     </div>
@@ -88,10 +95,11 @@ function PeriodEvidence({ data }: { data: AttributionData }) {
 
 /** The versioned dictionary, cost allocation and hand-checked cases behind the headline metrics. Read through the adapter; the read's state never hides the static definitions. */
 function DictionaryRead() {
-  const query = useView<Record<string, never>, MetricDictionaryData>("metricDictionary", {});
+  const period = useReportingPeriod();
+  const query = useView<Record<string, never>, MetricDictionaryData | NativeMetricDictionary>("metricDictionary", {}, period);
   return (
     <ViewShell query={query} subject="Metric dictionary" emptyTitle="No metric dictionary" emptyBody="The source responded, but it returned no versioned dictionary. The definitions above still apply.">
-      {(dict) => <Dictionary dict={dict} />}
+      {(dict) => dict.datasetKey === "analytics-native" ? <NativeDictionary data={dict} /> : <Dictionary dict={dict} />}
     </ViewShell>
   );
 }
@@ -172,7 +180,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
           <div className={styles.legend}>
             <Badge tone="violet" width={132}>Shopify</Badge>
             <Badge width={146}>TikTok Shop</Badge>
-            <p className={styles.small}>Totals: {usd({ minorUnits: totals.shopify, currency: "USD" })} / {usd({ minorUnits: totals.tiktok, currency: "USD" })}</p>
+            <p className={styles.small}>Totals: {data.weeks.length === 0 ? "N/A" : `${usd({ minorUnits: totals.shopify, currency: "USD" })} / ${usd({ minorUnits: totals.tiktok, currency: "USD" })}`}</p>
           </div>
           <div className={styles.weekly}>
             <div className={styles.yAxis} aria-hidden="true">
@@ -227,7 +235,7 @@ function Body({ data, openDefinitions }: { data: AttributionData; openDefinition
             <DetailRow key={c.key} label={`${c.label} · ${percent(c.netReceipts.minorUnits, channelTotal)}`} value={usd(c.netReceipts)} />
           ))}
           <hr className={styles.divider} />
-          <p className={styles.label}>{orders === null ? "Orders unknown" : `${count(orders)} orders`} · {count(data.retainedUnits)} retained units</p>
+          <p className={styles.label}>{orders === null ? "Orders unknown" : `${count(orders)} orders`} · {data.retainedUnits === null ? "retained units unknown" : `${count(data.retainedUnits)} retained units`}</p>
           <p className={styles.small}>Attribution is a second view of these same orders, not additional revenue.</p>
           <div className={styles.btnRow}><LinkButton variant="secondary" to="/operations" style={{ minWidth: 230 }}>View channel orders</LinkButton></div>
         </Card>

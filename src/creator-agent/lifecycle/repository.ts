@@ -5,15 +5,18 @@ import type { OperationsScope } from "../operations.ts";
 import { draftRecordSchema, flowResourceSchema, lifecycleFilters, mandatoryPolicies, nativeActivationSchema, nativeConsentSchema,
   nativeEmailFlowSchema, nativeLifecycleSchema, requestedSaveSchema, saveDraftSchema, saveReceiptSchema,
   type DraftRecord, type FlowCatalog, type FlowDraft, type FlowKey, type LifecycleViewKey, type NativeLifecycleData, type SaveDraftInput, type SaveReceipt } from "./contract.ts";
-import { LifecycleError, lifecycleObservationCurrent, lifecycleObservationDeadline, lifecycleSnapshotSchema, type LifecycleSnapshot, type LifecycleSourceReader } from "./source.ts";
+import { LifecycleError, lifecycleObservationCurrent, lifecycleObservationDeadline, lifecycleMaxObservationAgeMs, lifecycleSourceResultSchema, type LifecycleSnapshot, type LifecycleSourceReader, type LifecycleReadBinding, type LifecycleCallerBoundary } from "./source.ts";
+
+import { assertSynchronousVoid } from "../sourceFence.ts";
+import { boundedSourceRead } from "../actions/readBoundary.ts";
 
 export { LifecycleError } from "./source.ts";
 type Options = { db: DatabaseSync; scope: OperationsScope; secret: string; source?: LifecycleSourceReader; now?: () => number };
-type SourceRead = { snapshot: LifecycleSnapshot | null; reason: string | null; state: "unconfigured" | "unavailable" | "current" | "expired" | "partial"; factsHash: string | null };
+type SourceRead = { snapshot: LifecycleSnapshot | null; reason: string | null; state: "unconfigured" | "unavailable" | "current" | "expired" | "partial"; factsHash: string | null; assertCurrent(): void };
 type RequestRow = { actor: string; resource: string; hash: string; original: string; state: "recorded" | "rejected"; receipt: string | null; reason: string | null; current_version: string | null };
-export type LifecycleReadResult = { data: NativeLifecycleData; version: string; observedAt: string; partial: boolean; stale: boolean; empty: boolean;
+export type LifecycleReadResult = { assertCurrent(): void; data: NativeLifecycleData; version: string; observedAt: string; partial: boolean; stale: boolean; empty: boolean;
   capabilities: { actionKind: string; state: "available" | "held" | "denied"; reasonCodes: string[] }[] };
-const fail = (code: string, status: number, currentVersion?: string): never => { throw new LifecycleError(code, status, { currentVersion }); };
+function fail(code: string, status: number, currentVersion?: string): never { throw new LifecycleError(code, status, { currentVersion }); }
 const unknown = (missingReason: string) => ({ value: null, missingReason });
 const isEditable = (flow: FlowKey): flow is Exclude<FlowKey, "setup"> => flow !== "setup";
 
@@ -29,7 +32,7 @@ export function createLifecycleService(options: Options) {
     CREATE TABLE IF NOT EXISTS lifecycle_draft_revisions(flow TEXT NOT NULL,revision INTEGER NOT NULL,body TEXT NOT NULL,PRIMARY KEY(flow,revision));
     CREATE TABLE IF NOT EXISTS lifecycle_draft_requests(request_key TEXT PRIMARY KEY,actor TEXT NOT NULL,resource TEXT NOT NULL,hash TEXT NOT NULL,
       original TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,reason TEXT,current_version TEXT);`);
-  function tx<T>(fn: () => T): T { db.exec("BEGIN IMMEDIATE"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }
+  function tx<T>(fn: () => T, beforeCommit?: () => void): T { db.exec("BEGIN IMMEDIATE"); try { const result = fn(); beforeCommit?.(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }
   function latest(flow: FlowKey): DraftRecord | null {
     const row = db.prepare("SELECT body FROM lifecycle_draft_revisions WHERE flow=? ORDER BY revision DESC LIMIT 1").get(flow);
     return row ? draftRecordSchema.parse(JSON.parse(String(row.body))) : null;
@@ -46,23 +49,50 @@ export function createLifecycleService(options: Options) {
     // A trusted lease can renew. Changed substantive evidence under a reused source version cannot.
     return { ...rest, flows: rest.flows.map(catalogFacts) };
   }
-  async function observe(): Promise<SourceRead> {
-    if (!source) return { snapshot: null, reason: "LIFECYCLE_SOURCE_UNCONFIGURED", state: "unconfigured", factsHash: null };
+  async function observe(binding: LifecycleReadBinding, caller?: LifecycleCallerBoundary): Promise<SourceRead> {
+    const assertCaller = () => { if (caller?.signal?.aborted) fail("REQUEST_CANCELLED", 499); if (caller) assertSynchronousVoid(() => caller.assertCurrent()); };
+    assertCaller();
+    if (!source) return { snapshot: null, reason: "LIFECYCLE_SOURCE_UNCONFIGURED", state: "unconfigured", factsHash: null, assertCurrent: assertCaller };
+    if (typeof source.read !== "function" || typeof source.assertCurrent !== "function") fail("LIFECYCLE_SOURCE_INVALID", 502);
+    const immutableBinding = structuredClone(binding);
     let raw: unknown;
-    try { raw = await source({ ...scope }); }
+    try { raw = await boundedSourceRead(() => source.read(structuredClone(immutableBinding), caller?.signal), caller?.signal); }
     catch (error) {
-      if (error instanceof LifecycleError && (error.status === 401 || error.status === 403 || error.status < 500)) throw error;
-      return { snapshot: null, reason: "LIFECYCLE_SOURCE_UNAVAILABLE", state: "unavailable", factsHash: null };
+      assertCaller();
+      // Never pass an owner exception's text, headers, versions or arbitrary code to a browser.
+      if (error instanceof LifecycleError && [401, 403].includes(error.status)) fail("SOURCE_AUTHORITY_DENIED", error.status);
+      if (error instanceof Error && "code" in error && error.code === "REQUEST_CANCELLED") fail("REQUEST_CANCELLED", 499);
+      fail("LIFECYCLE_SOURCE_UNAVAILABLE", 503);
     }
-    if (raw === null) return { snapshot: null, reason: "LIFECYCLE_SOURCE_UNAVAILABLE", state: "unavailable", factsHash: null };
-    const parsed = lifecycleSnapshotSchema.safeParse(raw);
-    if (!parsed.success) throw new LifecycleError("LIFECYCLE_SOURCE_INVALID", 502);
-    const s = parsed.data;
+    assertCaller();
+    const parsed = lifecycleSourceResultSchema.safeParse(raw);
+    if (!parsed.success) fail("LIFECYCLE_SOURCE_INVALID", 502);
+    const result = parsed.data;
+    const assertCurrent = () => {
+      assertCaller();
+      const grant = result.authority, time = now();
+      if (digest(grant.scope) !== digest(scope) || grant.principalRef !== immutableBinding.principalRef ||
+          grant.operation !== immutableBinding.operation || grant.requestDigest !== immutableBinding.requestDigest) fail("SOURCE_SCOPE_DENIED", 403);
+      if (!Number.isFinite(time) || Date.parse(grant.observedAt) > time || Date.parse(grant.validUntil) <= time ||
+          Date.parse(grant.validUntil) - Date.parse(grant.observedAt) > lifecycleMaxObservationAgeMs) fail("SOURCE_AUTHORITY_EXPIRED", 403);
+      if (grant.sourceVersion !== (result.snapshot?.version ?? null)) fail("LIFECYCLE_SOURCE_INVALID", 502);
+      try { assertSynchronousVoid(() => source.assertCurrent(structuredClone(result), structuredClone(immutableBinding), time)); }
+      catch (error) {
+        if (error instanceof LifecycleError && [401, 403].includes(error.status)) fail("SOURCE_AUTHORITY_DENIED", error.status);
+        if (error instanceof LifecycleError && error.status === 409) fail("SOURCE_VERSION_CHANGED", 409);
+        fail("LIFECYCLE_SOURCE_INVALID", 502);
+      }
+      assertCaller();
+    };
+    assertCurrent();
+    const s = result.snapshot;
+    if (!s) return { snapshot: null, reason: "LIFECYCLE_SOURCE_UNAVAILABLE", state: "unavailable", factsHash: null, assertCurrent };
     if (digest(s.scope) !== digest(scope)) fail("SOURCE_SCOPE_DENIED", 403);
     const currentTime = now();
     if (!Number.isFinite(currentTime) || Date.parse(s.observedAt) > currentTime) fail("LIFECYCLE_SOURCE_INVALID", 502);
     const factsHash = digest(sourceFacts(s));
     tx(() => {
+      assertCurrent();
       const previous = db.prepare("SELECT facts_hash FROM lifecycle_source_versions WHERE version=?").get(s.version);
       if (previous && previous.facts_hash !== factsHash) fail("LIFECYCLE_SOURCE_CONFLICT", 409);
       const head = db.prepare("SELECT version,observed_at FROM lifecycle_source_head WHERE id=1").get();
@@ -71,9 +101,9 @@ export function createLifecycleService(options: Options) {
       db.prepare("INSERT OR IGNORE INTO lifecycle_source_versions VALUES(?,?)").run(s.version, factsHash);
       db.prepare("INSERT INTO lifecycle_source_head VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,facts_hash=excluded.facts_hash,observed_at=excluded.observed_at")
         .run(s.version, factsHash, s.observedAt);
-    });
+    }, assertCurrent);
     const expired = !lifecycleObservationCurrent(s.observedAt, s.validUntil, now());
-    return { snapshot: s, factsHash, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current",
+    return { snapshot: s, factsHash, assertCurrent, state: expired ? "expired" : s.coverage === "partial" ? "partial" : "current",
       reason: expired ? "SOURCE_STALE" : s.coverage === "partial" ? "SOURCE_COVERAGE_PARTIAL" : null };
   }
   const publicCohort = (c: NonNullable<LifecycleSnapshot["consent"]>["cohort"]) =>
@@ -135,14 +165,14 @@ export function createLifecycleService(options: Options) {
       receipt: row?.receipt ? saveReceiptSchema.parse(JSON.parse(row.receipt)) : null,
       reasonCode: row?.reason ?? (row ? null : "ABSENCE_IS_NOT_A_TERMINAL_FENCE") });
   }
-  async function read(view: LifecycleViewKey, rawFilters: unknown, actorRef: string): Promise<LifecycleReadResult> {
+  async function read(view: LifecycleViewKey, rawFilters: unknown, actorRef: string, caller?: LifecycleCallerBoundary): Promise<LifecycleReadResult> {
     if (actorRef !== "agent-reader" && actorRef !== "agent-reviewer") fail("SOURCE_SCOPE_DENIED", 403);
     if (!Object.hasOwn(lifecycleFilters, view)) fail("INVALID_REQUEST", 400);
     const filters = lifecycleFilters[view].safeParse(rawFilters);
     if (!filters.success) fail("INVALID_REQUEST", 400);
     const f = view === "emailFlow" ? lifecycleFilters.emailFlow.parse(filters.data) : null;
     if (f?.draftRequestKey && actorRef !== "agent-reviewer") fail("SOURCE_SCOPE_DENIED", 403);
-    const observed = await observe(), readTime = now();
+    const observed = await observe({ scope, principalRef: actorRef, operation: "read", requestDigest: digest([view, filters.data]) }, caller), readTime = now();
     const s: SourceRead = observed.snapshot && !lifecycleObservationCurrent(observed.snapshot.observedAt, observed.snapshot.validUntil, readTime)
       ? { ...observed, state: "expired", reason: "SOURCE_STALE" } : observed;
     const observedAt = new Date(readTime).toISOString();
@@ -174,7 +204,12 @@ export function createLifecycleService(options: Options) {
       v = "lc1-" + digest(data);
     }
     const sectionMissing = data.kind === "source-email-flow" ? !data.sourceConfig : data.kind === "source-consent" ? !data.consent : data.kind === "source-activation" ? !data.activation : !data.consent || !data.activation || data.flows.length !== 4;
-    return { data, version: v, observedAt, partial: s.state !== "current" || sectionMissing, stale: s.state === "expired", empty: false, capabilities };
+    const assertCurrent = () => {
+      s.assertCurrent();
+      if (s.state !== "expired" && s.snapshot && !lifecycleObservationCurrent(s.snapshot.observedAt, s.snapshot.validUntil, now())) fail("SOURCE_STALE", 409);
+    };
+    assertCurrent();
+    return { assertCurrent, data, version: v, observedAt, partial: s.state !== "current" || sectionMissing, stale: s.state === "expired", empty: false, capabilities };
   }
   function choice(config: FlowCatalog, payload: FlowDraft) {
     const e = config.entryEvents.find(x => x.ref === payload.entryEventRef);
@@ -182,7 +217,7 @@ export function createLifecycleService(options: Options) {
     const template = config.templates.find(x => x.ref === payload.templateRef && x.version === payload.templateVersion);
     return !!e && !!t && !!template && t.entryEventRef === e.ref && t.timezone === payload.timezone;
   }
-  async function saveDraft(raw: unknown, actorRef: string): Promise<SaveReceipt> {
+  async function saveDraft(raw: unknown, actorRef: string, caller?: LifecycleCallerBoundary): Promise<{ receipt: SaveReceipt; assertCurrent(): void }> {
     if (actorRef !== "agent-reviewer") fail("SOURCE_SCOPE_DENIED", 403);
     const parsed = saveDraftSchema.safeParse(raw);
     if (!parsed.success) throw new LifecycleError("VALIDATION_FAILED", 422, { fieldErrors: Object.fromEntries(parsed.error.issues.map(i => [i.path.join(".") || "draft", i.message])) });
@@ -190,9 +225,11 @@ export function createLifecycleService(options: Options) {
     const hash = digest([scope, actorRef, request]);
     const previous = requestRow(request.idempotencyKey);
     if (previous && (previous.hash !== hash || previous.actor !== actorRef || previous.resource !== request.resourceRef)) fail("IDEMPOTENCY_KEY_REUSED", 409);
-    const s = await observe();
+    const s = await observe({ scope, principalRef: actorRef, operation: "save", requestDigest: digest(request) }, caller);
     let failure: LifecycleError | null = null;
+    let requiresFreshBasis = false;
     const result = tx(() => {
+      s.assertCurrent();
       const prior = requestRow(request.idempotencyKey);
       if (prior) {
         if (prior.hash !== hash || prior.actor !== actorRef || prior.resource !== request.resourceRef) fail("IDEMPOTENCY_KEY_REUSED", 409);
@@ -219,6 +256,8 @@ export function createLifecycleService(options: Options) {
       const record = noChange ? stored : draftRecordSchema.parse({ kind: "local-flow-draft", flow, revision: (stored?.revision ?? 0) + 1,
         payload: request.payload, sourceVersion: sourceVersion(snapshot), catalogVersion: config.catalogVersion, policyVersion: config.policyVersion,
         templateVersion: request.payload.templateVersion, lockedPolicies: mandatoryPolicies, savedAt: new Date(now()).toISOString(), savedBy: actorRef });
+      s.assertCurrent();
+      requiresFreshBasis = true;
       if (!noChange) db.prepare("INSERT INTO lifecycle_draft_revisions VALUES(?,?,?)").run(flow, record.revision, JSON.stringify(record));
       const receipt = saveReceiptSchema.parse({ scope, resourceRef: request.resourceRef, resourceVersion: version(flow, s, record), persistedAt: record.savedAt,
         persistedByRef: record.savedBy, record, reasonCodes: noChange ? ["NO_CHANGE", "LOCAL_DRAFT_ONLY"] : ["LOCAL_DRAFT_ONLY"],
@@ -226,10 +265,23 @@ export function createLifecycleService(options: Options) {
       db.prepare("INSERT INTO lifecycle_draft_requests VALUES(?,?,?,?,?,'recorded',?,NULL,NULL)")
         .run(request.idempotencyKey, actorRef, request.resourceRef, hash, JSON.stringify(request), JSON.stringify(receipt));
       return receipt;
+    }, () => {
+      s.assertCurrent();
+      if (requiresFreshBasis && s.snapshot && !lifecycleObservationCurrent(s.snapshot.observedAt, s.snapshot.validUntil, now())) fail("SOURCE_STALE", 409);
     });
     if (failure) throw failure;
     if (!result) throw new LifecycleError("PERSISTENCE_UNCERTAIN", 500, { executionCertainty: "uncertain" });
-    return result;
+    const assertCurrent = () => {
+      try { s.assertCurrent(); }
+      catch (error) {
+        // The durable original receipt remains authoritative after commit. Never
+        // turn a withheld acknowledgment into permission to issue a new key.
+        if (error instanceof LifecycleError) throw new LifecycleError(error.code, error.status, { executionCertainty: "uncertain" });
+        throw new LifecycleError("PERSISTENCE_UNCERTAIN", 502, { executionCertainty: "uncertain" });
+      }
+    };
+    assertCurrent();
+    return { receipt: result, assertCurrent };
   }
   return { read, saveDraft };
 }

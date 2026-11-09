@@ -8,13 +8,23 @@ import type { JobRepository } from "./jobs/repository.ts";
 import type { createProviderHealth } from "./providerHealth.ts";
 import { openOperationsToken, sealOperationsToken } from "./operationsTokens.ts";
 import {assertSynchronousVoid} from "./sourceFence.ts";
+import {boundedSourceRead} from "./actions/readBoundary.ts";
 import {type OperationsControlAuthority,type OperationsControlProof,OperationsAuthorityError,type OperationsServiceReference,operationsTargetMaterialHash} from "./operationsControlAuthority.ts";
 import {operationsCanonicalIntentSchema,operationsIntentDigest,type OperationsCanonicalIntent,type OperationsControlBridge} from "./operationsControlBridge.ts";
 import type {ApprovalPrincipal} from "./approvals/contract.ts";
 import { controlPolicy, controlReceiptSchema, nativeOperationsControlSchema, operationsControlAction, operationsControlFilters, operationsControlSourceSchema,operationsHealthAction,operationsHealthResultSchema,
   operationsCanonicalAction,operationsServiceEvidenceSchema,type OperationsServiceEvidence,type NativeOperationsControl, type OperationsControlSnapshot, type OperationsReviewPayload } from "./operationsControlsSchema.ts";
 
-export type OperationsControlSource={read:(scope:OperationsScope)=>Promise<OperationsControlSnapshot>;allowedHandoffOrigins?:readonly string[];allowedHandoffUrls?:readonly string[]};
+const sourceRef=z.string().min(1).max(500),sourceInstant=z.string().datetime({offset:true});
+export const operationsReadBindingSchema=z.object({scope:z.object({workspaceId:sourceRef,accountId:sourceRef,environment:z.literal("sandbox")}).strict(),
+  principalRef:z.enum(["agent-reader","agent-reviewer"]),role:z.enum(["reader","reviewer"]),operation:z.enum(["read","propose","refreshHealth"]),requestDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export type OperationsReadBinding=z.infer<typeof operationsReadBindingSchema>;
+export const operationsSourceResultSchema=z.object({snapshot:operationsControlSourceSchema.nullable(),authority:z.object({binding:operationsReadBindingSchema,
+  sourceVersion:sourceRef.nullable(),permissionVersion:sourceRef,observedAt:sourceInstant,validUntil:sourceInstant}).strict()}).strict();
+export type OperationsSourceResult=z.infer<typeof operationsSourceResultSchema>;
+export type OperationsControlCaller={assertCurrent():void;signal?:AbortSignal};
+export type OperationsControlSource={read:(binding:OperationsReadBinding,signal?:AbortSignal)=>Promise<unknown>;assertCurrent(result:OperationsSourceResult,binding:OperationsReadBinding,now:number):void;
+  allowedHandoffOrigins?:readonly string[];allowedHandoffUrls?:readonly string[]};
 export class OperationsControlError extends Error{
   readonly code:string;readonly status:number;readonly currentVersion?:string;readonly executionCertainty:"notApplied"|"applied"|"uncertain";
   constructor(code:string,status:number,currentVersion?:string,executionCertainty:"notApplied"|"applied"|"uncertain"="notApplied"){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;this.executionCertainty=executionCertainty;}
@@ -48,16 +58,35 @@ export function createOperationsControls(input:Input){
   function open(ref:string){try{return targetSchema.parse(openOperationsToken(scope,input.secret,"operations-control-target",ref));}catch{return fail("INVALID_CONTROL_REFERENCE",400);}}
   const fresh=(at:string)=>Number.isFinite(Date.parse(at))&&Date.parse(at)<=now()&&now()-Date.parse(at)<=15*60_000;
   function auth(actor:string,role:Role){if(actor!=="agent-"+role)fail("SOURCE_SCOPE_DENIED",403);}
-  async function snapshot(){
-    if(!source)return null;
-    let raw:unknown;try{raw=await source.read(scope);}catch(error){ if(error instanceof OperationsControlError)throw error; return fail("SOURCE_UNAVAILABLE",503); }
-    const result=operationsControlSourceSchema.safeParse(raw);if(!result.success)fail("SOURCE_RESPONSE_INVALID",502);
-    const s=result.data;
-    if(digest(s.scope)!==digest(scope))fail("SOURCE_SCOPE_DENIED",403);
-    if(Date.parse(s.observedAt)>now())fail("SOURCE_RESPONSE_INVALID",502);
-    for(const rows of [s.roles,s.tasks,s.takeovers,s.permissions,s.comparisons,s.conflicts,s.reports,s.attribution,s.handoffs,s.runMembership])
-      for(const record of rows)if(Date.parse(record.observedAt)>now())fail("SOURCE_RESPONSE_INVALID",502);
-    return s;
+  function callerFence(caller?:OperationsControlCaller){return ()=>{if(caller?.signal?.aborted)fail("REQUEST_CANCELLED",499);if(!caller)return;
+    try{assertSynchronousVoid(caller.assertCurrent);}catch(error){throw new OperationsControlError("OPERATIONS_CALLER_DENIED",error instanceof OperationsControlError&&[401,403].includes(error.status)?error.status:403);}};}
+  const readBinding=(operation:OperationsReadBinding["operation"],request:unknown,actorRef:string,role:Role)=>operationsReadBindingSchema.parse({scope,principalRef:actorRef,role,operation,requestDigest:digest(request)});
+  async function snapshot(request:OperationsReadBinding,caller?:OperationsControlCaller){
+    const assertCaller=callerFence(caller);assertCaller();
+    if(!source)return {snapshot:null,accessValidUntil:null,assertCurrent:assertCaller};
+    if(typeof source.read!=="function"||typeof source.assertCurrent!=="function")fail("SOURCE_RESPONSE_INVALID",502);
+    let raw:unknown;try{raw=await boundedSourceRead(()=>source.read(structuredClone(request),caller?.signal),caller?.signal);}
+    catch(error){assertCaller();if(error instanceof OperationsControlError&&[401,403].includes(error.status))fail("SOURCE_SCOPE_DENIED",error.status);if(error instanceof OperationsControlError&&error.status===409)fail("SOURCE_CHANGED",409);return fail("SOURCE_UNAVAILABLE",503);}
+    assertCaller();const parsed=operationsSourceResultSchema.safeParse(raw);if(!parsed.success)return fail("SOURCE_RESPONSE_INVALID",502);
+    const result=parsed.data,s=result.snapshot;
+    const assertCurrent=()=>{
+      assertCaller();const time=now(),grant=result.authority;
+      if(digest(grant.binding)!==digest(request)||request.principalRef!=="agent-"+request.role||s&&digest(s.scope)!==digest(scope))fail("SOURCE_SCOPE_DENIED",403);
+      if(grant.sourceVersion!==(s?.revision??null))fail("SOURCE_RESPONSE_INVALID",502);
+      if(!Number.isFinite(time)||Date.parse(grant.observedAt)>time||Date.parse(grant.validUntil)<=time||Date.parse(grant.validUntil)<=Date.parse(grant.observedAt)||Date.parse(grant.validUntil)-Date.parse(grant.observedAt)>900_000)fail("SOURCE_AUTHORITY_EXPIRED",403);
+      try{assertSynchronousVoid(()=>source.assertCurrent(structuredClone(result),structuredClone(request),time));}
+      catch(error){if(error instanceof OperationsControlError&&[401,403].includes(error.status))fail("SOURCE_SCOPE_DENIED",error.status);if(error instanceof OperationsControlError&&error.status===409)fail("SOURCE_CHANGED",409);fail("SOURCE_RESPONSE_INVALID",502);}
+      assertCaller();
+    };
+    assertCurrent();
+    if(s){if(Date.parse(s.observedAt)>now())fail("SOURCE_RESPONSE_INVALID",502);
+      for(const rows of [s.roles,s.tasks,s.takeovers,s.permissions,s.comparisons,s.conflicts,s.reports,s.attribution,s.handoffs,s.runMembership])
+        for(const record of rows)if(Date.parse(record.observedAt)>now())fail("SOURCE_RESPONSE_INVALID",502);}
+    return {snapshot:s,accessValidUntil:result.authority.validUntil,assertCurrent};
+  }
+  function published<T extends object>(value:T,fence:()=>void,certainty:"notApplied"|"applied"|"uncertain"){
+    const assertCurrent=()=>{try{fence();}catch(error){if(error instanceof OperationsControlError)throw new OperationsControlError(error.code,error.status,undefined,error.code==="OPERATIONS_CALLER_DENIED"&&certainty==="applied"?"uncertain":certainty);throw error;}};
+    assertCurrent();return Object.defineProperty(value,"assertCurrent",{value:assertCurrent}) as T&{assertCurrent():void};
   }
   function localBasis(){
     return {jobs:db.prepare("SELECT COUNT(*) n,MAX(version) maxVersion FROM job_heads").get(),
@@ -134,12 +163,14 @@ export function createOperationsControls(input:Input){
     }
     proof.assertCurrent();
   }
-  async function read(raw:unknown,actorRef:string,role:Role){
+  async function read(raw:unknown,actorRef:string,role:Role,caller?:OperationsControlCaller){
     auth(actorRef,role);
     const parsed=operationsControlFilters.safeParse(raw);if(!parsed.success)fail("INVALID_REQUEST",400);const f=parsed.data;
     if(f.proposalRequestKey&&role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
+    const assertCaller=callerFence(caller);assertCaller();
     const proof=input.authority?await input.authority.resolve({principalRef:actorRef}):undefined;
-    const s=proof?.snapshot??await snapshot(),v=version(s,proof),sourceState=!s?"notConnected":!fresh(s.observedAt)?"stale":s.coverage==="partial"?"partial":"current";
+    assertCaller();const observed=proof?null:await snapshot(readBinding("read",f,actorRef,role),caller);
+    const s=proof?.snapshot??observed?.snapshot??null,v=version(s,proof),sourceState=!s?"notConnected":!fresh(s.observedAt)?"stale":s.coverage==="partial"?"partial":"current";
     let reportJob:string|null=null;
     if(f.jobRef){
       if(f.section!=="reports")fail("INVALID_REQUEST",400);
@@ -249,14 +280,19 @@ export function createOperationsControls(input:Input){
         approvalRef:null,manifestRef:null,version:null,executionCertainty:reconciliation.state==="rejected"?"notApplied":"uncertain"};
     }
     const data=nativeOperationsControlSchema.parse({kind:"native-operations-controls",section:f.section,version:v,observedAt:new Date(now()).toISOString(),actorRef,role,sourceState,sourceObservedAt:s?.observedAt??null,
+      readAccess:proof?{kind:"namedAuthority",validUntil:proof.validUntil}:observed?.accessValidUntil?{kind:"sourceGrant",validUntil:observed.accessValidUntil}:null,
       records,actions,healthTargets,localRuns,localCoverage:{returned:runRows.length,total:f.section==="runs"?runTotal:0,partial:f.section==="runs"&&runRows.length<runTotal},
       runFilterEvidence:{matched:localRuns.length,unknownPlatform,assignment:proof?"named-principal-verified":"named-principal-unverified"},
       namedActor:proof?{state:"verified",personRef:alias(proof.actor.personRef),roles:proof.actor.roles,observedAt:proof.observedAt,validUntil:proof.validUntil}:{state:"unavailable",personRef:null,roles:[],observedAt:null,validUntil:null},
       canonicalActions,canonicalReconciliation,serviceEvidence,
       handoffs,proposalReconciliation:reconciliation,history:hs.records,historyCoverage:hs.coverage});
-    proof?.assertCurrent();for(const fence of serviceFences)fence();proof?.assertCurrent();
-    if(proof&&version(s,proof)!==v)throw new OperationsAuthorityError("OPERATIONS_LOCAL_RECORD_CHANGED");
-    return {data,version:v,observedAt:data.observedAt,partial:sourceState==="partial"||data.localCoverage.partial||((f.section==="connections"||f.section==="capabilities")&&ledger.list(100).partial),stale:sourceState==="stale",empty:!records.length&&!actions.length&&!localRuns.length,
+    const assertCurrent=()=>{
+      assertCaller();observed?.assertCurrent();proof?.assertCurrent();for(const fence of serviceFences)fence();proof?.assertCurrent();observed?.assertCurrent();assertCaller();
+      if(s&&sourceState!=="stale"&&!fresh(s.observedAt))fail("SOURCE_STALE",409);
+      if(version(s,proof)!==v)throw new OperationsAuthorityError("OPERATIONS_LOCAL_RECORD_CHANGED");
+    };
+    assertCurrent();
+    return {assertCurrent,data,version:v,observedAt:data.observedAt,partial:sourceState!=="current"||data.localCoverage.partial||((f.section==="connections"||f.section==="capabilities")&&ledger.list(100).partial),stale:sourceState==="stale",empty:sourceState==="current"&&!records.length&&!actions.length&&!localRuns.length,
       capabilities:[{actionKind:"proposeOperationsReview",state:role==="reader"?"denied" as const:actions.some(a=>a.allowed)?"available" as const:"held" as const,reasonCodes:role==="reader"?["REVIEWER_REQUIRED"]:actions.some(a=>a.allowed)?[]:["SOURCE_AUTHORITY_UNAVAILABLE"]},
         {actionKind:"previewOperationsControl",state:role==="reader"?"denied" as const:canonicalActions.some(a=>a.allowed)?"available" as const:"held" as const,reasonCodes:role==="reader"?["REVIEWER_REQUIRED"]:canonicalActions.some(a=>a.allowed)?[]:["OPERATIONS_OWNER_UNCONFIGURED"]}]};
   }
@@ -318,24 +354,27 @@ export function createOperationsControls(input:Input){
       if(error&&typeof error==="object"&&"code"in error&&typeof error.code==="string"&&"status"in error&&typeof error.status==="number")throw new OperationsAuthorityError(error.code,error.status,"applied");
       throw new OperationsAuthorityError("OPERATIONS_PREVIEW_UNVERIFIED",502,"uncertain");}
   }
-  async function propose(raw:unknown,actorRef:string,role:Role){
+  async function propose(raw:unknown,actorRef:string,role:Role,caller?:OperationsControlCaller){
     auth(actorRef,role);if(role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
     const parsed=operationsControlAction.safeParse(raw);if(!parsed.success)fail("VALIDATION_FAILED",422);const a=parsed.data;
     if(a.requestedScope.workspaceId!==scope.workspaceId||a.requestedScope.accountIds[0]!==scope.accountId)fail("SOURCE_SCOPE_DENIED",403);
     const t=open(a.payload.targetRef);if(t.kind!==a.payload.kind)fail("INVALID_CONTROL_REFERENCE",400);
     const logical={scope,actorRef,kind:a.payload.kind,target:t.id,reason:a.payload.reason,base:a.expectedVersion},hash=digest([logical,a.payload]);
+    const bound=readBinding("propose",a,actorRef,role),observed=await snapshot(bound,caller);
     const old=db.prepare("SELECT request_hash,receipt FROM operations_control_requests WHERE request_key=?").get(a.idempotencyKey);
     if(old){if(old.request_hash!==hash)fail("IDEMPOTENCY_CONFLICT",409);const r=controlReceiptSchema.parse(JSON.parse(String(old.receipt)));
-      if(r.state==="rejected")fail("STALE_VERSION",409);return ack(r);}
-    const first=await snapshot();if(!first)fail("INTEGRATION_PENDING",503);
+      if(r.state==="rejected")fail("STALE_VERSION",409);return published(ack(r),observed.assertCurrent,"applied");}
+    const first=observed.snapshot;if(!first)fail("INTEGRATION_PENDING",503);
     const firstDigest=digest(facts(first));
-    const s=await snapshot();if(!s)fail("INTEGRATION_PENDING",503);
+    const currentSource=await snapshot(bound,caller),s=currentSource.snapshot;if(!s)fail("INTEGRATION_PENDING",503);
+    const fence=()=>{observed.assertCurrent();currentSource.assertCurrent();};fence();
     if(firstDigest!==digest(facts(s)))fail("SOURCE_CHANGED",409);
     db.exec("BEGIN IMMEDIATE");let closed=false;
     try{
+      fence();
       const existing=db.prepare("SELECT request_hash,receipt FROM operations_control_requests WHERE request_key=?").get(a.idempotencyKey);
       if(existing){if(existing.request_hash!==hash)fail("IDEMPOTENCY_CONFLICT",409);const r=controlReceiptSchema.parse(JSON.parse(String(existing.receipt)));
-        if(r.state==="rejected")fail("STALE_VERSION",409);db.exec("COMMIT");closed=true;return ack(r);}
+        if(r.state==="rejected")fail("STALE_VERSION",409);fence();db.exec("COMMIT");closed=true;return published(ack(r),fence,"applied");}
       if(!fresh(s.observedAt))fail("SOURCE_STALE",409);
       if(s.coverage!=="complete")fail("SOURCE_COVERAGE_PARTIAL",409);
       const current=version(s),member=target(s,a.payload.kind,t.id);
@@ -346,15 +385,15 @@ export function createOperationsControls(input:Input){
           manifestDigest:state==="recorded"?digest(manifest):null,payloadDigest:digest(a.payload),createdAt:new Date(now()).toISOString(),reason:a.payload.reason});
         db.prepare("INSERT INTO operations_control_requests VALUES(?,?,?,?,?,?,?,?)").run(a.idempotencyKey,actorRef,sectionFor[a.payload.kind],JSON.stringify(t),hash,JSON.stringify(receipt),state==="recorded"?JSON.stringify(manifest):null,
           Number(db.prepare("SELECT COALESCE(MAX(sequence),0)+1 n FROM operations_control_requests").get()?.n));
-        db.exec("COMMIT");closed=true;return receipt;
+        fence();db.exec("COMMIT");closed=true;return receipt;
       };
       // A complete changed basis seals the original request as a no-op, preventing a late old submission.
       if(current!==a.expectedVersion||!member){save("rejected");fail("STALE_VERSION",409,current);}
       const reason=hold(s,a.payload.kind,t.id);if(reason)fail(reason,reason==="SOURCE_SCOPE_DENIED"?403:409,current);
-      return ack(save("recorded"));
+      return published(ack(save("recorded")),fence,"applied");
     }catch(error){if(!closed)db.exec("ROLLBACK");throw error;}
   }
-  async function refreshHealth(raw:unknown,actorRef:string,role:Role){
+  async function refreshHealth(raw:unknown,actorRef:string,role:Role,caller?:OperationsControlCaller){
     auth(actorRef,role);if(role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
     const parsed=operationsHealthAction.safeParse(raw);if(!parsed.success)fail("VALIDATION_FAILED",422);const a=parsed.data;
     if(a.requestedScope.workspaceId!==scope.workspaceId||a.requestedScope.accountIds[0]!==scope.accountId)fail("SOURCE_SCOPE_DENIED",403);
@@ -363,42 +402,45 @@ export function createOperationsControls(input:Input){
     let prior=db.prepare("SELECT * FROM operations_control_health_requests WHERE request_key=?").get(a.idempotencyKey);
     if(prior&&prior.request_hash!==hash)fail("IDEMPOTENCY_CONFLICT",409);
     const priorCertainty=()=>prior?.result?operationsHealthResultSchema.parse(JSON.parse(String(prior.result))).executionCertainty:prior?"uncertain" as const:"notApplied" as const;
-    let sourceSnapshot:OperationsControlSnapshot|null;
-    try{sourceSnapshot=await snapshot();}catch(error){
+    const bound=readBinding("refreshHealth",a,actorRef,role);
+    let sourceSnapshot:OperationsControlSnapshot|null,sourceRead:Awaited<ReturnType<typeof snapshot>>;
+    try{sourceRead=await snapshot(bound,caller);sourceSnapshot=sourceRead.snapshot;}catch(error){
       prior=db.prepare("SELECT * FROM operations_control_health_requests WHERE request_key=?").get(a.idempotencyKey);
       if(error instanceof OperationsControlError)throw new OperationsControlError(error.code,error.status,error.currentVersion,priorCertainty());throw error;
     }
+    const fence=()=>sourceRead.assertCurrent();
     // Another request may establish or complete this exact command while source authority is awaited.
     prior=db.prepare("SELECT * FROM operations_control_health_requests WHERE request_key=?").get(a.idempotencyKey);
     if(prior&&prior.request_hash!==hash)fail("IDEMPOTENCY_CONFLICT",409);
     const binding=ledger.get(t.id);if(!binding)throw new OperationsControlError("RECORD_NOT_FOUND",404,undefined,priorCertainty());
     if(prior?.result){
       const historical=operationsHealthResultSchema.parse(JSON.parse(String(prior.result))),current=health.get(t.id);
-      if(historical.executionCertainty!=="applied")return historical;
+      if(historical.executionCertainty!=="applied")return published(historical,fence,historical.executionCertainty);
       const permitted=binding.state==="Ready"&&!ledger.hasDeniedActionRoute(binding.registration.binding)&&current?.permission!=="denied";
-      return {...historical,state:permitted&&current?.state==="ready"&&prior.binding_revision===binding.revision?"succeeded" as const:"blocked" as const,
-        reasonCodes:!permitted?["PROVIDER_PERMISSION_HELD"]:current?.reasonCodes??["SOURCE_HEALTH_UNKNOWN"]};
+      return published({...historical,state:permitted&&current?.state==="ready"&&prior.binding_revision===binding.revision?"succeeded" as const:"blocked" as const,
+        reasonCodes:!permitted?["PROVIDER_PERMISSION_HELD"]:current?.reasonCodes??["SOURCE_HEALTH_UNKNOWN"]},fence,historical.executionCertainty);
     }
     if(!prior&&version(sourceSnapshot)!==a.expectedVersion)fail("STALE_VERSION",409,version(sourceSnapshot));
     if(prior&&prior.binding_revision!==binding.revision)throw new OperationsControlError("STALE_VERSION",409,version(sourceSnapshot),priorCertainty());
     const summary=health.get(t.id),held=!summary?.configured?"PROVIDER_HEALTH_TARGET_UNAVAILABLE":binding.state!=="Ready"||ledger.hasDeniedActionRoute(binding.registration.binding)||summary.permission==="denied"?"PROVIDER_PERMISSION_HELD":null;
-    db.prepare("INSERT OR IGNORE INTO operations_control_health_requests VALUES(?,?,?,NULL)").run(a.idempotencyKey,hash,binding.revision);
+    fence();db.prepare("INSERT OR IGNORE INTO operations_control_health_requests VALUES(?,?,?,NULL)").run(a.idempotencyKey,hash,binding.revision);
     const concurrent=db.prepare("SELECT request_hash,result FROM operations_control_health_requests WHERE request_key=?").get(a.idempotencyKey);
     if(concurrent?.request_hash!==hash)fail("IDEMPOTENCY_CONFLICT",409);
-    if(concurrent.result)return operationsHealthResultSchema.parse(JSON.parse(String(concurrent.result)));
+    if(concurrent.result){const result=operationsHealthResultSchema.parse(JSON.parse(String(concurrent.result)));return published(result,fence,result.executionCertainty);}
     const base={actionRef:"control-health-"+digest([scope,actorRef,a.idempotencyKey]),payloadVersion:hash,policyVersion:controlPolicy};
     const finish=(result:unknown)=>{const r=operationsHealthResultSchema.parse(result);db.prepare("UPDATE operations_control_health_requests SET result=? WHERE request_key=? AND request_hash=?").run(JSON.stringify(r),a.idempotencyKey,hash);return r;};
-    if(held)return finish({...base,state:"blocked",runRef:null,receiptRefs:[],reasonCodes:[held],executionCertainty:"notApplied"});
+    if(held)return published(finish({...base,state:"blocked",runRef:null,receiptRefs:[],reasonCodes:[held],executionCertainty:"notApplied"}),fence,"notApplied");
     try{
+      fence();
       const result=await health.check({capabilityId:t.id,eventId:"controls-"+hash},"controls-"+digest([scope,actorRef,a.idempotencyKey]));
-      if(result.state==="held"&&result.runId){const run=jobs.getRun(result.runId);if(run.state==="running")return {...base,state:"outcomeUncertain" as const,runRef:seal("run",result.runId),receiptRefs:[],reasonCodes:["HEALTH_CHECK_IN_PROGRESS"],executionCertainty:"uncertain" as const};}
+      if(result.state==="held"&&result.runId){const run=jobs.getRun(result.runId);if(run.state==="running")return published({...base,state:"outcomeUncertain" as const,runRef:seal("run",result.runId),receiptRefs:[],reasonCodes:["HEALTH_CHECK_IN_PROGRESS"],executionCertainty:"uncertain" as const},fence,"uncertain");}
       const recorded=finish({...base,state:result.state==="observed"&&result.health?.state==="ready"?"succeeded":"blocked",runRef:result.runId?seal("run",result.runId):null,
         receiptRefs:result.observationId?["health-observation:"+alias(result.observationId)]:[],reasonCodes:result.state==="observed"?result.health?.reasonCodes??["SOURCE_HEALTH_UNKNOWN"]:result.state==="unconfigured"?["PROVIDER_HEALTH_TARGET_UNAVAILABLE"]:["HEALTH_JOB_HELD"],executionCertainty:result.state==="observed"?"applied":"notApplied"});
-      try{await snapshot();}catch(error){if(error instanceof OperationsControlError)throw new OperationsControlError(error.code,error.status,error.currentVersion,recorded.executionCertainty);throw error;}
+      try{sourceRead=await snapshot(bound,caller);}catch(error){if(error instanceof OperationsControlError)throw new OperationsControlError(error.code,error.status,undefined,error.code==="OPERATIONS_CALLER_DENIED"&&recorded.executionCertainty==="applied"?"uncertain":recorded.executionCertainty);throw error;}
       const currentBinding=ledger.get(t.id),currentHealth=health.get(t.id);
-      if(recorded.executionCertainty==="applied"&&(!currentBinding||currentBinding.state!=="Ready"||currentBinding.revision!==binding.revision||currentHealth?.state!=="ready"))return {...recorded,state:"blocked" as const,reasonCodes:currentHealth?.reasonCodes??["PROVIDER_PERMISSION_HELD"]};
-      return recorded;
-    }catch(error){if(error instanceof OperationsControlError)throw error;return {...base,state:"outcomeUncertain" as const,runRef:null,receiptRefs:[],reasonCodes:["HEALTH_CHECK_UNVERIFIED"],executionCertainty:"uncertain" as const};}
+      if(recorded.executionCertainty==="applied"&&(!currentBinding||currentBinding.state!=="Ready"||currentBinding.revision!==binding.revision||currentHealth?.state!=="ready"))return published({...recorded,state:"blocked" as const,reasonCodes:currentHealth?.reasonCodes??["PROVIDER_PERMISSION_HELD"]},fence,recorded.executionCertainty);
+      return published(recorded,fence,recorded.executionCertainty);
+    }catch(error){if(error instanceof OperationsControlError)throw error;return published({...base,state:"outcomeUncertain" as const,runRef:null,receiptRefs:[],reasonCodes:["HEALTH_CHECK_UNVERIFIED"],executionCertainty:"uncertain" as const},fence,"uncertain");}
   }
   return {read,propose,refreshHealth,previewCanonical,canonicalIntents:{read:canonicalIntent,assertCurrent:assertCanonicalIntent}};
 }

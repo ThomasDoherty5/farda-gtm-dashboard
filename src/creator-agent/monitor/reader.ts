@@ -5,7 +5,9 @@ import type { FunnelRepository } from "../funnelStore.ts";
 import type { OperationsScope } from "../operations.ts";
 import { openOperationsToken,sealOperationsToken } from "../operationsTokens.ts";
 import { digest } from "../config.ts";
-import { monitorFilters,monitorSnapshotSchema,nativeContentSchema,nativeWatchlistSchema,nativeRunSchema,nativePostSchema,
+import { boundedSourceRead } from "../actions/readBoundary.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
+import { monitorFilters,monitorReadBindingSchema,monitorSourceResultSchema,nativeContentSchema,nativeWatchlistSchema,nativeRunSchema,nativePostSchema,
   type MonitorSnapshot,type MonitorSourceReader,type MonitorViewKey,type NativeWatchlist } from "./contract.ts";
 import { effectiveEvents,projectPosts,monitorTotals,type Alias } from "./posts.ts";
 export { monitorFilters,monitorViewKeys,type MonitorSourceReader,type MonitorViewKey } from "./contract.ts";
@@ -129,7 +131,7 @@ export function createMonitorReader(options:Options){
     throw new MonitorError("DATABASE_SCOPE_MISMATCH",403);
   const key=createHmac("sha256",secret).update(JSON.stringify(["monitor-display.v1",scope])).digest();
   const alias:Alias=(kind,value)=>kind+"-"+createHmac("sha256",key).update(JSON.stringify([kind,value])).digest("hex").slice(0,24);
-  async function read(view:MonitorViewKey,raw:unknown,page:{cursor:string|null;limit:number;authorizationContext?:string}) {
+  async function read(view:MonitorViewKey,raw:unknown,page:{cursor:string|null;limit:number;authorizationContext?:string},caller?:{assertCurrent():void;signal?:AbortSignal}) {
     const filters=monitorFilters[view].parse(raw),limit=z.number().int().min(1).max(100).parse(page.limit);
     const context=digest([scope,view,filters,limit,page.authorizationContext??"reader"]),start=clock();
     let cursor:z.infer<typeof pageSchema>|null=null;
@@ -138,15 +140,32 @@ export function createMonitorReader(options:Options){
       catch {throw new MonitorError("INVALID_MONITOR_CURSOR",400);}
       if(cursor.context!==context || cursor.expires<=start)throw new MonitorError(cursor.expires<=start?"MONITOR_CURSOR_EXPIRED":"INVALID_MONITOR_CURSOR",409);
     }
-    const reply=source?await source(scope):null;
-    const result=reply===null?null:monitorSnapshotSchema.safeParse(reply);
+    const binding=monitorReadBindingSchema.parse({scope,principalRef:`agent-${page.authorizationContext??"reader"}`,viewKey:view,requestDigest:digest([filters,page.cursor,limit])});
+    const assertCaller=()=>{if(caller?.signal?.aborted)throw new MonitorError("REQUEST_CANCELLED",499);if(caller)assertSynchronousVoid(caller.assertCurrent);};
+    const sourceFailure=(error:unknown):never=>{if(error instanceof MonitorError && [401,403].includes(error.status))throw new MonitorError("MONITOR_SOURCE_DENIED",error.status);
+      if(error instanceof MonitorError && error.status===409)throw new MonitorError("MONITOR_SOURCE_CHANGED",409);
+      if(caller?.signal?.aborted)throw new MonitorError("REQUEST_CANCELLED",499);throw new MonitorError("MONITOR_SOURCE_UNAVAILABLE",503);};
+    assertCaller();
+    if(source && (typeof source.read!=="function" || typeof source.assertCurrent!=="function"))throw new MonitorError("MONITOR_SOURCE_INVALID",502);
+    let reply:unknown=null;
+    try{if(source)reply=await boundedSourceRead(()=>source.read(structuredClone(binding),caller?.signal),caller?.signal);}catch(error){sourceFailure(error);}
+    assertCaller();
+    const result=reply===null?null:monitorSourceResultSchema.safeParse(reply);
     if(result && !result.success)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
-    const s=result?.data??null,now=clock();
+    if(source && !result)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
+    const packet=result?.data??null,s=packet?.snapshot??null,now=clock();
+    const sourceExpires=s?Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs):null;
+    const expired=sourceExpires!==null && sourceExpires<=now;
+    const assertCurrent=()=>{assertCaller();if(packet && source){const proof=packet.authority,time=clock();
+      if(digest(proof.binding)!==digest(binding) || proof.sourceVersion!==(s?.version??null))throw new MonitorError("MONITOR_SOURCE_INVALID",502);
+      if(!Number.isFinite(time)||Date.parse(proof.observedAt)>time||Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+15*60_000)<=time)throw new MonitorError("MONITOR_SOURCE_ACCESS_EXPIRED",409);
+      try{assertSynchronousVoid(()=>source.assertCurrent(structuredClone(packet),structuredClone(binding),time));}catch(error){sourceFailure(error);}}
+      assertCaller();if(packet && Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)<=clock())throw new MonitorError("MONITOR_SOURCE_ACCESS_EXPIRED",409);
+      if(s && expired!==(Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs)<=clock()))throw new MonitorError("MONITOR_SOURCE_CHANGED",409);};
+    assertCurrent();
     if(s && (s.scope.accountId!==scope.accountId || s.scope.workspaceId!==scope.workspaceId || s.scope.environment!==scope.environment))
       throw new MonitorError("SOURCE_SCOPE_DENIED",403);
     if(s && Date.parse(s.observedAt)>now)throw new MonitorError("MONITOR_SOURCE_INVALID",502);
-    const sourceExpires=s?Math.min(Date.parse(s.validUntil),Date.parse(s.observedAt)+monitorMaxAgeMs):null;
-    const expired=sourceExpires!==null && sourceExpires<=now;
     const sourceState=!s ? source?"unavailable" as const:"unconfigured" as const : expired?"expired" as const:s.coverage==="partial"?"partial" as const:"current" as const;
     const asOf=cursor?.asOf??new Date(now).toISOString();
     db.exec("BEGIN");
@@ -160,7 +179,7 @@ export function createMonitorReader(options:Options){
       if(cursor && (cursor.basis!==basis || cursor.expires<=now))throw new MonitorError("MONITOR_SNAPSHOT_CHANGED",409);
       const watches=watchRows(members,s,!expired,alias,now);
       const latestRun=(s?.runs??[]).slice().sort((a,b)=>Date.parse(b.observedAt)-Date.parse(a.observedAt)||a.id.localeCompare(b.id))[0];
-      const meta={observedAt:asOf,sourceState,sourceAsOf:cursor?cursor.sourceAsOf:s?.observedAt??null,sourceVersion:s?alias("source",s.version):null,
+      const meta={observedAt:asOf,readAccess:packet?{validUntil:new Date(Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)).toISOString()}:null,sourceState,sourceAsOf:cursor?cursor.sourceAsOf:s?.observedAt??null,sourceVersion:s?alias("source",s.version):null,
         latestRunRef:latestRun?alias("run",latestRun.id):null,membershipComplete:members.complete};
       const offset=cursor?.offset??0;
       let total=0,returned=0;
@@ -220,8 +239,10 @@ export function createMonitorReader(options:Options){
       const more=offset+returned<total,partial=returned<total || sourceState!=="current" || !members.complete || (data?.kind==="saved-monitor-run"&&!data.complete);
       const expires=cursor?.expires??Math.min(now+15*60_000,sourceExpires!==null&&!expired?sourceExpires:Number.MAX_SAFE_INTEGER);
       const nextCursor=more?sealOperationsToken(scope,secret,"monitor-page.v1",{version:1,context,offset:offset+limit,asOf,sourceAsOf:meta.sourceAsOf,watermark:saved.watermark,basis,expires}):null;
+      assertCurrent();
+      if(data===null && (sourceState!=="current" || !members.complete))throw new MonitorError("MONITOR_SOURCE_COVERAGE_UNVERIFIED",503);
       db.exec("COMMIT");
-      return {data,total,returned,partial,stale:expired,nextCursor,hasMore:more,capabilities:[{actionKind:"retryMonitorProfile",state:"held" as const,
+      return {data,total,returned,partial,stale:expired,nextCursor,hasMore:more,assertCurrent,capabilities:[{actionKind:"retryMonitorProfile",state:"held" as const,
         reasonCodes:["J08_RETRY_AUTHORITY_UNVERIFIED"]}]};
     } catch(error){db.exec("ROLLBACK");throw error;}
   }

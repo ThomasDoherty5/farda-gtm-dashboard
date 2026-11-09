@@ -66,8 +66,8 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     for (const scope of [{ ...requestedScope, workspaceId: "foreign-workspace" }, { ...requestedScope, accountIds: ["foreign-account"] },
       { ...requestedScope, environment: "production" }]) {
       const foreign = await read(viewKey, operationsReadTestFilters[viewKey], { scope });
-      expect(foreign.status).toBe(400);
-      expect(foreign.body).toMatchObject({ code: "INVALID_INPUT", executionCertainty: "notApplied" });
+      expect(foreign.status).toBe(403);
+      expect(foreign.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: "notApplied" });
       expect(foreign.body).not.toHaveProperty("data");
     }
     expect(reads).toBe(0);
@@ -281,7 +281,9 @@ describe("authenticated operations reads (THO-301, THO-367)", () => {
     for (const viewKey of operationsReadViewKeys) expect(viewSchemas[viewKey], viewKey).toBe(opsViewSchemas[viewKey]);
     let reads = 0;
     const { read } = await start({ operationsReadSource: async () => { reads++; return null; } });
-    expect((await read("shippingHub", {})).body).toMatchObject({ code: "INTEGRATION_PENDING" });
+    const shipping = await read("shippingHub", {});
+    expect(shipping).toMatchObject({ status: 503, body: { code: "SHIPPING_SOURCE_UNCONFIGURED", executionCertainty: "notApplied" } });
+    expect(shipping.body).not.toHaveProperty("data");
     expect(reads).toBe(0);
   });
   it.each(operationsReadViewKeys)("%s refuses a demo identity at the authenticated native boundary", async viewKey => {

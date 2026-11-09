@@ -14,6 +14,7 @@ const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_S
 let settlement: ReturnType<typeof originalLayoutFinanceSource>;
 let app: ReturnType<typeof createAgentServer>;
 let mode: "unconfigured" | "configured" | "denied" = "unconfigured";
+let financeClock = fixedNow;
 const routes = ["/finance", "/finance/commissions", "/finance/settlements/COMM-DEMO-D", "/finance/payables/PAY-0012", "/finance/close/2026-10",
   "/finance/close/2026-10?view=months", "/finance/close/2026-10?view=manifest", "/analytics/finance"];
 
@@ -21,12 +22,13 @@ test.beforeEach(async ({ page }) => {
   await page.clock.install({ time: fixedNow });
   settlement = originalLayoutFinanceSource(scope, fixedNow);
   mode = "unconfigured";
+  financeClock = fixedNow;
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-    operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
+    operations: { now: () => financeClock },
     settlements: { source: settlement.source },
     financeSource: financeTestSource(async (_scope, request) => {
       if (mode === "denied") throw new FinanceError("DENIED", 403);
-      return { ...financeSnapshot(request.viewKey), scope: { ...scope } };
+      return { ...financeSnapshot(request.viewKey, {}, financeClock), scope: { ...scope } };
     }) });
   await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT), "127.0.0.1", resolve); });
 });
@@ -65,6 +67,23 @@ test("a configured source renders validated finance data, and a later source den
   await page.reload();
   await expect(page.getByRole("alert").filter({ hasText: "No access to this account" })).toBeVisible();
   await expect(page.getByText(/The accepted USD\s150\.00 obligation/)).toHaveCount(0);
+
+  // The legacy financial report has its own access grant, independent of the
+  // rich settlement reader above. Resuming a suspended tab cannot retain it.
+  mode = "configured";
+  await page.goto("/finance");
+  await expect(page.getByTestId("pnl")).toBeVisible();
+  await page.getByRole("button", { name: "View metric definitions" }).click();
+  await expect(page.getByRole("dialog", { name: "Metric definitions" })).toBeVisible();
+  financeClock = fixedNow + 15 * 60_000;
+  await page.clock.setSystemTime(financeClock);
+  await page.evaluate(() => { window.dispatchEvent(new Event("focus")); });
+  await expect(page.getByText("Source access has expired. Refresh to verify the current evidence.")).toBeVisible();
+  await expect(page.getByTestId("pnl")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Refresh source evidence" }).click();
+  await expect(page.getByTestId("pnl")).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 

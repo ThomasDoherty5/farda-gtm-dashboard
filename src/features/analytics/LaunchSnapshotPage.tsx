@@ -1,5 +1,9 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import type { NativeLaunchSnapshot as NativeSnapshot } from "@/creator-agent/analytics/views";
+import { NativeLaunchSnapshot } from "./NativeLaunchSnapshot";
+import { useReportingPeriod, reportingRoute } from "./reportingPeriod";
+import { nativePeriod } from "./NativeAnalyticsEvidence";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -11,18 +15,20 @@ const two = (n: number) => String(n).padStart(2, "0");
 
 /** Launch snapshot (Figma source 3:6, owner THO-293). L stays unset until the founder approves a date. */
 export function LaunchSnapshotPage() {
-  const query = useView<Record<string, never>, LaunchSnapshotData>("launchSnapshot", {});
+  const selectedPeriod = useReportingPeriod();
+  const query = useView<Record<string, never>, LaunchSnapshotData | NativeSnapshot>("launchSnapshot", {}, selectedPeriod);
   const [dialog, setDialog] = useState(false);
+  const native = query.data?.data?.datasetKey === "analytics-native" ? query.data.data : null;
   return (
     <section aria-labelledby="launch-snapshot-title" data-figma-source="3:6" className={styles.page}>
       <PageHeader id="launch-snapshot-title" title="Your launch, in focus." subtitle="One view of creators, operations, and the decisions that move Farda forward.">
-        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog(true)}>Last 30 days</Button>
-        <LinkButton to="/analytics/attribution" style={{ minWidth: 166 }}>View report</LinkButton>
+        <Button variant="secondary" style={{ minWidth: 172 }} aria-haspopup="dialog" onClick={() => setDialog(true)}>{native ? "Reporting period" : "Last 30 days"}</Button>
+        <LinkButton to={reportingRoute("/analytics/attribution", native?.period ?? selectedPeriod)} style={{ minWidth: 166 }}>View report</LinkButton>
       </PageHeader>
       <ViewShell query={query} subject="The launch snapshot" emptyTitle="No launch snapshot yet" emptyBody="The source responded, but there is no launch snapshot to show.">
-        {(data) => <Body data={data} />}
+        {(data) => data.datasetKey === "analytics-native" ? <NativeLaunchSnapshot data={data} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body data={data} />}
       </ViewShell>
-      <PeriodDialog open={dialog} onClose={() => setDialog(false)} period="Last 30 days of the demo snapshot" />
+      <PeriodDialog open={dialog} onClose={() => setDialog(false)} period={native ? nativePeriod(native) : "Last 30 days of the demo snapshot"} />
     </section>
   );
 }

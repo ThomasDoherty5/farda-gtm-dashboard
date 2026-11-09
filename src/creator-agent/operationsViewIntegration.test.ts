@@ -52,7 +52,7 @@ describe("native authenticated saved-operations read views", () => {
     await start();
     for (const key of keys) {
       expect((await request(key, {}, null)).status).toBe(401);
-      expect((await request(key, { requestedScope: { workspaceId: scope.workspaceId, accountIds: ["synthetic-other-account"], environment: "sandbox" } })).status).toBe(400);
+      expect((await request(key, { requestedScope: { workspaceId: scope.workspaceId, accountIds: ["synthetic-other-account"], environment: "sandbox" } })).status).toBe(403);
       expect((await request(key, { filters: { providerAccountId: "synthetic-client-selection" } })).status).toBe(400);
       expect((await request(key, { page: { cursor: "synthetic-client-cursor", limit: 1 } })).status).toBe(400);
       expect((await request(key, { sort: [{ field: "unknown", direction: "asc" }] })).status).toBe(400);

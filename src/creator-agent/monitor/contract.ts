@@ -100,7 +100,14 @@ export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,obser
       ctx.addIssue({code:"custom",message:"Publication and run identities must be unique."});
   });
 export type MonitorSnapshot=z.infer<typeof monitorSnapshotSchema>;
-export type MonitorSourceReader=(scope:MonitorSnapshot["scope"])=>Promise<MonitorSnapshot|null>;
+export const monitorReadBindingSchema=z.object({scope:sourceScope,principalRef:z.enum(["agent-reader","agent-reviewer"]),
+  viewKey:z.enum(["contentMonitor","watchlist","hourlyRun","postPerformance"]),requestDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const monitorSourceResultSchema=z.object({snapshot:monitorSnapshotSchema.nullable(),authority:z.object({binding:monitorReadBindingSchema,
+  sourceVersion:ref.nullable(),permissionVersion:ref,observedAt:instant,validUntil:instant}).strict()}).strict();
+export type MonitorReadBinding=z.infer<typeof monitorReadBindingSchema>;
+export type MonitorSourceResult=z.infer<typeof monitorSourceResultSchema>;
+export type MonitorSourceReader={read(binding:MonitorReadBinding,signal?:AbortSignal):Promise<unknown>;
+  assertCurrent(result:MonitorSourceResult,binding:MonitorReadBinding,now:number):void};
 export const monitorViewKeys=["contentMonitor","watchlist","hourlyRun","postPerformance"] as const;
 export type MonitorViewKey=typeof monitorViewKeys[number];
 const sourceFilter=z.enum(["all","social-cat","tiktok-affiliate"]);
@@ -111,7 +118,7 @@ export const monitorFilters={
     cohort:z.enum(["all","launch-a"]).default("all")}).strict(),hourlyRun:z.object({runId:ref}).strict(),postPerformance:z.object({postId:ref}).strict(),
 };
 
-const meta=z.object({observedAt:instant,sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
+const meta=z.object({observedAt:instant,readAccess:z.object({validUntil:instant}).strict().nullable().optional(),sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
   sourceVersion:ref.nullable(),latestRunRef:ref.nullable(),membershipComplete:z.boolean()}).strict();
 const outputObservation=observation;
 const outputPost=z.object({id:ref,creator:ref,network,enrollmentSource:acquisition,originalUrl:z.string().url().nullable(),

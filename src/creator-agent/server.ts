@@ -53,6 +53,7 @@ import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthor
 import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
 import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
 import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, type MonitorSourceReader } from "./monitor/reader.ts";
+import { createShippingHubReader, ShippingHubReadError, type ShippingHubSource } from "./shippingHubRead.ts";
 import { createLifecycleService } from "./lifecycle/repository.ts";
 import { lifecycleViewKeys, lifecycleFilters, flowResourceSchema } from "./lifecycle/contract.ts";
 import { LifecycleError, type LifecycleSourceReader } from "./lifecycle/source.ts";
@@ -101,6 +102,12 @@ import { invitationFiltersSchema, invitationSaveSchema, recruitmentBatchFiltersS
 import { JobRuntime } from "./jobs/runtime.ts";
 import { RuntimeError, type RuntimeAuthority, type RuntimeRegistry } from "./jobs/runtimeSchema.ts";
 import { createRuntimeApi, RuntimeApiError, runtimeApiCommandSchema, type RuntimeMachineBinding } from "./jobs/runtimeApi.ts";
+import { createNativeSourcingReader, NativeSourcingError } from "./sourcing/nativeReader.ts";
+import { SOURCING_PLAN_VIEW, sourcingPlanFilters } from "./sourcing/contract.ts";
+import type { NativeSourcingSource } from "./sourcing/nativeSource.ts";
+import { nativeAnalyticsFilters, analyticsPeriodSchemaNative, nativeAnalyticsViewKeys } from "./analytics/contract.ts";
+import { createNativeAnalyticsReader, NativeAnalyticsError } from "./analytics/nativeReader.ts";
+import type { NativeAnalyticsSource } from "./analytics/nativeSource.ts";
 
 const ADAPTER_SCHEMA = "2026-11-02.proposed";
 const safeEqual = (a: string, b: string) => timingSafeEqual(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
@@ -122,6 +129,7 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
   lifecycleSource?: LifecycleSourceReader;
+  shippingHubSource?: ShippingHubSource;
   /** Source-owned fulfillment plans and canonical owners; unset grants no proposal or provider authority. */
   fulfillment?: Omit<FulfillmentBindings,"authority">;
   /** Server-only accounting/provider readers. Unset means finance reads remain unavailable, never fixture-backed. */
@@ -135,6 +143,9 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   operationsControlSource?: OperationsControlSource;
   operationsControlAuthority?: OperationsControlAuthoritySource;
   operationsCanonical?: {source:OperationsCanonicalSource;owners:ReadonlyMap<OperationsCanonicalKind,OperationsOwnerRegistration>};
+  sourcingPlanSource?: NativeSourcingSource;
+  /** Exact principal/window-bound aggregate owners; customerJourney remains owned by siteTraffic. */
+  analyticsSource?: NativeAnalyticsSource;
   /** One source supplies current acquisition policy and historical earned reward terms. No request body can adopt it. */
   commercialPolicy?: CommercialPolicySource;
   recruitmentSource?: RecruitmentSource;
@@ -190,6 +201,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
   let monitor: ReturnType<typeof createMonitorReader>;
   let lifecycle: ReturnType<typeof createLifecycleService>;
+  let shippingHub: ReturnType<typeof createShippingHubReader>;
   let fulfillment: ReturnType<typeof createFulfillmentDomain>;
   let settlements: ReturnType<typeof createSettlementReader>;
   let finance: ReturnType<typeof createFinanceReader>;
@@ -201,6 +213,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let siteTrafficApi: ReturnType<typeof createSiteTrafficImportApi>;
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
+  let sourcingPlan: ReturnType<typeof createNativeSourcingReader>;
+  let analytics: ReturnType<typeof createNativeAnalyticsReader>;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
   let rewardDomain: ReturnType<typeof createRewardDomainBridge> | undefined;
   let mediaDomain: MediaComposition | undefined;
@@ -243,6 +257,8 @@ export function createAgentServer(options: AgentServerOptions) {
       funnel, intake, source: options.monitorSource, now: options.operations?.now });
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
+    shippingHub = createShippingHubReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      referenceKey: operationsSecret, source: options.shippingHubSource, now: options.operations?.now });
     lifecycle = createLifecycleService({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       source: options.lifecycleSource, now: options.operations?.now });
@@ -274,6 +290,11 @@ export function createAgentServer(options: AgentServerOptions) {
       scope:{workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox"},authority:controlAuthority,
       source:options.operationsCanonical.source,owners:options.operationsCanonical.owners,intents:controls.canonicalIntents,
       actions:()=>actionFoundation.service,approvals:()=>actionFoundation.approvals,now:options.operations?.now});
+    sourcingPlan = createNativeSourcingReader({ db: store.database,
+      scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
+      source: options.sourcingPlanSource, now: options.operations?.now });
+    analytics = createNativeAnalyticsReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
+      source: options.analyticsSource, now: options.operations?.now });
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -415,6 +436,19 @@ export function createAgentServer(options: AgentServerOptions) {
   };
   const commercialSelection = { offerId: offerIdSchema.optional(), offerVersion: z.string().regex(/^v[1-9]\d*$/).optional(),
     phase: z.enum(["invitation", "activation", "shipment"]).optional() };
+  const requestedScopeInput = z.object({ requestedScope: z.object({
+    workspaceId: z.string().min(1), accountIds: z.array(z.string().min(1)), environment: z.enum(["demo", "sandbox", "production"]),
+  }).strict() }).passthrough();
+  const assertReadSaveScope = (raw: unknown) => {
+    // Authenticate before this boundary. A malformed scope is still a 400;
+    // a valid foreign scope is a neutral 403 before any view or save owner runs.
+    // Keep the exact granted-scope schema below as a second admission check.
+    const { requestedScope } = requestedScopeInput.parse(raw);
+    if (requestedScope.workspaceId !== options.workspaceId || requestedScope.environment !== "sandbox" ||
+        requestedScope.accountIds.length !== 1 || requestedScope.accountIds[0] !== options.accountId)
+      throw new RuntimeApiError("FORBIDDEN", 403, "notApplied");
+    return raw;
+  };
   const readBase = z.object({
     schemaVersion: z.literal(ADAPTER_SCHEMA), operation: z.literal("readView"), requestId: z.string().min(1),
     requestedScope: z.object({ workspaceId: z.literal(options.workspaceId), accountIds: z.array(z.literal(options.accountId)).length(1), environment: z.literal("sandbox") }).strict(),
@@ -476,19 +510,35 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("automationRuns"), filters: operationsViewFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1), ...commercialSelection }).strict() }),
-    readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal("nightlyReconciliation"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationDetail"), filters: z.object({ collaborationId: z.string().min(1).max(500),
       proposalRequestKey: z.string().trim().min(1).max(240).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("collaborationEvidence"), filters: z.object({ collaborationId: z.string().min(1).max(500) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("discoverySummary"), filters: z.object({}).strict() }),
+    readBase.extend({ viewKey: z.literal(SOURCING_PLAN_VIEW), filters: sourcingPlanFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
+    // THO-293 analytics reads: strict per-view filters and an event-time period or null, through the shared read path.
+    ...nativeAnalyticsViewKeys.map(viewKey => readBase.extend({ viewKey: z.literal(viewKey), filters: nativeAnalyticsFilters[viewKey],
+      period: analyticsPeriodSchemaNative.nullable(), sort: z.array(z.never()).max(0) })),
   ]);
   const responseRequests = new WeakMap<ServerResponse, IncomingMessage>();
   const requestIds = new WeakMap<IncomingMessage, string>();
+  const readSaveRoles = new WeakMap<IncomingMessage, Role>();
   const reply = (res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
-    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
     const req = responseRequests.get(res);
+    const expectedRole = req ? readSaveRoles.get(req) : undefined;
+    // Shared final caller fence for every dashboard family, including legacy
+    // async owners. Owner assertions still govern source permissions separately.
+    if (req && expectedRole && (status < 400 || status === 404)) {
+      const currentAuth = authorize(req);
+      if (!currentAuth || currentAuth.role !== expectedRole) {
+        status = currentAuth ? 403 : 401;
+        body = { code: "CALLER_AUTHORITY_CHANGED", executionCertainty: new URL(req.url ?? "/", "http://localhost").pathname === "/v1/save" ? "uncertain" : "notApplied" };
+      }
+    }
+    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", "x-content-type-options": "nosniff", ...headers });
     res.end(JSON.stringify(status >= 400 ? apiErrorEnvelope(status, body, req ? requestIds.get(req) ?? null : null) : body));
   };
   const bodyOf = async (req: IncomingMessage): Promise<unknown> => {
@@ -575,6 +625,13 @@ export function createAgentServer(options: AgentServerOptions) {
       const auth = authorize(req);
       if (!auth) return reply(res, 401, { code: "AUTH_REQUIRED",
         executionCertainty: apiRequestKind(req.method ?? "GET", path) === "read" ? "notApplied" : "uncertain" });
+      if (path === "/v1/read" || path === "/v1/save") readSaveRoles.set(req, auth.role);
+      const callerAbort = new AbortController();
+      res.once("close", () => { if (!res.writableEnded) callerAbort.abort(); });
+      const monitorCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new MonitorError("MONITOR_CALLER_DENIED", current ? 403 : 401); } };
+      const stockCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new StockSupportError("STOCK_CALLER_DENIED", current ? 403 : 401); } };
+      const collaborationCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new CollaborationWorkflowError("COLLABORATION_CALLER_DENIED", current ? 403 : 401); } };
+      const controlsCaller = { signal: callerAbort.signal, assertCurrent: () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new OperationsControlError("OPERATIONS_CALLER_DENIED", current ? 403 : 401); } };
       // Cookie-authorized writes require both CSRF proof and exact same-origin. Machine bearer requests are separate.
       if (req.method !== "GET" && path !== "/v1/read" && auth.session) {
         const origin = options.publicOrigin ?? `http://${req.headers.host}`;
@@ -688,13 +745,15 @@ export function createAgentServer(options: AgentServerOptions) {
       if (path === "/v1/save" && req.method === "POST") {
         if (auth.role !== "reviewer") return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "notApplied" });
-        const input = saveSchema.parse(await bodyOf(req));
+        const input = saveSchema.parse(assertReadSaveScope(await bodyOf(req)));
+        const admittedCaller = authorize(req);
+        if (!admittedCaller || admittedCaller.role !== auth.role) return reply(res, admittedCaller ? 403 : 401, { code: "CALLER_AUTHORITY_CHANGED", executionCertainty: "notApplied" });
         if (input.resourceKind === "configurationDraft") {
           if (input.payload && typeof input.payload === "object" && "kind" in input.payload && input.payload.kind === "recruitmentInvitation") {
             const payload = invitationSaveSchema.parse(input.payload);
             if (payload.draftId !== input.resourceRef || payload.expectedVersion !== input.expectedVersion)
               throw new RecruitmentError("RECRUITMENT_SAVE_SCOPE_MISMATCH", 422);
-            const result = await recruitmentWorkspace.saveInvitation(payload, { principalRef: `agent-${auth.role}` }, input.idempotencyKey);
+            const result = await recruitmentWorkspace.saveInvitation(payload, { principalRef: `agent-${auth.role}` }, input.idempotencyKey, () => { const current = authorize(req); if (!current || current.role !== auth.role) throw new RecruitmentError("RECRUITMENT_CALLER_DENIED", current ? 403 : 401); });
             const currentAuth = authorize(req);
             if (!currentAuth || currentAuth.role !== auth.role) return reply(res, currentAuth ? 403 : 401, { code: "RECRUITMENT_AUTHORITY_CHANGED", executionCertainty: "uncertain" });
             result.assertCurrent();
@@ -705,8 +764,14 @@ export function createAgentServer(options: AgentServerOptions) {
               record: saved, reasonCodes: [], executionCertainty: "applied" });
           }
           if (flowResourceSchema.safeParse(input.resourceRef).success) {
-            const saved = await lifecycle.saveDraft({ resourceKind: input.resourceKind, resourceRef: input.resourceRef,
-              expectedVersion: input.expectedVersion, payload: input.payload, idempotencyKey: input.idempotencyKey }, `agent-${auth.role}`);
+            const cancel = new AbortController();
+            res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+            const assertCaller = () => { const latest = authorize(req); if (!latest || latest.role !== auth.role)
+              throw new LifecycleError("LIFECYCLE_CALLER_DENIED", latest ? 403 : 401); };
+            const result = await lifecycle.saveDraft({ resourceKind: input.resourceKind, resourceRef: input.resourceRef,
+              expectedVersion: input.expectedVersion, payload: input.payload, idempotencyKey: input.idempotencyKey }, `agent-${auth.role}`, { assertCurrent: assertCaller, signal: cancel.signal });
+            result.assertCurrent();
+            const saved = result.receipt;
             return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
               scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
               resourceVersion: saved.resourceVersion, persistedAt: saved.persistedAt, persistedByRef: saved.persistedByRef,
@@ -757,7 +822,8 @@ export function createAgentServer(options: AgentServerOptions) {
         if (native.success || domain.success) return reply(res, 200, await actionFoundation.execute(raw, `agent-${auth.role}`));
         const input = adapterActionSchema.parse(raw);
         if (input.actionKind === "refreshOperationsHealth") {
-          const result = await controls.refreshHealth(input, "agent-reviewer", auth.role);
+          const result = await controls.refreshHealth(input, "agent-reviewer", auth.role, controlsCaller);
+          result.assertCurrent();
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
             approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
@@ -765,8 +831,9 @@ export function createAgentServer(options: AgentServerOptions) {
             nextPollAfterMs: null });
         }
         const result = input.actionKind === "proposeCollaborationReview"
-          ? await collaborationWorkflow.propose(input, "agent-reviewer") : input.actionKind === "proposeOperationsReview"
-            ? await controls.propose(input, "agent-reviewer", auth.role) : await stockSupport.propose(input, "agent-reviewer");
+          ? await collaborationWorkflow.propose(input, "agent-reviewer", collaborationCaller) : input.actionKind === "proposeOperationsReview"
+            ? await controls.propose(input, "agent-reviewer", auth.role, controlsCaller) : await stockSupport.propose(input, "agent-reviewer", stockCaller);
+        if ("assertCurrent" in result && typeof result.assertCurrent === "function") result.assertCurrent();
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
           scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, ...result,
           runRef: null, approvalRef: null, manifestRef: null, modelVersion: null, offerVersion: null,
@@ -795,10 +862,13 @@ export function createAgentServer(options: AgentServerOptions) {
         financeReads: { sourceAuthority: options.financeSource ? "injected" : "notConnected", views: "read-only-projections", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" },
         operationsReads: { sourceAuthority: options.operationsReadSource ? "injected" : "notConnected", views: "read-only-projections", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" },
         teamInvitationReads: { sourceAuthority: options.teamInvitationReadSource ? "injected" : "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" },
+        shippingHub: { sourceAuthority: options.shippingHubSource ? "injected" : "notConnected", readOnly: true },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
           importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
+        dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
+        analyticsReads: { sourceAuthority: options.analyticsSource ? "injected" : "notConnected", viewKeys: nativeAnalyticsViewKeys, readOnly: true },
         actionFoundation: { approvalStorage: "durable-versioned", approvalAuthority: options.actionFoundation?.approvals ? "injected" : "notConnected",
           dispatch: options.actionFoundation?.worker ? "source-guarded-worker" : "notConnected", appDecisionRelease: "held",
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
@@ -829,7 +899,9 @@ export function createAgentServer(options: AgentServerOptions) {
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
-        const input = readSchema.parse(await bodyOf(req));
+        const input = readSchema.parse(assertReadSaveScope(await bodyOf(req)));
+        const admittedCaller = authorize(req);
+        if (!admittedCaller || admittedCaller.role !== auth.role) return reply(res, admittedCaller ? 403 : 401, { code: "CALLER_AUTHORITY_CHANGED", executionCertainty: "notApplied" });
         if (input.viewKey === "customerJourney") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const cancel = new AbortController();
@@ -846,6 +918,16 @@ export function createAgentServer(options: AgentServerOptions) {
           const assertSession = () => { const currentAuth = authorize(req); if (!currentAuth || currentAuth.role !== auth.role) throw new SiteTrafficError("TRAFFIC_PRINCIPAL_DENIED", currentAuth ? 403 : 401); };
           assertSession(); result.assertCurrent(); assertSession();
           return reply(res, 200, envelope);
+        }
+        if (input.viewKey === SOURCING_PLAN_VIEW) {
+          const cancel = new AbortController(); res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const result = await sourcingPlan.read({ viewKey: input.viewKey, filters: input.filters, period: input.period, sort: input.sort, page: input.page },
+            { principalRef: `agent-${auth.role}`, role: auth.role }, cancel.signal);
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
+            capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
+          result.assertCurrent(); return reply(res, 200, envelope);
         }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -904,13 +986,27 @@ export function createAgentServer(options: AgentServerOptions) {
             coverage: { expectedCount: data.items.length, observedCount: data.items.length, missingCount: 0, complete: true,
               reasonCodes: [] }, capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
+        if ((nativeAnalyticsViewKeys as readonly string[]).includes(input.viewKey)) {
+          const cancel = new AbortController(); res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const result = await analytics.read({ viewKey: input.viewKey, filters: input.filters, period: input.period, sort: input.sort, page: input.page },
+            { principalRef: `agent-${auth.role}`, role: auth.role }, cancel.signal);
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
+            capabilities: [], page: result.page, refresh: { nextPollAfterMs: null } };
+          result.assertCurrent(); return reply(res, 200, envelope);
+        }
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.viewKey === "emailFlow" && "draftRequestKey" in input.filters && input.filters.draftRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
-          const result = await lifecycle.read(input.viewKey, input.filters, `agent-${auth.role}`);
+          const cancel = new AbortController();
+          res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const assertCaller = () => { const latest = authorize(req); if (!latest || latest.role !== auth.role)
+            throw new LifecycleError("LIFECYCLE_CALLER_DENIED", latest ? 403 : 401); };
+          const result = await lifecycle.read(input.viewKey, input.filters, `agent-${auth.role}`, { assertCurrent: assertCaller, signal: cancel.signal });
           const held = result.stale || result.partial || result.empty;
-          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
             dataState: result.stale ? "stale" : result.partial ? "partial" : result.empty ? "empty" : "ready", data: result.data,
             sourceFreshness: [], coverage: { expectedCount: 1, observedCount: result.empty ? 0 : 1, missingCount: result.empty ? 1 : 0,
@@ -918,15 +1014,18 @@ export function createAgentServer(options: AgentServerOptions) {
             capabilities: (result.capabilities ?? []).map(capability => ({ ...capability,
               state: auth.role === "reviewer" ? capability.state : "denied",
               reasonCodes: auth.role === "reviewer" ? capability.reasonCodes : ["REVIEWER_REQUIRED"] })),
-            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
+          result.assertCurrent();
+          return reply(res, 200, envelope);
         }
-        if (input.viewKey === "operationsControl") {
+        if (input.viewKey === "operationsControl" || input.viewKey === "nightlyReconciliation") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
-          if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
+          const filters = input.viewKey === "nightlyReconciliation" ? { section: "reconciliation" as const } : input.filters;
+          if ("proposalRequestKey" in filters && filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
-          const result = await controls.read(input.filters, `agent-${auth.role}`, auth.role);
+          const result = await controls.read(filters, `agent-${auth.role}`, auth.role, controlsCaller);
           const held = result.stale || result.partial || result.empty;
-          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
             dataState: result.stale ? "stale" : result.partial ? "partial" : result.empty ? "empty" : "ready", data: result.data,
             sourceFreshness: [], coverage: { expectedCount: 1, observedCount: result.empty ? 0 : 1, missingCount: result.empty ? 1 : 0,
@@ -934,11 +1033,14 @@ export function createAgentServer(options: AgentServerOptions) {
             capabilities: result.capabilities.map(capability => ({ ...capability,
               state: auth.role === "reviewer" ? capability.state : "denied",
               reasonCodes: auth.role === "reviewer" ? capability.reasonCodes : ["REVIEWER_REQUIRED"] })),
-            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
+          result.assertCurrent();
+          return reply(res, 200, envelope);
         }
         if (input.viewKey === "contentMonitor" || input.viewKey === "watchlist" || input.viewKey === "hourlyRun" || input.viewKey === "postPerformance") {
           const result = await monitor.read(input.viewKey, input.filters,
-            { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role });
+            { cursor: input.page.cursor, limit: input.page.limit, authorizationContext: auth.role }, monitorCaller);
+          result.assertCurrent();
           if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(result.data),
@@ -955,7 +1057,9 @@ export function createAgentServer(options: AgentServerOptions) {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
-          const result = await stockSupport.read(input.viewKey, input.filters, `agent-${auth.role}`);
+          const result = await stockSupport.read(input.viewKey, input.filters, `agent-${auth.role}`, stockCaller);
+          result.assertCurrent();
+          if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           const held = result.stale || result.partial || result.empty;
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
@@ -1149,8 +1253,9 @@ export function createAgentServer(options: AgentServerOptions) {
           if (input.filters.proposalRequestKey !== undefined && auth.role !== "reviewer")
             return reply(res, 403, { code: "REVIEWER_REQUIRED", executionCertainty: "notApplied" });
           const result = await collaborationWorkflow.read(input.filters.collaborationId,
-            { requestKey: input.filters.proposalRequestKey, actorRef: `agent-${auth.role}` });
-          if (!result) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
+            { requestKey: input.filters.proposalRequestKey, actorRef: `agent-${auth.role}`, ...collaborationCaller });
+          result.assertCurrent();
+          if (result.data === null) return reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" });
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
             dataState: result.stale ? "stale" : result.partial ? "partial" : "ready", data: result.data, sourceFreshness: [],
@@ -1242,7 +1347,23 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.dataState, data: result.data, sourceFreshness: result.sourceFreshness, coverage: result.coverage,
             capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
-        if (input.viewKey === "shippingHub") return reply(res, 503, { code: "INTEGRATION_PENDING", message: "The requested source is not connected.", requestId: input.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
+        if (input.viewKey === "shippingHub") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          const cancel = new AbortController();
+          res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
+          const result = await shippingHub.read({ principalRef: `agent-${auth.role}`, role: auth.role }, input.page.limit, cancel.signal);
+          const coverage = result.data.provenance.coverage;
+          const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
+            dataState: coverage.state === "complete" ? result.data.shipments.length === 0 ? "empty" : "ready" : "partial", data: result.data,
+            sourceFreshness: [], coverage: { expectedCount: coverage.expectedCount, observedCount: coverage.observedCount,
+              missingCount: coverage.expectedCount === null ? null : coverage.expectedCount - coverage.observedCount,
+              complete: coverage.state === "complete", reasonCodes: coverage.reasonCodes },
+            capabilities: [{ actionKind: "purchaseLabel", state: "held", reasonCodes: ["FULFILLMENT_EXACT_ACTION_REQUIRED"] }],
+            page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
+          result.assertCurrent();
+          return reply(res, 200, envelope);
+        }
         if (input.viewKey === "discoverySummary") {
           const cursor = input.page.cursor === null ? null : decodeCursor(input.page.cursor, input.page.limit);
           const listing = store.listLatestPage({ limit: input.page.limit, snapshot: cursor ? { rowId: cursor.rowId, anchorRunId: cursor.anchorRunId } : undefined, after: cursor?.after });
@@ -1342,6 +1463,7 @@ export function createAgentServer(options: AgentServerOptions) {
         rowIndex: error.rowIndex, executionCertainty: error.executionCertainty });
       if (error instanceof BulkError) return reply(res, error.status, {code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof RecruitmentError) return reply(res, error.status, {code: error.code, executionCertainty: error.executionCertainty, ...(error.currentVersion === undefined ? {} : {currentVersion: error.currentVersion})});
+      if (error instanceof ShippingHubReadError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),
         ...(error.fieldErrors === undefined ? {} : { fieldErrors: error.fieldErrors }) });
@@ -1356,10 +1478,12 @@ export function createAgentServer(options: AgentServerOptions) {
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
       if (error instanceof TeamInvitationReadError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.reasonCodes.length ? { reasonCodes: error.reasonCodes } : {}) });
+      if (error instanceof NativeSourcingError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
       if (error instanceof MonitorError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
-      if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+      if (error instanceof NativeAnalyticsError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied" });
+      if (error instanceof StockSupportError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
-      if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
+      if (error instanceof CollaborationWorkflowError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });
       if (error instanceof EvidenceReviewError) return reply(res, error.status, { code: error.code, executionCertainty: "notApplied",
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }) });

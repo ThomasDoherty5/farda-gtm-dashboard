@@ -6,8 +6,7 @@ import {unknownBusinessEligibility,unknownSourceFreshness,type ExpectedBinding,t
 import {healthBindingDigest,type HealthObservation} from "./providerHealth.ts";
 import {controlTestScope as scope,controlTestTime} from "./operationsControlsFixtures.ts";
 import {SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN} from "./testFixtures.ts";
-import {OperationsControlError} from "./operationsControls.ts";
-import {controlSourceFixture} from "./operationsControlsFixtures.ts";
+import {controlSourceFixture,controlSourceProvider} from "./operationsControlsFixtures.ts";
 const apps:ReturnType<typeof createAgentServer>[]=[];afterEach(async()=>{for(const app of apps.splice(0))await app.close();});
 const requestedScope={workspaceId:scope.workspaceId,accountIds:[scope.accountId],environment:"sandbox"};
 async function setup(configured=true){
@@ -16,7 +15,7 @@ async function setup(configured=true){
  const observation:HealthObservation={bindingDigest:healthBindingDigest(binding),checkedAt:controlTestTime,status:"observed",permission:"allowed",session:"authenticated",roleScopePlan:"verified",coverage:"complete",sourceLastSuccess:controlTestTime,sourceUpdatedAt:controlTestTime,mirrorUpdatedAt:null,quotaState:"not_applicable",quotaRemaining:null,deadlineState:"not_applicable",deadline:null};
  const probe=vi.fn(async()=>structuredClone(observation));
  const clock={value:Date.parse(controlTestTime)},authority={denied:false};
- const app=createAgentServer({databasePath:":memory:",...scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,operationsControlSource:{read:async()=>{if(authority.denied)throw new OperationsControlError("SOURCE_SCOPE_DENIED",403);return controlSourceFixture();}},operations:{now:()=>clock.value,resolveReceipt:()=>receipt,
+ const app=createAgentServer({databasePath:":memory:",...scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,operationsControlSource:controlSourceProvider(controlSourceFixture,()=>clock.value,()=>!authority.denied),operations:{now:()=>clock.value,resolveReceipt:()=>receipt,
   resolveJobActivation:r=>({approved:true,decisionRef:r.decisionRef,definitionHash:r.definitionHash})},providerHealth:{now:()=>clock.value,activationRef:"activation:synthetic",catalog:configured?[{binding,ownerRef:"owner:synthetic",documentationRef:"docs:synthetic",documentationCheckedAt:controlTestTime,maxAgeSeconds:60,freshnessBasis:"successful_read",probe}]:[]}});
  apps.push(app);const id=capabilityIdForBinding(binding);app.operations.ledger.register({binding,ownerRef:"owner:synthetic",costBasis:{state:"unknown",reasonCode:"UNKNOWN"}},0);await app.operations.ledger.verify(id,receipt.receiptRef,1);expect(app.operations.ledger.get(id)?.state,JSON.stringify(app.operations.ledger.get(id))).toBe("Ready");
  await new Promise<void>(r=>app.server.listen(0,"127.0.0.1",r));const addr=app.server.address();if(!addr||typeof addr==="string")throw Error("No listener");const base="http://127.0.0.1:"+addr.port;

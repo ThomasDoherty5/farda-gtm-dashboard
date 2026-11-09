@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { digest } from "./config.ts";
 import { loadCreatorSourceRuntime } from "./sourceRuntime.ts";
 import { assetTestScope } from "./assetTestFixtures.ts";
 
@@ -37,9 +38,16 @@ describe("private source launcher configuration", () => {
     const ids = { stockDataSourceId: "00000000-0000-4000-8000-000000000001", supportDataSourceId: "00000000-0000-4000-8000-000000000002" };
     const env = { FARDA_STOCK_SUPPORT_SOURCE_CONFIG: JSON.stringify(ids), FARDA_AGENT_READ_TOKEN: "synthetic-source-reference-key-000000000000" };
     const runtime = loadCreatorSourceRuntime(env, assetTestScope), scope = { ...assetTestScope, environment: "sandbox" as const };
-    await expect(runtime.stockSupportSource!.readInventory(scope)).rejects.toMatchObject({ code: "INTEGRATION_PENDING" });
-    await expect(runtime.stockSupportSource!.readSupport(scope)).rejects.toMatchObject({ code: "INTEGRATION_PENDING" });
-    await expect(runtime.stockSupportSource!.readSupport({ ...scope, accountId: "synthetic-other-account" })).rejects.toMatchObject({ code: "SOURCE_SCOPE_DENIED" });
+    const binding = { scope, principalRef: "agent-reader" as const, operation: "read" as const, viewKey: "inventoryOverview" as const, requestDigest: digest({}) };
+    const provider = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unconfigured source must not call a provider"));
+    try {
+      await expect(runtime.stockSupportSource!.readInventory(binding)).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED" });
+      await expect(runtime.stockSupportSource!.readSupport({ ...binding, viewKey: "supportWorkspace" })).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED" });
+      // A configured mirror is not a current permission grant for any scope.
+      // Qualified wrong-scope rejection is covered in notionStockSupportSource.test.ts.
+      await expect(runtime.stockSupportSource!.readSupport({ ...binding, viewKey: "supportWorkspace", scope: { ...scope, accountId: "synthetic-other-account" } })).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED", status: 503 });
+      expect(provider).not.toHaveBeenCalled();
+    } finally { provider.mockRestore(); }
     expect(() => loadCreatorSourceRuntime({ ...env, FARDA_AGENT_READ_TOKEN: "" }, assetTestScope)).toThrow("FARDA_STOCK_SUPPORT_SOURCE_CONFIG is invalid.");
     expect(() => loadCreatorSourceRuntime({ ...env, FARDA_STOCK_SUPPORT_SOURCE_CONFIG: JSON.stringify({ ...ids, supportDataSourceId: ids.stockDataSourceId }) }, assetTestScope)).toThrow("FARDA_STOCK_SUPPORT_SOURCE_CONFIG is invalid.");
     expect(() => loadCreatorSourceRuntime({ ...env, FARDA_STOCK_SUPPORT_SOURCE_CONFIG: JSON.stringify({ ...ids, permission: true }) }, assetTestScope)).toThrow("FARDA_STOCK_SUPPORT_SOURCE_CONFIG is invalid.");

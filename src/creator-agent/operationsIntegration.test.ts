@@ -98,7 +98,8 @@ app.store.close(); console.log("native-service-initialized");`;
     expect(capability.body.portfolioReview).toMatchObject({ decisionAuthority: "notConnected", providerExecution: "notConnected" });
     const shipping = await request("/v1/read", "POST", { schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "shippingHub", requestId: "synthetic-shipping-read",
       requestedScope: { workspaceId: assetTestScope.workspaceId, accountIds: [assetTestScope.accountId], environment: "sandbox" }, filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 } });
-    expect(shipping.status).toBe(503); expect(shipping.body.code).toBe("INTEGRATION_PENDING");
+    expect(shipping.status).toBe(503); expect(shipping.body.code).toBe("SHIPPING_SOURCE_UNCONFIGURED");
+    expect(shipping.body).not.toHaveProperty("data");
     expect(shipping.body).not.toHaveProperty("data");
   });
   it("serves exact-collaboration evidence through the authenticated reader contract", async () => {
@@ -116,7 +117,7 @@ app.store.close(); console.log("native-service-initialized");`;
     expect(result.body.data).toMatchObject({ kind: "collaboration-evidence", total: 1, records: [expect.objectContaining({ assetId: "synthetic-http-0", rightsState: "unknown" })] });
     expect(result.body.data.records).toHaveLength(1);
     const foreign = structuredClone(body); foreign.requestedScope.accountIds = ["foreign"];
-    expect((await request("/v1/read", "POST", foreign)).status).toBe(400);
+    expect((await request("/v1/read", "POST", foreign)).status).toBe(403);
     expect((await request("/v1/read", "POST", { ...body, filters: { collaborationId: "empty" } })).body.data.total).toBe(0);
   });
   it("protects registry discovery and distinguishes unconfigured access from a verified empty read", async () => {

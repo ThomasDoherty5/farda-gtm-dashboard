@@ -2,7 +2,7 @@
 
 Recorded 2026-11-04. These answer the open questions in the backend requirements proposal (PR #48, D-1 to D-18) and the four contract gaps (Q-01 to Q-04 in `docs/intake.md`).
 
-**Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. Nothing here has been verified against a real service.
+**Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. These decisions originally preceded the service. Current native-service evidence is mapped in `docs/adapter-conformance.md`; evidence for one implemented family does not establish all decisions or production authorization.
 
 Principles behind every choice: the server is the only authority (a hidden button is never authorization); a small team needs fewer moving parts, not more; money and outbound messages get a second person; an unknown outcome is never retried blind; nothing in the browser holds a secret.
 
@@ -54,7 +54,7 @@ Writes (`/v1/action`, `/v1/save`) carry the CSRF token from the session call in 
 ## What changes in the code because of these
 
 - Q-01 to Q-04 and D-13 change `src/adapter/contract.ts`, the demo services, the schemas in `src/adapter/viewSchemas/`, and the screens that switch on state. They ship in their own PR with tests.
-- D-1 and D-11 define what a reference service built for testing implements. That service (`tools/reference-server/`) is a test double, not the production backend, and it is the only thing that implements the paths above.
+- D-1 and D-11 define the reference test service in `tools/reference-server/`. The authenticated native service in `src/creator-agent/server.ts` also implements the paths above, with its independently tested source-family owners. The reference service remains a test double and is never evidence of provider integration.
 - Everything else is for the backend owner.
 
 ## Bounded native observation refresh

@@ -55,12 +55,12 @@ describe("finance reader", () => {
   });
 
   it("reports stale and partial sources honestly and never as complete", async () => {
-    const stale = await reader(async () => financeSnapshot("commissionLedger"), { clock: () => Date.parse("2026-11-07T11:00:00.000Z") })
+    const stale = await reader(async () => financeSnapshot("commissionLedger", {}, Date.parse("2026-11-07T11:00:00.000Z")), { clock: () => Date.parse("2026-11-07T11:00:00.000Z") })
       .read("commissionLedger", {}, "reader");
     expect(stale).toMatchObject({ dataState: "stale", coverage: { complete: false, reasonCodes: ["FINANCE_SOURCE_STALE"] } });
     expect(stale.sourceFreshness[0]).toMatchObject({ staleReasonCode: "FINANCE_SOURCE_STALE" });
     // The server-owned 24h ceiling wins over a longer source lease.
-    const longLease = await reader(async () => financeSnapshot("commissionLedger", { validUntil: "2026-12-30T00:00:00.000Z" }),
+    const longLease = await reader(async () => financeSnapshot("commissionLedger", { validUntil: "2026-12-30T00:00:00.000Z" }, Date.parse("2026-11-07T11:00:01.000Z")),
       { clock: () => Date.parse("2026-11-07T11:00:01.000Z") }).read("commissionLedger", {}, "reader");
     expect(longLease.dataState).toBe("stale");
     const partial = await reader(async () => financeSnapshot("commissionLedger", { coverage: { state: "partial", expectedCount: 4, observedCount: 3, reasonCodes: ["SOURCE_ROWS_DEFERRED"] } }))

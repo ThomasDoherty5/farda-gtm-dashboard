@@ -1,12 +1,14 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { digest } from "./config.ts";
-import { StockSupportError,type StockSupportSource } from "./stockSupport.ts";
+import { StockSupportError,stockSupportAuthoritySchema,type StockSupportSource,type StockSupportBinding,type StockSupportSourceResult } from "./stockSupport.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 import { inventorySnapshotSchema,supportSnapshotSchema,type InventorySnapshot,type SupportSnapshot } from "./stockSupportSchema.ts";
 import type { OperationsScope } from "./operations.ts";
 
 const uuid=z.string().uuid();
-export type StockSupportMirrorConfig={scope:OperationsScope,stockDataSourceId:string,supportDataSourceId:string,token:()=>Promise<string|null>,referenceKey:string};
+export type StockSupportMirrorConfig={scope:OperationsScope,stockDataSourceId:string,supportDataSourceId:string,token:()=>Promise<string|null>,referenceKey:string,
+  sourceAuthority?:{observe(binding:StockSupportBinding,snapshot:InventorySnapshot|SupportSnapshot,now:number):StockSupportSourceResult["authority"];assertCurrent:StockSupportSource["assertCurrent"]}};
 const page=z.object({object:z.literal("page"),id:uuid,parent:z.object({type:z.literal("data_source_id"),data_source_id:uuid}),last_edited_time:z.string().datetime({offset:true}),
   archived:z.literal(false).optional(),in_trash:z.literal(false),properties:z.record(z.unknown())});
 const list=z.object({object:z.literal("list"),results:z.array(page).max(100),has_more:z.boolean(),next_cursor:z.string().min(1).max(2048).nullable()});
@@ -21,7 +23,7 @@ const categories=["Pairing","App","Hardware defect","Shipping","Other"] as const
 const states:Record<string,"Open"|"Waiting"|"In review"|"Resolved">={"Open":"Open","New":"Open","In progress":"In review","Waiting":"Waiting","Waiting on customer":"Waiting","Resolved":"Resolved","Closed":"Resolved"};
 
 /** Read two explicitly configured, scoped mirrors. Neither mirror establishes a Shopify snapshot, J15 opening balance or J16 execution permission. */
-export function createNotionStockSupportSource(config:StockSupportMirrorConfig,fetcher:typeof fetch=fetch,now:()=>number=Date.now):StockSupportSource{
+export function createNotionStockSupportSource(config:StockSupportMirrorConfig,fetcher:typeof fetch=fetch,now:()=>number=Date.now){
   const stockId=uuid.parse(config.stockDataSourceId).toLowerCase(),supportId=uuid.parse(config.supportDataSourceId).toLowerCase();
   if(stockId===supportId || config.referenceKey.length<32)throw new Error("Invalid stock/support source binding");
   const ref=(kind:string,raw:string)=>kind+"-"+createHmac("sha256",config.referenceKey).update(JSON.stringify([config.scope,kind,raw])).digest("hex").slice(0,24);
@@ -52,8 +54,15 @@ export function createNotionStockSupportSource(config:StockSupportMirrorConfig,f
     // Both mirror projections are explicitly partial. Completeness is never borrowed from a bounded page scan.
     return found.sort((a,b)=>a.id.localeCompare(b.id));
   }
+  const requireAuthority=()=>{if(!config.sourceAuthority)throw new StockSupportError("SOURCE_AUTHORITY_UNCONFIGURED",503);return config.sourceAuthority;};
+  const assertCurrent:StockSupportSource["assertCurrent"]=(result,binding,time)=>assertSynchronousVoid(()=>requireAuthority().assertCurrent(structuredClone(result),structuredClone(binding),time));
+  const qualify=<T extends InventorySnapshot|SupportSnapshot>(snapshot:T,binding:StockSupportBinding)=>{
+    const authority=stockSupportAuthoritySchema.parse(requireAuthority().observe(structuredClone(binding),structuredClone(snapshot),now()));
+    const result={snapshot,authority};assertCurrent(result,binding,now());return result;};
   return {
-    async readInventory(scope){
+    assertCurrent,
+    async readInventory(binding:StockSupportBinding){
+      requireAuthority();const scope=binding.scope;
       const list=await rows(scope,stockId),observedAt=new Date(now()).toISOString();
       const movements:InventorySnapshot["periods"][number]["movements"]=[];
       for(const r of list){
@@ -66,10 +75,11 @@ export function createNotionStockSupportSource(config:StockSupportMirrorConfig,f
         movements.push({ref:ref("movement",r.id),home,sku:ref("sku",sku),date:dt,type,orderRef:null,physicalDelta:posted?Number(phys):null,reserveDelta:posted?Number(res):null,receipt:posted?ref("ledger",r.id+"/"+r.last_edited_time):null});
       }
       const positions=[...new Map(movements.map(m=>[m.home+"/"+m.sku,{home:m.home,sku:m.sku,onHand:null,reserved:null,shopify:null,threshold:null,reservations:[]}])).values()];
-      return inventorySnapshotSchema.parse({scope,observedAt,revision:digest(list.map(r=>[r.id,r.last_edited_time])),coverage:"partial",
-        currentWindow:movements.length?"observed":null,periods:movements.length?[{window:{ref:"observed",start:movements.map(m=>m.date).sort()[0],end:observedAt.slice(0,10)},positions,movements,transfers:[]}]:[]});
+      return qualify(inventorySnapshotSchema.parse({scope,observedAt,revision:digest(list.map(r=>[r.id,r.last_edited_time])),coverage:"partial",
+        currentWindow:movements.length?"observed":null,periods:movements.length?[{window:{ref:"observed",start:movements.map(m=>m.date).sort()[0],end:observedAt.slice(0,10)},positions,movements,transfers:[]}]:[]}),binding);
     },
-    async readSupport(scope){
+    async readSupport(binding:StockSupportBinding){
+      requireAuthority();const scope=binding.scope;
       const list=await rows(scope,supportId),observedAt=new Date(now()).toISOString();
       const cases:SupportSnapshot["cases"]=list.map(r=>{
         const order=relation(r,"Order"),type=choice(r,"Type");
@@ -77,7 +87,7 @@ export function createNotionStockSupportSource(config:StockSupportMirrorConfig,f
           state:states[choice(r,"Status","status")??""]??"Unknown",category:type==="Return"||type==="Replacement"?type:z.enum(categories).safeParse(choice(r,"Category")).data??"Unknown",
           owner:"Unknown",shipmentRef:null,returnRef:null,handoffAllowed:false};
       });
-      return supportSnapshotSchema.parse({scope,revision:digest(list.map(r=>[r.id,r.last_edited_time])),coverage:"partial",observedAt,cases,allTimeOpen:null,cohort:null});
+      return qualify(supportSnapshotSchema.parse({scope,revision:digest(list.map(r=>[r.id,r.last_edited_time])),coverage:"partial",observedAt,cases,allTimeOpen:null,cohort:null}),binding);
     }
   };
 }
