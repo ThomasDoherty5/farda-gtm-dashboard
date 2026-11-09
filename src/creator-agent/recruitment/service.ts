@@ -125,14 +125,18 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
     receiptRef: value.receiptRef ? alias("receipt", value.receiptRef) : null,
     ...(value.route!=="ownerHandoff" && value.deadline !== null && Date.parse(value.deadline) <= now() ? { route: "held" as const, reasonCodes: [...new Set([...value.reasonCodes, "SAMPLE_DEADLINE_EXPIRED"])] } : {}),
   }));
-  function header(snapshot: RecruitmentSnapshot, actor: TrustedHuman) {
+  function header(snapshot: RecruitmentSnapshot, actor: TrustedHuman, publishedProofDeadlines: readonly string[] = []) {
     const sampleDeadlines=snapshot.samples.flatMap(sample=>{
       if(Date.parse(sample.observedAt)>Date.parse(snapshot.observedAt)||Date.parse(sample.validUntil)<=Date.parse(sample.observedAt)||Date.parse(sample.validUntil)-Date.parse(sample.observedAt)>RECRUITMENT_SOURCE_MAX_AGE_MS)
         return fail("RECRUITMENT_SAMPLE_EVIDENCE_INVALID",502);
-      return [Date.parse(sample.validUntil)];
+      // A currently usable route stops being usable at the request's own deadline.
+      // An expired request projects as held; owner handoff remains available evidence.
+      const activeDeadline = ["verifiedApi", "permittedBrowser"].includes(sample.route) && sample.deadline !== null && Date.parse(sample.deadline) > now()
+        ? [Date.parse(sample.deadline)] : [];
+      return [Date.parse(sample.validUntil), ...activeDeadline];
     });
     return { provenance: snapshot.provenance, sourceVersion: alias("source-version", snapshot.sourceVersion), observedAt: snapshot.observedAt,
-      validUntil: new Date(Math.min(Date.parse(snapshot.validUntil), Date.parse(actor.validUntil),...sampleDeadlines,
+      validUntil: new Date(Math.min(Date.parse(snapshot.validUntil), Date.parse(actor.validUntil),...sampleDeadlines,...publishedProofDeadlines.map(Date.parse),
         ...snapshot.capacity.filter(v=>v.remaining!==null||v.limit!==null).flatMap(v=>v.validUntil&&Date.parse(v.validUntil)>now()?[Date.parse(v.validUntil)]:[]))).toISOString(), actorRef: alias("person", actor.personRef),
       sourceState: snapshot.complete ? "current" as const : "partial" as const, reasonCodes: snapshot.reasonCodes };
   }
@@ -156,7 +160,8 @@ export function createRecruitmentService(options: RecruitmentServiceOptions) {
     const accepted = record && snapshot.acceptedOffer && snapshot.willingness === "willing" &&
       snapshot.acceptedOffer.offerId === record.offerId && snapshot.acceptedOffer.version === record.version &&
       Date.parse(snapshot.acceptedOffer.validUntil) > now() && Date.parse(snapshot.acceptedOffer.validUntil) <= Date.parse(snapshot.validUntil);
-    const data = nativeInvitationViewSchema.parse({ kind: "native-invitation", ...header(snapshot, actor), filters,
+    const data = nativeInvitationViewSchema.parse({ kind: "native-invitation", ...header(snapshot, actor,
+      accepted && commercial && snapshot.acceptedOffer ? [snapshot.acceptedOffer.validUntil] : []), filters,
       provider: snapshot.provider, account: field(snapshot.account),
       creators: snapshot.creators.map(value => ({ ...value, ref: alias("creator", value.ref), label: field(value.label) })),
       products: snapshot.products.map(value => ({ ...value, ref: alias("product", value.ref), programRef: alias("program", value.programRef), label: field(value.label), market: field(value.market), category: field(value.category) })),

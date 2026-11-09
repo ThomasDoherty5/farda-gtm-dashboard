@@ -25,19 +25,19 @@ export function RecruitmentCapacity({ values, current }: { values: NativeInvitat
 const routes={verifiedApi:"Verified API · PENDING Open request",permittedBrowser:"Independently permitted browser route",ownerHandoff:"Owner permission handoff",held:"Held · current capability required"};
 export function RecruitmentSamples({ values, current }: { values: NativeInvitationView["samples"]; current: boolean }) {
   const lease = useSourceLease(values.length ? new Date(Math.min(...values.map(value => Date.parse(value.validUntil)))).toISOString() : null);
-  current = current && lease;
+  const sourceCurrent = current && lease;
   return <section className={creators.panel} aria-labelledby="recruitment-samples-title"><h2 id="recruitment-samples-title" className={acquisition.h2}>Approve samples inside TikTok.</h2>
     <p>Supported PENDING Open requests may use the verified API. Other routes require independent permission. Permission denial 16022020 requires the source owner; it never authorizes a browser bypass.</p>
     {!values.length&&<p>No source-confirmed sample request is available. Invitation acceptance does not approve a sample.</p>}
     {values.map(sample=><div key={sample.requestRef} className={styles.sampleGrid}><div className={styles.sampleInfo}><h3 className={creators.h3}>{sample.requestRef}</h3><dl className={styles.sampleList}>
       <div className={styles.sampleRow}><dt>Native request state</dt><dd>{sample.requestType} · {sample.nativeState}</dd></div>
       <div className={styles.sampleRow}><dt>Native deadline</dt><dd>{observedDate(sample.deadline)}</dd></div>
-      <div className={styles.sampleRow}><dt>Execution route</dt><dd>{current?routes[sample.route]:"Unknown · refresh current permission"}</dd></div>
-      <div className={styles.sampleRow}><dt>Capability evidence</dt><dd>{current?(sample.capabilityVersion??"Unknown"):"Unknown"}</dd></div>
+      <div className={styles.sampleRow}><dt>Execution route</dt><dd>{sourceCurrent?routes[sample.route]:"Unknown · refresh current permission"}</dd></div>
+      <div className={styles.sampleRow}><dt>Capability evidence</dt><dd>{sourceCurrent?(sample.capabilityVersion??"Unknown"):"Unknown"}</dd></div>
     </dl><p className={acquisition.small}>{sample.reasonCodes.join(" · ")||"The owning source provides these request facts."}</p></div>
     <div className={styles.sampleBox}><h3 className={creators.h3}>Source evidence closes the step.</h3><p>Review the exact sample decision, its stock allocation and native receipt separately. Unknown results retain their original attempt.</p>
-      {current&&sample.approvalRef?<LinkButton to={`/approvals/${encodeURIComponent(sample.approvalRef)}`}>Review sample decision</LinkButton>:<Button disabledReason="A source-authorized exact sample decision is required.">Review sample decision</Button>}
-      {current&&sample.runRef?<LinkButton variant="secondary" to={`/runs/${encodeURIComponent(sample.runRef)}?tab=recovery`}>Review sample receipt</LinkButton>:<Button variant="secondary" disabledReason="No source-bound sample run was returned.">Review sample receipt</Button>}
+      {sourceCurrent&&sample.approvalRef?<LinkButton to={`/approvals/${encodeURIComponent(sample.approvalRef)}`}>Review sample decision</LinkButton>:<Button disabledReason="A source-authorized exact sample decision is required.">Review sample decision</Button>}
+      {sourceCurrent&&sample.runRef?<LinkButton variant="secondary" to={`/runs/${encodeURIComponent(sample.runRef)}?tab=recovery`}>Review sample receipt</LinkButton>:<Button variant="secondary" disabledReason="No source-bound sample run was returned.">Review sample receipt</Button>}
       <p className={acquisition.small}>Receipt: {sample.receiptRef??"Unknown · no native decision receipt"}</p>
     </div></div>)}
   </section>;

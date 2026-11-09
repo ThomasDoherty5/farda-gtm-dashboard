@@ -237,6 +237,25 @@ describe("source-owned sample and provenance boundaries",()=>{
     expect(JSON.stringify(result.data.samples)).not.toMatch(/fictional-pending-sample|fictional-api-grant-v1|fictional-sample-source|synthetic-private-profile/);
     w.o.advance(120_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
   });
+  it.each(["verifiedApi", "permittedBrowser"] as const)("expires a published %s capability at the earlier native request deadline", async route => {
+    const w=setup(),deadline=new Date(w.source.state.observedAt+30_000).toISOString();
+    w.source.state.transform=s=>{s.samples=[{...sample(w),route,deadline}];};
+    const result=await w.service.readInvitation(w.filters,principal);
+    expect(result.data.samples[0]?.route).toBe(route);expect(result.data.validUntil).toBe(deadline);
+    w.o.advance(30_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    const refreshed=await w.service.readInvitation(w.filters,principal);refreshed.assertCurrent();
+    expect(refreshed.data.samples[0]).toMatchObject({route:"held",reasonCodes:["SAMPLE_DEADLINE_EXPIRED"]});
+  });
+  it("bounds a published accepted fact by its own evidence lease, without erasing owner handoff", async()=>{
+    const w=setup(),deadline=new Date(w.source.state.observedAt+1_000).toISOString();w.source.state.willingness="willing";
+    w.source.state.transform=s=>{if(s.kind==="invitation")s.acceptedOffer={offerId:w.offer.offerId,version:w.offer.version,receiptRef:"fictional-accepted-receipt",validUntil:deadline};
+      s.samples=[{...sample(w),route:"ownerHandoff",deadline:new Date(w.source.state.observedAt-1).toISOString(),reasonCodes:["TIKTOK_PERMISSION_DENIED_16022020"]}];};
+    const result=await w.service.readInvitation(w.filters,principal);expect(result.data.offer?.accepted).toBe(true);expect(result.data.validUntil).toBe(deadline);
+    expect(result.data.samples[0]?.route).toBe("ownerHandoff");w.o.advance(1_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    const refreshed=await w.service.readInvitation(w.filters,principal);refreshed.assertCurrent();
+    expect(refreshed.data.offer?.accepted).not.toBe(true);expect(refreshed.data.samples[0]?.route).toBe("ownerHandoff");
+    expect(Date.parse(refreshed.data.validUntil)).toBeGreaterThan(w.o.now());
+  });
   it.each(["type","state","capability","denied","future"])("refuses malformed source sample %s without browser fallback",async kind=>{
     const w=setup();w.source.state.transform=s=>{const value={...sample(w)};
       if(kind==="type")Object.assign(value,{requestType:"target"});if(kind==="state")Object.assign(value,{nativeState:"approved"});
