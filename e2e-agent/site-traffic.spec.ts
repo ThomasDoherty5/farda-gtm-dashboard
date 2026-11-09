@@ -121,6 +121,9 @@ test("performance definitions use the same source owner without changing financi
 
 test("complete original-layout adaptation at three widths, keyboard definitions and actual daily-table screen-reader proof", async ({ page }, info) => {
   test.setTimeout(150_000); await importSource(); await page.goto("/analytics/customer-journey"); await expect(page.getByTestId("metric-conversion")).toHaveText("1.625%");
+  await expect(page.getByRole("list", { name: "Support tickets by category" }).getByText("Unknown", { exact: true })).toHaveCount(4);
+  await expect(page.getByRole("list", { name: "Reviews by star rating" }).getByText("Unknown", { exact: true })).toHaveCount(5);
+  for (const label of ["Shopify net receipts", "Shopify AOV", "Quarantined from inspected"]) await expect(page.getByText(label, { exact: true })).toBeVisible();
   for (const width of [1440, 1024, 390]) {
     await page.setViewportSize({ width, height: 1000 }); await page.evaluate(() => document.fonts.ready);
     await page.screenshot({ path: info.outputPath(`traffic-complete-${width}.png`), fullPage: true });

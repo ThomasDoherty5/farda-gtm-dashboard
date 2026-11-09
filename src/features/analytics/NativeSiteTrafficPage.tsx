@@ -110,14 +110,16 @@ function TrafficBody({ data, openSource, selectSegment }: { data: NativeSiteTraf
         <BarList label="Store conversion measures" rows={observations.map(row => ({ key: row.key, label: row.label, value: valueText(row.metric), note: row.note, share: (row.metric.value ?? 0) / scale }))} />
         <p className={styles.small}>Bar lengths use the largest observed count as a display scale. These are different measures, not a required descending funnel.</p>
         <hr className={styles.divider} />
+        <DetailRow label="Shopify net receipts" value="Unknown" />
+        <DetailRow label="Shopify AOV" value="N/A · matching net receipts unavailable" />
         <DetailRow label="Add-to-cart session rate" value={`${rateText(rates.addToCart)} · ${stateNote(rates.addToCart)}`} />
         <DetailRow label="Checkout completion" value={`${rateText(rates.checkoutCompletion)} · ${stateNote(rates.checkoutCompletion)}`} />
         <p className={styles.small}>TikTok Shop orders and TikTok-origin Shopify mirrors are excluded. Store conversion uses matching storefront orders and sessions; global orders are not its numerator.</p>
         <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 250 }} aria-haspopup="dialog" onClick={openSource}>Open commerce source</Button></div>
       </Card>
       <Card labelledBy="support-title" className={styles.card20}>
-        <SectionHeading id="support-title" title="Support categories" note="Support reporting requires its own delivered-unit cohort." />
-        <p className={styles.metric}>Unknown</p>
+        <SectionHeading id="support-title" title="Support categories" note="Support reporting requires its own delivered-unit cohort · no message text." />
+        <BarList label="Support tickets by category" rows={["Setup", "Shipping", "Hardware", "Return / refund"].map(label => ({ key: label, label, value: "Unknown", share: 0 }))} />
         <p className={styles.small}>Traffic sessions do not establish ticket counts or support outcomes.</p>
         <hr className={styles.divider} />
         <DetailRow label="Resolved by Fin" value="Unknown" /><DetailRow label="Resolved by people" value="Unknown" /><DetailRow label="Open / handed off" value="Unknown" />
@@ -128,17 +130,19 @@ function TrafficBody({ data, openSource, selectSegment }: { data: NativeSiteTraf
       <Card labelledBy="returns-title" className={styles.card20}>
         <SectionHeading id="returns-title" title="A return ends with a verified outcome" note="Return rate needs a qualified delivered-unit cohort." />
         <p className={styles.metric} data-testid="metric-return-rate">N/A</p>
-        <DetailRow label="Received and inspected" value="Unknown" /><DetailRow label="Awaiting inspection" value="Unknown" /><DetailRow label="Restocked from inspected units" value="Unknown" />
-        <div className={styles.btnRow}><Button variant="secondary" disabledReason="A verified return reference is required to open return evidence.">Open return evidence</Button></div>
+        <DetailRow label="Received and inspected" value="Unknown" /><DetailRow label="Awaiting inspection" value="Unknown" /><DetailRow label="Restocked from inspected" value="Unknown" /><DetailRow label="Quarantined from inspected" value="Unknown" />
+        <p className={styles.small}>Refunds and physical returns are separate events. Restock only after inspection; replacements link the original order. Source Orders owns refund and retained-unit totals.</p>
+        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 232 }} disabledReason="A verified return reference is required to open return evidence.">Open return cases</Button></div>
       </Card>
       <Card labelledBy="reviews-title" className={styles.card20}>
-        <SectionHeading id="reviews-title" title="Reviews reflect verified customer experience" note="All-time ratings and delivered cohorts stay separate." />
-        <p className={styles.metric}>N/A</p>
-        <DetailRow label="Rated reviews" value="Unknown" /><DetailRow label="Published reviews" value="Unknown" /><DetailRow label="Awaiting review" value="Unknown" />
-        <div className={styles.btnRow}><Button variant="secondary" disabledReason="The current ratings source is not connected to this report.">Open review source</Button></div>
+        <SectionHeading id="reviews-title" title="Rated reviews unavailable" note="Ratings-only feed · latest unique platform + review ID. All-time ratings and delivered cohorts stay separate." />
+        <BarList label="Reviews by star rating" rows={[5, 4, 3, 2, 1].map(star => ({ key: String(star), label: `${star} ${star === 1 ? "star" : "stars"}`, value: "Unknown", share: 0 }))} />
+        <hr className={styles.divider} />
+        <p className={styles.small}>Unrated reviews are excluded from the average. Review requests pause during unresolved support/returns. Low-rating follow-up stays in the source tool with an accountable owner.</p>
+        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 250 }} disabledReason="The current ratings source is not connected to this report.">Open review outcomes</Button></div>
       </Card>
     </div>
-    <Notice tone="warning" title="Unknowns stay visible">
+    <Notice tone="warning" title="Unknown is not zero">
       Missing source counters remain unknown; zero sessions produce N/A rates. Partial coverage is provisional. Creator clicks and storefront sessions are different measures. Support, returns and ratings require their own source evidence.
     </Notice>
     <Card labelledBy="traffic-source-title">
