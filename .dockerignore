@@ -13,6 +13,16 @@
 !src/creator-agent/approvals/*.ts
 !src/creator-agent/actions/
 !src/creator-agent/actions/*.ts
+!src/creator-agent/finance/
+!src/creator-agent/finance/*.ts
+!src/creator-agent/fulfillmentDomain/
+!src/creator-agent/fulfillmentDomain/*.ts
+!src/creator-agent/operationsReads/
+!src/creator-agent/operationsReads/*.ts
+!src/creator-agent/settlements/
+!src/creator-agent/settlements/*.ts
+!src/creator-agent/teamInvitationReads/
+!src/creator-agent/teamInvitationReads/*.ts
 !src/creator-agent/configurations/
 !src/creator-agent/configurations/*.json
 !src/adapter/
@@ -21,6 +31,7 @@
 !src/adapter/viewSchemas/
 !src/adapter/viewSchemas/finance.ts
 !src/adapter/viewSchemas/ops.ts
+!src/adapter/viewSchemas/nativeOperations.ts
 !src/adapter/viewSchemas/approvals.ts
 !src/adapter/viewSchemas/settings.ts
 !src/adapter/viewSchemas/recruitment.ts

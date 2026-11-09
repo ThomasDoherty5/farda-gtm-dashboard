@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useId, type ReactNode } from "react";
 const SyntheticSource = createContext(true);
 import type { ReadResponse } from "@/adapter/contract";
 import type { NativeCommissionLedger, NativePayable, NativeSettlement, SettlementRecord } from "@/creator-agent/settlements/contract";
@@ -13,7 +13,7 @@ import styles from "./NativeFinance.module.css";
 
 export type NativeFinanceData = NativeCommissionLedger | NativePayable | NativeSettlement;
 export type MoneyFact = SettlementRecord["eligibleBase"];
-export const stateText: Record<SettlementRecord["state"], string> = { estimated: "Estimated", earned: "Earned", held: "Held", disputed: "Disputed", approved: "Approved", billed: "Billed", awaitingCreator: "Waiting for creator activation", merchantPaid: "Merchant paid", creatorPaid: "Creator paid", failed: "Failed", adjusted: "Adjusted", reconciled: "Reconciled", requested: "Requested", executed: "Executed", reversed: "Reversed", unknown: "Unknown" };
+export const stateText: Record<SettlementRecord["state"], string> = { estimated: "Estimated", earned: "Earned", held: "Held", disputed: "Disputed", approved: "Approved", billed: "Billed", awaitingCreator: "Waiting for creator activation", awaitingProvider: "Awaiting provider", merchantPaid: "Merchant paid", creatorPaid: "Creator paid", failed: "Failed", adjusted: "Adjusted", reconciled: "Reconciled", requested: "Requested", executed: "Executed", reversed: "Reversed", unknown: "Unknown" };
 export const reasonText = (reason: string) => reason.toLowerCase().replaceAll("_", " ");
 export function exactMoney(value: { minorUnits: number; currency: string }) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: value.currency, currencyDisplay: "code" }).format(value.minorUnits / 100);
@@ -51,8 +51,15 @@ export function FinanceSourceLink({ record, kind, label, current = true, targetR
   const link = matches.length === 1 ? matches[0] : undefined;
   const leased = useSourceLease(link?.validUntil);
   const safe = !synthetic && current && leased && link?.state === "verified" && link.url && /^https:\/\//i.test(link.url);
+  const reason = matches.length > 1 ? "Source links conflict. Ask the source owner." : "Source link unavailable. Refresh source access.";
   return safe ? <LinkButton variant="secondary" to={link.url!} target="_blank" rel="noopener noreferrer">{label}<span className="visually-hidden"> (external source, opens in a new tab)</span></LinkButton>
-    : <Button variant="secondary" disabledReason={matches.length > 1 ? "More than one source destination was returned. Ask the source owner to identify the exact record." : "A current verified source link is unavailable. Refresh source evidence or contact the source owner."}>{label}</Button>;
+    : <FinancialHeldButton reason={reason}>{label}</FinancialHeldButton>;
+}
+
+/** Keep the visible explanation grouped with its control instead of making it a header flex item. */
+export function FinancialHeldButton({ reason, children }: { reason: string; children: ReactNode }) {
+  const reasonId = useId();
+  return <span className={styles.sourceLink}><Button variant="secondary" disabledReason={reason} reasonFor={reasonId}>{children}</Button><span id={reasonId} className={styles.sourceLinkReason}>{reason}</span></span>;
 }
 
 export function FinancialEvidenceDialog({ record, onClose }: { record: SettlementRecord | null; onClose: () => void }) {

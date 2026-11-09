@@ -29,6 +29,15 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-original-layout-finance
+          path: |
+            test-results/**/finance-original-layout-demo-*.png
+            test-results/**/finance-original-layout-demo-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-report

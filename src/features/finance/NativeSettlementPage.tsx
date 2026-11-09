@@ -47,7 +47,7 @@ function NativeCollabsSettlement({ data, record }: { data: NativeSettlement; rec
       </div>
     </Panel>
     <Panel large roomy title="Identity first, then accounting." subtitle="An unmatched source record stays in review. Inspect the account, payee and original evidence before requesting a match.">
-      <DataTable caption="Source identity and matching" columns={[{ label: "Record" }, { label: "Observed value" }, { label: "Match status" }, { label: "Action" }]} rows={[
+      <DataTable caption="Source identity and matching" minWidth={1248} columns={[{ label: "Record", width: "310px" }, { label: "Observed value", width: "470px" }, { label: "Match status", width: "260px" }, { label: "Action", width: "208px" }]} rows={[
         ["Commission component", record.componentRef, record.crosswalk.state, <Button key="identity" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("identity")}>Review identity</Button>],
         ["Order-line crosswalk", record.crosswalk.orderRef ?? "Unknown", record.crosswalk.state, <Button key="crosswalk" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("crosswalk")}>Open crosswalk</Button>],
         ["Provider receipt", `${record.receipts.length} source receipts`, "Inspect original evidence", <Button key="receipt" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Inspect receipt</Button>],

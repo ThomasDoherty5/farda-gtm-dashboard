@@ -10,3 +10,16 @@
 .barTrack { background: var(--color-subtle); height: 24px; }
 .bar { display: block; height: 100%; background: var(--color-violet); }
 @media (max-width: 600px) { .contribution li { grid-template-columns: 1fr; gap: var(--space-8); } }
+
+.sourceLink { display: inline-flex; flex-direction: column; gap: var(--space-4); min-width: 0; max-width: 100%; }
+.sourceLink button { width: 100%; }
+.sourceLinkReason { display: block; max-width: 240px; font: var(--text-small); color: var(--color-muted); }
+
+.contributionFooter { display: flex; flex-wrap: wrap; gap: var(--space-16); align-items: flex-start; }
+.cohortFacts { flex: 1 1 760px; min-width: 0; }
+.cohortFacts > dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-16); }
+.cohortFacts > dl > div { display: flex; flex-direction: column; gap: var(--space-4); }
+.cohortFacts > dl dd { font: var(--text-small); }
+@media (max-width: 767px) { .cohortFacts > dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.historicalTerms { display: block; margin-top: var(--space-4); overflow-wrap: anywhere; }

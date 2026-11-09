@@ -92,3 +92,7 @@
 .bigValue { margin: 0; font: var(--text-metric); }
 @media (max-width: 1179px) { .analytics { grid-template-columns: minmax(0, 1fr); } .kpiStack { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); } }
 @media (max-width: 767px) { .chartGap { display: none; } .badgeRow { flex-wrap: wrap; } }
+
+.lane > button, .lane > span { align-self: flex-start; }
+
+.rateLanes .lane h3 { font: var(--text-h2); }

@@ -142,7 +142,7 @@ test("native five-screen keyboard, desktop and mobile accessible evidence",async
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth);expect(violations).toEqual([]);expect(overflow).toBe(false);
   await page.screenshot({path:dir+"/"+name+"-"+width+".png",fullPage:true});proof.push({name,route,width,height:width===390?844:1000,violations,overflow});
  }
- await page.goto("/settings/capabilities");await page.getByRole("button",{name:"Plan validation",exact:true}).focus();await page.keyboard.press("Enter");
+ renew();await page.goto("/settings/capabilities");const planValidation=page.getByRole("button",{name:"Plan validation",exact:true});await expect(planValidation).toBeEnabled();await planValidation.focus();await page.keyboard.press("Enter");
  await expect(page.getByRole("dialog",{name:"Plan validation"})).toBeVisible();await page.keyboard.press("Escape");await expect(page.getByRole("button",{name:"Plan validation",exact:true})).toBeFocused();
  writeFileSync(dir+"/accessibility.json",JSON.stringify(proof,null,2));
 });

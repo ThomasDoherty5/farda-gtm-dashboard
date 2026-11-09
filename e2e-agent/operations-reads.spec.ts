@@ -108,7 +108,7 @@ test("native operations captures every original frame and preserves privacy and 
   expect(orderTarget.searchParams.get("timezone")).toBe("UTC");
   for (const node of ["4:6", "12:653", "12:708"] as const) await captureFinanceOperations(page, node);
   await page.setViewportSize({ width: 1440, height: 1452 });
-  const queue = page.getByRole("region", { name: "Ready to leave home", exact: true });
+  const queue = page.getByTestId("queue-table");
   await screenReaderCheckpoint(page, "native-dispatch-table-headers", queue, ["Order", "sample", "Home", "Waiting", "Next action"]);
   await page.goto("/orders/TEST-SH-1042");
   await expect(page.getByRole("heading", { name: "Order TEST-SH-1042" })).toBeVisible();
@@ -138,8 +138,8 @@ test("native operations captures every original frame and preserves privacy and 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Return resolved", exact: true })).toBeVisible();
   await captureFinanceOperations(page, "12:431");
-  await expect(page.getByText("synthetic-refundSettled-receipt", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("return-chain").getByRole("row").filter({hasText:"synthetic-refundSettled-receipt"})).toBeVisible();
   await page.clock.fastForward(601_000);
   await expect(page.getByRole("heading", { name: "Return resolved", exact: true })).toHaveCount(0);
-  await expect(page.getByText("synthetic-refundSettled-receipt", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/synthetic-refundSettled-receipt/)).toHaveCount(0);
 });

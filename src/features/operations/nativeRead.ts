@@ -32,7 +32,7 @@ export function operationsHref(path: string, search: URLSearchParams): string {
 
 /** Read-only source navigation may name existing internal records, never an arbitrary origin or script. */
 export function isOperationsRecordPath(value: string): boolean {
-  return /^\/(?:orders|shipments|returns|inventory|operations)(?:[/?#]|$)/.test(value) && !/[\\\u0000-\u0020]/.test(value);
+  return /^\/(?:orders|shipments|returns|inventory|operations)(?:[/?#]|$)/.test(value) && !Array.from(value).some(character => character === "\\" || character.charCodeAt(0) <= 32);
 }
 
 export function operationsContext(search: URLSearchParams, value: unknown): URLSearchParams {

@@ -5,13 +5,13 @@ import { FinanceError } from "../src/creator-agent/finance/source.ts";
 import { financeTestSource, financeSnapshot } from "../src/creator-agent/finance/fixtures.testkit.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "../src/creator-agent/testFixtures.ts";
 
-import { settlementSourceFixture } from "../src/creator-agent/settlements/fixtures.testkit.ts";
+import { originalLayoutFinanceSource } from "./support/original-layout-finance-source.ts";
 import { captureFinanceOperations } from "./support/finance-operations-captures.ts";
 import { screenReaderCheckpoint } from "./support/screen-reader.ts";
 
 const fixedNow = Date.parse("2026-11-06T12:00:00.000Z");
 const scope = { workspaceId: SYNTHETIC_SCOPE.workspaceId, accountId: SYNTHETIC_SCOPE.accountIds[0]!, environment: "sandbox" as const };
-let settlement: ReturnType<typeof settlementSourceFixture>;
+let settlement: ReturnType<typeof originalLayoutFinanceSource>;
 let app: ReturnType<typeof createAgentServer>;
 let mode: "unconfigured" | "configured" | "denied" = "unconfigured";
 const routes = ["/finance", "/finance/commissions", "/finance/settlements/COMM-DEMO-D", "/finance/payables/PAY-0012", "/finance/close/2026-10",
@@ -19,19 +19,7 @@ const routes = ["/finance", "/finance/commissions", "/finance/settlements/COMM-D
 
 test.beforeEach(async ({ page }) => {
   await page.clock.install({ time: fixedNow });
-  settlement = settlementSourceFixture(scope, fixedNow);
-  settlement.source.read = async request => {
-    const snapshot = settlement.snapshot(request);
-    if (request.viewKey === "commissionLedger") {
-      const money = settlement.money;
-      snapshot.stateTotals = { held: money(1000), disputed: money(2000), awaitingProvider: money(3000), paid: money(18000) };
-      snapshot.accountingPolicy = { state: "verified", reference: "synthetic-policy" };
-      snapshot.economics = { cohortRef: "synthetic-cohort", periodStart: "2026-10-01T00:00:00Z", periodEnd: "2026-11-01T00:00:00Z", eligibleOrders: settlement.number(3), grossSales: money(120000), refunds: money(0), netRevenue: money(120000), creatorCommissions: money(18000), providerFees: money(3000), fulfillmentCost: money(20000), sampleCost: money(4000), contribution: money(60000),
-        waterfall: { netSales: money(120000), commerceCosts: money(20000), fixedFees: money(15000), samples: money(4000), netCommission: money(18000), feeEstimate: money(3000), contribution: money(60000) } };
-      snapshot.totals.contribution = money(60000);
-    }
-    return snapshot;
-  };
+  settlement = originalLayoutFinanceSource(scope, fixedNow);
   mode = "unconfigured";
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
     operations: { now: () => Date.parse("2026-11-06T12:00:00.000Z") },
@@ -83,9 +71,11 @@ test("a configured source renders validated finance data, and a later source den
 test("native ledger and every settlement frame retain evidence, held authority and full-page accessibility", async ({ page }) => {
   test.setTimeout(180_000);
   await login(page);
-  await page.goto("/finance/commissions");
+  await page.goto("/finance/commissions?provider=collabs");
   await expect(page.getByRole("heading", { name: "Every commission, accounted for." })).toBeVisible();
   await expect(page.getByRole("region", { name: "Contribution waterfall", exact: true })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Commission and historical obligation records", exact: true }).getByRole("row")).toHaveCount(5);
+  await expect(page.getByRole("table", { name: "Commission and historical obligation records", exact: true })).toContainText("Awaiting provider");
   await captureFinanceOperations(page, "65:1037");
   const ledger = page.getByRole("region", { name: "Commission and historical obligation records" });
   await screenReaderCheckpoint(page, "native-ledger-table-headers", ledger, ["Record", "Gross earned", "Reversed", "Net accrued", "Current source state", "Next action"]);
@@ -95,7 +85,11 @@ test("native ledger and every settlement frame retain evidence, held authority a
   await page.keyboard.press("Escape");
   await expect(exportButton).toBeFocused();
   await screenReaderCheckpoint(page, "native-ledger-export-focus-return", exportButton, ["Export ledger"]);
-  const details = await page.getByRole("link", { name: /^Open settlement/ }).evaluateAll(links => links.map(link => (link as HTMLAnchorElement).getAttribute("href")!));
+  await page.goto("/finance/commissions");
+  await expect(page.getByRole("link", { name: /Open historical payable/ })).toBeVisible();
+  const allDetails = await page.getByRole("link", { name: /^Open settlement/ }).evaluateAll(links => links.map(link => (link as HTMLAnchorElement).getAttribute("href")!));
+  expect(allDetails).toHaveLength(5);
+  const details = [allDetails[3]!, allDetails[4]!];
   const payable = await page.getByRole("link", { name: /Open historical payable/ }).getAttribute("href");
   expect(details).toHaveLength(2);
   for (const [index, route] of details.entries()) {

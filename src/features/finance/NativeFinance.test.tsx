@@ -98,6 +98,11 @@ it("withholds even a verified external link on synthetic financial evidence", as
   await screen.findByTestId("native-payment-request");
   expect(screen.getByRole("button", { name: "Current affiliate terms" })).toHaveAttribute("aria-disabled", "true");
   expect(screen.queryByRole("link", { name: /Current affiliate terms/ })).not.toBeInTheDocument();
+  const held = screen.getByRole("button", { name: "Current affiliate terms" });
+  const reason = document.getElementById(held.getAttribute("aria-describedby")!);
+  expect(reason).toBeVisible();
+  expect(reason).toHaveTextContent("Source link unavailable. Refresh source access.");
+  expect(reason?.parentElement).toBe(held.parentElement);
 });
 it("renders source execution only from its independent event", async () => {
   const { payable } = fixture();

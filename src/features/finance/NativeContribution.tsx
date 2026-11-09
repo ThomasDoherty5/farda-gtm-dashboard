@@ -32,13 +32,15 @@ export function NativeContribution({ data }: { data: NativeCommissionLedger }) {
   });
   const table = <DataTable caption="Source contribution components" columns={[{ label: "Component" }, { label: "Source amount" }, { label: "Evidence" }, { label: "Observed" }]} rows={items.map(([label, fact]) => [label, fact ? moneyFact(fact) : "Unknown · source component not supplied", fact?.evidenceRef ?? "Unknown", observed(fact?.observedAt ?? null)])} />;
   return <>
-    <div className={styles.filters} aria-label="Contribution view"><Button variant="secondary" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart</Button><Button variant="secondary" aria-pressed={mode === "table"} onClick={() => setMode("table")}>Accessible table</Button></div>
-    <FactList label="Contribution cohort" rows={[["Cohort", facts.cohortRef], ["Period", `${observed(facts.periodStart)} – ${observed(facts.periodEnd)}`], ["Eligible orders", facts.eligibleOrders.state === "known" ? String(facts.eligibleOrders.value) : "Unknown"], ["Accounting policy", data.accountingPolicy.reference ?? "Unknown"]]} />
     {mode === "chart" && comparable ? <>
       <div className={finance.plotScroll} role="region" aria-label="Contribution waterfall" tabIndex={0}><div className={finance.waterfall} role="img" aria-label={`Source-reported net sales less commerce costs, historical fixed fees, samples, net commission and fee estimate. Contribution ${waterfall ? moneyFact(waterfall.contribution) : "unknown"}.`}>
         {[34, 146, 258].map(top => <span key={top} className={finance.wfLine} style={{ top }} />)}
         {geometry.map(item => <span key={item.label}><span className={finance.wfBar} data-kind={item.total ? "total" : "cost"} style={{ left: item.left, width: item.width, top: item.top, height: Math.max(item.height, 1) }} /><p className={finance.wfValue} data-kind={item.total ? "total" : "cost"} style={{ left: item.left, top: item.top - 27 }}>{item.total ? "" : "−"}{item.fact ? moneyFact(item.fact) : "Unknown"}</p><p className={finance.wfLabel} style={{ left: item.left }}>{item.label}</p></span>)}
       </div></div><table className="visually-hidden"><caption>Source contribution components</caption><thead><tr><th scope="col">Component</th><th scope="col">Source amount</th></tr></thead><tbody>{items.map(([label, fact]) => <tr key={label}><th scope="row">{label}</th><td>{fact ? moneyFact(fact) : "Unknown"}</td></tr>)}</tbody></table>
     </> : <>{mode === "chart" && <p role="status">Chart unavailable: complete, consistent source components and a verified accounting policy are required. No missing costs are inferred. Source facts remain available below.</p>}{table}</>}
+    <div className={styles.contributionFooter}>
+      <div className={styles.cohortFacts}><FactList label="Contribution cohort" rows={[["Cohort", facts.cohortRef], ["Period", `${observed(facts.periodStart)} – ${observed(facts.periodEnd)}`], ["Eligible orders", facts.eligibleOrders.state === "known" ? String(facts.eligibleOrders.value) : "Unknown"], ["Accounting policy", data.accountingPolicy.reference ?? "Unknown"]]} /></div>
+      <div className={styles.filters} aria-label="Contribution view"><Button variant="secondary" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart</Button><Button variant="secondary" aria-pressed={mode === "table"} onClick={() => setMode("table")}>Accessible table</Button></div>
+    </div>
   </>;
 }

@@ -8,7 +8,7 @@ import { Dialog } from "@/components/Dialog";
 import { Kpi } from "@/components/Kpi";
 import { ContextCard, FactList, GateRows, PageHeader, Panel } from "@/components/Panels";
 import { SectionTabs } from "@/components/SectionTabs";
-import { displayReference, exactMoney, FinancialEvidenceDialog, FinanceSourceLink, moneyFact, observed, reasonText, recordPath, stateText } from "./NativeFinance";
+import { displayReference, exactMoney, FinancialEvidenceDialog, FinancialHeldButton, FinanceSourceLink, moneyFact, observed, reasonText, recordPath, stateText } from "./NativeFinance";
 import { SettlementExceptions } from "./NativeSettlementPage";
 import { SettlementMatchDialog } from "./NativeStatementMatch";
 import styles from "./Finance.module.css";
@@ -31,7 +31,7 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
   };
   return <>
     <PageHeader id="settlement-title" title="Native rates. Native settlement." subtitle={`${displayReference(record.ref)} · TikTok Shop · ${record.accountRef}`}>
-      <Button variant="secondary" disabledReason="A current target-invite reference was not supplied for this record.">Open target invite</Button><LinkButton to="/settings/capabilities">Validate native access</LinkButton>
+      <FinancialHeldButton reason="Target invite unavailable. Refresh source access.">Open target invite</FinancialHeldButton><LinkButton to="/settings/capabilities">Validate native access</LinkButton>
     </PageHeader>
     <SectionTabs label="TikTok settlement sections" tabs={tabs.map(item => ({ label: item.label, to: tabTo(item.key), width: item.width, current: item.key === tab }))} />
     <ContextCard title="Historical funded work and current commission terms" actions={<><LinkButton variant="secondary" to="/creators/pipeline">Full acquisition funnel</LinkButton><LinkButton variant="secondary" to="/creators/discovery">Daily sourcing</LinkButton></>}>Previously accepted funded obligations retain their own source terms. New acquisition is commission-only; Standard and Shop Ads terms remain independently evidenced.</ContextCard>
@@ -39,7 +39,7 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
     {tab === "rates" ? <>
       <Panel title="Read the rate that actually applies." large spacious subtitle="Current, proposed and effective terms are distinct. Read the exact source dates and versions.">
         <div className={styles.rateLanes}>{lane("standard", "Standard commission", "violet")}{lane("shopAds", "Shop Ads commission", "subtle")}</div>
-        <DataTable caption="Native commission routing" columns={[{ label: "Order event" }, { label: "Entitlement" }, { label: "Financial state" }, { label: "Action" }]} rows={[
+        <DataTable caption="Native commission routing" minWidth={1248} columns={[{ label: "Order event", width: "300px" }, { label: "Entitlement", width: "340px" }, { label: "Financial state", width: "360px" }, { label: "Action", width: "248px" }]} rows={[
           ["Affiliate order", record.orderRef ?? "Unknown order identity", stateText[record.state], <FinanceSourceLink key="order" record={record} kind="order" targetRef={record.orderRef ?? ""} label="Inspect native order" />],
           ["Refund / reversal", `${record.adjustments.length} source adjustments`, "Original receipts remain immutable", <Button key="adjustment" variant="ghost" aria-haspopup="dialog" onClick={() => setDialog("evidence")}>Review adjustment</Button>],
           ["Native settlement", record.componentRef, record.accounting.state, <Button key="match" variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("match")}>Open reconciliation</Button>],
@@ -53,7 +53,7 @@ export function NativeTikTokSettlement({ data, record }: { data: NativeSettlemen
           { badge: <Badge>Historical version</Badge>, title: "Accepted terms", text: historical?.termsVersion ?? "Unknown · no accepted historical terms returned" },
           { badge: <Badge>Observe + reconcile</Badge>, title: "Provider release", text: "No duplicate manual payout after provider funding" },
         ]} />
-        <Button variant="secondary" aria-haspopup="dialog" onClick={() => setDialog("history")}>Review historical terms</Button>
+        <Button variant="secondary" style={{ alignSelf: "flex-start", minWidth: 240 }} aria-haspopup="dialog" onClick={() => setDialog("history")}>Review historical terms</Button>
       </Panel>
       <Panel title="Missing API action routes to a validated browser task." large roomy subtitle="A missing API does not grant permission. A native browser route requires its own verified authority.">
         <ul className={styles.chips} aria-label="Source action requirements"><li><Badge>Verified source capability</Badge></li><li><Badge tone="violet">Exact approved decision</Badge></li><li><Badge>Current source permission</Badge></li><li><Badge>Original native receipt</Badge></li></ul>

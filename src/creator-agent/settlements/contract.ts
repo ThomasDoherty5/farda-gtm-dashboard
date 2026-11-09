@@ -19,7 +19,7 @@ export const moneyFactSchema = settlementFact(settlementMoneySchema);
 export const settlementStateTotalsSchema=z.object({held:moneyFactSchema,disputed:moneyFactSchema,awaitingProvider:moneyFactSchema,paid:moneyFactSchema}).strict();
 export const numberFactSchema = settlementFact(z.number().finite());
 export const textFactSchema = settlementFact(settlementRef);
-export const settlementStateSchema = z.enum(["estimated", "earned", "held", "disputed", "approved", "billed", "awaitingCreator", "merchantPaid", "creatorPaid", "failed", "adjusted", "reconciled", "requested", "executed", "reversed", "unknown"]);
+export const settlementStateSchema = z.enum(["estimated", "earned", "held", "disputed", "approved", "billed", "awaitingCreator", "awaitingProvider", "merchantPaid", "creatorPaid", "failed", "adjusted", "reconciled", "requested", "executed", "reversed", "unknown"]);
 export const balanceKeys = ["estimated", "earned", "held", "disputed", "approved", "billed", "merchantPaid", "creatorPaid", "outstanding", "adjusted"] as const;
 export const balancesSchema = z.object({ estimated: moneyFactSchema, earned: moneyFactSchema, held: moneyFactSchema, disputed: moneyFactSchema,
   approved: moneyFactSchema, billed: moneyFactSchema, merchantPaid: moneyFactSchema, creatorPaid: moneyFactSchema, outstanding: moneyFactSchema, adjusted: moneyFactSchema }).strict();

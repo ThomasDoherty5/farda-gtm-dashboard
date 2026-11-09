@@ -7,6 +7,8 @@ import { ReadState } from "@/components/ReadState";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
 import { Button } from "@/components/Button";
+import { EmptyState, SkeletonCard } from "@/components/EmptyState";
+import { ViewError } from "@/components/ViewError";
 import { FlatTable, Panel } from "@/components/Panels";
 import { EXCEPTION_KINDS, type CarrierState, type ChainStep, type OpsException, type Shipment } from "@/fixtures/opsShipping";
 import { waitingLabel } from "./format";
@@ -38,8 +40,15 @@ export function ShippingPanels({ reportingContext }: { reportingContext?: URLSea
   if (adapter.kind !== "demo") for (const name of ["home", "startAt", "endAt", "timezone"]) { const value = search.get(name); if (value !== null) filters[name] = value; }
   const query = useView<Record<string, string>, ShippingData>("operationsShipping", filters);
   const data = query.data?.data ?? null;
-  if (query.isError) return <p role="alert">Shipping detail could not be loaded. The figures above are unaffected.</p>;
-  if (!data) return null;
+  if (query.isPending) return <SkeletonCard label="Loading shipping evidence…" />;
+  if (query.isError) return <ViewError error={query.error} subject="Shipping evidence" onRetry={() => { void query.refetch(); }} />;
+  if (!data) {
+    const empty=query.data?.dataState==="empty"&&query.data.coverage.complete===true;
+    return <EmptyState state={empty?"Empty":"Error"} title={empty?"No shipping data yet":"Shipping evidence unavailable"} alert={!empty}>
+      <p>{empty?"The source returned no shipping records for this home and reporting period.":"Incomplete or stale source evidence cannot establish that no shipments exist."}</p>
+      <Button variant="secondary" onClick={() => { void query.refetch(); }}>Refresh shipping evidence</Button>
+    </EmptyState>;
+  }
   const context = operationsContext(search, data);
   const complete = adapter.kind === "demo" || query.data?.coverage.complete === true && query.data.dataState !== "stale";
   const transit = data.shipments.filter(isInTransit);

@@ -23,5 +23,9 @@ export function OperationsCohortProvider({ children }: { children: ReactNode }) 
 export const useOperationsCohort = () => useContext(Context);
 export function useRegisterOperationsCohort(cohort: OperationsReportingScope | null | undefined) {
   const { register } = useOperationsCohort();
-  useEffect(() => cohort ? register(cohort) : undefined, [cohort, register]);
+  const home=cohort?.home,startAt=cohort?.startAt,endAt=cohort?.endAt,timezone=cohort?.timezone,basis=cohort?.basis;
+  // Callers may reconstruct an equivalent source cohort on render. Register only material changes,
+  // while retaining this registration's owner-specific cleanup and authenticated scope identity.
+  useEffect(() => home&&startAt&&endAt&&timezone&&basis ? register({home,startAt,endAt,timezone,basis}) : undefined,
+    [home,startAt,endAt,timezone,basis,register]);
 }
