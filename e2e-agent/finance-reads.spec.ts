@@ -86,6 +86,18 @@ test("native ledger and every settlement frame retain evidence, held authority a
   await chart.click();
   await expect(chart).toHaveAttribute("aria-pressed", "true");
   await screenReaderCheckpoint(page, "native-contribution-chart-control", chart, ["Chart"]);
+  const cohortEvidence = page.getByRole("button", { name: "Cohort evidence", exact: true });
+  await cohortEvidence.click();
+  const cohortDialog = page.getByRole("dialog", { name: "Contribution cohort evidence", exact: true });
+  await expect(cohortDialog).toContainText(/cohort-[a-f0-9]{24}/);
+  await expect(cohortDialog).not.toContainText("layout-four-commission-groups");
+  await expect(cohortDialog).toContainText("Eligible orders");
+  await expect(cohortDialog).toContainText("Accounting policy");
+  await expect(cohortDialog).toContainText("USD");
+  await screenReaderCheckpoint(page, "native-contribution-cohort-dialog", cohortDialog, ["Contribution cohort evidence", "Cohort", "Period", "Accounting policy"]);
+  await page.keyboard.press("Escape");
+  await expect(cohortEvidence).toBeFocused();
+  await screenReaderCheckpoint(page, "native-contribution-cohort-focus-return", cohortEvidence, ["Cohort evidence"]);
   const ledger = page.getByRole("region", { name: "Commission and historical obligation records" });
   await screenReaderCheckpoint(page, "native-ledger-table-headers", ledger, ["Record", "Gross earned", "Reversed", "Net accrued", "Current source state", "Next action"]);
   const exportButton = page.getByRole("button", { name: "Export ledger", exact: true });

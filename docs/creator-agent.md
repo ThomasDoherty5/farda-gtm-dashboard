@@ -39,11 +39,15 @@ All three response versions hash the returned read-model data. A stale/supersede
 
 ### Finance and payable reads (THO-303, THO-300; THO-367)
 
+The initial baseline below is retained for the general accounting reader. Native commission, settlement and historical payable routes now use `settlements/reader.ts`; their current contract and canonical export/match recovery are described in the register's **Current settlement and fulfillment application contracts** section. Provider activation remains separate from application integration.
+
 `financeDashboard`, `periodClose`, `monthsHistory`, `closePackage`, `reportManifest`, `commissionLedger`, `settlementDetail` and `payableDetail` are served by `src/creator-agent/finance/`. **Stage: sandbox, unconfigured source.** No QuickBooks or provider reader exists in this repository, so with the default configuration every one of these reads answers 503 `INTEGRATION_PENDING` with reason `FINANCE_SOURCE_UNCONFIGURED` and no data. The service never serves the demo fixtures and never synthesizes a figure or an empty success.
 
 A private `financeSource` reader can be injected through the server options. Its answer is validated strictly: exact scope, view, period and record id; the frontend's per-view schema; a lease capped at the 24-hour D-13 accounting ceiling; and explicit coverage. Stale and partial answers keep their state, counts and reasons. Unknown values stay unknown. A source denial clears to a neutral 403, and source text never reaches a response. Filters are exact, with no `scenario`. Cursors are refused. Reader capabilities are denied, and no Pay, reconcile, close, sign-off or export action exists. The full outcome table is in `adapter-freeze-register.md`, under "Native finance and payable reads".
 
 ### Operations reads (THO-301; THO-367)
+
+The current operations reader additionally binds home/reporting periods, validates independent milestone receipts and integrates canonical fulfillment proposal/recovery. See **Current settlement and fulfillment application contracts** in the register; the paragraph below describes the original unconfigured baseline, not permission to activate a source.
 
 `operationsOverview`, `orderDetail`, `orderCustomer`, `shippingException`, `returnDetail`, `fulfillmentAnalytics`, `operationsShipping` and `opsHealth` are served by `src/creator-agent/operationsReads/`. **Stage: sandbox, unconfigured source.** No Shopify, Shippo or warehouse reader exists in this repository, so with the default configuration every one of these reads answers 503 `INTEGRATION_PENDING` with reason `OPERATIONS_SOURCE_UNCONFIGURED` and no data. The service never serves the demo fixtures and never synthesizes a figure or an empty success.
 

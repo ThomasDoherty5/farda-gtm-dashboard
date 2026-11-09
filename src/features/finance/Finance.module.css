@@ -96,3 +96,5 @@
 .lane > button, .lane > span { align-self: flex-start; }
 
 .rateLanes .lane h3 { font: var(--text-h2); }
+
+.dark button[aria-disabled="true"] { color: var(--color-ink); }

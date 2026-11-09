@@ -1,3 +1,4 @@
+import { HeldOperationButton } from "./HeldOperationButton";
 import { useState } from "react";
 import { z } from "zod";
 import { scopeKey, useScope } from "@/adapter/scope";
@@ -17,7 +18,7 @@ type Payload = { kind: FulfillmentKind; targetRef: string; planRef: string; reas
 export function NativeFulfillmentControl({ kind, targetRef, label }: { kind: FulfillmentKind; targetRef: string | null; label: string }) {
   const ctx = useScope();
   const [open, setOpen] = useState(false);
-  if (!targetRef) return <Button disabledReason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action.">{label}</Button>;
+  if (!targetRef) return <HeldOperationButton disabledReason="A source-owned proposal target was not supplied. Refresh source evidence before preparing an action.">{label}</HeldOperationButton>;
   return <><Button aria-haspopup="dialog" onClick={() => setOpen(true)}>{label}</Button><Dialog open={open} title={kind === "returnTask" ? "Prepare the source return plan" : "Record the next step"} onClose={() => setOpen(false)}>{open && <Proposal key={JSON.stringify([...scopeKey(ctx), kind, targetRef])} kind={kind} targetRef={targetRef} />}<Button variant="secondary" onClick={() => setOpen(false)}>Close plan review</Button></Dialog></>;
 }
 function Proposal({ kind, targetRef }: { kind: FulfillmentKind; targetRef: string }) {

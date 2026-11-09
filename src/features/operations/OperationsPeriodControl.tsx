@@ -4,9 +4,11 @@ import { Button } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { Field } from "@/components/Field";
 import styles from "./Operations.module.css";
-export function OperationsPeriodControl({ scope, onApply }: { scope: OperationsReportingScope | null | undefined; onApply: (startAt: string, endAt: string) => void }) {
-  const [open, setOpen] = useState(false);
-  return <><Button variant="secondary" disabledReason={scope ? undefined : "A source-bound reporting period was not supplied."} aria-haspopup="dialog" onClick={() => setOpen(true)}>Reporting period</Button><Dialog open={open} title="Reporting period" onClose={() => setOpen(false)}>{scope && open && <PeriodFields key={`${scope.startAt}:${scope.endAt}:${scope.timezone}`} scope={scope} apply={(start, end) => { onApply(start, end); setOpen(false); }} />}<Button variant="secondary" onClick={() => setOpen(false)}>Cancel period change</Button></Dialog></>;
+export function OperationsPeriodControl({ scope, onApply, open: controlledOpen, onOpenChange, trigger = true }: { open?: boolean; onOpenChange?: (open: boolean) => void; trigger?: boolean; scope: OperationsReportingScope | null | undefined; onApply: (startAt: string, endAt: string) => void }) {
+  const [localOpen, setLocalOpen] = useState(false);
+  const open = controlledOpen ?? localOpen;
+  const setOpen = onOpenChange ?? setLocalOpen;
+  return <>{trigger && <Button variant="secondary" disabledReason={scope ? undefined : "A source-bound reporting period was not supplied."} aria-haspopup="dialog" onClick={() => setOpen(true)}>Reporting period</Button>}<Dialog open={open} title="Reporting period" onClose={() => setOpen(false)}>{scope && open && <PeriodFields key={`${scope.startAt}:${scope.endAt}:${scope.timezone}`} scope={scope} apply={(start, end) => { onApply(start, end); setOpen(false); }} />}<Button variant="secondary" onClick={() => setOpen(false)}>Cancel period change</Button></Dialog></>;
 }
 function PeriodFields({ scope, apply }: { scope: OperationsReportingScope; apply: (start: string, end: string) => void }) {
   const [start, setStart] = useState(new Date(scope.startAt).toISOString().slice(0, -1));

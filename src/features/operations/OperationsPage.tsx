@@ -1,5 +1,5 @@
 import { useRegisterOperationsCohort } from "./OperationsCohortContext";
-import { OperationsPeriodControl } from "./OperationsPeriodControl";
+import { HeldOperationButton } from "./HeldOperationButton";
 import { NativeOperationsGrant } from "./NativeOperationsGrant";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
@@ -66,24 +66,18 @@ function OperationsOverviewPage() {
     else next.set("home", value);
     setSearch(next);
   };
-  const periodControl = adapter.kind === "demo" ? null : <OperationsPeriodControl scope={reportingScope} onApply={(startAt, endAt) => {
-    if (!reportingScope) return;
-    const next = new URLSearchParams(search); next.set("home", reportingScope.home); next.set("startAt", startAt); next.set("endAt", endAt); next.set("timezone", reportingScope.timezone); setSearch(next);
-  }} />;
   return (
     <Page aria-labelledby="ops-title" data-figma-source="4:6">
       {layout === "desktop" ? (
         <PageHeader id="ops-title" title="Operations" subtitle="The right next action, for every order and every home.">
           {adapter.kind === "demo" || reportingScope ? <FilterButton name="Home" bare title="Choose a home" options={HOME_OPTIONS} value={renderedHome} onChange={setHome} width={160} /> : <Button variant="secondary" disabledReason="A source-bound home and reporting period were not supplied.">Home: All homes</Button>}
-          {periodControl}
-          <LinkButton variant="secondary" to={operationsHref(HEALTH_PATH, operationsContext(search, query.data?.data))} style={{ minWidth: 190 }}>Issues and fulfillment health</LinkButton>
-          <Button disabledReason={adapter.kind === "demo" ? undefined : "A verified warehouse source link was not supplied."} aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSourceOpen(true)}>Open warehouse</Button>
+          {adapter.kind === "demo" && <LinkButton variant="secondary" to={operationsHref(HEALTH_PATH, operationsContext(search, query.data?.data))} style={{ minWidth: 190 }}>Issues and fulfillment health</LinkButton>}
+          <HeldOperationButton disabledReason={adapter.kind === "demo" ? undefined : "A verified warehouse source link was not supplied."} aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSourceOpen(true)}>Open warehouse</HeldOperationButton>
         </PageHeader>
       ) : (
         <div className={styles.compactHeading}>
           <h1 id="ops-title">Operations</h1>
-          {periodControl}
-          {layout === "tablet" && <Button disabledReason={adapter.kind === "demo" ? undefined : "A verified warehouse source link was not supplied."} aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</Button>}
+          {layout === "tablet" && <HeldOperationButton disabledReason={adapter.kind === "demo" ? undefined : "A verified warehouse source link was not supplied."} aria-haspopup="dialog" style={{ minWidth: 174 }} onClick={() => setSourceOpen(true)}>Open source</HeldOperationButton>}
         </div>
       )}
       {/* A partial or stale read is said in words, not only by a badge. */}
@@ -92,7 +86,7 @@ function OperationsOverviewPage() {
       {query.isError && <ViewError error={query.error} subject="Operations" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data &&
         (query.data.data ? (
-          <NativeOperationsGrant data={query.data.data} refresh={() => { void query.refetch(); }}><Body reportingLabel={reportingScope ? `${reportingScope.startAt} to ${reportingScope.endAt} · ${reportingScope.timezone} · ${reportingScope.basis === "requestedAt" ? "request cohort" : "event cohort"}` : null} res={query.data as ReadResponse<OperationsOverviewRead>} data={query.data.data} layout={layout} home={renderedHome} demo={adapter.kind === "demo"} /></NativeOperationsGrant>
+          <NativeOperationsGrant data={query.data.data} refresh={() => { void query.refetch(); }}><Body reportingLabel={reportingScope ? `${reportingScope.startAt.slice(0,10)} to ${reportingScope.endAt.slice(0,10)} · ${reportingScope.timezone} · ${reportingScope.basis === "requestedAt" ? "request cohort" : "event cohort"}` : null} res={query.data as ReadResponse<OperationsOverviewRead>} data={query.data.data} layout={layout} home={renderedHome} demo={adapter.kind === "demo"} /></NativeOperationsGrant>
         ) : (
           query.data.dataState === "empty" && query.data.coverage.complete ? <EmptyState state="Empty" title="No operations data yet"><p>The warehouse mirror responded, but it holds no records for this scope.</p></EmptyState> : <EmptyState state="Error" title="Operations evidence unavailable" alert><p>Incomplete or stale evidence cannot establish that no records exist.</p></EmptyState>
         ))}

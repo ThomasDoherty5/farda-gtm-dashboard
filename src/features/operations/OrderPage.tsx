@@ -1,3 +1,4 @@
+import { HeldOperationButton } from "./HeldOperationButton";
 import { OperationsSourceLink } from "./OperationsSourceLink";
 import { NativeEventTimeline } from "./NativeEventTimeline";
 import type { NativeFulfillmentEvent } from "@/adapter/viewSchemas/nativeOperations";
@@ -39,7 +40,7 @@ export function OrderPage() {
           <>
             <PageHeader id="order-title" title={`${sample ? "Sample" : "Order"} ${o.orderRef}`} subtitle={`${sample ? "Samples" : "Orders"} / ${o.orderRef} · ${demo ? "Shopify → Sheets → Notion mirror" : operationsEvidenceLabel(o)}`}>
               {demo ? <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 168 }} onClick={() => setSource("Open Shopify")}>Open Shopify</Button> : <OperationsSourceLink data={o} kind={sample ? "sample" : "order"} targetRef={o.orderRef} label="Open source order" />}
-              <Button disabledReason={sourceHold} aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSource("Open the source row")}>Open source row</Button>
+              <HeldOperationButton disabledReason={sourceHold} aria-haspopup="dialog" style={{ minWidth: 190 }} onClick={() => setSource("Open the source row")}>Open source row</HeldOperationButton>
             </PageHeader>
             <Notice tone={o.notice.tone} label={o.notice.label} title={o.notice.title} role={o.notice.tone === "danger" ? "alert" : undefined} testId="order-notice">{o.notice.text}</Notice>
             <KpiRow>
@@ -73,8 +74,8 @@ export function OrderPage() {
               </Panel>
             </TwoColumns>
             {(demo ? o.refundPath.length > 0 : true) && (
-              <Panel title="Refunds have their own lifecycle" subtitle="A refund does not automatically mean stock is resellable.">
-                {!demo ? <NativeEventTimeline events={o.nativeEvents} expected={["returnReceived", "refundSettled", "replacementCreated", "replacementShipped"]} /> : <ol className={styles.refundStates} aria-label="Refund lifecycle">
+              <Panel id="refund-lifecycle" title="Refunds have their own lifecycle" subtitle="A refund does not automatically mean stock is resellable.">
+                {!demo ? <NativeEventTimeline horizontal events={o.nativeEvents} expected={["returnReceived", "refundSettled", "replacementCreated", "replacementShipped"]} /> : <ol className={styles.refundStates} aria-label="Refund lifecycle">
                   {o.refundPath.map((step) => (
                     <li key={step.key}>
                       <span><Badge tone={step.reached ? "success" : "neutral"}>{step.label}<span className="visually-hidden">{step.reached ? " · reached" : " · not reached"}</span></Badge></span>

@@ -75,7 +75,7 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
  if(key==="KP_Add"||readLines)await browseFromStart();
  if(readLines){await press("h");await new Promise(resolve=>setTimeout(resolve,500));}
  if(!readLines)await press(key);
- let lineMoves=0;
+ let lineMoves=0,statusPresented=false;
  if(columns)await inspectHeaders();
  const speech=()=>readFileSync(log).subarray(offset).toString("utf8").split("\n").filter(line=>line.includes("SPEECH OUTPUT:"));
  const normalize=(s:string)=>s.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
@@ -93,8 +93,20 @@ export async function screenReaderCheckpoint(page:Page,name:string,focus:Locator
    if(missing.length&&readLines&&lineMoves<40){
      // A finite read-only traversal replaces the non-starting Say All command.
      // Preserve the original 60s ceiling and require the actual Orca utterance.
+     const lineOffset=statSync(log).size;
      await press("Down");lineMoves++;
      await new Promise(resolve=>setTimeout(resolve,1000));
+     // Actual 4b32 speech reached "statusbar." but caret Down exposed two
+     // blank lines instead of its contents. Ask Orca to present the status
+     // bar using its documented desktop command, once, within this same
+     // 60s budget. This reads AT-SPI; it never supplies expected text.
+     // https://help.gnome.org/orca/commands_where_am_i.html
+     if(!statusPresented&&/SPEECH OUTPUT: 'statusbar[.']/.test(readFileSync(log).subarray(lineOffset).toString("utf8"))){
+       statusPresented=true;
+       await run("xdotool",["key","--clearmodifiers","--repeat","2","--delay","100","KP_Insert+KP_Enter"]);
+       osKeys.push("KP_Insert+KP_Enter","KP_Insert+KP_Enter");
+       await new Promise(resolve=>setTimeout(resolve,1000));
+     }
    }
    return missing;
  },{timeout:key==="KP_Add"||readLines?60000:20000,intervals:readLines?[250]:[500,1000,2000],message:"Orca spoken output: "+name}).toEqual([]);

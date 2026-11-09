@@ -67,6 +67,17 @@ it("requires a separate authoritative receipt and time for each confirmed event"
   expect(nativeFulfillmentEventSchema.safeParse(event).success).toBe(true);
   for(const patch of [{receiptRef:null},{sourceRef:null},{eventAt:null},{eventAt:"2026-11-06T12:00:00.000Z"}])expect(nativeFulfillmentEventSchema.safeParse({...event,...patch}).success).toBe(false);
 });
+it.each(["returnAuthorized","returnInspected","carrierLost","carrierReturned"] as const)("projects source-confirmed %s only with its own valid receipt and observation",async kind=>{
+  const event={kind,state:"confirmed",eventAt:"2026-11-06T11:00:00.000Z",observedAt,receiptRef:`fictional-${kind}-receipt`,sourceRef:`fictional-${kind}-source`,reasonCode:null};
+  const result=await reader({...overview(),nativeEvents:[event]}).service.read("operationsOverview",filters,principal);
+  expect(result.data).toMatchObject({nativeEvents:[event]});result.assertCurrent();
+  for(const patch of [{receiptRef:null},{sourceRef:null},{eventAt:null},{eventAt:"2026-11-06T11:55:00.001Z"}]){
+    await expect(reader({...overview(),nativeEvents:[{...event,...patch}]}).service.read("operationsOverview",filters,principal))
+      .rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID",status:502,reasonCodes:["OPERATIONS_RECORD_INVALID"]});
+  }
+  await expect(reader({...overview(),nativeEvents:[{...event,observedAt:"2026-11-06T11:55:00.001Z"}]}).service.read("operationsOverview",filters,principal))
+    .rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID",status:502,reasonCodes:["OPERATIONS_EVENT_TIME_INVALID"]});
+});
 it("withholds every synthetic source URL, including an allowlisted origin",async()=>{
   const record={...overview(),sourceLinks:[{kind:"order",targetRef:"fictional-order",state:"verified",url:"https://source.example.test/orders/fictional-order",observedAt,validUntil:"2026-11-06T12:05:00.000Z"}]};
   const result=await reader(record).service.read("operationsOverview",filters,principal);

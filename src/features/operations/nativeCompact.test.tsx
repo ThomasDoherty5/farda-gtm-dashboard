@@ -154,3 +154,19 @@ it("retries a shipping error through the same source-bound compact view",async()
   expect(w.reads.filter(read=>read.viewKey==="operationsShipping").map(read=>read.filters)).toEqual([scopeFilters(),scopeFilters()]);
 });
 function scopeFilters(){return {home:scope.home,startAt:scope.startAt,endAt:scope.endAt,timezone:scope.timezone};}
+
+it("keeps the source-bound period editor in the workspace menu and restores its outer trigger", async () => {
+  state.layout = "mobile";
+  const { adapter } = source();
+  renderRoute("/operations", adapter);
+  await screen.findByTestId("metric-To ship");
+  expect(screen.queryByRole("button", { name: "Reporting period" })).not.toBeInTheDocument();
+  const user = userEvent.setup(), menu = screen.getByRole("button", { name: "Menu" });
+  await user.click(menu);
+  await user.click(screen.getByRole("button", { name: "Reporting period" }));
+  expect(screen.getByRole("dialog", { name: "Reporting period" })).toBeVisible();
+  expect(screen.queryByRole("dialog", { name: "Explore the Farda workspace." })).not.toBeInTheDocument();
+  expect((screen.getByLabelText("Start (UTC)") as HTMLInputElement).value).toMatch(/^2026-11-01T00:00/);
+  await user.click(screen.getByRole("button", { name: "Cancel period change" }));
+  expect(menu).toHaveFocus();
+});

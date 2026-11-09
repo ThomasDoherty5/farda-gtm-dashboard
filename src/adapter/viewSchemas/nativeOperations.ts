@@ -11,7 +11,7 @@ export const dispatchSourceFactsSchema=z.object({
   identityResolved:z.boolean().nullable(),stockAvailable:z.boolean().nullable(),evidenceRef:ref,observedAt:instant,
 }).strict();
 export const nativeFulfillmentEventSchema=z.object({
-  kind:z.enum(["orderPaid","labelCreated","carrierAccepted","shipped","delivered","returnReceived","refundSettled","replacementCreated","replacementShipped","inventoryRestocked","inventoryQuarantined","accountingPosted","caseClosed"]),
+  kind:z.enum(["orderPaid","labelCreated","carrierAccepted","shipped","delivered","carrierLost","carrierReturned","returnAuthorized","returnReceived","returnInspected","refundSettled","replacementCreated","replacementShipped","inventoryRestocked","inventoryQuarantined","accountingPosted","caseClosed"]),
   state:z.enum(["confirmed","pending","failed","unknown"]),eventAt:instant.nullable(),observedAt:instant,
   receiptRef:ref.nullable(),sourceRef:ref.nullable(),reasonCode:ref.nullable(),
 }).strict().superRefine((value,ctx)=>{

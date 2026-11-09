@@ -72,8 +72,10 @@ describe("operations overview", () => {
   it("shows an empty queue as a known zero, not a failure", async () => {
     await open("/operations?scenario=empty");
     expect(await screen.findByTestId("metric-To ship")).toHaveTextContent("0");
-    expect(screen.getByText("No eligible dispatch rows were returned for this home.")).toBeInTheDocument();
-    expect(screen.queryByText(/Dispatch evidence is incomplete/)).not.toBeInTheDocument();
+    const queue=screen.getByTestId("queue-panel");
+    expect(queue).toHaveTextContent("No eligible dispatch rows were returned for all homes.");
+    expect(queue).toHaveTextContent("The source reports no eligible records in this complete scope.");
+    expect(queue).not.toHaveTextContent(/incomplete|not a known zero/);
   });
 
   it("shows a recoverable error when the mirror is unreachable", async () => {
@@ -284,9 +286,11 @@ describe("fulfillment analytics", () => {
   it("says a comparison is not available instead of showing zero", async () => {
     await open("/analytics/fulfillment?days=7");
     expect(await screen.findByTestId("metric-Orders shipped")).toHaveTextContent("177");
-    expect(metric("Orders shipped")).toHaveTextContent("Observed shipped orders");
-    expect(metric("Orders shipped")).toHaveTextContent("Observed daily rows only · full-period total unknown");
-    expect(metric("Orders shipped")).not.toHaveTextContent(/% vs prior/);
+    const shipped=metric("Orders shipped").closest("dl");
+    expect(shipped).not.toBeNull();
+    expect(shipped).toHaveTextContent("Observed shipped orders");
+    expect(shipped).toHaveTextContent("Observed daily rows only · full-period total unknown");
+    expect(shipped).not.toHaveTextContent(/% vs prior/);
     expect(screen.getByText("N/A. No delivery mix was supplied for this period.")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(/does not establish complete coverage of the selected period/);
   });

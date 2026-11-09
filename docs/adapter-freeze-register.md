@@ -665,3 +665,16 @@ To add one: add the row to the matching table (first column in backticks), then 
 These reads use the existing canonical export service and do not release a payment, message or media action.
 
 | `fulfillmentProposal` | Native-only exact source plan and original-key recovery | `fulfillmentDomain/contract.ts` | No demo approval or provider effect |
+
+
+## Current settlement and fulfillment application contracts
+
+This section supersedes the initial read-only baseline descriptions above for the following routes; it does not declare a connected production provider.
+
+- `commissionLedger`, `settlementDetail` and `payableDetail` use `settlements/reader.ts` and the strict native settlement schemas. Provider and currency filters, principal-bound snapshot cursors and independently evidenced states replace the legacy demo record shapes. Immutable receipt and adjustment hashes reject rewritten history. Historical accepted fees remain separate; provider-settled records never gain manual Pay.
+- Ledger export and statement-match intents use the existing canonical services and exact original-request recovery. A visible page is not a whole-snapshot CSV. Missing source bindings or approval authority hold the action. Currency, cohort and accounting-policy evidence remains inspectable independently of chart/table presentation.
+- Operations list filters accept canonical home plus a complete start/end/timezone window. The source must acknowledge that same cohort. Dispatch readiness is derived from explicit order/sample, identity, stock and label facts; requested timestamps control oldest-first order. Unknown coverage is never converted into an empty success.
+- The typed native event array includes independent authorization, receipt, inspection, carrier-lost/returned, inventory, remedy and accounting observations. A confirmed event needs its own source and receipt references and valid event/observation times. Legacy status labels and inspection booleans do not manufacture milestones or prove resolved completion.
+- Shipping and return previews use the shared fulfillment proposal, approval and recovery services. They preserve actor, reason, version, exact plan and original request key. No provider write follows from a local preview. Customer disclosure, external links and display leases retain independent source authorization.
+
+Boundary and native browser tests use explicitly fictional HTTP/SQLite sources. Their success proves application integration only; deployed unconfigured sources must still return honest holds. Release evidence and provider activation are recorded separately in the owning issue.

@@ -112,3 +112,21 @@ it("binds a native health read to the requested cohort and preserves it on sourc
   expect(target.pathname).toBe("/orders/source-order");
   for (const [key, value] of Object.entries(filters)) expect(target.searchParams.get(key)).toBe(value);
 });
+
+it("keeps each held source action with its visible explanation and preserves horizontal independent refund events", async () => {
+  const data = operationsRecord("orderDetail");
+  data.provenance = { ...(data.provenance as object), validUntil: "2099-01-01T00:00:00Z", version: "native-v1" };
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read") throw new Error("No native effect");
+    return respondWith(request.envelope, data, { dataVersion: "native-v1" });
+  } } });
+  renderRoute("/orders/TEST-SH-1042", adapter);
+  const button = (await screen.findAllByRole("button", { name: "Open source order", exact: true }))[0]!;
+  const explanation = document.getElementById(button.getAttribute("aria-describedby")!);
+  expect(explanation).toBeVisible();
+  expect(explanation?.parentElement).toBe(button.parentElement);
+  const panel = screen.getByRole("region", { name: "Refunds have their own lifecycle" });
+  expect(within(panel).getAllByRole("listitem")).toHaveLength(4);
+  for (const label of ["Return received", "Refund settled", "Replacement created", "Replacement shipped"]) expect(within(panel).getByText(label)).toBeVisible();
+  expect(within(panel).getAllByText("Unknown · no independent source receipt was returned.")).toHaveLength(4);
+});

@@ -1,16 +1,18 @@
 import { useState } from "react";
 import type { NativeCommissionLedger } from "@/creator-agent/settlements/contract";
 import { Button } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
 import { DataTable } from "@/components/DataTable";
-import { FactList } from "@/components/Panels";
+import { FactList, Panel, SectionHeading } from "@/components/Panels";
 import { moneyFact, observed, type MoneyFact } from "./NativeFinance";
 import styles from "./NativeFinance.module.css";
 import finance from "./Finance.module.css";
 
 export function NativeContribution({ data }: { data: NativeCommissionLedger }) {
   const [mode, setMode] = useState<"chart" | "table">("chart");
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
   const facts = data.economics;
-  if (!facts) return <><div className={styles.unknownPlot} role="status">A source-backed cost breakdown was not supplied. No waterfall values are inferred from paid cash or historical examples.</div><FactList label="Contribution evidence" rows={[["Source contribution", moneyFact(data.totals.contribution)], ["Currency", data.currency ?? "Unknown · do not combine currencies"], ["Observed", observed(data.source.observedAt)]]} /></>;
+  if (!facts) return <Panel id="contribution" title="Contribution after creator costs" large roomy subtitle="Currency, cohort and accounting policy must agree before a cost breakdown can be combined."><div className={styles.unknownPlot} role="status">A source-backed cost breakdown was not supplied. No waterfall values are inferred from paid cash or historical examples.</div><FactList label="Contribution evidence" rows={[["Source contribution", moneyFact(data.totals.contribution)], ["Currency", data.currency ?? "Unknown · do not combine currencies"], ["Observed", observed(data.source.observedAt)]]} /></Panel>;
   const waterfall = facts.waterfall;
   const items: [string, MoneyFact | null][] = [
     ["Net sales", waterfall?.netSales ?? null], ["Commerce costs", waterfall?.commerceCosts ?? null],
@@ -31,16 +33,20 @@ export function NativeContribution({ data }: { data: NativeCommissionLedger }) {
     return { label, fact, total, top: 258 - high * scale, height: amount * scale, left: `${index * (1248 / 7 + 16 / 7) / 1248 * 100}%`, width: `${(1248 - 6 * 16) / 7 / 1248 * 100}%` };
   });
   const table = <DataTable caption="Source contribution components" columns={[{ label: "Component" }, { label: "Source amount" }, { label: "Evidence" }, { label: "Observed" }]} rows={items.map(([label, fact]) => [label, fact ? moneyFact(fact) : "Unknown · source component not supplied", fact?.evidenceRef ?? "Unknown", observed(fact?.observedAt ?? null)])} />;
-  return <>
+  return <Panel id="contribution" roomy header={<div className={finance.headRow}>
+    <SectionHeading id="contribution" large title="Contribution after creator costs" subtitle={`${data.currency ?? "Unknown currency"} · currency, cohort and accounting policy must agree.`} />
+    <div className={styles.filters} aria-label="Contribution view"><Button variant="secondary" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart</Button><Button variant="secondary" aria-pressed={mode === "table"} onClick={() => setMode("table")}>Accessible table</Button><Button variant="secondary" aria-haspopup="dialog" onClick={() => setEvidenceOpen(true)}>Cohort evidence</Button></div>
+  </div>}>
     {mode === "chart" && comparable ? <>
       <div className={finance.plotScroll} role="region" aria-label="Contribution waterfall" tabIndex={0}><div className={finance.waterfall} role="img" aria-label={`Source-reported net sales less commerce costs, historical fixed fees, samples, net commission and fee estimate. Contribution ${waterfall ? moneyFact(waterfall.contribution) : "unknown"}.`}>
         {[34, 146, 258].map(top => <span key={top} className={finance.wfLine} style={{ top }} />)}
         {geometry.map(item => <span key={item.label}><span className={finance.wfBar} data-kind={item.total ? "total" : "cost"} style={{ left: item.left, width: item.width, top: item.top, height: Math.max(item.height, 1) }} /><p className={finance.wfValue} data-kind={item.total ? "total" : "cost"} style={{ left: item.left, top: item.top - 27 }}>{item.total ? "" : "−"}{item.fact ? moneyFact(item.fact) : "Unknown"}</p><p className={finance.wfLabel} style={{ left: item.left }}>{item.label}</p></span>)}
       </div></div><table className="visually-hidden"><caption>Source contribution components</caption><thead><tr><th scope="col">Component</th><th scope="col">Source amount</th></tr></thead><tbody>{items.map(([label, fact]) => <tr key={label}><th scope="row">{label}</th><td>{fact ? moneyFact(fact) : "Unknown"}</td></tr>)}</tbody></table>
     </> : <>{mode === "chart" && <p role="status">Chart unavailable: complete, consistent source components and a verified accounting policy are required. No missing costs are inferred. Source facts remain available below.</p>}{table}</>}
-    <div className={styles.contributionFooter}>
-      <div className={styles.cohortFacts}><FactList label="Contribution cohort" rows={[["Cohort", facts.cohortRef], ["Period", `${observed(facts.periodStart)} – ${observed(facts.periodEnd)}`], ["Eligible orders", facts.eligibleOrders.state === "known" ? String(facts.eligibleOrders.value) : "Unknown"], ["Accounting policy", data.accountingPolicy.reference ?? "Unknown"]]} /></div>
-      <div className={styles.filters} aria-label="Contribution view"><Button variant="secondary" aria-pressed={mode === "chart"} onClick={() => setMode("chart")}>Chart</Button><Button variant="secondary" aria-pressed={mode === "table"} onClick={() => setMode("table")}>Accessible table</Button></div>
-    </div>
-  </>;
+    <p className={finance.footnote}>Source-reported costs apply only to this currency and cohort. Paid cash settles accrued expense; it is not deducted again. Inspect cohort evidence before combining periods or accounting policies.</p>
+    <Dialog open={evidenceOpen} title="Contribution cohort evidence" badge="Read only" onClose={() => setEvidenceOpen(false)}>
+      <FactList label="Contribution cohort" rows={[["Cohort", facts.cohortRef], ["Period", `${observed(facts.periodStart)} – ${observed(facts.periodEnd)}`], ["Currency", data.currency ?? "Unknown"], ["Eligible orders", facts.eligibleOrders.state === "known" ? String(facts.eligibleOrders.value) : "Unknown"], ["Accounting policy", data.accountingPolicy.reference ?? "Unknown"], ["Policy state", data.accountingPolicy.state]]} />
+      <Button variant="secondary" onClick={() => setEvidenceOpen(false)}>Close cohort evidence</Button>
+    </Dialog>
+  </Panel>;
 }
