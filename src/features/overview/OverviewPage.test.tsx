@@ -143,15 +143,20 @@ describe("OverviewPage", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("labels values kept through an outage as possibly out of date", async () => {
+  it("clears previously read figures after a failed refresh and restores them only after a successful retry", async () => {
+    const user = userEvent.setup();
     const adapter = scriptedAdapter(async (request, call) => {
-      if (call === 1) return ok(request);
+      if (call !== 2) return ok(request);
       throw new AdapterError({ code: "SOURCE_UNAVAILABLE", message: "down", requestId: null, correlationId: null, retryable: false, retryAfterMs: null });
     });
     const { client } = renderWithAdapter(<OverviewPage />, adapter);
     expect(await metric("Paid orders")).toHaveTextContent("400");
     await client.refetchQueries();
-    expect(await screen.findByRole("alert")).toHaveTextContent("last successful read");
-    expect(screen.getByTestId("metric-Paid orders")).toHaveTextContent("400");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Data unavailable");
+    expect(screen.queryByTestId("metric-Paid orders")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("metric-Net receipts")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await metric("Paid orders")).toHaveTextContent("400");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

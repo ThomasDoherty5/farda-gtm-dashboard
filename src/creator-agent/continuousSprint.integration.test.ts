@@ -4,6 +4,8 @@ import { createAgentServer, type AgentServerOptions } from "./server";
 import { stockSupportTestSource,inventorySourceFixture, stockTestScope, stockTestTime, supportSourceFixture } from "./stockSupportFixtures";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "./testFixtures";
 import { loadCreatorSourceRuntime } from "./sourceRuntime";
+import { createNotionStockSupportSource } from "./notionStockSupportSource";
+import { StockSupportError, type StockSupportBinding, type StockSupportSourceResult } from "./stockSupport";
 
 const apps: ReturnType<typeof createAgentServer>[] = [];
 const requestedScope = { workspaceId: stockTestScope.workspaceId, accountIds: [stockTestScope.accountId], environment: "sandbox" };
@@ -31,7 +33,7 @@ async function start(options: Partial<AgentServerOptions> = {}) {
 afterEach(async () => { for (const app of apps.splice(0)) await app.close(); vi.restoreAllMocks(); });
 
 describe("continuous sprint authenticated integration boundaries", () => {
-  it("wires the private mirror reader through the actual launcher and HTTP adapter without claiming complete inventory or handoff authority", async () => {
+  it("holds the unqualified launcher and serves an explicitly qualified fictional mirror through HTTP without claiming complete inventory or handoff authority", async () => {
     const stockId="00000000-0000-4000-8000-000000000011",supportId="00000000-0000-4000-8000-000000000012";
     const rowId="00000000-0000-4000-8000-000000000013",orderId="00000000-0000-4000-8000-000000000014";
     const actualFetch=globalThis.fetch,providerCalls:string[]=[];let denied=false;
@@ -49,7 +51,30 @@ describe("continuous sprint authenticated integration boundaries", () => {
     });
     const runtime=loadCreatorSourceRuntime({FARDA_STOCK_SUPPORT_SOURCE_CONFIG:JSON.stringify({stockDataSourceId:stockId,supportDataSourceId:supportId}),
       FARDA_AGENT_READ_TOKEN:SYNTHETIC_READ_TOKEN,FARDA_NOTION_READ_TOKEN:"synthetic-notion-read-token"},stockTestScope);
-    const {read,call}=await start({...runtime,operations:{now:Date.now}});
+    const unqualified=await start({...runtime,operations:{now:Date.now}});
+    for(const [view,filters] of [["inventoryOverview",{}],["supportWorkspace",{caseId:"queue"}]] as const){
+      const response=await unqualified.read(view,filters);
+      expect(response).toMatchObject({status:503,data:{code:"STOCK_SUPPORT_SOURCE_UNAVAILABLE",executionCertainty:"notApplied"}});
+      expect(response.data).not.toHaveProperty("data");
+    }
+    expect(providerCalls).toEqual([]);
+    // Explicit test-only grant owner. A configured mirror/token alone never
+    // creates this permission or qualifies the provider for production use.
+    const sourceAuthority={
+      observe:(binding:StockSupportBinding,snapshot:StockSupportSourceResult["snapshot"],time:number)=>({
+        binding,sourceVersion:snapshot.revision,permissionVersion:"fictional-sprint-read-grant-v1",
+        observedAt:new Date(time).toISOString(),validUntil:new Date(time+60_000).toISOString(),
+      }),
+      assertCurrent:(result:StockSupportSourceResult,binding:StockSupportBinding)=>{
+        if(denied)throw new StockSupportError("SOURCE_AUTHORITY_DENIED",403);
+        expect(result.authority.binding).toEqual(binding);
+        expect(result.authority.sourceVersion).toBe(result.snapshot.revision);
+        expect(result.authority.permissionVersion).toBe("fictional-sprint-read-grant-v1");
+      },
+    };
+    const stockSupportSource=createNotionStockSupportSource({scope:stockTestScope,stockDataSourceId:stockId,supportDataSourceId:supportId,
+      referenceKey:"fictional-stock-support-reference-key-000000000000",token:async()=>"synthetic-notion-read-token",sourceAuthority});
+    const {read,call}=await start({...runtime,stockSupportSource,operations:{now:Date.now}});
     const stock=await read("inventoryOverview",{}),support=await read("supportWorkspace",{caseId:"queue"});
     expect(stock).toMatchObject({status:200,data:{coverage:{complete:false},data:{kind:"source-stock",coverage:"partial",period:null,skus:[]}}});
     expect(support).toMatchObject({status:200,data:{coverage:{complete:false},data:{kind:"source-support",allTimeOpen:null,cohort:null,
@@ -74,8 +99,11 @@ describe("continuous sprint authenticated integration boundaries", () => {
       expect(result.data.coverage.complete).toBe(false);
       expect(result.data.capabilities).toEqual([expect.objectContaining({ state: "denied", reasonCodes: ["REVIEWER_REQUIRED"] })]);
     }
-    expect(await read("hourlyRun", { runId: "missing-native-run" })).toMatchObject({ status: 404, data: { code: "RECORD_NOT_FOUND" } });
-    expect(await read("postPerformance", { postId: "missing-native-post" })).toMatchObject({ status: 404, data: { code: "RECORD_NOT_FOUND" } });
+    for(const [view,filters] of [["hourlyRun",{runId:"missing-native-run"}],["postPerformance",{postId:"missing-native-post"}]] as const){
+      const absent=await read(view,filters);
+      expect(absent).toMatchObject({status:503,data:{code:"MONITOR_SOURCE_COVERAGE_UNVERIFIED",executionCertainty:"notApplied"}});
+      expect(absent.data).not.toHaveProperty("data");
+    }
     const capabilities = (await call("/v1/capabilities")).data;
     expect(capabilities.contentMonitor).toMatchObject({ sourceAuthority: "notConnected", retryAuthority: "notConnected" });
     expect(capabilities.stockSupportReview).toMatchObject({ sourceAuthority: "notConnected", inventoryExecution: "notConnected", supportExecution: "notConnected" });

@@ -7,6 +7,9 @@ import { createAgentServer, type AgentServerOptions } from "./server";
 import { nativeAnalyticsFixture } from "./analytics/nativeFixtures.testkit";
 import { nativeAnalyticsViewKeys } from "./analytics/contract";
 import { controlSourceFixture, controlSourceProvider, controlTestScope, controlTestTime } from "./operationsControlsFixtures";
+import { type NativeOperationsControl } from "./operationsControlsSchema";
+import { openOperationsToken } from "./operationsTokens";
+import { loadOperationsSecret } from "./operationsSecret";
 import { POLICY_VERSION } from "./assessmentSchema";
 import { syntheticBinding, syntheticPacket, SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "./testFixtures";
 
@@ -57,9 +60,18 @@ describe("real service + HTTP transport + live adapter conformance supplements",
     const f = await start({ workspaceId: controlTestScope.workspaceId, accountId: controlTestScope.accountId,
       operations: { now }, operationsControlSource: controlSourceProvider(() => snapshot, now) });
     const adapter = f.makeAdapter();
-    const nightly = await adapter.readView(f.request("nightlyReconciliation"));
-    const canonical = await adapter.readView(f.request("operationsControl", { section: "reconciliation" }));
-    expect(nightly.data).toEqual(canonical.data); expect(nightly.dataVersion).toBe(canonical.dataVersion);
+    const nightly = await adapter.readView<unknown, NativeOperationsControl>(f.request("nightlyReconciliation"));
+    const canonical = await adapter.readView<unknown, NativeOperationsControl>(f.request("operationsControl", { section: "reconciliation" }));
+    expect(nightly.data).not.toBeNull(); expect(canonical.data).not.toBeNull();
+    // Encrypted action selectors use fresh AES-GCM nonces. Compare their exact
+    // scoped identities, not ciphertext bytes, while retaining every other field.
+    const secret = loadOperationsSecret(f.app.store.database, controlTestScope);
+    const comparable = (data: NativeOperationsControl) => ({ ...data, actions: data.actions.map(action => ({ ...action,
+      targetRef: openOperationsToken(controlTestScope, secret, "operations-control-target", action.targetRef),
+    })) });
+    expect(comparable(nightly.data!)).toEqual(comparable(canonical.data!));
+    expect(comparable(nightly.data!).actions).toMatchObject([{ kind: "repair", targetRef: { kind: "repair", id: snapshot.conflicts[0]!.id } }]);
+    expect(nightly.dataVersion).toBe(canonical.dataVersion);
     expect(nightly.data).toMatchObject({ kind: "native-operations-controls", section: "reconciliation" });
     expect(nightly.coverage.complete).toBe(true);
   });

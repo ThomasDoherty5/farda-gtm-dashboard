@@ -104,9 +104,13 @@ test("full source-layout evidence, responsive creator details and actual table a
     expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([]);
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
-  // Target the real table; its focus anchor keeps AT navigation inside it after leaving the header checkbox.
-  // The enclosing region stays keyboard-focusable for horizontal scrolling.
-  await screenReaderCheckpoint(page, "shipping-hub-table-headers", queue, ["Shared shipment", "Recipient", "Shipment state", "Cost"], "KP_Enter", undefined, { tableBrowseMode: "sticky" });
+  // Static cells accept programmatic AT focus without adding Tab stops. This
+  // keeps Chromium from moving focus to the scroll ancestor when leaving a checkbox.
+  // Assert the real cell before actual Orca traversal; no semantics are changed by the harness.
+  const recipientHeader = queue.getByRole("columnheader", { name: "Recipient / origin", exact: true });
+  await recipientHeader.focus(); await expect(recipientHeader).toBeFocused();
+  await expect(recipientHeader).toHaveAttribute("tabindex", "-1");
+  await screenReaderCheckpoint(page, "shipping-hub-table-headers", queue, ["Shared shipment", "Select visible shipments", "Recipient / origin", "Product / home", "Readiness", "Shipment state", "Carrier / timing", "Cost / freshness", "Next action"], "KP_Enter", undefined, { tableBrowseMode: "sticky" });
   const trigger = queue.getByRole("row").filter({ hasText: "Creator" }).filter({ hasText: "DELIVERED" }).getByRole("button");
   await trigger.focus(); await page.keyboard.press("Enter");
   const detail = page.getByRole("dialog", { name: "Creator shipment" }); await expect(detail).toBeVisible();

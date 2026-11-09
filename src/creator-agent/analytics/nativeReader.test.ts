@@ -143,7 +143,12 @@ describe("source-owned analytics facts and arithmetic", () => {
     expect(data.totals.measures.find(row => row.metricId === "ctr")?.result.value).toBe(2);
     expect(data.totals.measures.find(row => row.metricId === "cpc")?.result.value).toBe(31);
     expect(data.channels.find(row => row.platform === "tiktok")?.measures.find(row => row.metricId === "cpc.tiktok")?.result.value).toBe(33);
-    expect(data.assets.map(row => row.ctr.value)).toEqual([2.8, 2, 1.6]);
+    expect(data.assets).toHaveLength(3);
+    expect(data.assets.map(row => row.label)).toEqual(["AD-01", "AD-03", expect.stringMatching(/^Asset [a-f0-9]{8}$/)]);
+    for (const [index, expected] of [2.8, 2, 1.6].entries()) {
+      expect(data.assets[index]!.ctr.state).toBe("known");
+      expect(data.assets[index]!.ctr.value).toBeCloseTo(expected, 12);
+    }
     const attributed = await read(f, "attribution"); if (attributed.data.viewKey !== "attribution") throw new Error("wrong view");
     expect(attributed.data.measures.find(row => row.metricId === "platformRoas.tiktok")?.result.value).toBe(2.4);
   });

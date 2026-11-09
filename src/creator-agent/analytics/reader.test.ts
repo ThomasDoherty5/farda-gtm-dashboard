@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { analyticsViewSchemas } from "../../adapter/viewSchemas/analytics";
+import { z } from "zod";
+import { analyticsViewSchemas, customerJourneySchema, measureSchema, sourceStatusSchema } from "../../adapter/viewSchemas/analytics";
 import { createAnalyticsReader, resolveWindow, type AnalyticsViewKey } from "./reader";
 import { freshnessOf, observed, operand, ratio, sumOperands, worstFreshness } from "./metrics";
 import { AnalyticsError, CLOCK_SKEW_MS, FRESHNESS_LIMIT_MS, type AnalyticsSourceRequest, type AnalyticsSources, type OrderRow, type OrdersSnapshot } from "./sources";
@@ -8,6 +9,27 @@ import { adPlatformsFixture, analyticsTestScope, analyticsTestSecret, analyticsT
   supportFixture, syntheticAnalyticsSources } from "./fixtures.testkit";
 
 const T = analyticsTestTime;
+// Preserve the original author's arithmetic/coverage contract for this pure
+// legacy projection. siteTraffic is the sole served customerJourney owner;
+// this historical shape must never enter its live schema union.
+const legacyJourneySchema = customerJourneySchema.extend({
+  datasetKey: z.literal("customer-journey-observed"),
+  productViewed: customerJourneySchema.shape.productViewed.nullable(),
+  checkoutStarted: customerJourneySchema.shape.checkoutStarted.nullable(),
+  websiteOrders: customerJourneySchema.shape.websiteOrders.nullable(),
+  tiktokOrders: customerJourneySchema.shape.tiktokOrders.nullable(),
+  websiteNetReceipts: customerJourneySchema.shape.websiteNetReceipts.nullable(),
+  globalAov: customerJourneySchema.shape.globalAov.nullable(),
+  globalOrders: customerJourneySchema.shape.globalOrders.nullable(),
+  tickets: customerJourneySchema.shape.tickets.nullable(),
+  resolution: customerJourneySchema.shape.resolution.nullable(),
+  returns: customerJourneySchema.shape.returns.nullable(),
+  measures: z.array(measureSchema).max(60), sources: z.array(sourceStatusSchema).min(1).max(4),
+});
+function expectLegacyJourney(data: unknown) {
+  expect(legacyJourneySchema.safeParse(data).success).toBe(true);
+  expect(analyticsViewSchemas.customerJourney!.safeParse(data).success).toBe(false);
+}
 const reader = (sources: AnalyticsSources = syntheticAnalyticsSources(), now = () => T) =>
   createAnalyticsReader({ scope: analyticsTestScope, secret: analyticsTestSecret, sources, now, timezone: analyticsTestTimezone });
 const measure = (data: Record<string, unknown>, key: string) => (data.measures as { key: string; state: string; value: number | null; reasonCode: string | null;
@@ -176,7 +198,8 @@ describe("overview and attribution from synthetic order and ad readers", () => {
     for (const view of ["paidMedia", "customerJourney", "attribution"] as const) {
       const result = await reader({}).read(view, {}, null);
       expect(result.dataState).toBe("partial");
-      expect(analyticsViewSchemas[view]!.safeParse(result.data).success, view).toBe(true);
+      if (view === "customerJourney") expectLegacyJourney(result.data);
+      else expect(analyticsViewSchemas[view]!.safeParse(result.data).success, view).toBe(true);
     }
     const { orders } = syntheticAnalyticsSources();
     const result = await reader({ orders }).read("overviewSummary", {}, null);
@@ -399,7 +422,7 @@ describe("paid media and customer journey", () => {
     expect(measure(d, "averageRating").value).toBeCloseTo(4.36, 10);
     expect(d.resolution).toEqual({ byFin: 9, byPeople: 11, open: 2 });
     expect(result.dataState).toBe("ready");
-    expect(analyticsViewSchemas.customerJourney!.safeParse(d).success).toBe(true);
+    expectLegacyJourney(d);
   });
 
   it("reads missing sessions and support as N/A, a known zero as zero, and a zero denominator as not applicable", async () => {
@@ -411,7 +434,7 @@ describe("paid media and customer journey", () => {
     expect(d.reviews.stars).toEqual([]);
     expect(measure(d, "storeConversion")).toMatchObject({ state: "unknown", reasonCode: "SESSIONS_SOURCE_UNCONFIGURED" });
     expect(bare.dataState).toBe("partial");
-    expect(analyticsViewSchemas.customerJourney!.safeParse(d).success).toBe(true);
+    expectLegacyJourney(d);
 
     const zero = await reader({ orders, sessions: async r => { const s = sessionsFixture(r); Object.assign(s.feed, { sessions: 0, productViewed: 0, checkoutStarted: 0 }); return s; },
       support: async r => { const s = supportFixture(r); Object.assign(s.feed, { deliveredUnits: 0, tickets: [], reviews: { ratedCount: null, stars: null } }); return s; } }).read("customerJourney", {}, null);

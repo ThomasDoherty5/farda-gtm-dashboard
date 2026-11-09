@@ -22,7 +22,7 @@ const setup=(respond:(url:URL,body:Record<string,unknown>|null)=>Response,token:
 const read=async(provider:ReturnType<typeof setup>,selected=scope)=>collaborationSourceResultSchema.parse(await provider.readCollaborationSnapshot.read({scope:selected,principalRef:"agent-reader",operation:"read",collaborationId:target,requestDigest:digest({target})},"server-secret")).snapshot;
 describe("existing native registry as the collaboration source",()=>{
   it("does not query a real collection without an explicit current authority owner",async()=>{
-    let calls=0;const provider=createNotionDriveAssetSource({scope,notionToken:async()=>"test-read",collaborationDataSourceId:collabs,contentDataSourceId:content},
+    let calls=0;const provider=createNotionDriveAssetSource({scope:{workspaceId:scope.workspaceId,accountId:scope.accountId},notionToken:async()=>"test-read",collaborationDataSourceId:collabs,contentDataSourceId:content},
       {fetch:async()=>{calls++;return Response.json(list([]));},clock:()=>collabTestAt});
     await expect(read(provider)).rejects.toMatchObject({code:"SOURCE_AUTHORITY_UNCONFIGURED",status:503});expect(calls).toBe(0);
   });

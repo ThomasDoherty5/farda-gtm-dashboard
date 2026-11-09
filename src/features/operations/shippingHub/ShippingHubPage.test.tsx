@@ -11,6 +11,19 @@ import type { ShippingHubData } from "./types";
 
 const path = "/operations?view=hub";
 describe("unified shipping hub", () => {
+  it("keeps assistive-technology focus on the addressed cell without adding static cells to the Tab order", async () => {
+    const user = userEvent.setup(); renderRoute(path, createDemoAdapter());
+    const table = await screen.findByRole("table", { name: "Shared shipment queue" });
+    const headers = within(table).getAllByRole("columnheader");
+    expect(headers).toHaveLength(8);
+    for (const cell of [...headers, ...within(table).getAllByRole("rowheader"), ...within(table).getAllByRole("cell")]) {
+      expect(cell).toHaveAttribute("tabindex", "-1");
+      cell.focus(); expect(cell).toHaveFocus();
+    }
+    const selectAll = within(table).getByRole("checkbox", { name: "Select visible shipments" });
+    selectAll.focus(); await user.tab();
+    expect(within(table).getAllByRole("checkbox")[1]).toHaveFocus();
+  });
   it("renders the shared queue, filters creators and preserves selection across filtering", async () => {
     const user = userEvent.setup(); renderRoute(path, createDemoAdapter());
     const table = await screen.findByRole("table", { name: "Shared shipment queue" }, { timeout: 5000 });

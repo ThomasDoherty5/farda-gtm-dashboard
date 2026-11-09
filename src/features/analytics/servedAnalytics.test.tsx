@@ -46,13 +46,24 @@ describe("served analytics pages never derive a figure from an unknown input", (
     expect(screen.getByTestId("metric-Attributed net sales")).toHaveTextContent("N/A");
     expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
     expect(screen.getByText("Order total N/A", { exact: false })).toBeInTheDocument();
-    for (const [path, heading] of [["/analytics/paid-media", "See what earns the click."], ["/analytics/customer-journey", "Watch the journey after the click."],
+    for (const [path, heading] of [["/analytics/paid-media", "See what earns the click."],
       ["/analytics/attribution", null]] as const) {
       document.body.innerHTML = "";
       renderRoute(path, served({}));
       expect(await screen.findByTestId("source-states")).toHaveTextContent("not connected");
       if (heading) expect(screen.getByRole("heading", { name: heading, level: 1 })).toBeInTheDocument();
     }
+  });
+
+  it("refuses the superseded journey projection on the native traffic route instead of displaying its figures", async () => {
+    // The dedicated site-traffic owner now serves this route. Its positive,
+    // unconfigured and partial-source paths run over actual HTTP in
+    // e2e-agent/site-traffic.spec.ts; the legacy analytics reader is not that owner.
+    renderRoute("/analytics/customer-journey", served({}));
+    expect(await screen.findByRole("heading", { name: "Data unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Watch the journey after the click.", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByTestId("source-states")).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
   });
 
   it("does not present one platform's spend as the paid media total", async () => {

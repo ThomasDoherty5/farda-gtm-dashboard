@@ -98,7 +98,8 @@ app.store.close(); console.log("native-service-initialized");`;
     expect(capability.body.portfolioReview).toMatchObject({ decisionAuthority: "notConnected", providerExecution: "notConnected" });
     const shipping = await request("/v1/read", "POST", { schemaVersion: SCHEMA_VERSION, operation: "readView", viewKey: "shippingHub", requestId: "synthetic-shipping-read",
       requestedScope: { workspaceId: assetTestScope.workspaceId, accountIds: [assetTestScope.accountId], environment: "sandbox" }, filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 } });
-    expect(shipping.status).toBe(503); expect(shipping.body.code).toBe("INTEGRATION_PENDING");
+    expect(shipping.status).toBe(503); expect(shipping.body.code).toBe("SHIPPING_SOURCE_UNCONFIGURED");
+    expect(shipping.body).not.toHaveProperty("data");
     expect(shipping.body).not.toHaveProperty("data");
   });
   it("serves exact-collaboration evidence through the authenticated reader contract", async () => {

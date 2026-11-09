@@ -235,6 +235,13 @@ The table is the code-to-category map in `src/adapter/errors.ts` joined with whe
 | `CAPABILITY_UNVERIFIED` | capabilityHold | never raised |
 | `FORBIDDEN` | forbidden | `demoAdapter`, `demoAnalytics`, `demoApprovals`, `demoMonitor`, `demoScorecards`, `useView` |
 | `INTEGRATION_PENDING` | unavailable | `demoAdapter`, `demoApprovals`, `demoBatch`, `demoCollaboration`, `liveAdapter` |
+| `SOURCING_SOURCE_UNCONFIGURED` | unavailable | No qualified sourcing-plan source is bound. |
+| `SOURCING_SOURCE_UNAVAILABLE` | unavailable | The bound sourcing-plan source could not be read. |
+| `SOURCING_SOURCE_INVALID` | unavailable | The source returned an invalid or mismatched sourcing snapshot. |
+| `SOURCING_SOURCE_DENIED` | forbidden | Current source permission was refused; clear protected plan data. |
+| `SOURCING_SOURCE_CHANGED` | conflict | The source basis changed before publication. |
+| `SOURCING_PUBLICATION_EXPIRED` | conflict | The sourcing read grant expired before publication. |
+| `SOURCING_REQUEST_INVALID` | validation | The sourcing-plan request is outside the supported contract. |
 | `CREATOR_IDENTITY_CHANGED` | conflict | An existing offer cannot be rebound to a different creator. |
 | `IDEMPOTENCY_KEY_REUSED` | conflict | The signed-in reviewer retried a command key with different input. |
 | `INVALID_INPUT` | validation | The service rejected an invalid request or schema before writing. |

@@ -43,7 +43,9 @@ describe("private source launcher configuration", () => {
     try {
       await expect(runtime.stockSupportSource!.readInventory(binding)).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED" });
       await expect(runtime.stockSupportSource!.readSupport({ ...binding, viewKey: "supportWorkspace" })).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED" });
-      await expect(runtime.stockSupportSource!.readSupport({ ...binding, viewKey: "supportWorkspace", scope: { ...scope, accountId: "synthetic-other-account" } })).rejects.toMatchObject({ code: "SOURCE_SCOPE_DENIED" });
+      // A configured mirror is not a current permission grant for any scope.
+      // Qualified wrong-scope rejection is covered in notionStockSupportSource.test.ts.
+      await expect(runtime.stockSupportSource!.readSupport({ ...binding, viewKey: "supportWorkspace", scope: { ...scope, accountId: "synthetic-other-account" } })).rejects.toMatchObject({ code: "SOURCE_AUTHORITY_UNCONFIGURED", status: 503 });
       expect(provider).not.toHaveBeenCalled();
     } finally { provider.mockRestore(); }
     expect(() => loadCreatorSourceRuntime({ ...env, FARDA_AGENT_READ_TOKEN: "" }, assetTestScope)).toThrow("FARDA_STOCK_SUPPORT_SOURCE_CONFIG is invalid.");

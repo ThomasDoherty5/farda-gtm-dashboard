@@ -36,6 +36,11 @@ async function request(service: Pick<ReturnType<typeof createLifecycleService>, 
     payload: { entryEventRef: entry.ref, timingRuleRef: timing.ref, timezone: timing.timezone, templateRef: template.ref, templateVersion: template.version, templateName: "Synthetic local title" } };
 }
 const revisionCount = (w: ReturnType<typeof setup>) => Number(w.store.database.prepare("SELECT count(*) n FROM lifecycle_draft_revisions").get()!.n);
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe("lifecycle source-safe schema boundaries", () => {
   it.each(["recipients", "email", "medicationLog", "deviceId", "providerToken"])("rejects the private or undeclared source field %s", field => {
@@ -136,16 +141,19 @@ describe("scoped lifecycle reads and truthful evidence", () => {
     expect(view.sourceConfig!.evidence[0]).toMatchObject({ state: "unknown", validUntil: new Date(lifecycleTestTime).toISOString() });
   });
   it("rechecks the age at read publication and draft commit after the source promise has completed", async () => {
-    let expire = false;
-    const source = lifecycleSourceFixture();
-    const w = setup(async () => {
-      if (expire) queueMicrotask(() => queueMicrotask(() => w.setTime(lifecycleTestTime + 15 * 60_000)));
-      return structuredClone(source);
-    });
-    const input = await request(w.service); expire = true;
+    const w = setup();
+    // A fresh explicit permission at +14m remains valid when the business
+    // observation reaches its independent +15m deadline after the source await.
+    w.setTime(lifecycleTestTime + 14 * 60_000);
+    const input = await request(w.service), originalAssertion = w.reader.assertCurrent;
+    w.reader.assertCurrent = (result, binding, now) => {
+      originalAssertion(result, binding, now);
+      w.setTime(lifecycleTestTime + 15 * 60_000);
+    };
     const result = await w.service.read("emailFlow", { flow: "early-access" }, "agent-reviewer");
     expect(result).toMatchObject({ stale: true, data: { sourceState: "expired", freshness: "stale", saveHoldReasons: ["SOURCE_STALE"] } });
-    w.setTime(lifecycleTestTime);
+    expect(() => result.assertCurrent()).not.toThrow();
+    w.setTime(lifecycleTestTime + 14 * 60_000);
     await expect(w.service.saveDraft(input, "agent-reviewer")).rejects.toMatchObject({ code: "SOURCE_STALE" });
     expect(revisionCount(w)).toBe(0);
   });
@@ -256,28 +264,33 @@ describe("immutable local flow draft persistence and recovery", () => {
     await expect(w.service.saveDraft(input, "agent-reviewer")).resolves.toMatchObject({ record: { revision: 1 } });
   });
   it("checks source withdrawal and lease expiry after an awaited source read", async () => {
-    let gate: (() => void) | undefined, wait = false, denied = false;
+    let gate = deferred(), entered = deferred(), wait = false, denied = false;
     const source = lifecycleSourceFixture();
-    const w = setup(async () => { if (wait) await new Promise<void>(r => { gate = r; }); if (denied) throw new LifecycleError("SOURCE_AUTHORITY_DENIED", 403); return structuredClone(source); });
+    const w = setup(async () => { if (wait) { entered.resolve(); await gate.promise; } if (denied) throw new LifecycleError("SOURCE_AUTHORITY_DENIED", 403); return structuredClone(source); });
     const input = await request(w.service); wait = true;
     const deniedPromise = w.service.saveDraft(input, "agent-reviewer");
-    denied = true; gate!();
-    await expect(deniedPromise).rejects.toMatchObject({ status: 403 }); expect(revisionCount(w)).toBe(0);
-    denied = false;
+    const deniedAssertion = expect(deniedPromise).rejects.toMatchObject({ status: 403 });
+    await entered.promise; denied = true; gate.resolve();
+    await deniedAssertion; expect(revisionCount(w)).toBe(0);
+    denied = false; gate = deferred(); entered = deferred();
     const expired = w.service.saveDraft({ ...input, idempotencyKey: "expired-wait" }, "agent-reviewer");
-    w.setTime(lifecycleTestTime + 15 * 60_000); gate!();
-    await expect(expired).rejects.toMatchObject({ code: "SOURCE_STALE" }); expect(revisionCount(w)).toBe(0);
+    const expiredAssertion = expect(expired).rejects.toMatchObject({ code: "SOURCE_STALE" });
+    await entered.promise; w.setTime(lifecycleTestTime + 15 * 60_000); gate.resolve();
+    await expiredAssertion; expect(revisionCount(w)).toBe(0);
   });
   it("rejects a delayed older source read after a newer policy observation has been accepted", async () => {
-    let slow = false, release: (() => void) | undefined;
+    let slow = false;
+    const entered = deferred(), gate = deferred();
     let snapshot = lifecycleSourceFixture();
-    const w = setup(async () => { const captured = structuredClone(snapshot); if (slow) await new Promise<void>(r => { release = r; }); return captured; });
+    const w = setup(async () => { const captured = structuredClone(snapshot); if (slow) { entered.resolve(); await gate.promise; } return captured; });
     const input = await request(w.service); slow = true;
     const pending = w.service.saveDraft(input, "agent-reviewer");
+    const rejection = expect(pending).rejects.toMatchObject({ code: "LIFECYCLE_SOURCE_REGRESSED" });
+    await entered.promise;
     snapshot = structuredClone(snapshot); snapshot.version = "newer-policy-source"; snapshot.flows[1]!.policyVersion = "newer-policy";
     w.setTime(w.time() + 1); snapshot.observedAt = new Date(w.time()).toISOString(); slow = false;
-    await flowView(w.service); release!();
-    await expect(pending).rejects.toMatchObject({ code: "LIFECYCLE_SOURCE_REGRESSED" });
+    await flowView(w.service); gate.resolve();
+    await rejection;
     expect(revisionCount(w)).toBe(0);
   });
   it("reports finite history truncation and preserves exact old receipts beyond the visible history page", async () => {
