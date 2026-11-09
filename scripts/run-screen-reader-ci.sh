@@ -21,8 +21,12 @@ pulseaudio --start --exit-idle-time=-1
 pactl load-module module-null-sink sink_name=farda_at >/dev/null
 pactl set-default-sink farda_at
 speech-dispatcher -d -l 3 -L "$out"
+# Orca 46.1 can throw in automatic page-load SayAll during document replacement.
+# Keep speech enabled and require every existing manual navigation checkpoint.
+# This is the documented web preference, not a patch to Orca's speech engine:
+# https://help.gnome.org/orca/preferences_web.html
 cat > "$prefs/user-settings.conf" <<'JSON'
-{"general":{"startingProfile":["Default","default"],"activeProfile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory"},"pronunciations":{},"keybindings":{},"profiles":{"default":{"profile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","pronunciations":{},"keybindings":{}}}}
+{"general":{"startingProfile":["Default","default"],"activeProfile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","sayAllOnLoad":false},"pronunciations":{},"keybindings":{},"profiles":{"default":{"profile":["Default","default"],"enableSpeech":true,"enableBraille":false,"speechServerFactory":"speechdispatcherfactory","sayAllOnLoad":false,"pronunciations":{},"keybindings":{}}}}
 JSON
 cat > "$prefs/orca-customizations.py" <<'PY'
 import orca.debug
@@ -52,7 +56,7 @@ orca --version > "$out/versions.txt"
 speech-dispatcher --version >> "$out/versions.txt"
 node --version >> "$out/versions.txt"
 set +e
-node node_modules/playwright/cli.js test -c playwright.agent.config.ts --headed --workers=1 e2e-agent/action-review.spec.ts e2e-agent/lifecycle.spec.ts e2e-agent/monitor-evidence.spec.ts e2e-agent/stock-support.spec.ts e2e-agent/finance-reads.spec.ts e2e-agent/operations-reads.spec.ts e2e-agent/fulfillment-canonical.spec.ts e2e-agent/recruitment-workspace.spec.ts > "$out/browser.log" 2>&1
+node node_modules/playwright/cli.js test -c playwright.agent.config.ts --headed --workers=1 e2e-agent/action-review.spec.ts e2e-agent/lifecycle.spec.ts e2e-agent/monitor-evidence.spec.ts e2e-agent/stock-support.spec.ts e2e-agent/finance-reads.spec.ts e2e-agent/operations-reads.spec.ts e2e-agent/fulfillment-canonical.spec.ts e2e-agent/recruitment-workspace.spec.ts e2e-agent/bulk.spec.ts > "$out/browser.log" 2>&1
 browser_status=$?
 set -e
 kill -INT "$record_pid" 2>/dev/null || true
@@ -60,5 +64,8 @@ wait "$record_pid" 2>/dev/null || true
 grep 'SPEECH OUTPUT:' "$FARDA_SCREEN_READER_LOG" > "$out/spoken-output.txt" || true
 cat "$out/browser.log"
 if test "$browser_status" -ne 0; then exit "$browser_status"; fi
+# Require the native web script's effective preference readback, and retain it
+# in the existing evidence artifact. A requested JSON setting alone is no proof.
+grep -F -m 1 'WEB: Not doing SayAll due to sayAllOnLoad being False' "$FARDA_SCREEN_READER_LOG" >> "$out/versions.txt"
 python3 scripts/verify-screen-reader-audio.py "$out"
 exit "$browser_status"

@@ -1,3 +1,4 @@
+import { nativeBulkViewSchema } from "../../creator-agent/bulk/views.ts";
 /**
  * Runtime schemas for recruitmentQueue, invitationDraft, batchDetail, pipelineSummary and discoverySummary.
  *
@@ -209,7 +210,7 @@ const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchem
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
   recruitmentQueue: z.union([nativeRecruitmentViewSchema, recruitmentQueue]),
   invitationDraft,
-  batchDetail: z.union([nativeRecruitmentBatchSchema, scorecardPreviewSchema, batchDetail]),
+  batchDetail: z.union([nativeBulkViewSchema,nativeRecruitmentBatchSchema, scorecardPreviewSchema, batchDetail]),
   pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),
   pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,

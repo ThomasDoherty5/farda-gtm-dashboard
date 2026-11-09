@@ -87,6 +87,9 @@ import { DispatchError } from "./jobs/dispatchSchema.ts";
 import { apiRequestKind } from "./apiRequestLimits.ts";
 import { apiErrorEnvelope } from "./apiErrorEnvelope.ts";
 import { composeActionDomains } from "./actionDomains.ts";
+import { createBulkService, type BulkServiceOptions } from "./bulk/service.ts";
+import { BulkError, bulkReadFiltersSchema } from "./bulk/contract.ts";
+import { assertBulkRuntimeRegistration, findBulkGroupManifest } from "./bulkRuntime.ts";
 import { createRecruitmentService, type RecruitmentServiceOptions } from "./recruitment/service.ts";
 import { InvitationDraftRepository } from "./recruitment/drafts.ts";
 import { RecruitmentError } from "./recruitment/source.ts";
@@ -133,6 +136,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   recruitmentSource?: RecruitmentSource;
   /** Current source-owned recruitment catalog; absence never supplies demo data or send authority. */
   recruitmentWorkspace?: Pick<RecruitmentServiceOptions, "source" | "invitationOwner" | "permittedLinkOrigins">;
+  /** Finite source-owned J13 sets and exact compiled domain owners. No default source or activation. */
+  bulkWorkspace?: Pick<BulkServiceOptions, "source" | "owners">;
   rewardDomain?: { source: RewardDomainSource; registration: RewardRegistration };
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
@@ -179,6 +184,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let operationsReads: ReturnType<typeof createOperationsReadReader>;
   let teamInvitationReads: ReturnType<typeof createTeamInvitationReadReader>;
   let recruitmentWorkspace: ReturnType<typeof createRecruitmentService>;
+  let bulkWorkspace: ReturnType<typeof createBulkService>;
   let controls: ReturnType<typeof createOperationsControls>;
   let operationsBridge: ReturnType<typeof createOperationsControlBridge> | undefined;
   let actionFoundation: ReturnType<typeof createActionFoundation>;
@@ -271,7 +277,16 @@ export function createAgentServer(options: AgentServerOptions) {
       records: { readApproval: ref => actionFoundation.approvals.readApproval(ref), readRun: ref => actionFoundation.dispatch.read(ref, false),
         readPreview: (command, principal, key) => actionFoundation.approvals.readCommand("propose", command, principal, key) },
     });
-    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[]),...(options.fulfillment?[fulfillment.domain]:[]),...(recruitmentWorkspace.domain?[recruitmentWorkspace.domain]:[])]);
+    const bulkScope = {workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const};
+    bulkWorkspace = createBulkService({ scope: bulkScope, referenceKey: operationsSecret, now: options.operations?.now,
+      source: options.bulkWorkspace?.source, owners: options.bulkWorkspace?.owners ?? new Map(), records: {
+        readApproval: (ref, version) => actionFoundation.approvals.readApproval(ref, version),
+        readRun: ref => actionFoundation.dispatch.read(ref, false),
+        readRuns: (ref, version) => actionFoundation.dispatch.readApprovalRuns(ref, version),
+        findGroupManifest: (sourceRef, basisHash, kind, payloadRef) => findBulkGroupManifest(store.database, bulkScope, sourceRef, basisHash, kind, payloadRef),
+        assertRegistration: descriptor => assertBulkRuntimeRegistration(store.database, options.runtime?.registry, descriptor),
+      } });
+    let actionBindings = composeActionDomains(options.actionFoundation, [...(rewardDomain ? [rewardDomain] : []), ...(mediaDomain ? [mediaDomain] : []),...(operationsBridge?[operationsBridge.domain]:[]),...(settlementDomain?[settlementDomain]:[]),...(options.fulfillment?[fulfillment.domain]:[]),...(recruitmentWorkspace.domain?[recruitmentWorkspace.domain]:[]),...(options.bulkWorkspace?[bulkWorkspace.domain]:[])]);
     if(settlementLedger)actionBindings={...actionBindings,ledger:settlementLedger};
     if (mediaDomain && actionBindings) actionBindings = { ...actionBindings, resources: createMediaResources(actionBindings.resources, mediaDomain) };
     if (actionBindings?.approvals?.registry) actionBindings = { ...actionBindings, approvals: { ...actionBindings.approvals,
@@ -416,7 +431,7 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("launchControl"), filters: z.object({ requestKey: z.string().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("approvalDetail"), filters: z.object({ approvalId: z.string().min(1).max(240), manifestVersion:z.number().int().positive().safe().optional(), history:z.boolean().optional(), beforeVersion:z.number().int().positive().safe().optional() }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("runDetail"), filters: z.object({ runId: z.string().min(1).max(1400) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
-    readBase.extend({ viewKey: z.literal("batchDetail"), filters: z.union([scorecardPreviewFilters, recruitmentBatchFiltersSchema]) }),
+    readBase.extend({ viewKey: z.literal("batchDetail"), filters: z.union([scorecardPreviewFilters, recruitmentBatchFiltersSchema, bulkReadFiltersSchema.extend({context:z.literal("bulk")}).strict()]) }),
     readBase.extend({ viewKey: z.literal("recruitmentQueue"), filters: recruitmentFiltersSchema, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("operationsControl"), filters: operationsControlFilters,
       period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -949,6 +964,25 @@ export function createAgentServer(options: AgentServerOptions) {
           result.assertCurrent();
           return reply(res, 200, envelope);
         }
+        if (input.viewKey === "batchDetail" && "context" in input.filters && input.filters.context === "bulk") {
+          if (input.page.cursor !== null || input.period !== null || input.sort.length)
+            return reply(res, 400, {code:"BULK_READ_SCOPE_INVALID",executionCertainty:"notApplied"});
+          const result = await bulkWorkspace.read({batchRef:input.filters.batchRef,batchVersion:input.filters.batchVersion}, {principalRef:`agent-${auth.role}`});
+          const data = result.data;
+          const capabilities = [...new Set(data.groups.map(group => group.actionKind))].map(actionKind => {
+            const available = data.groups.some(group => group.actionKind === actionKind && group.preview && !group.approval);
+            return {actionKind,state:auth.role !== "reviewer" ? "denied" : available ? "available" : "held",
+              reasonCodes:auth.role !== "reviewer" ? ["REVIEWER_REQUIRED"] : available ? [] : ["BULK_REVIEW_ORIGINAL_MANIFEST"]};
+          });
+          const envelope = {schemaVersion:ADAPTER_SCHEMA,requestId:input.requestId,
+            scope:{...input.requestedScope,authorizationScopeVersion:"creator-agent.scope.v1"},dataVersion:versionOfData(data),
+            dataState:"ready",data,sourceFreshness:[],coverage:{expectedCount:data.rows.length,observedCount:data.rows.length,missingCount:0,complete:true,reasonCodes:[]},
+            capabilities,page:{nextCursor:null,hasMore:false},refresh:{nextPollAfterMs:null}};
+          const finalAuth = authorize(req);
+          if (!finalAuth || finalAuth.role !== auth.role) return reply(res, finalAuth ? 403 : 401, {code:"BULK_AUTHORITY_CHANGED",executionCertainty:"notApplied"});
+          result.assertCurrent();
+          return reply(res,200,envelope);
+        }
         if (input.viewKey === "batchDetail") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           const projections: CommercialProjection[] = [], basisFences: (() => void)[] = [];
@@ -1254,6 +1288,7 @@ export function createAgentServer(options: AgentServerOptions) {
       }
       if (error instanceof OfferPolicyError) return reply(res, error.status, { code: error.code, reasonCodes: error.reasonCodes,
         rowIndex: error.rowIndex, executionCertainty: error.executionCertainty });
+      if (error instanceof BulkError) return reply(res, error.status, {code:error.code,executionCertainty:error.executionCertainty});
       if (error instanceof RecruitmentError) return reply(res, error.status, {code: error.code, executionCertainty: error.executionCertainty, ...(error.currentVersion === undefined ? {} : {currentVersion: error.currentVersion})});
       if (error instanceof LifecycleError) return reply(res, error.status, { code: error.code, executionCertainty: error.executionCertainty,
         ...(error.currentVersion === undefined ? {} : { currentVersion: error.currentVersion }),

@@ -5,6 +5,7 @@ import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
 import { parseScorecardSelection } from "@/creator-agent/scorecardPreview";
+import { NativeBulkPage } from "./NativeBulkPage";
 import { NativeBatchPage } from "./NativeBatchPage";
 import { ScorecardPreviewPage } from "./ScorecardPreview";
 import { Badge } from "@/components/Badge";
@@ -50,6 +51,7 @@ export function BatchPage() {
   const { batchId } = useParams();
   const [search] = useSearchParams();
   const scope = useScope();
+  if (batchId !== "scorecard-preview" && search.get("context") === "bulk" && scope.adapter.kind !== "demo") return <NativeBulkPage />;
   if (batchId !== "scorecard-preview") return scope.adapter.kind === "demo" ? <ExecutionBatchPage /> : <NativeBatchPage />;
   const selection = parseScorecardSelection(search);
   if (!selection) return <EmptyState state="Empty" title="Invalid assessment selection"><p>Select up to 25 different saved creators from daily sourcing.</p><LinkButton to="/creators/discovery">Daily sourcing</LinkButton></EmptyState>;
