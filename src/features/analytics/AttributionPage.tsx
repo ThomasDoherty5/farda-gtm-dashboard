@@ -17,6 +17,7 @@ const multiple = (n: number) => `${n.toFixed(2)}×`;
 
 /** Performance attribution (Figma source 14:377, owner THO-293, CTRL-202 and CTRL-203). */
 export function AttributionPage() {
+  const demo = useIsDemo();
   const query = useView<Record<string, never>, AttributionData>("attribution", {});
   const report = query.data?.data;
   const periodLabel = report?.datasetKey === "attribution-observed"
@@ -34,7 +35,7 @@ export function AttributionPage() {
         {(data) => <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
       <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
-      <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
+      <Dialog open={dialog === "definitions"} focusHeading={!demo} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
         {dialog === "definitions" && <Definitions data={query.data?.data ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>

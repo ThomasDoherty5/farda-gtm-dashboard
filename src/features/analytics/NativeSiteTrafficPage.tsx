@@ -74,7 +74,7 @@ export function NativeSiteTrafficPage() {
         }} />}
       </ViewShell>
       <p className={styles.small} id="traffic-support-hold">{supportReason}</p>
-      <Dialog open={dialog !== null} title={dialog === "source" ? "Commerce source evidence" : "Cohort definitions"} badge={data?.provenance.synthetic ? "Fictional test" : "Source evidence"} onClose={() => setDialog(null)}>
+      <Dialog open={dialog !== null} focusHeading title={dialog === "source" ? "Commerce source evidence" : "Cohort definitions"} badge={data?.provenance.synthetic ? "Fictional test" : "Source evidence"} onClose={() => setDialog(null)}>
         {displayed ? <TrafficDefinitions data={displayed} showDaily={dialog === "source"} /> : <p>Current source evidence is unavailable. No previous account data is displayed.</p>}
         <Button variant="secondary" loading={query.isFetching} onClick={() => void query.refetch()}>Refresh source</Button>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
@@ -93,6 +93,8 @@ function TrafficBody({ data, openSource, selectSegment }: { data: NativeSiteTraf
   ];
   const scale = Math.max(1, ...observations.map(row => row.metric.value ?? 0));
   const pending = data.imports.firstActualImport.state === "pending";
+  const returnReason = "A verified return reference is required to open return evidence.";
+  const reviewReason = "The current ratings source is not connected to this report.";
   return <>
     <Notice tone={data.provenance.synthetic ? "violet" : "warning"} title={data.capability.state === "unsupported" ? "Shopify traffic access unsupported" : data.capability.state === "unconfigured" ? "Shopify traffic source pending" : data.provenance.synthetic ? "Fictional test evidence · each metric keeps its own cohort" : "Source evidence · each metric keeps its own cohort"}>
       {data.capability.state !== "ready" && <>{accessText(data)}{data.provenance.synthetic ? " This is fictional test evidence." : ""}{" "}</>}
@@ -132,14 +134,16 @@ function TrafficBody({ data, openSource, selectSegment }: { data: NativeSiteTraf
         <p className={styles.metric} data-testid="metric-return-rate">N/A</p>
         <DetailRow label="Received and inspected" value="Unknown" /><DetailRow label="Awaiting inspection" value="Unknown" /><DetailRow label="Restocked from inspected" value="Unknown" /><DetailRow label="Quarantined from inspected" value="Unknown" />
         <p className={styles.small}>Refunds and physical returns are separate events. Restock only after inspection; replacements link the original order. Source Orders owns refund and retained-unit totals.</p>
-        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 232 }} disabledReason="A verified return reference is required to open return evidence.">Open return cases</Button></div>
+        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 232 }} disabledReason={returnReason} reasonFor="traffic-return-hold">Open return cases</Button></div>
+        <p className={styles.small} id="traffic-return-hold">{returnReason}</p>
       </Card>
       <Card labelledBy="reviews-title" className={styles.card20}>
         <SectionHeading id="reviews-title" title="Rated reviews unavailable" note="Ratings-only feed · latest unique platform + review ID. All-time ratings and delivered cohorts stay separate." />
         <BarList label="Reviews by star rating" rows={[5, 4, 3, 2, 1].map(star => ({ key: String(star), label: `${star} ${star === 1 ? "star" : "stars"}`, value: "Unknown", share: 0 }))} />
         <hr className={styles.divider} />
         <p className={styles.small}>Unrated reviews are excluded from the average. Review requests pause during unresolved support/returns. Low-rating follow-up stays in the source tool with an accountable owner.</p>
-        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 250 }} disabledReason="The current ratings source is not connected to this report.">Open review outcomes</Button></div>
+        <div className={styles.btnRow}><Button variant="secondary" style={{ minWidth: 250 }} disabledReason={reviewReason} reasonFor="traffic-review-hold">Open review outcomes</Button></div>
+        <p className={styles.small} id="traffic-review-hold">{reviewReason}</p>
       </Card>
     </div>
     <Notice tone="warning" title="Unknown is not zero">

@@ -115,6 +115,14 @@ test("performance definitions use the same source owner without changing financi
   }
   await trigger.click(); await expect(page.getByRole("dialog", { name: "Metric definitions" })).toContainText("1.625%");
   await expect(page.getByRole("dialog")).toContainText("It does not change the financial reporting period or assign unattributed orders");
+  await expect(page.getByRole("heading", { name: "Metric definitions", exact: true })).toBeFocused();
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(page.getByRole("heading", { name: "Metric definitions", exact: true })).toBeInViewport();
+    expect(await page.getByRole("dialog").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`traffic-performance-definitions-${width}.png`), fullPage: true });
+  }
   await page.getByRole("link", { name: "Open traffic evidence", exact: true }).click();
   await expect(page).toHaveURL(/\/analytics\/customer-journey$/); await expect(page.getByTestId("metric-sessions")).toHaveText("16,000");
 });
@@ -129,14 +137,26 @@ test("complete original-layout adaptation at three widths, keyboard definitions 
     await page.screenshot({ path: info.outputPath(`traffic-complete-${width}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   }
+  for (const [label, reasonId] of [["Open return cases", "traffic-return-hold"], ["Open review outcomes", "traffic-review-hold"]]) {
+    const button = page.getByRole("button", { name: label, exact: true });
+    const buttonBox = await button.boundingBox(), reasonBox = await page.locator(`#${reasonId}`).boundingBox();
+    expect(buttonBox).not.toBeNull(); expect(reasonBox).not.toBeNull();
+    expect(buttonBox!.height).toBeGreaterThanOrEqual(44); expect(buttonBox!.height).toBeLessThanOrEqual(64);
+    expect(reasonBox!.y).toBeGreaterThanOrEqual(buttonBox!.y + buttonBox!.height);
+    await expect(button).toHaveAttribute("aria-describedby", reasonId);
+  }
   const axe = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(node => node.target) }))).toEqual([]);
   await page.setViewportSize({ width: 1440, height: 1000 });
   const trigger = page.getByRole("button", { name: "Cohort definitions", exact: true }); await trigger.focus(); await page.keyboard.press("Enter");
-  await expect(page.getByRole("dialog", { name: "Cohort definitions" })).toBeVisible(); await page.keyboard.press("Escape"); await expect(trigger).toBeFocused();
+  await expect(page.getByRole("dialog", { name: "Cohort definitions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cohort definitions", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape"); await expect(trigger).toBeFocused();
   await screenReaderCheckpoint(page, "traffic-definitions-focus-return", trigger, ["Cohort definitions", "button"]);
   await page.getByRole("button", { name: "Open commerce source", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 1000 });
+  await expect(page.getByRole("heading", { name: "Commerce source evidence", exact: true })).toBeFocused();
+  await expect(page.getByRole("heading", { name: "Commerce source evidence", exact: true })).toBeInViewport();
   expect(await page.getByRole("dialog").evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   const dailyRegion = page.getByRole("region", { name: "Imported storefront daily aggregates" });
