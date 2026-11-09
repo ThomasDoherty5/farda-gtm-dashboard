@@ -24,8 +24,11 @@
 
 .historicalTerms { display: block; margin-top: var(--space-4); overflow-wrap: anywhere; }
 
-/* Keep desktop evidence controls in one header row; narrower layouts wrap safely. */
-.panelHeader > :last-child { flex: 0 0 auto; flex-wrap: nowrap; align-items: flex-start; }
+/* Reserve the controls' intrinsic width; the heading takes the remaining space. */
+div.panelHeader { display: grid; grid-template-columns: minmax(0, 1fr) max-content; }
+.panelHeader > :last-child { min-width: 0; max-width: 100%; flex-wrap: nowrap; align-items: flex-start; }
+.panelHeader > :last-child button { flex: 0 0 auto; white-space: nowrap; }
 @media (max-width: 1024px) {
-  .panelHeader > :last-child { flex: 0 1 auto; flex-wrap: wrap; max-width: 100%; }
+  div.panelHeader { grid-template-columns: minmax(0, 1fr); }
+  .panelHeader > :last-child { flex-wrap: wrap; }
 }

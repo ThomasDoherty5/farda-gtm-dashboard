@@ -68,6 +68,38 @@ test("a configured source renders validated finance data, and a later source den
 });
 
 
+test("native ledger header controls remain inside their panels at desktop, tablet and mobile widths", async ({ page }) => {
+  await login(page);
+  await page.goto("/finance/commissions?provider=collabs");
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const title of ["Accrued expense and cash are different.", "Contribution after creator costs"]) {
+      const panel = page.getByRole("region", { name: title, exact: true });
+      await expect(panel).toBeVisible();
+      const header = panel.locator(":scope > div").first();
+      const controls = header.getByRole("button").or(header.getByRole("link"));
+      expect(await controls.count()).toBeGreaterThan(0);
+      const bounds = await panel.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
+      for (const control of await controls.all()) {
+        await expect(control).toBeVisible();
+        const rect = await control.boundingBox();
+        expect(rect).not.toBeNull();
+        expect(rect!.x).toBeGreaterThanOrEqual(bounds!.x);
+        expect(rect!.x + rect!.width).toBeLessThanOrEqual(bounds!.x + bounds!.width);
+        expect(await control.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        if (width === 1440) expect(rect!.height).toBeLessThanOrEqual(45);
+      }
+      if (width === 1440) {
+        const heading = await panel.getByRole("heading", { name: title, exact: true }).boundingBox();
+        const firstControl = await controls.first().boundingBox();
+        expect(Math.abs(heading!.y - firstControl!.y)).toBeLessThanOrEqual(1);
+      }
+    }
+  }
+});
+
 test("native ledger and every settlement frame retain evidence, held authority and full-page accessibility", async ({ page }) => {
   test.setTimeout(180_000);
   await login(page);
