@@ -73,3 +73,12 @@
 .exactTerms div { min-width: 0; }
 .exactTerms dt { font: var(--text-label); }
 .exactTerms dd { margin: var(--space-8) 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Disabled reasons remain legible on the two source-native dark panels. */
+.sourceDark > button[aria-describedby] + span[id],
+.invitationMessage > button[aria-describedby] + span[id] { color: var(--color-onDark); }
+
+.headingActions { flex: 1 1 380px; max-width: 420px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: var(--space-16); }
+.headingActions > div { min-width: 0; }
+.headingActions > div > button, .headingActions > div > a { width: 100%; }
+@media (max-width: 479px) { .headingActions { flex-basis: 100%; grid-template-columns: minmax(0, 1fr); } }

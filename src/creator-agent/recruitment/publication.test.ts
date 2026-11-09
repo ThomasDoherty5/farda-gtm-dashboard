@@ -15,6 +15,12 @@ afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of close.splice
 it.each(["permission", "sampleDeadline", "acceptedProof"] as const)("rechecks %s after constructing the HTTP envelope and publishes no expired protected fact", async boundary => {
   const directory = mkdtempSync(join(tmpdir(), "recruitment-publication-"));
   const fixture = recruitmentServerFixture(join(directory, "agent.sqlite"));
+  // Retain one fictional provider observation so advancing time only expires the
+  // recruitment fact, rather than generating a different offer observation first.
+  const providerPacket = structuredClone(fixture.o.auth.provider!(fixture.offer.terms, fixture.scope));
+  fixture.o.auth.provider = () => structuredClone(providerPacket);
+  const originalOffer = fixture.o.repo.readOffer(fixture.offer.offerId);
+  expect(originalOffer?.provider).not.toBeNull();
   const deadline = new Date(fixture.o.now() + 1_000).toISOString();
   fixture.source.state.transform = snapshot => {
     if (boundary === "sampleDeadline") snapshot.samples = [{ requestRef: "fictional-open-request", version: "v1", creatorRef: "synthetic-private-profile",
@@ -45,6 +51,7 @@ it.each(["permission", "sampleDeadline", "acceptedProof"] as const)("rechecks %s
         finalFences++;
         if (!serialized) throw new Error("The publication fence ran before envelope construction.");
         if (boundary === "permission") fixture.source.state.denied = true;
+        expect(fixture.o.repo.readOffer(fixture.offer.offerId)).toEqual(originalOffer);
         result.assertCurrent();
       } };
     } };

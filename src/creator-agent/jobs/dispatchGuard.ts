@@ -4,7 +4,7 @@ import { assertSynchronousVoid } from "../sourceFence.ts";
 import type { CapabilityLedger } from "../connections/ledger.ts";
 import type { ApprovalScope, VerifiedApprovalProof } from "../approvals/contract.ts";
 import { approvalRefSchema } from "../approvals/contract.ts";
-import { JobRepository } from "./repository.ts";
+import { JobRepository, JobConflict } from "./repository.ts";
 import { dispatchIntentSchema, dispatchReadbackSchema, grantSchema, providerRequirementSchema, resourceRequirementsSchema, DispatchError, type DispatchIntent, type DispatchHandler, type DispatchRead, type DispatchReceipt, type DispatchApprovalAuthority, type ResourceAuthority, type ResourceGrant, type ResourceRequirements, type DispatchReadback, type DispatchContext, type DispatchWorker } from "./dispatchSchema.ts";
 export type DispatchGuardOptions = {
     db: DatabaseSync;
@@ -403,7 +403,16 @@ export class DispatchGuard {
                 const receipt = { requestKey: request.idempotencyKey, principalRef: request.principalRef, command, expectedRevision, appliedRevision: this.revision(runRef),...(selection?{itemRefs:selection.itemRefs}:{}) };
                 this.db.prepare("INSERT INTO job_dispatch_controls VALUES(?,?,?,?)").run(requestKey, bodyHash, runRef, JSON.stringify(receipt));
             } };
-            if(selection)this.jobs.cancelUnsentItems(runRef,selection.itemKeys,assertCurrent,persist);
+            if(selection) {
+                try { this.jobs.cancelUnsentItems(runRef,selection.itemKeys,assertCurrent,persist); }
+                catch(error) {
+                    // The existing transaction rolls back both selected rows and the control receipt.
+                    // Only known finite-selection conflicts cross the public action boundary.
+                    if(error instanceof JobConflict && ["INVALID_ITEM_SELECTION","APPROVED_DISPATCH_REQUIRED","ITEM_NOT_IN_RUN","ITEM_NOT_UNSENT","ITEM_SHARED_WITH_OTHER_RUN"].includes(error.message))
+                        throw new DispatchError(error.message,error.message==="INVALID_ITEM_SELECTION"?422:409,"notApplied");
+                    throw error;
+                }
+            }
             else this.jobs.controlRun(runRef,command,assertCurrent,persist);
         }
         const saved = validatePrior();

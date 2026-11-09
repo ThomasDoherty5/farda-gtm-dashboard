@@ -82,8 +82,8 @@ function NativeBatchBody({data,res,current,setParam,refresh}:{data:NativeRecruit
   };
   return <>
     <PageTitle id="batch-title" title="Scale the work. Keep control." subtitle={`${data.batchId} · ${data.sourceState} source membership · ${data.provenance.synthetic?"Fictional integration evidence":"Source evidence"}`}>
-      <Button variant="secondary" disabledReason={hold("pauseRun")??(data.run.control!=="active"?"This run is not active.":null)} loading={command.busy} aria-haspopup="dialog" onClick={()=>setPause(data.run.version)}>Pause new work</Button>
-      <LinkButton to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=recovery`}>Review batch receipt</LinkButton>
+      <div className={styles.headingActions}><div><Button variant="secondary" disabledReason={hold("pauseRun")??(data.run.control!=="active"?"This run is not active.":null)} loading={command.busy} aria-haspopup="dialog" onClick={()=>setPause(data.run.version)}>Pause new work</Button></div><div>
+      <LinkButton to={`/runs/${encodeURIComponent(data.run.runRef)}?tab=recovery`}>Review batch receipt</LinkButton></div></div>
     </PageTitle>
     <nav className={styles.buttons} aria-label="Batch sections"><LinkButton variant="ghost" to="/automations">Operations queue</LinkButton>{["detail","exceptions","capacity","samples"].map(value=><Button key={value} variant={tab===value?"primary":"ghost"} aria-pressed={tab===value} onClick={()=>setTab(value)}>{value==="detail"?"Batch detail":value[0]!.toUpperCase()+value.slice(1)}</Button>)}</nav>
     <StaleNotice res={res}/>{!current&&<p role="status">Current source permission or version is unavailable. Refresh before any action; retained state does not authorize new work.</p>}

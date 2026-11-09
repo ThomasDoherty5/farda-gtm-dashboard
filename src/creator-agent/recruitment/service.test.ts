@@ -184,7 +184,8 @@ describe("exact saved invitation -> existing J04 bridge",()=>{
     const a=await w.repo.preparePreview(w.command,principal,"original-preview-key");
     expect(a.manifest.items[0]).toMatchObject({itemRef:w.command.selectionRefs[0],targetRef:"synthetic-creator",payloadHash:w.saved.data.resource.payloadDigest});
     expect(a.manifest.draft.commercialOffers).toEqual([{itemRef:w.command.selectionRefs[0],offerRef:w.offer.offerId,offerVersion:w.offer.version,basisHash:expect.stringMatching(/^[a-f0-9]{64}$/)}]);
-    expect(a.current.state).toBe("pending");expect(a.decisionReceipt).toBeNull();expect(w.owner.state.contexts).toEqual([]);
+    expect(a.current).toEqual({state:"held",reasonCodes:["APPROVAL_REQUEST_UNVERIFIED","DECISION_READBACK_UNVERIFIED"]});
+    expect(a.request).toEqual({state:"local",record:null});expect(a.decisionReceipt).toBeNull();expect(w.a.state.writes).toBe(0);expect(w.owner.state.contexts).toEqual([]);
     expect(await w.repo.preparePreview(w.command,principal,"original-preview-key")).toEqual(a);
     await expect(w.repo.preparePreview(w.command,principal,"fresh-key-same-draft")).rejects.toMatchObject({code:"APPROVAL_CURRENT_SOURCE_UNVERIFIED"});
     const another={...w.request,draftId:"second-local-id"};await w.service.saveInvitation(another,principal,"another-local-save");
@@ -227,31 +228,41 @@ describe("exact saved invitation -> existing J04 bridge",()=>{
 });
 
 describe("source-owned sample and provenance boundaries",()=>{
+  function retainOfferObservation(w:ReturnType<typeof setup>){
+    // Isolate the recruitment clock boundary from the general offer fixture's fresh
+    // observation on every call. The same fictional provider packet remains current.
+    const packet=structuredClone(w.o.auth.provider!(w.offer.terms,scope));
+    w.o.auth.provider=()=>structuredClone(packet);
+    const record=w.o.repo.readOffer(w.offer.offerId);expect(record?.provider).not.toBeNull();
+    return ()=>expect(w.o.repo.readOffer(w.offer.offerId)).toEqual(record);
+  }
   function sample(w:ReturnType<typeof setup>){return {requestRef:"fictional-pending-sample",version:"fictional-sample-v1",creatorRef:"synthetic-private-profile",sourceRef:"fictional-sample-source",
     observedAt:new Date(w.source.state.observedAt).toISOString(),validUntil:new Date(w.source.state.observedAt+120_000).toISOString(),requestType:"open" as const,nativeState:"pending" as const,
     deadline:new Date(w.source.state.observedAt+60_000).toISOString(),route:"verifiedApi" as const,capabilityVersion:"fictional-api-grant-v1",reasonCodes:[] as string[],approvalRef:null,runRef:null,receiptRef:null};}
   it("projects a source-verified PENDING Open API route without granting approval, stock or dispatch",async()=>{
-    const w=setup();w.source.state.transform=s=>{s.samples=[sample(w)];};
+    const w=setup(),assertOfferUnchanged=retainOfferObservation(w);w.source.state.transform=s=>{s.samples=[sample(w)];};
     const result=await w.service.readInvitation(w.filters,principal);result.assertCurrent();
     expect(result.data).toMatchObject({provenance:{evidenceStage:"synthetic",synthetic:true},dispatchAuthorized:false,samples:[{requestType:"open",nativeState:"pending",route:"verifiedApi",approvalRef:null,runRef:null,receiptRef:null}]});
     expect(JSON.stringify(result.data.samples)).not.toMatch(/fictional-pending-sample|fictional-api-grant-v1|fictional-sample-source|synthetic-private-profile/);
-    w.o.advance(120_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    w.o.advance(120_000);assertOfferUnchanged();expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
   });
   it.each(["verifiedApi", "permittedBrowser"] as const)("expires a published %s capability at the earlier native request deadline", async route => {
-    const w=setup(),deadline=new Date(w.source.state.observedAt+30_000).toISOString();
+    const w=setup(),assertOfferUnchanged=retainOfferObservation(w),deadline=new Date(w.source.state.observedAt+30_000).toISOString();
     w.source.state.transform=s=>{s.samples=[{...sample(w),route,deadline}];};
     const result=await w.service.readInvitation(w.filters,principal);
     expect(result.data.samples[0]?.route).toBe(route);expect(result.data.validUntil).toBe(deadline);
-    w.o.advance(30_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    w.o.advance(29_999);assertOfferUnchanged();result.assertCurrent();
+    w.o.advance(1);assertOfferUnchanged();expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
     const refreshed=await w.service.readInvitation(w.filters,principal);refreshed.assertCurrent();
     expect(refreshed.data.samples[0]).toMatchObject({route:"held",reasonCodes:["SAMPLE_DEADLINE_EXPIRED"]});
   });
   it("bounds a published accepted fact by its own evidence lease, without erasing owner handoff", async()=>{
-    const w=setup(),deadline=new Date(w.source.state.observedAt+1_000).toISOString();w.source.state.willingness="willing";
+    const w=setup(),assertOfferUnchanged=retainOfferObservation(w),deadline=new Date(w.source.state.observedAt+1_000).toISOString();w.source.state.willingness="willing";
     w.source.state.transform=s=>{if(s.kind==="invitation")s.acceptedOffer={offerId:w.offer.offerId,version:w.offer.version,receiptRef:"fictional-accepted-receipt",validUntil:deadline};
       s.samples=[{...sample(w),route:"ownerHandoff",deadline:new Date(w.source.state.observedAt-1).toISOString(),reasonCodes:["TIKTOK_PERMISSION_DENIED_16022020"]}];};
     const result=await w.service.readInvitation(w.filters,principal);expect(result.data.offer?.accepted).toBe(true);expect(result.data.validUntil).toBe(deadline);
-    expect(result.data.samples[0]?.route).toBe("ownerHandoff");w.o.advance(1_000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    expect(result.data.samples[0]?.route).toBe("ownerHandoff");w.o.advance(999);assertOfferUnchanged();result.assertCurrent();
+    w.o.advance(1);assertOfferUnchanged();expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
     const refreshed=await w.service.readInvitation(w.filters,principal);refreshed.assertCurrent();
     expect(refreshed.data.offer?.accepted).not.toBe(true);expect(refreshed.data.samples[0]?.route).toBe("ownerHandoff");
     expect(Date.parse(refreshed.data.validUntil)).toBeGreaterThan(w.o.now());
@@ -278,9 +289,9 @@ describe("source-owned sample and provenance boundaries",()=>{
     const svc=createRecruitmentService({...w.options,permittedLinkOrigins:["https://fictional.example.test"]});expect((await svc.readInvitation(w.filters,principal)).data.sourceLink.state).toBe("unavailable");
   });
   it("expires a displayed known capacity at its own earlier deadline",async()=>{
-    const w=setup();w.source.state.transform=s=>{s.capacity=[{kind:"invitations",unit:"native invitations",currency:null,remaining:3,limit:5,observedAt:new Date(w.source.state.observedAt).toISOString(),validUntil:new Date(w.source.state.observedAt+1000).toISOString(),resetAt:null,reasonCodes:[]}];};
+    const w=setup(),assertOfferUnchanged=retainOfferObservation(w);w.source.state.transform=s=>{s.capacity=[{kind:"invitations",unit:"native invitations",currency:null,remaining:3,limit:5,observedAt:new Date(w.source.state.observedAt).toISOString(),validUntil:new Date(w.source.state.observedAt+1000).toISOString(),resetAt:null,reasonCodes:[]}];};
     const result=await w.service.readInvitation(w.filters,principal);expect(result.data.capacity[0]?.remaining).toBe(3);
-    w.o.advance(1000);expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
+    w.o.advance(1000);assertOfferUnchanged();expect(result.assertCurrent).toThrow("RECRUITMENT_SOURCE_STALE");
   });
 });
 

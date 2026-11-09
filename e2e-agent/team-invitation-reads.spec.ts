@@ -32,16 +32,30 @@ const sessionRead = (page: Page, viewKey: string) => page.request.post("/v1/read
   requestId: "synthetic-browser-read", requestedScope: { workspaceId: scope.workspaceId, accountIds: [scope.accountId], environment: "sandbox" },
   viewKey, filters: {}, period: null, sort: [], page: { cursor: null, limit: 50 } } });
 
-test("the invitation composer and team screen show no demo draft or roles when the source is not connected", async ({ page }) => {
+/** A legacy read source cannot grant the separate recruitment workspace's named actor authority. */
+async function openUnboundComposer(page: Page) {
+  const response = page.waitForResponse(value => value.url().endsWith("/v1/read") && value.request().method() === "POST" &&
+    value.request().postDataJSON()?.viewKey === "invitationDraft" && value.request().postDataJSON()?.filters?.context === "recruitment");
+  await page.goto("/creators/tiktok/invitations/new");
+  const denied = await response;
+  expect(denied.request().postDataJSON().filters).toEqual({ context: "recruitment" });
+  expect(denied.status()).toBe(403);
+  const body = await denied.json();
+  expect(body).toMatchObject({ code: "RECRUITMENT_AUTHORITY_UNAVAILABLE", executionCertainty: "notApplied" });
+  expect(body).not.toHaveProperty("data");
+  await expect(page.getByRole("alert").filter({ hasText: "No access to this account" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Make every term explicit." })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Send request|Save invitation draft/ })).toHaveCount(0);
+}
+
+test("the invitation composer and team screen expose no demo draft or roles without their distinct authority and source bindings", async ({ page }) => {
   test.setTimeout(120_000);
   // The injected reader exists only to prove the other states below; this case uses a server with none.
   await app.close();
   app = createAgentServer({ databasePath: ":memory:", ...scope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN });
   await listen();
   await login(page);
-  await page.goto("/creators/tiktok/invitations/new");
-  await expect(page.getByRole("alert").filter({ hasText: "Data unavailable" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Send request/ })).toHaveCount(0);
+  await openUnboundComposer(page);
   for (const demo of demoValues) await expect(page.getByText(demo, { exact: false }), demo).toHaveCount(0);
   let axe = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([]);
@@ -61,18 +75,27 @@ test("the invitation composer and team screen show no demo draft or roles when t
   expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([]);
 });
 
-test("a configured source renders a validated draft whose send stays blocked, and a later source denial clears it", async ({ page }) => {
+test("the configured legacy draft stays read-only, cannot bind the native composer, and returns no data after source denial", async ({ page }) => {
   test.setTimeout(90_000);
-  await login(page);
-  await page.goto("/creators/tiktok/invitations/new");
-  await expect(page.getByRole("heading", { name: "Make every term explicit." })).toBeVisible();
-  await expect(page.getByTestId("metric-Live quota remaining")).toContainText("N/A");
-  const send = page.getByRole("button", { name: /Send request/ });
-  await expect(send).toBeVisible();
-  await expect(send).toHaveAttribute("aria-disabled", "true");
+  await login(page, true);
+  const legacy = await sessionRead(page, "invitationDraft");
+  expect(legacy.status()).toBe(200);
+  const body = await legacy.json();
+  expect(body).toMatchObject({ dataState: "ready", data: { datasetKey: "invitation-native", synthetic: true,
+    provenance: { evidenceStage: "synthetic" }, draftVersion: "synthetic-draft-v1",
+    quota: { state: "unknown", reasonCode: "QUOTA_NOT_READ" } },
+    capabilities: [{ actionKind: "sendInvitation", state: "held", reasonCodes: ["INVITATION_ACTIONS_NOT_CONNECTED"] }] });
+  await openUnboundComposer(page);
+  await expect(page.getByText("@synthetic.creator", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("Synthetic historical model", { exact: false })).toHaveCount(0);
   mode = "denied";
-  await page.reload();
-  await expect(page.getByRole("alert").filter({ hasText: "No access to this account" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Make every term explicit." })).toHaveCount(0);
+  const denied = await sessionRead(page, "invitationDraft");
+  expect(denied.status()).toBe(403);
+  const denial = await denied.json();
+  expect(denial).toMatchObject({ code: "SOURCE_AUTHORITY_DENIED", executionCertainty: "notApplied" });
+  expect(denial).not.toHaveProperty("data");
+  await openUnboundComposer(page);
+  await expect(page.getByText("@synthetic.creator", { exact: false })).toHaveCount(0);
   await expect(page.getByText("TT-COMMERCE-v2", { exact: false })).toHaveCount(0);
+  expect(app.store.database.prepare("SELECT count(*) n FROM job_runs").get()?.n).toBe(0);
 });

@@ -59,6 +59,24 @@ test("actual HTTP invitation save, original readback, immutable preview and cano
   await expect(page.getByRole("table",{name:"Exact finite batch outcomes"})).toContainText("cancelled");expect(fixture.owner.state.contexts).toHaveLength(0);expect(app.actionFoundation.dispatch.read(queued.run.runRef,false).run.items[0]?.state).toBe("cancelled");await capture(page,info,"cancelled",1440);
 });
 
+test("proposed Social Cat terms save through the actual offer repository and remain proposals after reload",async({page})=>{
+  await login(page);await page.goto(queue());
+  await expect(page.getByRole("button",{name:"Save proposed terms",exact:true})).toBeEnabled();
+  await page.getByRole("checkbox",{name:"Propose Instagram deliverable",exact:true}).check();await page.getByLabel("Instagram deliverable",{exact:true}).fill("Proposed everyday routine video");
+  await page.getByLabel("Instagram deliverable count",{exact:true}).fill("1");
+  await page.getByRole("checkbox",{name:"Propose optional TikTok post",exact:true}).check();await page.getByLabel("TikTok deliverable",{exact:true}).fill("Optional routine post");
+  await page.getByLabel("Commission percent",{exact:true}).fill("17");await page.getByLabel("instagram rights proposal",{exact:true}).fill("Organic repost proposal; scope requires agreement");
+  const due=new Date(fixture.o.now()+86_400_000).toISOString();await page.getByLabel("instagram delivery timestamp",{exact:true}).fill(due);await page.getByLabel("instagram delivery timezone",{exact:true}).fill("America/Los_Angeles");
+  await page.getByLabel("Sample creators",{exact:true}).fill("1");await page.getByLabel("Units per creator",{exact:true}).fill("1");
+  await page.getByRole("button",{name:"Save proposed terms",exact:true}).click();await expect(page.getByRole("button",{name:"Use saved offer revision",exact:true})).toBeVisible();
+  await page.reload();await page.getByRole("button",{name:"Use saved offer revision",exact:true}).click();
+  await expect(page.getByLabel("Commission percent",{exact:true})).toHaveValue("17");expect(page.url()).toContain("offerVersion=v2");
+  const saved=fixture.o.repo.readOffer(fixture.offer.offerId)!;expect(saved.version).toBe("v2");expect(saved.state).toBe("proposed");expect(saved.acceptedRef).toBeNull();
+  expect(saved.terms.commission.standardRateBps).toBe(1700);expect(saved.terms.manifest.deliverables.map(d=>d.network)).toEqual(expect.arrayContaining(["instagram","tiktok"]));
+  expect(saved.terms.manifest.deliverables.find(d=>d.network==="instagram")).toMatchObject({format:"Proposed everyday routine video",dueAt:due,timezone:"America/Los_Angeles"});
+  expect(fixture.owner.state.contexts).toHaveLength(0);expect(app.store.database.prepare("SELECT count(*) n FROM job_runs").get()?.n).toBe(0);
+});
+
 test("source denial clears the protected composer and reader role cannot save",async({page})=>{
   await login(page,false);await page.goto(composer());await expect(page.getByRole("button",{name:"Save invitation draft",exact:true})).toBeDisabled();
   await login(page);await page.reload();await expect(page.getByLabel("Invitation message",{exact:true})).toBeVisible();fixture.source.state.denied=true;await page.getByRole("button",{name:"Refresh source evidence",exact:true}).click();await expect(page.getByRole("alert").filter({hasText:"No access"})).toBeVisible();await expect(page.getByLabel("Invitation message",{exact:true})).toHaveCount(0);
@@ -66,7 +84,7 @@ test("source denial clears the protected composer and reader role cannot save",a
 
 test("finite batch filters withdraw selected cancellation and capacity units stay separate",async({page})=>{
   const w=await batch();await login(page);await page.goto(`/batches/${encodeURIComponent(w.run.runRef)}`);await page.getByRole("checkbox",{name:/Select Fictional creator/}).check();await expect(page.getByRole("button",{name:"Cancel selected unsent items",exact:true})).toBeEnabled();
-  await page.getByRole("button",{name:/Source:/}).click();await page.getByRole("radio",{name:"Social Cat",exact:true}).check();await page.keyboard.press("Escape");await expect(page.getByRole("button",{name:"Cancel selected unsent items",exact:true})).toBeDisabled();expect(page.url()).toContain("source=social-cat");
+  await page.getByRole("button",{name:/Source:/}).click();await page.getByRole("radio",{name:"Social Cat",exact:true}).click();await expect(page).toHaveURL(/source=social-cat/);await page.keyboard.press("Escape");await expect(page.getByRole("button",{name:"Cancel selected unsent items",exact:true})).toBeDisabled();expect(page.url()).toContain("source=social-cat");
   await page.getByRole("button",{name:"Capacity",exact:true}).click();expect(page.url()).toContain("tab=capacity");await expect(page.getByRole("table",{name:"Source capacity by native unit"})).toBeVisible();expect(fixture.owner.state.contexts).toHaveLength(0);
 });
 
