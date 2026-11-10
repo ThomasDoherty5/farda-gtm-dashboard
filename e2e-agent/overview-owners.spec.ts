@@ -1,4 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { overviewOwnersFixture } from "../src/creator-agent/analytics/overviewOwners.testkit.ts";
@@ -89,6 +90,8 @@ test("overview and actual creator, Operations, Finance and monitoring owners rec
     const monitor=(await (await monitorAnswer).json()).data;
     expect(monitor.selection).toEqual(d.domains!.activity.data!.selection);expect([monitor.views,monitor.rate,monitor.orders,monitor.net]).toEqual([d.domains!.activity.data!.views,d.domains!.activity.data!.rate,d.domains!.activity.data!.orders,d.domains!.activity.data!.net]);
     await expect(page.getByText("Observed views",{exact:true}).locator("..")).toContainText("500");await captures(page,info,"monitor");
-    await info.attach("overview-owner-reconciliation.json",{body:JSON.stringify({stage:"Synthetic actual HTTP/readers only",period:d.period,cohort:d.cohortRef,overview:d.domains,creatorTotals:{orders:creators.attributedOrders,net:creators.attributedNetSales},operations:ops.summaryBasis,finance:finance.summaryContext,monitor:{selection:monitor.selection,views:monitor.views,rate:monitor.rate,orders:monitor.orders,net:monitor.net}},null,2),contentType:"application/json"});
+    const proofPath=info.outputPath("overview-owner-reconciliation.json");
+    await writeFile(proofPath,JSON.stringify({stage:"Synthetic actual HTTP/readers only",period:d.period,cohort:d.cohortRef,overview:d.domains,creatorTotals:{orders:creators.attributedOrders,net:creators.attributedNetSales},operations:ops.summaryBasis,finance:finance.summaryContext,monitor:{selection:monitor.selection,views:monitor.views,rate:monitor.rate,orders:monitor.orders,net:monitor.net}},null,2));
+    await info.attach("overview-owner-reconciliation.json",{path:proofPath,contentType:"application/json"});
   } finally {await app.close();f.close();}
 });

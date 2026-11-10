@@ -178,7 +178,7 @@ describe("launch source handoffs", () => {
     await userEvent.click(screen.getByRole("button",{name:"Open date proposal"}));
     expect(screen.getByRole("link",{name:"Open verified date-approval workflow"})).toHaveAttribute("href","https://www.notion.so/fictional-date-workflow");
     expect(screen.getByText("Launch date is not set")).toBeInTheDocument();expect(h.requests).toHaveLength(0);
-    expect(JSON.stringify([Object.entries(sessionStorage),Object.entries(localStorage)])).not.toContain("Review verified sample acceptance");
+    expect(JSON.stringify([Object.entries(window.sessionStorage),Object.entries(window.localStorage)])).not.toContain("Review verified sample acceptance");
   });
   it("does not expose fixture navigation and clears the gate drilldown when its source revision changes", async () => {
     const h=harness(supplied("synthetic"));await screen.findByTestId("metric-gates");
@@ -186,7 +186,9 @@ describe("launch source handoffs", () => {
     expect(screen.queryByRole("link",{name:"Open task in source",hidden:true})).not.toBeInTheDocument();
     h.d.version="new-source-version";h.d.presentation!.recordVersion=h.d.version;
     await act(async()=>{await h.client.invalidateQueries();});
-    expect(screen.queryByText("Launch gate evidence",{selector:"h2"})).not.toBeInTheDocument();
+    const dialog=screen.getByText("Launch gate evidence",{selector:"h2"}).closest("dialog")!;
+    await waitFor(()=>expect(dialog).not.toHaveAttribute("open"));
+    expect(within(dialog).queryByText(h.d.gates[0]!.id,{exact:true})).not.toBeInTheDocument();
     expect(h.requests).toHaveLength(0);
   });
 });

@@ -1,4 +1,5 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { nativeAnalyticsFixture } from "../src/creator-agent/analytics/nativeFixtures.testkit.ts";
@@ -112,7 +113,9 @@ test("native order review, rights grants and timestamp disclosures preserve exac
     }
     expect(paid.assets.map(asset=>asset.rightsEvidence.state).sort()).toEqual(["available","expired","missing","stale"]);
     expect(writes).toEqual([]);
-    await info.attach("overview-detail-provenance.json",{body:JSON.stringify({stage:"Fictional actual HTTP readers; no provider writes",review,rights:paid.assets.map(asset=>({label:asset.label,rights:asset.rightsEvidence})),period:paid.period,sources:paid.sources},null,2),contentType:"application/json"});
+    const proofPath=info.outputPath("overview-detail-provenance.json");
+    await writeFile(proofPath,JSON.stringify({stage:"Fictional actual HTTP readers; no provider writes",review,rights:paid.assets.map(asset=>({label:asset.label,rights:asset.rightsEvidence})),period:paid.period,sources:paid.sources},null,2));
+    await info.attach("overview-detail-provenance.json",{path:proofPath,contentType:"application/json"});
   } finally {await app.close();}
 });
 

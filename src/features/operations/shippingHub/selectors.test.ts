@@ -87,7 +87,10 @@ describe("shipping report deep links", () => {
     const f={...HUB_DEFAULT_FILTERS,start:"2026-11-01T00:00:00Z",end:"2026-11-03T00:00:00Z",timezone:"UTC"};
     expect(new Set(filterShipments(rows,f,SHIPPING_DEMO_NOW).map(r=>r.id))).toEqual(new Set(rows.slice(0,2).map(r=>r.id)));
     const creator={...rows[0]!,recipient:{type:"creator" as const,ref:"fictional-creator",display:"Fictional creator",collaborationRef:"fictional-collaboration"},purpose:"sample" as const};
-    expect(filterShipments([creator,...rows.slice(1)],{...f,recipient:"creator",purpose:"sample"},SHIPPING_DEMO_NOW)).toEqual([creator]);
+    const otherPurpose={...creator,id:"fictional-reward",purpose:"reward" as const};
+    const otherRecipient={...creator,id:"fictional-customer",recipient:{type:"customer" as const,ref:"fictional-customer",display:"Fictional customer"}};
+    const outsidePeriod={...creator,id:"fictional-period-end",requestedAt:f.end};
+    expect(filterShipments([creator,otherPurpose,otherRecipient,outsidePeriod],{...f,recipient:"creator",purpose:"sample"},SHIPPING_DEMO_NOW)).toEqual([creator]);
   });
   it.each([{start:"bad"},{start:"2026-11-01T00:00:00Z"},{start:"2026-11-03T00:00:00Z",end:"2026-11-01T00:00:00Z",timezone:"UTC"},{start:"2026-11-01T00:00:00Z",end:"2026-11-03T00:00:00Z",timezone:"invalid-zone"}])("never silently widens a malformed period %j", patch => {
     const f={...HUB_DEFAULT_FILTERS,...patch};expect(shippingReportingPeriod(f).state).toBe("invalid");
