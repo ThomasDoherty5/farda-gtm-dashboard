@@ -182,6 +182,9 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
           if (!s || !m || moreSource.length || moreMirror.length || s.read !== "complete" || m.read !== "complete") continue;
           if (s.amountMinor !== m.amountMinor) raise(k, "both", "amount", g.dataset.amountField,
             { kind: "money", minorUnits: s.amountMinor, currency: g.currency }, { kind: "money", minorUnits: m.amountMinor, currency: g.currency });
+          // A mirrored field is compared only when the dataset declares it and the source vouches for its value.
+          if (g.dataset.mirroredFields?.includes("record-status") && s.status !== undefined && s.status !== "unknown" && s.status !== m.status) raise(k, "both", "field", "record-status",
+            { kind: "state", value: s.status }, m.status === undefined ? null : { kind: "state", value: m.status });
         }
       }
     }
