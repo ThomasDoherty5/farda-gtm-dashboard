@@ -61,8 +61,8 @@ export type MirrorPolicy = {
   checkEveryMinutes: number; staleAfterMinutes: number | null;
   /** Where the numbers came from. `proposed-default` values are not owner-approved. */
   basis: "proposed-default" | "configured";
-  /** False when the server has no mirror-freshness source configured. Every state is then `unknown`. */
-  sourceConfigured: boolean;
+  /** True only when a run recorder is explicitly bound to this mirror. Thresholds alone never bind one. Unbound is `unknown`. */
+  runsBound: boolean;
 };
 
 export const mirrorPolicyOverrideSchema = z.object({
@@ -72,21 +72,29 @@ export const mirrorPolicyOverrideSchema = z.object({
 export const mirrorPolicyOverridesSchema = z.object(Object.fromEntries(MIRROR_IDS.map(id => [id, mirrorPolicyOverrideSchema.optional()])) as Record<MirrorId, z.ZodOptional<typeof mirrorPolicyOverrideSchema>>).strict();
 export type MirrorPolicyOverrides = z.input<typeof mirrorPolicyOverridesSchema>;
 
+/** The mirrors that have a run recorder. It is explicit and never inferred from thresholds. */
+export const mirrorRunBindingSchema = z.array(z.enum(MIRROR_IDS)).max(MIRROR_IDS.length).refine(ids => new Set(ids).size === ids.length, "Duplicate mirror.");
+
 export class MirrorPolicyError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.code = code; }
 }
 
-/** Proposed defaults plus owner overrides. A check that runs less often than the threshold could miss a stale window, so it is refused. */
-export function resolveMirrorPolicies(overrides: MirrorPolicyOverrides = {}, sourceConfigured = true): Record<MirrorId, MirrorPolicy> {
+/**
+ * Proposed defaults plus owner overrides, and the explicit list of mirrors that have a run recorder. A check that runs less
+ * often than the threshold could miss a stale window, so it is refused.
+ */
+export function resolveMirrorPolicies(overrides: MirrorPolicyOverrides = {}, boundMirrors: readonly MirrorId[] = []): Record<MirrorId, MirrorPolicy> {
   const parsed = mirrorPolicyOverridesSchema.safeParse(overrides);
   if (!parsed.success) throw new MirrorPolicyError("INVALID_MIRROR_POLICY");
+  const bound = mirrorRunBindingSchema.safeParse(boundMirrors);
+  if (!bound.success) throw new MirrorPolicyError("INVALID_MIRROR_RUN_BINDING");
   return Object.fromEntries(MIRROR_IDS.map(mirrorId => {
     const base = PROPOSED_DEFAULT_MIRROR_POLICIES[mirrorId], override = parsed.data[mirrorId] ?? {};
     const policy: MirrorPolicy = { mirrorId, label: base.label, provider: base.provider,
       checkEveryMinutes: override.checkEveryMinutes ?? base.checkEveryMinutes,
       staleAfterMinutes: override.staleAfterMinutes === undefined ? base.staleAfterMinutes : override.staleAfterMinutes,
-      basis: Object.keys(override).length ? "configured" : "proposed-default", sourceConfigured };
+      basis: Object.keys(override).length ? "configured" : "proposed-default", runsBound: bound.data.includes(mirrorId) };
     if (policy.staleAfterMinutes !== null && policy.checkEveryMinutes > policy.staleAfterMinutes) throw new MirrorPolicyError("MIRROR_CHECK_SLOWER_THAN_THRESHOLD");
     return [mirrorId, policy];
   })) as Record<MirrorId, MirrorPolicy>;
@@ -122,7 +130,10 @@ export const mirrorRunSchema = z.object({
 });
 export type MirrorRun = z.infer<typeof mirrorRunSchema>;
 
-/** What classification reads: the latest finished run and the latest complete run. Both are public (ids, times, counts). */
+/**
+ * What classification reads: the latest finished run, and the complete run with the highest coverage watermark. Overlapping
+ * complete runs are all kept; the furthest proven coverage wins, whichever run finished last. Both are public (ids, times, counts).
+ */
 export type MirrorFreshnessEvidence = {
   latestRun: { runId: string; outcome: MirrorRun["outcome"]; finishedAt: string; reasonCode: string | null; counts: MirrorRun["counts"] } | null;
   lastComplete: { runId: string; finishedAt: string; coverageWatermark: string; rowsChanged: number } | null;
@@ -149,13 +160,13 @@ const parse = (value: string | null | undefined) => (value ? Date.parse(value) :
 export function classifyMirrorFreshness(policy: MirrorPolicy, evidence: MirrorFreshnessEvidence, at: number): MirrorClassification {
   const result = (state: MirrorFreshnessState, reasonCodes: string[], ageMinutes: number | null = null): MirrorClassification =>
     ({ state, reasonCodes: [...new Set(reasonCodes)], ageMinutes, valuesAreCurrent: HEALTHY_MIRROR_STATES.includes(state) });
-  if (!policy.sourceConfigured) return result("unknown", ["MIRROR_FRESHNESS_NOT_CONFIGURED"]);
+  if (!policy.runsBound) return result("unknown", ["MIRROR_RUNS_NOT_BOUND"]);
   const { latestRun, lastComplete } = evidence;
   const latestAt = parse(latestRun?.finishedAt), completeAt = parse(lastComplete?.finishedAt), watermark = parse(lastComplete?.coverageWatermark);
   const valid = Number.isSafeInteger(at) && at >= 0
     && (!latestRun || (Number.isFinite(latestAt) && latestAt <= at))
     && (!lastComplete || (!!latestRun && Number.isFinite(completeAt) && Number.isFinite(watermark) && watermark <= completeAt && completeAt <= latestAt))
-    && (latestRun?.outcome !== "complete" || lastComplete?.runId === latestRun.runId);
+    && (latestRun?.outcome !== "complete" || !!lastComplete);
   if (!valid) return result("unknown", ["INVALID_FRESHNESS_EVIDENCE"]);
   if (!latestRun) return result("neverSynced", ["MIRROR_NEVER_SYNCED"]);
   const ageMinutes = lastComplete ? Math.floor((at - watermark) / 60_000) : null;
@@ -176,7 +187,7 @@ export type MirrorFreshnessSummary = {
   mirrorId: MirrorId; label: string; provider: MirrorProvider;
   state: MirrorFreshnessState; reasonCodes: string[]; valuesAreCurrent: boolean; ageMinutes: number | null;
   checkedAt: string;
-  policy: Pick<MirrorPolicy, "checkEveryMinutes" | "staleAfterMinutes" | "basis" | "sourceConfigured">;
+  policy: Pick<MirrorPolicy, "checkEveryMinutes" | "staleAfterMinutes" | "basis" | "runsBound">;
   evidence: MirrorFreshnessEvidence;
 };
 
@@ -184,7 +195,7 @@ export function summarizeMirrorFreshness(policy: MirrorPolicy, evidence: MirrorF
   const c = classifyMirrorFreshness(policy, evidence, at);
   return { mirrorId: policy.mirrorId, label: policy.label, provider: policy.provider, ...c,
     checkedAt: new Date(Number.isSafeInteger(at) && at >= 0 ? at : 0).toISOString(),
-    policy: { checkEveryMinutes: policy.checkEveryMinutes, staleAfterMinutes: policy.staleAfterMinutes, basis: policy.basis, sourceConfigured: policy.sourceConfigured },
+    policy: { checkEveryMinutes: policy.checkEveryMinutes, staleAfterMinutes: policy.staleAfterMinutes, basis: policy.basis, runsBound: policy.runsBound },
     evidence };
 }
 
@@ -256,30 +267,41 @@ export function toD13SourceFreshness(summary: MirrorFreshnessSummary): { freshne
 export const MIRROR_INCIDENT_STATES = ["stale", "partial", "error", "neverSynced", "accessRevoked", "unknown"] as const;
 export type MirrorIncidentState = (typeof MIRROR_INCIDENT_STATES)[number];
 
-/** An unhealthy state raises an incident, except an unknown that only reflects missing owner configuration. */
+/**
+ * An unhealthy state raises an incident. A mirror with no bound run recorder, or with no owner threshold, is waiting on
+ * configuration and raises none, whatever its state.
+ */
 export function incidentStateOf(summary: MirrorFreshnessSummary): MirrorIncidentState | null {
+  if (!summary.policy.runsBound || summary.policy.staleAfterMinutes === null) return null;
   if (HEALTHY_MIRROR_STATES.includes(summary.state)) return null;
-  if (summary.state === "unknown" && summary.reasonCodes.every(code => code === "MIRROR_FRESHNESS_NOT_CONFIGURED" || code === "MIRROR_THRESHOLD_NOT_CONFIGURED")) return null;
   return summary.state as MirrorIncidentState;
 }
 
+export const MIRROR_INCIDENT_CLEAR_REASONS = ["healthyCompleteRun", "ownerThresholdPending"] as const;
+export type MirrorIncidentClearReason = (typeof MIRROR_INCIDENT_CLEAR_REASONS)[number];
 export type OpenMirrorIncident = { incidentId: string; mirrorId: MirrorId; state: MirrorIncidentState; openedAfterRunSequence: number };
-export type MirrorIncidentPlan = { open: MirrorIncidentState | null; suppress: string[]; clear: string[] };
+export type MirrorIncidentPlan = { open: MirrorIncidentState | null; suppress: string[]; clear: string[]; clearReason: MirrorIncidentClearReason | null };
 
 /**
- * One mirror, one check. A repeat of an open (mirror, state) incident is suppressed. An incident clears only when this
- * check is healthy and rests on a complete run recorded after the incident opened; anything else leaves it open.
+ * One mirror, one check. A repeat of an open (mirror, state) incident is suppressed. An incident clears only on a complete
+ * run recorded after it opened, and only when that check is either healthy (`healthyCompleteRun`) or the mirror has no
+ * owner threshold to judge it by (`ownerThresholdPending`). An unbound mirror neither opens nor clears anything.
  */
 export function planMirrorIncidents(summary: MirrorFreshnessSummary, open: readonly OpenMirrorIncident[], lastCompleteRunSequence: number | null): MirrorIncidentPlan {
+  const none: MirrorIncidentPlan = { open: null, suppress: [], clear: [], clearReason: null };
   const mine = open.filter(incident => incident.mirrorId === summary.mirrorId);
-  if (HEALTHY_MIRROR_STATES.includes(summary.state) && mirrorFreshnessStateOf(summary) === summary.state) {
-    return { open: null, suppress: [], clear: lastCompleteRunSequence === null ? []
-      : mine.filter(incident => lastCompleteRunSequence > incident.openedAfterRunSequence).map(incident => incident.incidentId) };
-  }
+  const trusted = mirrorFreshnessStateOf(summary) === summary.state;
+  const clearable = (clearReason: MirrorIncidentClearReason): MirrorIncidentPlan => {
+    const clear = lastCompleteRunSequence === null ? [] : mine.filter(incident => lastCompleteRunSequence > incident.openedAfterRunSequence).map(incident => incident.incidentId);
+    return { ...none, clear, clearReason: clear.length ? clearReason : null };
+  };
+  if (!summary.policy.runsBound || !trusted) return none;
+  if (summary.policy.staleAfterMinutes === null) return summary.evidence.lastComplete ? clearable("ownerThresholdPending") : none;
+  if (HEALTHY_MIRROR_STATES.includes(summary.state)) return clearable("healthyCompleteRun");
   const state = incidentStateOf(summary);
-  if (!state) return { open: null, suppress: [], clear: [] };
+  if (!state) return none;
   const repeat = mine.filter(incident => incident.state === state).map(incident => incident.incidentId);
-  return repeat.length ? { open: null, suppress: repeat, clear: [] } : { open: state, suppress: [], clear: [] };
+  return repeat.length ? { ...none, suppress: repeat } : { ...none, open: state };
 }
 
 /** The alert body. IDs, counts, times and reason codes only; the strict schema refuses anything else. */
@@ -297,6 +319,7 @@ export const mirrorIncidentPayloadSchema = z.object({
   occurrences: count.min(1),
   latestRunId: mirrorRefSchema.nullable(),
   clearedByRunId: mirrorRefSchema.nullable(),
+  clearReason: z.enum(MIRROR_INCIDENT_CLEAR_REASONS).nullable(),
   ageMinutes: count.nullable(),
   staleAfterMinutes: count.nullable(),
   counts: z.object({ rowsRead: count.nullable(), rowsChanged: count.nullable(), rowsExpected: count.nullable() }).strict().nullable(),

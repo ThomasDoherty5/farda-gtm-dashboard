@@ -161,8 +161,9 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
   runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
-  /** Mirror freshness thresholds (proposed defaults unless overridden). Unset means every mirror reads as unknown and the read is unavailable. */
-  mirrorFreshness?: Pick<MirrorFreshnessOptions, "policies">;
+  /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
+   * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
+  mirrorFreshness?: Pick<MirrorFreshnessOptions, "boundMirrors" | "policies">;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -256,7 +257,7 @@ export function createAgentServer(options: AgentServerOptions) {
       source: options.recruitmentSource, secret: operationsSecret, now: options.operations?.now });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
     if (options.mirrorFreshness) mirrorFreshness = new MirrorFreshnessRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
-      { policies: options.mirrorFreshness.policies, now: options.operations?.now });
+      { boundMirrors: options.mirrorFreshness.boundMirrors, policies: options.mirrorFreshness.policies, now: options.operations?.now });
     stockSupport = createStockSupportWorkflow(store.database,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
@@ -941,16 +942,17 @@ export function createAgentServer(options: AgentServerOptions) {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
           // Read-only classification at the current clock; incidents belong to the sweep, never to a read.
           const mirrors = mirrorFreshness ? mirrorFreshness.evaluate() : unconfiguredMirrorFreshness((options.operations?.now ?? Date.now)());
-          const data = { kind: "mirror-freshness" as const, configured: mirrorFreshness !== null, mirrors };
+          const bound = mirrors.filter(mirror => mirror.policy.runsBound).length;
+          const data = { kind: "mirror-freshness" as const, configured: bound > 0, mirrors };
           const observed = mirrors.filter(mirror => mirror.state !== "unknown").length;
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
-            dataState: mirrorFreshness ? "ready" : "unavailable", data,
+            dataState: bound === 0 ? "unavailable" : bound < mirrors.length ? "partial" : "ready", data,
             sourceFreshness: mirrors.flatMap(mirror => { const d13 = toD13SourceFreshness(mirror); return d13 ? [{ sourceRef: { source: "mirror:" + mirror.mirrorId,
               accountId: options.accountId, sourceId: null, canonicalId: null, url: null, identityState: "unresolved", provenanceRef: "mirror-freshness:" + mirror.mirrorId },
               observedAt: mirror.checkedAt, mirroredAt: mirror.evidence.lastComplete?.finishedAt ?? null, ...d13 }] : []; }),
             coverage: { expectedCount: mirrors.length, observedCount: observed, missingCount: mirrors.length - observed, complete: observed === mirrors.length,
-              reasonCodes: mirrorFreshness ? [] : ["MIRROR_FRESHNESS_NOT_CONFIGURED"] },
+              reasonCodes: bound < mirrors.length ? ["MIRROR_RUNS_NOT_BOUND"] : [] },
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "launchControl") {

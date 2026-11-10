@@ -11,7 +11,7 @@ import {
 
 const NOW = Date.parse("2027-02-10T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
-const policies = resolveMirrorPolicies();
+const policies = resolveMirrorPolicies({}, MIRROR_IDS);
 let n = 0;
 function run(mirrorId: MirrorId, outcome: MirrorRun["outcome"], finishedMinutesAgo: number, extra: Partial<MirrorRun> = {}): MirrorRun {
   return mirrorRunSchema.parse({ runId: `synthetic-run-${++n}`, mirrorId, startedAt: ago(finishedMinutesAgo + 2), finishedAt: ago(finishedMinutesAgo), outcome,
@@ -39,11 +39,11 @@ function matrix(): { name: string; mirrorId: MirrorId; latest: MirrorRun | null;
     { name: "QuickBooks ledger inside 26 hours", mirrorId: "finance", latest: ledger, complete: ledger, state: "current" },
     { name: "QuickBooks ledger past 26 hours", mirrorId: "finance", latest: oldLedger, complete: oldLedger, state: "stale" },
     { name: "registry without an approved threshold", mirrorId: "content", latest: registry, complete: registry, state: "unknown" },
-    { name: "no configured source", mirrorId: "orders", latest: current, complete: current, state: "unknown", configured: false },
+    { name: "thresholds set but no run recorder bound", mirrorId: "orders", latest: current, complete: current, state: "unknown", configured: false },
   ];
 }
 const summaryOf = (row: ReturnType<typeof matrix>[number]) =>
-  summarizeMirrorFreshness(row.configured === false ? resolveMirrorPolicies({}, false)[row.mirrorId] : policies[row.mirrorId], evidenceFrom(row.latest, row.complete), NOW);
+  summarizeMirrorFreshness(row.configured === false ? resolveMirrorPolicies({}, [])[row.mirrorId] : policies[row.mirrorId], evidenceFrom(row.latest, row.complete), NOW);
 
 describe("mirror freshness configuration (AC1)", () => {
   it("covers every mirror with proposed defaults: Sheets 1 hour, QuickBooks 26 hours, registries unset", () => {
@@ -64,6 +64,15 @@ describe("mirror freshness configuration (AC1)", () => {
     expect(() => resolveMirrorPolicies({ orders: { staleAfterMinutes: 0 } })).toThrow("INVALID_MIRROR_POLICY");
     expect(() => resolveMirrorPolicies({ orders: { staleAfterMinutes: 30, extra: 1 } as never })).toThrow("INVALID_MIRROR_POLICY");
     expect(() => resolveMirrorPolicies({ orders: { staleAfterMinutes: 10, checkEveryMinutes: 15 } })).toThrow("MIRROR_CHECK_SLOWER_THAN_THRESHOLD");
+    expect(() => resolveMirrorPolicies({}, ["orders", "orders"])).toThrow("INVALID_MIRROR_RUN_BINDING");
+    expect(() => resolveMirrorPolicies({}, ["invented"] as never)).toThrow("INVALID_MIRROR_RUN_BINDING");
+  });
+  it("binds run recorders explicitly: thresholds alone leave a mirror unknown, never never-synced", () => {
+    const thresholdsOnly = resolveMirrorPolicies({ orders: { staleAfterMinutes: 90 } });
+    for (const id of MIRROR_IDS) expect(thresholdsOnly[id].runsBound).toBe(false);
+    expect(classifyMirrorFreshness(thresholdsOnly.orders, evidenceFrom(null, null), NOW)).toEqual({ state: "unknown", reasonCodes: ["MIRROR_RUNS_NOT_BOUND"], ageMinutes: null, valuesAreCurrent: false });
+    const some = resolveMirrorPolicies({}, ["orders", "finance"]);
+    expect(MIRROR_IDS.filter(id => some[id].runsBound)).toEqual(["orders", "finance"]);
   });
 });
 
@@ -90,6 +99,14 @@ describe("mirror freshness classification (AC2, AC3)", () => {
     expect(mirrorRunSchema.safeParse({ ...base, coverageWatermark: null }).success).toBe(false);
     expect(mirrorRunSchema.safeParse({ ...base, counts: { ...base.counts, rowsChanged: null } }).success).toBe(false);
     expect(mirrorRunSchema.safeParse({ ...base, counts: { rowsRead: 3, rowsChanged: 0, rowsExpected: 4 } }).success).toBe(false);
+  });
+
+  it("reads the highest watermark when overlapping complete runs finish out of order", () => {
+    // B started earlier and finished later than A, so its proven coverage is older. A's coverage still counts.
+    const a = run("orders", "complete", 20, { coverageWatermark: ago(25) });
+    const b = run("orders", "complete", 10, { startedAt: ago(90), coverageWatermark: ago(90) });
+    expect(classify("orders", b, a)).toMatchObject({ state: "current", ageMinutes: 25 });
+    expect(classify("orders", b, b)).toMatchObject({ state: "stale", ageMinutes: 90 });
   });
 
   it("treats a successful complete run that found nothing new as current, not stale", () => {

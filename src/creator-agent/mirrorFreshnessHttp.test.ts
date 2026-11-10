@@ -50,11 +50,29 @@ describe("mirrorFreshness read", () => {
     expect(body.data!.configured).toBe(false);
     expect(body.data!.mirrors.map(m => m.mirrorId)).toEqual([...MIRROR_IDS]);
     for (const mirror of body.data!.mirrors) {
-      expect(mirror).toMatchObject({ state: "unknown", valuesAreCurrent: false, ageMinutes: null, reasonCodes: ["MIRROR_FRESHNESS_NOT_CONFIGURED"] });
+      expect(mirror).toMatchObject({ state: "unknown", valuesAreCurrent: false, ageMinutes: null, reasonCodes: ["MIRROR_RUNS_NOT_BOUND"] });
       expect(mirrorFreshnessBadge(mirror).state).toBe("unknown");
     }
     expect(body.sourceFreshness).toEqual([]);
-    expect(body.coverage).toEqual({ expectedCount: 7, observedCount: 0, missingCount: 7, complete: false, reasonCodes: ["MIRROR_FRESHNESS_NOT_CONFIGURED"] });
+    expect(body.coverage).toEqual({ expectedCount: 7, observedCount: 0, missingCount: 7, complete: false, reasonCodes: ["MIRROR_RUNS_NOT_BOUND"] });
+  });
+
+  it("does not treat thresholds alone as a bound run recorder", async () => {
+    await start({ mirrorFreshness: { policies: { orders: { staleAfterMinutes: 90 }, content: { staleAfterMinutes: 120 } } } });
+    const body = readResponseSchema(dataSchema).parse(await (await read()).json());
+    expect(body.dataState).toBe("unavailable");
+    expect(body.data!.configured).toBe(false);
+    for (const mirror of body.data!.mirrors) expect(mirror).toMatchObject({ state: "unknown", reasonCodes: ["MIRROR_RUNS_NOT_BOUND"] });
+    expect(body.sourceFreshness).toEqual([]);
+  });
+
+  it("is partial when only some mirrors have a run recorder", async () => {
+    await start({ mirrorFreshness: { boundMirrors: ["orders", "finance"] } });
+    const body = readResponseSchema(dataSchema).parse(await (await read()).json());
+    expect(body.dataState).toBe("partial");
+    expect(Object.fromEntries(body.data!.mirrors.map(m => [m.mirrorId, m.state]))).toEqual({ orders: "neverSynced", shipments: "unknown", stock: "unknown",
+      support: "unknown", finance: "neverSynced", content: "unknown", collaborations: "unknown" });
+    expect(body.coverage).toMatchObject({ expectedCount: 7, observedCount: 2, complete: false, reasonCodes: ["MIRROR_RUNS_NOT_BOUND"] });
   });
 
   it("enforces authentication, exact scope and the bounded request shape", async () => {
@@ -69,10 +87,10 @@ describe("mirrorFreshness read", () => {
   it("serves recorded runs with one state for the badge, the detail and the D-13 entry", async () => {
     const dir = mkdtempSync(join(tmpdir(), "farda-mirror-read-")); dirs.push(dir);
     const path = join(dir, "state.sqlite");
-    await start({ mirrorFreshness: { policies: { content: { staleAfterMinutes: 120 } } } }, path);
+    await start({ mirrorFreshness: { boundMirrors: MIRROR_IDS, policies: { content: { staleAfterMinutes: 120 } } } }, path);
     const db = new DatabaseSync(path);
     try {
-      const repo = new MirrorFreshnessRepository(db, scope, { now: () => NOW });
+      const repo = new MirrorFreshnessRepository(db, scope, { boundMirrors: MIRROR_IDS, now: () => NOW });
       const counts = (rowsChanged: number | null) => ({ rowsRead: 5, rowsChanged, rowsExpected: null });
       const run = (runId: string, mirrorId: string, outcome: string, minutesAgo: number, watermarkMinutesAgo: number | null, rowsChanged: number | null) => repo.recordRun({
         runId, mirrorId, startedAt: iso(minutesAgo + 1), finishedAt: iso(minutesAgo), outcome,
@@ -108,6 +126,8 @@ describe("mirrorFreshness read", () => {
 
   it("refuses an invalid threshold configuration at startup", () => {
     expect(() => createAgentServer({ databasePath: ":memory:", ...assetTestScope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      mirrorFreshness: { policies: { orders: { staleAfterMinutes: 5 } } } })).toThrow("MIRROR_CHECK_SLOWER_THAN_THRESHOLD");
+      mirrorFreshness: { boundMirrors: MIRROR_IDS, policies: { orders: { staleAfterMinutes: 5 } } } })).toThrow("MIRROR_CHECK_SLOWER_THAN_THRESHOLD");
+    expect(() => createAgentServer({ databasePath: ":memory:", ...assetTestScope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
+      mirrorFreshness: { boundMirrors: ["orders", "orders"] } })).toThrow("INVALID_MIRROR_RUN_BINDING");
   });
 });
