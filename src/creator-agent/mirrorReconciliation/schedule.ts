@@ -26,12 +26,24 @@ function offset(timezone: string, at: number) {
   return Date.UTC(w.year, w.month - 1, w.day, w.hour, w.minute, w.second) - Math.floor(at / 1000) * 1000;
 }
 
-/** The instant a local wall time occurs in a timezone. Two passes settle the offset across a DST change. */
+/**
+ * The instant a local wall time occurs in a timezone. A wall time that occurs twice resolves to the first occurrence. One
+ * that does not exist, such as midnight on a day whose DST change happens at midnight, resolves to the first instant at
+ * or after it.
+ */
 export function localInstant(timezone: string, date: string, minutes = 0): number {
   const [y, m, d] = date.split("-").map(Number) as [number, number, number];
   const naive = Date.UTC(y, m - 1, d) + minutes * MINUTE;
-  const first = naive - offset(timezone, naive);
-  return naive - offset(timezone, first);
+  const before = offset(timezone, naive - DAY), after = offset(timezone, naive + DAY);
+  const exact = [naive - before, naive - after].filter(t => naive - offset(timezone, t) === t).sort((a, b) => a - b);
+  if (exact.length) return exact[0]!;
+  // In a forward gap the wall clock jumps past `naive`; find the jump to the second.
+  let lo = Math.min(naive - before, naive - after), hi = Math.max(naive - before, naive - after);
+  while (hi - lo > 1000) {
+    const mid = lo + Math.max(1, Math.floor((hi - lo) / 2000)) * 1000;
+    if (mid + offset(timezone, mid) >= naive) hi = mid; else lo = mid;
+  }
+  return hi;
 }
 
 export function localDateAt(timezone: string, at: number): string {
