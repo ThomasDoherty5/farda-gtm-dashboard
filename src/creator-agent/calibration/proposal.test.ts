@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { approvalTestScope } from "../approvals/fixtures.testkit.ts";
 import { baselineEvidencePolicy, classifyPath, type PolicyChange } from "./contract.ts";
-import { applyChangeSet } from "./proposal.ts";
+import { applyChangeSet, inferenceRefusals } from "./proposal.ts";
 import { compareConfigs } from "./compare.ts";
 import { CalibrationRepository } from "./repository.ts";
 import { packetChangeInput, proposed, syntheticBasis, syntheticBasisResolver, syntheticCandidateSet } from "./fixtures.testkit.ts";
@@ -231,6 +231,44 @@ describe("no demographic, diagnosis or sales inference", () => {
     const { repo } = repository();
     const input = packetChangeInput(NOW, { rationale: "Keep likes over 200 and two publication dates; no audience data was used." });
     expect((await repo.createProposal(input, actor, "ordinary")).status).toBe("proposed");
+  });
+
+  it.each([
+    "Packs the case into a race day bag.",
+    "Rich leather trim on the strap.",
+    "Unisex tote with a padded laptop sleeve.",
+    "Fits a teens' size backpack.",
+    "The reviewer quoted the caption's claim that it helps with back pain, then rated the demo.",
+    "Raise the like gate to over 250 for aged-in-place reviews; sex-neutral wording in anchors.",
+    "No mature retained-sales cohorts exist yet.",
+  ])("passes ordinary product and gate language: %s", async text => {
+    expect(inferenceRefusals([text])).toEqual([]);
+    const { repo } = repository();
+    const set = syntheticCandidateSet(); set.label = text; set.candidates[0]!.label = text;
+    const input = packetChangeInput(NOW, { rationale: text, evidenceBasis: syntheticBasis({ limits: [text] }), candidateSet: set,
+      changes: [{ path: "packet.minIndependentPosts", before: 3, after: 2, rationale: text }] });
+    expect((await repo.createProposal(input, actor, "ordinary-text")).status).toBe("proposed");
+  });
+
+  it.each([
+    ["Creators with a likely diagnosis performed differently.", ["DIAGNOSIS_INFERENCE_REFUSED"]],
+    ["Lower the gate for creators of an apparent age under 25.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["This should raise expected sales across the cohort.", ["SALES_INFERENCE_REFUSED"]],
+    ["Routine fit judged from the creator's gender and ethnicity.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["Creators aged 30-40 respond better to a smaller packet.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["Synthetic creator with a medical condition", ["DIAGNOSIS_INFERENCE_REFUSED"]],
+    ["synthetic:pregnancy-cohort", ["DIAGNOSIS_INFERENCE_REFUSED"]],
+    ["Creators over 40 years old show higher purchase intent and revenue.", ["DEMOGRAPHIC_INFERENCE_REFUSED", "SALES_INFERENCE_REFUSED"]],
+    ["Pregnant creators aged 30-40, likely to buy", ["DEMOGRAPHIC_INFERENCE_REFUSED", "DIAGNOSIS_INFERENCE_REFUSED", "SALES_INFERENCE_REFUSED"]],
+    ["Shoppers with a diagnosis were excluded.", ["DIAGNOSIS_INFERENCE_REFUSED"]],
+    ["She looks about 35 years old.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["Built for new moms over 40.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["An older, mostly female audience.", ["DEMOGRAPHIC_INFERENCE_REFUSED"]],
+    ["A wealthy suburban audience with high income.", ["PURCHASING_POWER_INFERENCE_REFUSED"]],
+    ["Her followers can afford premium cases.", ["PURCHASING_POWER_INFERENCE_REFUSED"]],
+    ["The creator seems pregnant in the second clip.", ["DIAGNOSIS_INFERENCE_REFUSED"]],
+  ])("still refuses inference phrasing: %s", (text, codes) => {
+    expect(inferenceRefusals([text])).toEqual(codes);
   });
 
   it("has no schema field for audience, health or sales inputs, and accepts only synthetic candidates", async () => {

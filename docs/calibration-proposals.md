@@ -94,7 +94,11 @@ To record J04 outcome links, the J04 repository must be constructed with `verify
   - rollback reasons and limits;
   - candidate-set and candidate labels and references.
 
-  The screen refuses diagnosis, protected-demographic and sales-outcome wording. Unchanged baseline anchors are not screened, because the audience anchors legitimately name authorized aggregate age dimensions. The screen is a floor, not a classifier, and the named approver still reviews the text. To describe what a basis excludes, use general words such as "no audience data" rather than naming a category.
+  The screen refuses phrasing that infers health or diagnosis, demographics or life stage, purchasing power, or sales outcomes about a creator, audience or cohort. Examples are "seems pregnant", "about 35 years old", "creators aged 30-40", "new moms over 40", "older female audience", "high income", "followers can afford" and "expected sales".
+
+  It matches phrasing in context and never refuses on a single word. Ordinary product language such as "race day bag", "rich leather", "unisex tote" or "teens' size backpack" passes. Unchanged baseline anchors are not screened, because the audience anchors legitimately name authorized aggregate age dimensions. The screen is a floor, not a classifier, and the named approver still reviews the text.
+
+  The patterns follow the video-evidence screen (`videoEvidence/inferenceScreen.ts`). The two screens should stay aligned until they are shared.
 - **Approved v3 model unchanged.** Proposals may target only evidence-policy anchors and gates, never numeric weights. Model identities, weights, arithmetic and bands stay as approved.
 
 ## Comparison

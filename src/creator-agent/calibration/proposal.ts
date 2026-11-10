@@ -28,19 +28,49 @@ export function diffConfigs(from: EvidencePolicyConfig, to: EvidencePolicyConfig
 /**
  * Sensitive-inference guard over every free-text and reference field a person supplies in a proposal: rationales,
  * changed anchor text, basis limits and references, rollback reasons and limits, and candidate-set and candidate labels
- * and references. It refuses wording that names a health or diagnosis, protected-demographic or sales-outcome inference.
- * It is a floor, not a classifier: the named human approver still owns the review. Unchanged baseline anchors, which
- * name authorized aggregate audience dimensions, are not re-scanned.
+ * and references. It refuses phrasing that infers health or diagnosis, demographics or life stage, purchasing power or
+ * sales outcomes about a creator or audience. Unchanged baseline anchors, which name authorized aggregate audience
+ * dimensions, are not re-scanned.
+ *
+ * It matches inference phrasing in context, never single words, so ordinary product language ("race day bag",
+ * "rich leather", "unisex tote", "teens' size backpack") passes. The patterns follow the video-evidence screen
+ * (`videoEvidence/inferenceScreen.ts`); keep the two aligned until they are shared. This copy adds creators, shoppers and
+ * cohorts as subjects, "aged N-M" phrasing, judgments "based on" a protected attribute, health-named cohorts and in-context
+ * revenue claims. It is a floor, not a classifier: the named human approver still owns the review.
  */
+const PERSON = String.raw`(?:creators?|she|he|they|her|him|them|host|presenter|viewers?|audience|followers?|buyers?|shoppers?|people|women|men)`;
+const SEEMS = String.raw`(?:looks?|seems?|appears?|is|are|likely|probably|must be|might be|may be|could be|clearly|obviously)`;
+const GROUP = String.raw`(?:audience|viewers|followers|demographic|crowd|buyers|shoppers|women|men|moms|mums|mothers|parents|people|creators|cohort|segment)`;
+const HEALTH = String.raw`(?:pregnan\w*|ill|sick|disabled|diabetic|depressed|anxious|infertile|postpartum|menopausal|neurodivergent|autistic)`;
+const ATTRIBUTE = String.raw`(?:gender|ethnicity|race|religion|age|sexual orientation|nationality|health|diagnosis|income|disability)`;
+
 const PROHIBITED_INFERENCE: { code: string; pattern: RegExp }[] = [
-  { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: /\b(diagnos\w*|medical condition|health condition|disorder|illness|disabilit\w*|neurodivergen\w*|pregnan\w*)\b/i },
-  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\b(ethnic\w*|race|racial|religio\w*|sexual orientation|gender|sex|nationality|immigration status|age group|years old|apparent age|looks? (young|old|older|younger))\b|\baged?\s*(over|under)?\s*\d|\b\d+\s*-\s*\d+\s*(years|yrs|year-olds)\b/i },
-  { code: "SALES_INFERENCE_REFUSED", pattern: /\b(predicted sales|expected sales|sales (lift|uplift|forecast|potential)|revenue|conversion rate|gmv|purchase intent|likely to (buy|purchase|convert)|buying power|spending power)\b/i },
+  // Health or diagnosis attributed to a person, audience or cohort.
+  { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${SEEMS}\s+(?:\w+\s+){0,2}${HEALTH}\b`, "i") },
+  { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${PERSON}\s+(?:has|have|with|suffers? from|is living with|lives with)\s+(?:a\s+|an\s+)?(?:\w+\s+){0,2}(?:condition|disorder|illness|disease|disability|diagnosis)\b`, "i") },
+  { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: /\b(?:diagnos(?:ed|is|e)\s+(?:with|as)|undiagnosed)\b/i },
+  { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${HEALTH}[\s_-]+(?:${GROUP}|${PERSON}|households?|families)\b`, "i") },
+  // Demographics and life stage attributed to a person or audience.
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\b(?:about|around|roughly|approximately|maybe|likely|probably|looks?|seems?|appears?|over|under|above|below)\s+(?:\w+\s+){0,2}\d{1,2}\s*(?:years?\s+old|yrs?\s+old|year-olds?)\b/i },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\b\d{1,2}\s*(?:-|to)\s*\d{1,2}\s*(?:years?\s+old|year-olds?)\b|\bin\s+(?:her|his|their)\s+(?:early\s+|mid\s+|late\s+)?\d0s\b|\b\d0-somethings?\b|\b(?:apparent|perceived|estimated)\s+(?:age|gender|ethnicity|race)\b/i },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\baged\s+(?:over\s+|under\s+)?\d{1,2}(?:\s*(?:-|to)\s*\d{1,2}|\+)?\b(?!\s*(?:days?|weeks?|months?))/i },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b(?:new|expecting|pregnant|postpartum|first-time|young|older|single|stay-at-home)\s+(?:moms?|mums?|mothers?|dads?|parents?)\b|\b(?:moms?|mums?|mothers?|dads?|parents?|${GROUP})\s+(?:aged\s+|who are\s+)?(?:over|under|above|below)\s+\d{2}\b`, "i") },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b(?:older|younger|middle-aged|elderly|mature|teen(?:age)?|millennial|gen\s?z|boomer|female|male)\b[\w ,-]{0,30}\b${GROUP}\b`, "i") },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${GROUP}\s+(?:is|are|skews?|skewing|leans?|trends?)\s+(?:\w+\s+){0,2}(?:older|younger|female|male|teen\w*|middle-aged)\b`, "i") },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${SEEMS}\s+(?:\w+\s+){0,2}(?:asian|black|white|latin[ao]|latinx|hispanic|arab|gay|lesbian|straight|muslim|christian|jewish|hindu|immigrant)\b|\b(?:ethnicity|racial background|religious background|sexual orientation|immigration status|nationality)\s+(?:is|seems|appears|looks|of)\b`, "i") },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b(?:judged?|inferred?|based|estimated?|guessed?|assessed|scored|ranked)\s+(?:on|from|by)\s+(?:the\s+)?(?:\w+'s\s+|\w+\s+){0,2}${ATTRIBUTE}\b`, "i") },
+  // Purchasing power attributed to a person or audience.
+  { code: "PURCHASING_POWER_INFERENCE_REFUSED", pattern: /\b(?:high|low|middle|upper|lower)[- ]income\b|\b(?:purchasing|buying|spending) power\b|\bdisposable income\b|\b(?:upper|middle|working)[- ]class\b/i },
+  { code: "PURCHASING_POWER_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b(?:wealthy|affluent|well-off|well off|rich|budget-conscious|low-budget|high-spending)\b[\w ,-]{0,20}\b(?:${GROUP}|households?|creators?|family|families)\b|\b${PERSON}\s+(?:can|could|cannot|can't)\s+afford\b`, "i") },
+  { code: "PURCHASING_POWER_INFERENCE_REFUSED", pattern: new RegExp(String.raw`\b${PERSON}\s+${SEEMS}\s+(?:\w+\s+){0,2}(?:wealthy|affluent|well-off|rich|broke|low-income|high-income)\b`, "i") },
+  // Sales outcomes.
+  { code: "SALES_INFERENCE_REFUSED", pattern: /\b(?:predicted|expected|projected|forecast)\s+(?:sales|revenue|gmv|conversions?)\b|\b(?:sales|revenue|gmv) (?:lift|uplift|forecast|potential)\b|\bconversion rate\b|\bpurchase intent\b|\blikely to (?:buy|purchase|convert)\b/i },
+  { code: "SALES_INFERENCE_REFUSED", pattern: /\b(?:higher|more|increased?|greater|lower|less|drives?|boosts?|raises?)\s+(?:\w+\s+){0,2}(?:revenue|gmv|sales|conversions)\b/i },
 ];
 export function inferenceRefusals(texts: string[]): string[] {
   const codes = new Set<string>();
   for (const value of texts) for (const rule of PROHIBITED_INFERENCE) if (rule.pattern.test(value)) codes.add(rule.code);
-  return [...codes];
+  return [...codes].sort();
 }
 
 /** Applies an evidence-policy change set to a named baseline. Anything else is refused whole, never partially applied. */
