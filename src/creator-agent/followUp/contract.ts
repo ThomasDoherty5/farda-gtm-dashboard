@@ -111,7 +111,7 @@ export type FollowUpChannel = "creator-message" | "human-review";
  */
 export type SendPath = "j04Preview" | "workflowReminder" | "workflowHandoff";
 
-export const INTENT_STATES = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved",
+export const INTENT_STATES = ["proposed", "previewing", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved",
   "uncertain", "sent", "notSent", "superseded"] as const;
 export type IntentState = typeof INTENT_STATES[number];
 export type SupersededBy = "closure" | "dueDateChanged" | "stepAdvanced" | "outreachSuppressed";

@@ -9,6 +9,8 @@ import { closureEvidenceSchema, FOLLOW_UP_POLICY_VERSION, followUpConfigSchema, 
 import { decideClosure, decideReminder, dedupeKeyOf, localDay, type ReminderDecision, type ReminderInput } from "./policy.ts";
 import { applyReviewEvent, initialReviewState, type ReviewEvent, type ReviewState } from "./reviewMachine.ts";
 import { evaluatePaidReuse, type RightsGateResult } from "./rightsGate.ts";
+import { previewEnvelope } from "./envelopes.ts";
+import type { FoundationAction } from "../actions/wire.ts";
 
 export class FollowUpError extends Error {
   readonly code: string; readonly status: number;
@@ -38,14 +40,15 @@ const reviewEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("decided"), contentVersion: reference, outcome: z.enum(["approved", "revisionRequested", "rejected"]), reviewerRef: reference }).strict(),
 ]);
 /** Not yet sent or uncertain: these can still be withdrawn locally. Withdrawing does not cancel anything held elsewhere. */
-const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved", "uncertain"];
+const WITHDRAWABLE: IntentState[] = ["proposed", "previewing", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved", "uncertain"];
 /**
  * Where an intent may still be approved or run after it is withdrawn here. A J04 hold is not terminal and can
  * resume, so a held approval with a reference is live; a hold that never reached J04 is not.
  */
 export function liveElsewhere(intent: StoredIntent): "j04" | "workflow" | "uncertain" | null {
   if (intent.state === "uncertain") return "uncertain";
-  if (intent.state === "awaitingApproval" || intent.state === "dispatched" || intent.state === "approvalHeld" && intent.approvalRef !== null) return "j04";
+  // A reserved preview counts from before its submission, so a withdrawal during submission is never silent.
+  if (intent.state === "previewing" || intent.state === "awaitingApproval" || intent.state === "dispatched" || intent.state === "approvalHeld" && intent.approvalRef !== null) return "j04";
   // A reserved handoff counts from before its submission, so a withdrawal during submission is never silent.
   return intent.state === "handingOff" || intent.state === "handedOff" || intent.state === "workflowApproved" ? "workflow" : null;
 }
@@ -55,12 +58,12 @@ const SEND_PATH: Record<FollowUpStep, SendPath> = { "due-minus-2": "j04Preview",
 const NEXT_STATE: Record<SendOutcome["kind"], IntentState> = { approvalRecorded: "awaitingApproval", approvalHeld: "approvalHeld",
   dispatchPending: "dispatched", sent: "sent", notSent: "notSent", uncertain: "uncertain" };
 const ALLOWED_FROM: Record<SendOutcome["kind"], IntentState[]> = {
-  approvalRecorded: ["proposed", "awaitingApproval", "approvalHeld"],
-  approvalHeld: ["proposed", "awaitingApproval", "approvalHeld"],
-  dispatchPending: ["proposed", "awaitingApproval", "dispatched"],
-  sent: ["proposed", "awaitingApproval", "dispatched", "uncertain"],
-  notSent: ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
-  uncertain: ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
+  approvalRecorded: ["previewing", "awaitingApproval", "approvalHeld"],
+  approvalHeld: ["previewing", "awaitingApproval", "approvalHeld"],
+  dispatchPending: ["previewing", "awaitingApproval", "dispatched"],
+  sent: ["previewing", "awaitingApproval", "dispatched", "uncertain"],
+  notSent: ["previewing", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
+  uncertain: ["previewing", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
 };
 
 /**
@@ -87,8 +90,11 @@ export class FollowUpRepository {
       CREATE TABLE IF NOT EXISTS creator_follow_up_requests(request_key TEXT PRIMARY KEY,request_digest TEXT NOT NULL,receipt TEXT NOT NULL);`);
   }
 
-  /** One locked, idempotent write. The clock is read inside the lock, so a waiting writer cannot use a stale time. */
-  private once<T>(kind: string, key: string, input: unknown, work: (at: number) => T): T {
+  /**
+   * One locked, idempotent write. The clock is read inside the lock, so a waiting writer cannot use a stale time.
+   * `replay`, when given, re-validates a stored receipt against current state inside the same lock.
+   */
+  private once<T>(kind: string, key: string, input: unknown, work: (at: number) => T, replay?: (stored: T) => T): T {
     if (!reference.safeParse(key).success) throw new FollowUpError("IDEMPOTENCY_KEY_REQUIRED", 400);
     const requestDigest = digest([this.scope, kind, input]);
     this.db.exec("BEGIN IMMEDIATE");
@@ -96,7 +102,8 @@ export class FollowUpRepository {
       const prior = this.db.prepare("SELECT request_digest,receipt FROM creator_follow_up_requests WHERE request_key=?").get(key);
       if (prior) {
         if (prior.request_digest !== requestDigest) throw new FollowUpError("IDEMPOTENCY_KEY_REUSED");
-        this.db.exec("COMMIT"); return JSON.parse(String(prior.receipt)) as T;
+        const stored = JSON.parse(String(prior.receipt)) as T, result = replay ? replay(stored) : stored;
+        this.db.exec("COMMIT"); return result;
       }
       const at = this.now();
       if (!Number.isFinite(at)) throw new FollowUpError("INVALID_CLOCK", 500);
@@ -230,6 +237,7 @@ export class FollowUpRepository {
         return { state: "conflict", intent, conflict };
       }
       if (intent.state === "sent" || intent.state === "notSent") throw new FollowUpError("INTENT_TERMINAL");
+      if (intent.state === "proposed") throw new FollowUpError("INTENT_NOT_RESERVED");
       const value = <K extends "approvalRef" | "manifestRef" | "runRef" | "runVersion">(field: K) => (field in outcome ? (outcome as Record<K, string | null>)[field] : null);
       const bound = (["approvalRef", "manifestRef", "runRef", "runVersion"] as const).every(field => value(field) === null || intent[field] === null || intent[field] === value(field));
       if (!bound) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
@@ -246,6 +254,45 @@ export class FollowUpRepository {
       this.writeIntent(next);
       return { state: "recorded", intent: next };
     });
+  }
+
+  /** The account scope this repository is bound to, for building envelopes. */
+  boundScope(): OperationsScope { return { ...this.scope }; }
+
+  /**
+   * Reserves a `preDue` reminder for J04 and returns its preview envelope, in one locked transaction. It re-reads the
+   * intent, requires `proposed` on the `j04Preview` path, and moves it to `previewing`, which counts as live in J04.
+   * Another key for the same intent is refused. The same key returns the same envelope only while the intent is
+   * still `previewing`; once it is withdrawn or moves on, the replay is refused too.
+   */
+  reservePreview(intentRef: string, idempotencyKey: string, context: { requestId: string }): { intent: StoredIntent; action: FoundationAction } {
+    reference.parse(intentRef); reference.parse(context.requestId);
+    const build = (intent: StoredIntent) => ({ intent, action: previewEnvelope(intent, this.scope, context.requestId) });
+    return this.once("reservePreview", idempotencyKey, intentRef, at => {
+      const intent = this.intentRow("intent_ref=?", intentRef);
+      if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
+      if (intent.sendPath !== "j04Preview") throw new FollowUpError("INTENT_NOT_ON_J04_PATH");
+      if (intent.state !== "proposed") throw new FollowUpError(intent.state === "previewing" ? "INTENT_ALREADY_RESERVED" : "INTENT_NOT_PROPOSED");
+      const next: StoredIntent = { ...intent, state: "previewing", updatedAt: new Date(at).toISOString() };
+      this.writeIntent(next);
+      return build(next);
+    }, () => {
+      const intent = this.intentRow("intent_ref=?", intentRef);
+      if (!intent || intent.state !== "previewing") throw new FollowUpError("INTENT_NOT_PREVIEWING");
+      return build(intent);
+    });
+  }
+
+  /**
+   * For the J04 registration's current-draft check: throws unless the intent is still on the J04 path, at this exact
+   * version, and not withdrawn or settled.
+   */
+  assertJ04Current(intentRef: string, intentVersion: string): void {
+    const intent = this.intentRow("intent_ref=?", intentRef);
+    if (!intent || intent.sendPath !== "j04Preview") throw new FollowUpError("RECORD_NOT_FOUND", 404);
+    if (intent.state === "superseded") throw new FollowUpError("INTENT_WITHDRAWN");
+    if (intent.intentVersion !== intentVersion) throw new FollowUpError("INTENT_VERSION_CHANGED");
+    if (!["previewing", "awaitingApproval", "approvalHeld", "dispatched"].includes(intent.state)) throw new FollowUpError("INTENT_NOT_IN_J04");
   }
 
   /**
@@ -384,13 +431,13 @@ export class FollowUpRepository {
       .map(row => JSON.parse(String(row.body)) as OutcomeConflict);
   }
   /**
-   * Intents whose outcome is unknown, oldest first: uncertain, reserved but unanswered, or withdrawn from either state
+   * Intents whose outcome is unknown, oldest first: uncertain, reserved but unanswered on either path, or withdrawn from such a state
    * while its conflict is open. Each needs a reconciliation lookup before anything else happens.
    */
   pendingReconciliation(limit = 50): StoredIntent[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new FollowUpError("INVALID_LIST_LIMIT", 422);
-    return this.db.prepare(`SELECT i.body FROM creator_follow_up_intents i WHERE i.state IN ('uncertain','handingOff')
-        OR i.state='superseded' AND json_extract(i.body,'$.supersededFrom') IN ('uncertain','handingOff')
+    return this.db.prepare(`SELECT i.body FROM creator_follow_up_intents i WHERE i.state IN ('uncertain','handingOff','previewing')
+        OR i.state='superseded' AND json_extract(i.body,'$.supersededFrom') IN ('uncertain','handingOff','previewing')
           AND EXISTS(SELECT 1 FROM creator_follow_up_outcome_conflicts c WHERE c.intent_ref=i.intent_ref AND c.resolved=0)
       ORDER BY i.updated_at,i.intent_ref LIMIT ?`).all(limit).map(row => JSON.parse(String(row.body)) as StoredIntent);
   }
