@@ -51,9 +51,17 @@ export const checkScheduleSchema = z.object({
 export type CheckSchedule = z.infer<typeof checkScheduleSchema>;
 export type ExpectedDataset = z.infer<typeof expectedDatasetSchema>;
 
-/** One source or mirror row. `read` is the row-level coverage flag: a partial row was seen but its amount is not trusted. */
+/** Values of the mirrored `record-status` field, as the conflict schema's `state` value carries them. */
+export const RECORD_STATUSES = ["open", "closed", "pending", "confirmed", "unknown"] as const;
+export type RecordStatus = (typeof RECORD_STATUSES)[number];
+
+/**
+ * One source or mirror row. `read` is the row-level coverage flag: a partial row was seen but its amount is not trusted.
+ * `status` is an optional mirrored field. It is compared only when the source row carries a known status.
+ */
 export const reconciliationRowSchema = z.object({
   key: ref(200), scope: ref(80), grain: z.enum(GRAINS), period: localDate, currency, amountMinor: minorUnits,
+  status: z.enum(RECORD_STATUSES).optional(),
   read: z.enum(["complete", "partial"]),
 }).strict();
 export type ReconciliationRow = z.infer<typeof reconciliationRowSchema>;
