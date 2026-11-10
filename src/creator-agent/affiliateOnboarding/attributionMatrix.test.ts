@@ -54,6 +54,16 @@ describe("J10-07 sandbox checkout attribution matrix", () => {
     expect(() => evaluateAttributionMatrix([{ ...f.order("linkOnly"), environment: "production" }], context())).toThrow();
   });
 
+  it("never lets one passing order hide a failing order in the same case", () => {
+    const f = onboardingFixture();
+    const uncredited = f.order("linkOnly", { orderRef: providerRef("synthetic-order-linkOnly-2"), sourceRef: "synthetic-sandbox-linkOnly-2",
+      providerCredit: { state: "notCredited", relationshipSourceId: null, via: null } });
+    const result = evaluateAttributionMatrix([...f.passingOrders(), uncredited], context());
+    expect(result.cases.linkOnly).toBe("fail");
+    expect(result.overall).toBe("failed");
+    expect(result.websiteCommerce.test).toBeNull();
+  });
+
   it("preserves unknown refund representation as unknown, not zero", () => {
     const f = onboardingFixture();
     const refund = f.order("refund", { refund: { state: "unknown", unknownReason: "Refund not yet visible in the sandbox export" } });

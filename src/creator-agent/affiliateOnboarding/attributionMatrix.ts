@@ -114,13 +114,15 @@ function eligibleOf(order: SandboxOrder): Money | null {
   return order.refund.state === "unknown" ? null : order.amounts.eligible;
 }
 
-/** Each case's state is its best row: one passing row passes it; an exception outranks a failure or an unknown. */
+/**
+ * Each case's state is its worst counted row: an exception outranks a failure, a failure outranks an unknown, and an
+ * unknown outranks a pass. One passing order never hides another order that failed. Excluded mirrors are not counted.
+ */
 function caseState(rows: RowResult[]): MatrixResult["cases"][MatrixCase] {
-  if (!rows.length) return "missing";
-  if (rows.some(r => r.state === "exception")) return "exception";
-  if (rows.some(r => r.state === "pass")) return "pass";
-  if (rows.some(r => r.state === "fail")) return "fail";
-  return rows.every(r => r.state === "excluded") ? "missing" : "unknown";
+  const counted = rows.filter(r => r.state !== "excluded");
+  if (!counted.length) return "missing";
+  for (const state of ["exception", "fail", "unknown"] as const) if (counted.some(r => r.state === state)) return state;
+  return "pass";
 }
 
 export function evaluateAttributionMatrix(rawOrders: unknown, ctx: MatrixContext): MatrixResult {
