@@ -20,10 +20,11 @@ const DAY = "2027-02-11";
 const dirs: string[] = [];
 afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
-const row = (key: string, amountMinor: number): ReconciliationRow =>
-  ({ key, scope: "synthetic-store-a", grain: "order", period: DAY, currency: "GBP", amountMinor, read: "complete" });
-const read = (side: ReadCoverage["side"], state: ReadCoverage["state"] = "complete"): ReadCoverage =>
-  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v1`, readAt: "2027-02-12T05:00:00Z" });
+const SECRET = "synthetic-test-secret-0123456789abcdef";
+const row = (key: string, amountMinor: number, extra: Partial<ReconciliationRow> = {}): ReconciliationRow =>
+  ({ key, scope: "synthetic-store-a", grain: "order", period: DAY, currency: "GBP", amountMinor, read: "complete", ...extra });
+const read = (side: ReadCoverage["side"], state: ReadCoverage["state"] = "complete", extra: Partial<ReadCoverage> = {}): ReadCoverage =>
+  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v1`, readAt: "2027-02-12T05:00:00Z", ...extra });
 const input = (runId: string, extra: Partial<CheckInput> = {}): CheckInput => ({ runId, checkId: schedule.checkId, scheduleVersion: 1,
   periods: [DAY], coverage: [read("source"), read("mirror")], sourceRows: [], mirrorRows: [], ...extra });
 const twoDifferences = { sourceRows: [row("order-1", 1000), row("order-2", 500)], mirrorRows: [row("order-1", 900)] };
@@ -33,7 +34,7 @@ function setup(path = ":memory:") {
   db.exec("CREATE TABLE IF NOT EXISTS capability_scope(id INTEGER PRIMARY KEY,workspace_id TEXT,account_id TEXT,environment TEXT)");
   db.prepare("INSERT OR IGNORE INTO capability_scope VALUES(1,?,?,?)").run(scope.workspaceId, scope.accountId, scope.environment);
   const clock = { at: START, reads: 0 };
-  const repo = new MirrorReconciliationRepository(db, scope, { now: () => { clock.reads++; return clock.at; } });
+  const repo = new MirrorReconciliationRepository(db, scope, { secret: SECRET, now: () => { clock.reads++; return clock.at; } });
   return { db, repo, clock };
 }
 const count = (db: InstanceType<typeof DatabaseSync>, table: string) => Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get()!.n);
@@ -41,7 +42,8 @@ const count = (db: InstanceType<typeof DatabaseSync>, table: string) => Number(d
 describe("mirror reconciliation repository", () => {
   it("refuses a database bound to another scope", () => {
     const { db } = setup();
-    expect(() => new MirrorReconciliationRepository(db, { ...scope, accountId: "synthetic-other" })).toThrow("DATABASE_SCOPE_MISMATCH");
+    expect(() => new MirrorReconciliationRepository(db, { ...scope, accountId: "synthetic-other" }, { secret: SECRET })).toThrow("DATABASE_SCOPE_MISMATCH");
+    expect(() => new MirrorReconciliationRepository(db, scope, { secret: "" })).toThrow("INVALID_RECONCILIATION_SECRET");
   });
 
   it("AC1: stores the schedule record by version, replays it and refuses reuse or an older version", () => {
@@ -134,7 +136,8 @@ describe("mirror reconciliation repository", () => {
     expect(repo.latestSlice(schedule.checkId)).toBeNull();
     repo.recordCheck(input("synthetic-run-1", twoDifferences));
     const slice = repo.latestSlice(schedule.checkId)!;
-    expect(slice).toMatchObject({ outcome: "differences", truncated: false });
+    expect(slice).toMatchObject({ outcome: "differences", truncated: false, coverage: "complete", openFindings: 2, unconfirmedOpenFindings: 0 });
+    expect(slice.conflicts).toHaveLength(2);
     const parsed = operationsControlSourceSchema.safeParse({ scope: { ...scope }, revision: "synthetic-revision-1", observedAt: slice.observedAt,
       coverage: "complete", roles: [], tasks: [], takeovers: [], permissions: [], reports: [], attribution: [], handoffs: [],
       comparisons: slice.comparisons, conflicts: slice.conflicts });
@@ -164,7 +167,61 @@ describe("mirror reconciliation repository", () => {
 
   it("refuses an invalid clock", () => {
     const { db } = setup();
-    const repo = new MirrorReconciliationRepository(db, scope, { now: () => Number.NaN });
+    const repo = new MirrorReconciliationRepository(db, scope, { secret: SECRET, now: () => Number.NaN });
     expect(() => repo.saveSchedule(schedule)).toThrow("INVALID_RECONCILIATION_CLOCK");
+  });
+
+  it("clears an orphan once a complete mirror read no longer has it", () => {
+    const { repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    const retiredRead = read("mirror", "complete", { scope: "synthetic-retired-store" });
+    const o1 = repo.recordCheck(input("o1", { coverage: [read("source"), read("mirror"), retiredRead],
+      mirrorRows: [row("X1", 10, { scope: "synthetic-retired-store" })] }));
+    expect(o1.raised.map(f => f.conflict.category)).toEqual(["orphan"]);
+    clock.at += 60_000;
+    const o2 = repo.recordCheck(input("o2", { coverage: [read("source"), read("mirror"), retiredRead] }));
+    expect(o2).toMatchObject({ cleared: [o1.raised[0]!.fingerprint], run: { outcome: "matched", dispositions: { cleared: 1 } } });
+    expect(repo.findings(schedule.checkId, "open")).toEqual([]);
+    expect(repo.latestSlice(schedule.checkId)).toMatchObject({ coverage: "complete", openFindings: 0 });
+  });
+
+  it("does not let a run with older reads clear or reopen a finding, whatever order runs are recorded in", () => {
+    const { repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    const at = (readAt: string) => [read("source", "complete", { readAt }), read("mirror", "complete", { readAt })];
+    const n1 = repo.recordCheck(input("n1", { coverage: at("2027-02-12T05:30:00Z"), ...twoDifferences }));
+    expect(n1.raised).toHaveLength(2);
+    clock.at += 60_000;
+    const n0 = repo.recordCheck(input("n0", { coverage: at("2027-02-12T05:00:00Z"), sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 1000)] }));
+    expect(n0).toMatchObject({ cleared: [], run: { outcome: "matched", dispositions: { cleared: 0, stale: 2 } } });
+    expect(repo.findings(schedule.checkId, "open").map(f => f.basis)).toEqual([
+      { source: "2027-02-12T05:30:00.000Z", mirror: "2027-02-12T05:30:00.000Z" }, { source: "2027-02-12T05:30:00.000Z", mirror: "2027-02-12T05:30:00.000Z" }]);
+    expect(repo.runFindings("n0").map(f => f.disposition)).toEqual(["stale", "stale"]);
+    // The matched but older run is the latest recorded; the slice still shows the open findings and is not complete.
+    expect(repo.latestSlice(schedule.checkId)).toMatchObject({ outcome: "matched", coverage: "partial", openFindings: 2, unconfirmedOpenFindings: 2 });
+    expect(repo.latestSlice(schedule.checkId)!.conflicts).toHaveLength(2);
+
+    clock.at += 60_000;
+    const n2 = repo.recordCheck(input("n2", { coverage: at("2027-02-12T05:45:00Z"), sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 1000)] }));
+    expect(n2.cleared).toHaveLength(2);
+    clock.at += 60_000;
+    // An even older run that still sees the differences cannot reopen what a newer read cleared.
+    const late = repo.recordCheck(input("late", { coverage: at("2027-02-12T05:10:00Z"), ...twoDifferences }));
+    expect(late).toMatchObject({ raised: [], run: { dispositions: { reopened: 0, stale: 2 } } });
+    expect(repo.findings(schedule.checkId, "open")).toEqual([]);
+  });
+
+  it("keeps findings from a period outside the latest run open and counted in the slice", () => {
+    const { repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    repo.recordCheck(input("synthetic-run-1", twoDifferences));
+    clock.at += 24 * 3_600_000;
+    const next = "2027-02-12";
+    const later = (side: ReadCoverage["side"]) => read(side, "complete", { period: next, readAt: "2027-02-13T05:00:00Z" });
+    const run = repo.recordCheck(input("synthetic-run-2", { periods: [next], coverage: [later("source"), later("mirror")] }));
+    expect(run.run).toMatchObject({ outcome: "matched", dispositions: { cleared: 0 } });
+    expect(repo.findings(schedule.checkId, "open")).toHaveLength(2);
+    const slice = repo.latestSlice(schedule.checkId)!;
+    expect(slice).toMatchObject({ outcome: "matched", coverage: "partial", openFindings: 2, unconfirmedOpenFindings: 2, conflicts: [] });
   });
 });

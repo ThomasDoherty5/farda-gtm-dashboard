@@ -4,10 +4,11 @@ import type { OperationsScope } from "../operations.ts";
 import { compareMirror, toOperationsControlSlice } from "./comparator.ts";
 import {
   MirrorReconciliationError, checkInputSchema, checkScheduleSchema,
-  type CheckResult, type CheckSchedule, type ReconciliationConflict, type ReconciliationFinding,
+  type CheckResult, type CheckSchedule, type ComparisonResult, type GroupRef, type ReconciliationConflict, type ReconciliationFinding,
 } from "./contract.ts";
 
-export type FindingDisposition = "opened" | "repeated" | "reopened" | "cleared";
+/** `stale`: the run's reads of the group were older than those behind the finding's state, so its clear or reopen was ignored. */
+export type FindingDisposition = "opened" | "repeated" | "reopened" | "cleared" | "stale";
 export type StoredRun = CheckResult & { sequence: number; dispositions: Record<FindingDisposition, number> };
 export type RecordedCheck = {
   run: StoredRun;
@@ -18,21 +19,37 @@ export type RecordedCheck = {
   cleared: string[];
 };
 export type StoredFinding = {
-  fingerprint: string; checkId: string; comparisonId: string; category: ReconciliationConflict["category"]; recordKey: string;
+  fingerprint: string; checkId: string; comparisonId: string; group: GroupRef; category: ReconciliationConflict["category"]; recordKey: string;
   status: "open" | "cleared"; occurrences: number; firstRunId: string; lastRunId: string; clearedByRunId: string | null;
-  firstSeenAt: string; lastSeenAt: string; clearedAt: string | null; conflict: ReconciliationConflict;
+  firstSeenAt: string; lastSeenAt: string; clearedAt: string | null;
+  /** The newest reads, per side, behind the finding's current state. A run with older reads cannot clear or reopen it. */
+  basis: Reads; conflict: ReconciliationConflict;
 };
-export type MirrorReconciliationOptions = { now?: () => number };
+export type MirrorReconciliationOptions = {
+  /** Server-held key for public ids, such as the operations secret from `loadOperationsSecret`. */
+  secret: string;
+  now?: () => number;
+};
+type Reads = ComparisonResult["reads"];
+const SIDES = ["source", "mirror"] as const;
+/** True when any side of `reads` is older than, or unknown against, a known side of `basis`. */
+const olderThan = (reads: Reads, basis: Reads) =>
+  SIDES.some(side => basis[side] !== null && (reads[side] === null || Date.parse(reads[side]!) < Date.parse(basis[side]!)));
+const newest = (a: Reads, b: Reads): Reads => Object.fromEntries(SIDES.map(side =>
+  [side, a[side] === null ? b[side] : b[side] === null ? a[side] : Date.parse(a[side]!) >= Date.parse(b[side]!) ? a[side] : b[side]])) as Reads;
 
 type Row = Record<string, unknown>;
 const runFrom = (r: Row): StoredRun => ({ ...(JSON.parse(String(r.body)) as Omit<StoredRun, "sequence">), sequence: Number(r.sequence) });
+const basisFrom = (r: Row): Reads => ({ source: r.basis_source_read_at === null ? null : String(r.basis_source_read_at),
+  mirror: r.basis_mirror_read_at === null ? null : String(r.basis_mirror_read_at) });
 const findingFrom = (r: Row): StoredFinding => ({
   fingerprint: String(r.fingerprint), checkId: String(r.check_id), comparisonId: String(r.comparison_id),
+  group: { scope: String(r.scope), grain: String(r.grain) as GroupRef["grain"], period: String(r.period), currency: String(r.currency) },
   category: String(r.category) as StoredFinding["category"], recordKey: String(r.record_key), status: String(r.status) as StoredFinding["status"],
   occurrences: Number(r.occurrences), firstRunId: String(r.first_run_id), lastRunId: String(r.last_run_id),
   clearedByRunId: r.cleared_by_run_id === null ? null : String(r.cleared_by_run_id), firstSeenAt: String(r.first_seen_at),
   lastSeenAt: String(r.last_seen_at), clearedAt: r.cleared_at === null ? null : String(r.cleared_at),
-  conflict: JSON.parse(String(r.conflict)) as ReconciliationConflict,
+  basis: basisFrom(r), conflict: JSON.parse(String(r.conflict)) as ReconciliationConflict,
 });
 
 /**
@@ -40,9 +57,10 @@ const findingFrom = (r: Row): StoredFinding => ({
  * `BEGIN IMMEDIATE` transaction that reads the injected clock after the lock is held.
  */
 export class MirrorReconciliationRepository {
-  readonly db: DatabaseSync; readonly now: () => number;
-  constructor(db: DatabaseSync, scope: OperationsScope, options: MirrorReconciliationOptions = {}) {
-    this.db = db; this.now = options.now ?? Date.now;
+  readonly db: DatabaseSync; readonly now: () => number; private readonly secret: string;
+  constructor(db: DatabaseSync, scope: OperationsScope, options: MirrorReconciliationOptions) {
+    if (typeof options.secret !== "string" || options.secret.length < 32) throw new MirrorReconciliationError("INVALID_RECONCILIATION_SECRET", 500);
+    this.db = db; this.now = options.now ?? Date.now; this.secret = options.secret;
     const bound = db.prepare("SELECT workspace_id,account_id,environment FROM capability_scope WHERE id=1").get();
     if (!bound || scope.workspaceId !== bound.workspace_id || scope.accountId !== bound.account_id || scope.environment !== bound.environment)
       throw new MirrorReconciliationError("DATABASE_SCOPE_MISMATCH", 403);
@@ -53,12 +71,13 @@ export class MirrorReconciliationRepository {
         outcome TEXT NOT NULL CHECK(outcome IN ('matched','differences','incomplete')),body TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS mirror_reconciliation_runs_check ON mirror_reconciliation_runs(check_id,sequence);
       CREATE TABLE IF NOT EXISTS mirror_reconciliation_findings(fingerprint TEXT PRIMARY KEY,check_id TEXT NOT NULL,comparison_id TEXT NOT NULL,
+        scope TEXT NOT NULL,grain TEXT NOT NULL,period TEXT NOT NULL,currency TEXT NOT NULL,
         category TEXT NOT NULL,record_key TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','cleared')),occurrences INTEGER NOT NULL,
         first_run_id TEXT NOT NULL,last_run_id TEXT NOT NULL,cleared_by_run_id TEXT,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,
-        cleared_at TEXT,conflict TEXT NOT NULL);
+        cleared_at TEXT,basis_source_read_at TEXT,basis_mirror_read_at TEXT,conflict TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS mirror_reconciliation_findings_open ON mirror_reconciliation_findings(check_id,comparison_id,status);
       CREATE TABLE IF NOT EXISTS mirror_reconciliation_run_findings(run_id TEXT NOT NULL,fingerprint TEXT NOT NULL,
-        disposition TEXT NOT NULL CHECK(disposition IN ('opened','repeated','reopened','cleared')),PRIMARY KEY(run_id,fingerprint));`);
+        disposition TEXT NOT NULL CHECK(disposition IN ('opened','repeated','reopened','cleared','stale')),PRIMARY KEY(run_id,fingerprint));`);
   }
 
   private clock(): number {
@@ -101,8 +120,10 @@ export class MirrorReconciliationRepository {
   /**
    * AC7. Runs one check against the current schedule and records the run, its findings and their dispositions. The same
    * run id with the same input returns the recorded run unchanged; with different input it is refused. A finding already
-   * open is counted as repeated, not raised again. An open finding clears only when a later run compares its group with
-   * complete coverage and no longer sees it; an incomplete or unknown group leaves it open.
+   * open is counted as repeated, not raised again. Groups with open findings are compared again whenever their period is
+   * in the run. An open finding clears only when a run compares its group with complete coverage and no longer sees it; an
+   * incomplete or unknown group leaves it open. A run whose reads of a group are older than those behind a finding's
+   * current state cannot clear or reopen it, whatever order runs are recorded in.
    */
   recordCheck(raw: unknown): RecordedCheck {
     const parsed = checkInputSchema.safeParse(raw);
@@ -117,42 +138,59 @@ export class MirrorReconciliationRepository {
       }
       const schedule = this.latestSchedule(input.checkId);
       if (!schedule) throw new MirrorReconciliationError("CHECK_SCHEDULE_NOT_FOUND", 404);
-      const result = compareMirror(schedule, input, at);
-      const observedAt = result.observedAt, dispositions: Record<FindingDisposition, number> = { opened: 0, repeated: 0, reopened: 0, cleared: 0 };
+      const openGroups = this.db.prepare("SELECT DISTINCT scope,grain,period,currency FROM mirror_reconciliation_findings WHERE check_id=? AND status='open'")
+        .all(input.checkId).map(r => ({ scope: String(r.scope), grain: String(r.grain) as GroupRef["grain"], period: String(r.period), currency: String(r.currency) }));
+      const result = compareMirror(schedule, input, at, { secret: this.secret, openGroups });
+      const observedAt = result.observedAt, groups = new Map(result.comparisons.map(c => [c.comparison.id, c]));
+      const dispositions: Record<FindingDisposition, number> = { opened: 0, repeated: 0, reopened: 0, cleared: 0, stale: 0 };
       const raised: ReconciliationFinding[] = [], cleared: string[] = [];
-      const mark = this.db.prepare("INSERT INTO mirror_reconciliation_run_findings(run_id,fingerprint,disposition) VALUES(?,?,?)");
+      const mark = (fingerprint: string, disposition: FindingDisposition) => {
+        dispositions[disposition]++;
+        this.db.prepare("INSERT INTO mirror_reconciliation_run_findings(run_id,fingerprint,disposition) VALUES(?,?,?)").run(result.runId, fingerprint, disposition);
+      };
+      const stored = (fingerprint: string) => this.db.prepare("SELECT * FROM mirror_reconciliation_findings WHERE fingerprint=?").get(fingerprint);
 
       for (const f of result.findings) {
-        const existing = this.db.prepare("SELECT status FROM mirror_reconciliation_findings WHERE fingerprint=?").get(f.fingerprint);
-        const conflict = JSON.stringify(f.conflict);
-        let disposition: FindingDisposition;
+        const c = groups.get(f.comparisonId)!, reads = c.reads, existing = stored(f.fingerprint), conflict = JSON.stringify(f.conflict);
         if (!existing) {
-          this.db.prepare(`INSERT INTO mirror_reconciliation_findings(fingerprint,check_id,comparison_id,category,record_key,status,occurrences,
-              first_run_id,last_run_id,cleared_by_run_id,first_seen_at,last_seen_at,cleared_at,conflict) VALUES(?,?,?,?,?,'open',1,?,?,NULL,?,?,NULL,?)`)
-            .run(f.fingerprint, result.checkId, f.comparisonId, f.conflict.category, f.recordKey, result.runId, result.runId, observedAt, observedAt, conflict);
-          disposition = "opened";
-        } else {
-          disposition = existing.status === "open" ? "repeated" : "reopened";
-          this.db.prepare(`UPDATE mirror_reconciliation_findings SET status='open',occurrences=occurrences+1,last_run_id=?,last_seen_at=?,
-              cleared_by_run_id=NULL,cleared_at=NULL,conflict=? WHERE fingerprint=?`).run(result.runId, observedAt, conflict, f.fingerprint);
+          this.db.prepare(`INSERT INTO mirror_reconciliation_findings(fingerprint,check_id,comparison_id,scope,grain,period,currency,category,record_key,
+              status,occurrences,first_run_id,last_run_id,cleared_by_run_id,first_seen_at,last_seen_at,cleared_at,basis_source_read_at,basis_mirror_read_at,conflict)
+              VALUES(?,?,?,?,?,?,?,?,?,'open',1,?,?,NULL,?,?,NULL,?,?,?)`)
+            .run(f.fingerprint, result.checkId, f.comparisonId, c.group.scope, c.group.grain, c.group.period, c.group.currency, f.conflict.category,
+              f.recordKey, result.runId, result.runId, observedAt, observedAt, reads.source, reads.mirror, conflict);
+          raised.push(f); mark(f.fingerprint, "opened");
+          continue;
         }
-        if (disposition !== "repeated") raised.push(f);
-        dispositions[disposition]++;
-        mark.run(result.runId, f.fingerprint, disposition);
+        const basis = basisFrom(existing), older = olderThan(reads, basis);
+        if (existing.status === "open") {
+          // An older run confirms the finding but does not replace the newer evidence behind it.
+          const next = older ? basis : newest(reads, basis);
+          this.db.prepare(`UPDATE mirror_reconciliation_findings SET occurrences=occurrences+1,last_run_id=?,last_seen_at=?,basis_source_read_at=?,
+              basis_mirror_read_at=?,conflict=CASE WHEN ? THEN conflict ELSE ? END WHERE fingerprint=?`)
+            .run(result.runId, observedAt, next.source, next.mirror, older ? 1 : 0, conflict, f.fingerprint);
+          mark(f.fingerprint, "repeated");
+        } else if (older) {
+          mark(f.fingerprint, "stale");
+        } else {
+          this.db.prepare(`UPDATE mirror_reconciliation_findings SET status='open',occurrences=occurrences+1,last_run_id=?,last_seen_at=?,
+              cleared_by_run_id=NULL,cleared_at=NULL,basis_source_read_at=?,basis_mirror_read_at=?,conflict=? WHERE fingerprint=?`)
+            .run(result.runId, observedAt, reads.source, reads.mirror, conflict, f.fingerprint);
+          raised.push(f); mark(f.fingerprint, "reopened");
+        }
       }
 
       const seen = new Set(result.findings.map(f => f.fingerprint));
-      const clear = this.db.prepare("UPDATE mirror_reconciliation_findings SET status='cleared',cleared_by_run_id=?,cleared_at=? WHERE fingerprint=?");
       for (const c of result.comparisons) {
         if (c.comparison.coverage !== "complete") continue;
-        const open = this.db.prepare("SELECT fingerprint FROM mirror_reconciliation_findings WHERE check_id=? AND comparison_id=? AND status='open'")
+        const open = this.db.prepare("SELECT * FROM mirror_reconciliation_findings WHERE check_id=? AND comparison_id=? AND status='open'")
           .all(result.checkId, c.comparison.id);
-        for (const { fingerprint } of open) {
-          if (seen.has(String(fingerprint))) continue;
-          clear.run(result.runId, observedAt, String(fingerprint));
-          mark.run(result.runId, String(fingerprint), "cleared");
-          cleared.push(String(fingerprint));
-          dispositions.cleared++;
+        for (const row of open) {
+          const fingerprint = String(row.fingerprint);
+          if (seen.has(fingerprint)) continue;
+          if (olderThan(c.reads, basisFrom(row))) { mark(fingerprint, "stale"); continue; }
+          this.db.prepare(`UPDATE mirror_reconciliation_findings SET status='cleared',cleared_by_run_id=?,cleared_at=?,basis_source_read_at=?,
+              basis_mirror_read_at=? WHERE fingerprint=?`).run(result.runId, observedAt, c.reads.source, c.reads.mirror, fingerprint);
+          cleared.push(fingerprint); mark(fingerprint, "cleared");
         }
       }
 
@@ -185,9 +223,21 @@ export class MirrorReconciliationRepository {
       .map(r => ({ fingerprint: String(r.fingerprint), disposition: String(r.disposition) as FindingDisposition }));
   }
 
-  /** The latest run as `comparisons` and `conflicts` for an operations-control source snapshot, or null before any run. */
+  /**
+   * The latest run as `comparisons` and `conflicts` for an operations-control source snapshot, or null before any run.
+   * Conflicts are the check's currently open findings whose group is in the slice. `coverage` is what the snapshot should
+   * report: `partial` when the slice was truncated, or when any open finding was not confirmed by the latest run (its
+   * period was outside the run, its group was not fully read, or the run's reads were older). `openFindings` counts every
+   * open finding for the check, so a matched run cannot hide one.
+   */
   latestSlice(checkId: string) {
     const [latest] = this.runs(checkId, 1).runs;
-    return latest ? { ...toOperationsControlSlice(latest), observedAt: latest.observedAt, outcome: latest.outcome } : null;
+    if (!latest) return null;
+    const open = this.findings(checkId, "open");
+    const slice = toOperationsControlSlice({ comparisons: latest.comparisons, findings: [] }, open.map(f => f.conflict));
+    const confirmed = new Set(latest.findings.map(f => f.fingerprint));
+    const unconfirmedOpenFindings = open.filter(f => !confirmed.has(f.fingerprint) || f.lastRunId !== latest.runId).length;
+    const coverage: "complete" | "partial" = slice.truncated || unconfirmedOpenFindings > 0 ? "partial" : "complete";
+    return { ...slice, coverage, observedAt: latest.observedAt, outcome: latest.outcome, openFindings: open.length, unconfirmedOpenFindings };
   }
 }
