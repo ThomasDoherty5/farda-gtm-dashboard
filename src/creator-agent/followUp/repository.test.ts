@@ -87,7 +87,7 @@ describe("follow-up repository", () => {
     expect(lateApproval).toMatchObject({ state: "conflict", intent: { state: "superseded" }, conflict: { kind: "lateOutcome", blocking: true } });
     expect(lateSent).toMatchObject({ state: "conflict", conflict: { outcome: { kind: "sent", receiptRefs: ["synthetic-receipt"] } } });
     expect(repo.intent(intent.intentRef)).toMatchObject({ state: "superseded", supersededBy: "closure", receiptRefs: [] });
-    expect(repo.conflicts(collaborationId).map(c => c.outcome?.kind)).toEqual(["approvalRecorded", "sent"]);
+    expect(repo.conflicts(collaborationId).map(c => c.outcome && "kind" in c.outcome ? c.outcome.kind : null)).toEqual(["approvalRecorded", "sent"]);
   });
   it("withdraws creator messages in J04 when outreach is suppressed", () => {
     const { repo } = setup();
@@ -113,6 +113,57 @@ describe("follow-up repository", () => {
     clock.at = laNoon("2026-11-13");
     expect(repo.planReminder(plan(), "plan-2")).toEqual({ decision: { kind: "humanReview", reasonCodes: ["PRIOR_SEND_IN_FLIGHT"] }, proposals: [] });
     expect(repo.intent(intent.intentRef)?.state).toBe("dispatched");
+  });
+  it("holds the next step while an earlier reminder awaits approval or sits in a live J04 hold", () => {
+    for (const outcome of [{ kind: "approvalRecorded", ...approval }, { kind: "approvalHeld", ...approval, reasonCodes: ["APPROVAL_HELD"] }]) {
+      const { repo, clock } = setup();
+      const intent = repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+      repo.recordSendOutcome({ intentRef: intent.intentRef, ...outcome }, "outcome-1");
+      clock.at = laNoon("2026-11-11");
+      expect(repo.planReminder(plan(), "plan-2").proposals[0]).toMatchObject({ created: false, intent: { intentRef: intent.intentRef } });
+      clock.at = laNoon("2026-11-13");
+      expect(repo.planReminder(plan(), "plan-3")).toEqual({ decision: { kind: "humanReview", reasonCodes: ["PRIOR_SEND_IN_FLIGHT"] }, proposals: [] });
+    }
+  });
+  it("treats a J04 hold with an approval reference as live when withdrawing it", () => {
+    const { repo } = setup();
+    const intent = repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+    repo.recordSendOutcome({ kind: "approvalHeld", intentRef: intent.intentRef, ...approval, reasonCodes: ["APPROVAL_HELD"] }, "outcome-1");
+    repo.close(collaborationId, { reason: "cancelled", sourceRef: "synthetic-cancel" }, "close-1");
+    expect(repo.intent(intent.intentRef)).toMatchObject({ state: "superseded", supersededFrom: "approvalHeld" });
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "withdrawnWhileInJ04", intentState: "approvalHeld", blocking: true }]);
+  });
+  it("does not open a conflict for a hold that never reached J04", () => {
+    const { repo } = setup();
+    const intent = repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+    repo.recordSendOutcome({ kind: "approvalHeld", intentRef: intent.intentRef, approvalRef: null, manifestRef: null, reasonCodes: ["AUTHORITY_REQUIRED"] }, "outcome-1");
+    repo.close(collaborationId, { reason: "cancelled", sourceRef: "synthetic-cancel" }, "close-1");
+    expect(repo.conflicts(collaborationId)).toEqual([]);
+  });
+  it("opens one blocking conflict, without withdrawing, when outreach becomes unknown while a message is live", () => {
+    const { repo, clock } = setup();
+    const intent = repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+    repo.recordSendOutcome({ kind: "approvalRecorded", intentRef: intent.intentRef, ...approval }, "outcome-1");
+    expect(repo.planReminder(plan(clockEvent(), "unknown"), "plan-2").decision).toEqual({ kind: "humanReview", reasonCodes: ["SUPPRESSION_UNVERIFIED"] });
+    clock.at = laNoon("2026-11-11");
+    repo.planReminder(plan(clockEvent(), "unknown"), "plan-3");
+    expect(repo.intent(intent.intentRef)?.state).toBe("awaitingApproval");
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "outreachUnverifiedWhileLive", intentRef: intent.intentRef, blocking: true }]);
+    expect(repo.planReminder(plan(), "plan-4").decision).toEqual({ kind: "humanReview", reasonCodes: ["OUTCOME_CONFLICT_OPEN"] });
+  });
+  it("records a workflow handoff only for workflow-path intents and treats it as live on closure", () => {
+    const { repo } = setup(laNoon("2026-11-15"), postGraceConfig);
+    const [escalation, reminder] = repo.planReminder(plan(), "plan-1").proposals.map(p => p.intent);
+    expect([escalation!.sendPath, reminder!.sendPath]).toEqual(["workflowHandoff", "workflowReminder"]);
+    repo.recordWorkflowHandoff({ intentRef: reminder!.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1");
+    expect(() => repo.recordWorkflowHandoff({ intentRef: reminder!.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-2")).toThrow("OUTCOME_OUT_OF_ORDER");
+    repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "withdrawnWhileInWorkflow", intentRef: reminder!.intentRef }]);
+    expect(repo.recordWorkflowHandoff({ intentRef: escalation!.intentRef, result: "recorded", proposalRef: "proposal-late" }, "handoff-3"))
+      .toMatchObject({ state: "conflict", intent: { state: "superseded" }, conflict: { kind: "lateOutcome" } });
+    const preDue = setup();
+    const j04 = preDue.repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+    expect(() => preDue.repo.recordWorkflowHandoff({ intentRef: j04.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1")).toThrow("INTENT_NOT_ON_WORKFLOW_PATH");
   });
   it("records nothing for a missing date and sends it to human review", () => {
     const { db, repo } = setup();

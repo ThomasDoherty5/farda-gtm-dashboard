@@ -101,10 +101,17 @@ export type ClosureEvidence = z.infer<typeof closureEvidenceSchema>;
 
 export const FOLLOW_UP_STEPS = ["due-minus-2", "within-grace", "post-grace", "past-grace", "rights-expiry-warning"] as const;
 export type FollowUpStep = typeof FOLLOW_UP_STEPS[number];
-/** A creator message needs J04 exact-action approval. A human review item never messages the creator. */
+/** A creator message needs approval before it is sent. A human review item never messages the creator. */
 export type FollowUpChannel = "creator-message" | "human-review";
+/**
+ * Each intent has exactly one way out of this module, fixed when it is created:
+ * - `j04Preview`: a `preDue` creator reminder, through J04 exact-action approval;
+ * - `workflowReminder`: a `postGraceOnly` creator reminder, through the collaboration workflow's `reminder` proposal;
+ * - `workflowHandoff`: a human-review item, through the collaboration workflow's `human-handoff` proposal.
+ */
+export type SendPath = "j04Preview" | "workflowReminder" | "workflowHandoff";
 
-export const INTENT_STATES = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "uncertain", "sent", "notSent", "superseded"] as const;
+export const INTENT_STATES = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handedOff", "uncertain", "sent", "notSent", "superseded"] as const;
 export type IntentState = typeof INTENT_STATES[number];
 export type SupersededBy = "closure" | "dueDateChanged" | "stepAdvanced" | "outreachSuppressed";
 
@@ -117,6 +124,7 @@ export type FollowUpIntent = {
   /** Due-date version for reminders; the rights binding for an expiry warning. */
   dueVersion: string;
   channel: FollowUpChannel;
+  sendPath: SendPath;
   localDay: string;
   timezone: string;
   reasonCodes: string[];
@@ -134,6 +142,8 @@ export type StoredIntent = FollowUpIntent & {
   approvalRef: string | null;
   manifestRef: string | null;
   runRef: string | null;
+  /** The collaboration workflow proposal, once handed off. */
+  workflowProposalRef: string | null;
   /** The first signed run version seen. It stays the reconciliation binding. */
   runVersion: string | null;
   receiptRefs: string[];
@@ -155,3 +165,14 @@ export const sendOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("uncertain"), intentRef: reference, ...refs }).strict(),
 ]);
 export type SendOutcome = z.infer<typeof sendOutcomeSchema>;
+
+/**
+ * The answer from the collaboration workflow's `proposeCollaborationReview` for one intent. `recorded` carries its
+ * proposal reference; `notApplied` is its sealed stale-version refusal; `uncertain` needs its `proposalRequestKey` lookup.
+ */
+export const workflowHandoffSchema = z.discriminatedUnion("result", [
+  z.object({ intentRef: reference, result: z.literal("recorded"), proposalRef: reference }).strict(),
+  z.object({ intentRef: reference, result: z.literal("notApplied") }).strict(),
+  z.object({ intentRef: reference, result: z.literal("uncertain") }).strict(),
+]);
+export type WorkflowHandoff = z.infer<typeof workflowHandoffSchema>;

@@ -7,8 +7,9 @@ import type { SendOutcome, StoredIntent } from "./contract.ts";
 
 /**
  * Translates follow-up intents into envelopes the existing actions service accepts. It produces requests only:
- * nothing here calls the service, registers a handler or sends a message. Every creator message goes through
- * J04 exact-action approval via `previewAction`.
+ * nothing here calls the service, registers a handler or sends a message. Each intent has one send path: a `preDue`
+ * creator reminder goes to J04 exact-action approval via `previewAction`; a `postGraceOnly` reminder and human-review
+ * items go to the collaboration workflow's own approval proposal.
  */
 export const FOLLOW_UP_ACTION_KIND = "creatorFollowUpReminder";
 type Context = { scope: OperationsScope; requestId: string };
@@ -21,7 +22,7 @@ export class FollowUpAdapterError extends Error {
 
 /** A J04 preview for one proposed creator reminder. The approval binds to the exact intent version. */
 export function previewActionFor(intent: StoredIntent, context: Context): FoundationAction {
-  if (intent.channel !== "creator-message") throw new FollowUpAdapterError("INTENT_NOT_SENDABLE");
+  if (intent.sendPath !== "j04Preview") throw new FollowUpAdapterError("INTENT_NOT_ON_J04_PATH");
   if (intent.state !== "proposed") throw new FollowUpAdapterError("INTENT_NOT_PROPOSED");
   return foundationActionSchema.parse({ schemaVersion: SCHEMA_VERSION, requestId: context.requestId, requestedScope: requestedScope(context.scope),
     operation: "previewAction", actionKind: FOLLOW_UP_ACTION_KIND, expectedVersion: intent.intentVersion, idempotencyKey: "follow-up-preview:" + intent.intentRef,
@@ -36,6 +37,8 @@ export type Reconciliation = { kind: "action"; action: FoundationAction } | { ki
  */
 export function reconciliationFor(intent: StoredIntent, context: Context & { idempotencyKey: string }): Reconciliation {
   if (intent.state !== "uncertain") throw new FollowUpAdapterError("INTENT_NOT_UNCERTAIN");
+  // A workflow handoff reconciles through the workflow's own detail read with `proposalRequestKey`.
+  if (intent.sendPath !== "j04Preview") return { kind: "hold", reasonCode: "WORKFLOW_PROPOSAL_LOOKUP_REQUIRED" };
   const base = { schemaVersion: SCHEMA_VERSION, requestId: context.requestId, requestedScope: requestedScope(context.scope), idempotencyKey: context.idempotencyKey, entityRefs: [] };
   if (intent.runRef && intent.runVersion && intent.approvalRef && intent.manifestRef)
     return { kind: "action", action: foundationActionSchema.parse({ ...base, operation: "reconcileRun", actionKind: "lookup", runRef: intent.runRef,
@@ -47,7 +50,8 @@ export function reconciliationFor(intent: StoredIntent, context: Context & { ide
 
 /** Same as above for an uncertain approval request, when the caller holds the signed approval version. */
 export function approvalReconciliationFor(intent: StoredIntent, context: Context & { idempotencyKey: string; approvalVersion: string }): FoundationAction {
-  if (intent.state !== "uncertain" || intent.runRef || !intent.approvalRef || !intent.manifestRef) throw new FollowUpAdapterError("INTENT_NOT_APPROVAL_UNCERTAIN");
+  if (intent.sendPath !== "j04Preview" || intent.state !== "uncertain" || intent.runRef || !intent.approvalRef || !intent.manifestRef)
+    throw new FollowUpAdapterError("INTENT_NOT_APPROVAL_UNCERTAIN");
   return foundationActionSchema.parse({ schemaVersion: SCHEMA_VERSION, requestId: context.requestId, requestedScope: requestedScope(context.scope),
     idempotencyKey: context.idempotencyKey, entityRefs: [], operation: "requestApproval", actionKind: "reconcileApproval",
     approvalRef: intent.approvalRef, manifestRef: intent.manifestRef, expectedVersion: context.approvalVersion, payload: {} });
@@ -97,14 +101,22 @@ const OUTCOME: Record<ClosureRecord["reason"], WorkflowIntent["outcome"]> = {
   "posted-verified": "completed", declined: "declined", expired: "no-response", "terms-mismatch": "canceled",
   "rights-unavailable": "canceled", cancelled: "canceled",
 };
+/** The stable request key for an intent's workflow proposal, also used for its `proposalRequestKey` lookup. */
+export const workflowRequestKeyFor = (intent: StoredIntent) => "follow-up-workflow:" + intent.intentRef;
+
+/**
+ * Workflow proposal payloads. An intent qualifies only on its own workflow send path and only while `proposed`;
+ * once handed off, `recordWorkflowHandoff` moves it on so it cannot be proposed twice.
+ */
 export function collaborationProposalFor(item: { kind: "handoff"; intent: StoredIntent } | { kind: "closure"; closure: ClosureRecord }, collaborationRef: string): WorkflowIntent {
-  // Under postGraceOnly, the post-grace reminder matches the workflow's own reminder proposal.
-  if (item.kind === "handoff" && item.intent.step === "post-grace")
-    return workflowIntentSchema.parse({ collaborationRef, kind: "reminder", reason: `Follow-up post-grace reminder: ${item.intent.reasonCodes.join(", ")}` });
-  if (item.kind === "handoff") {
-    if (item.intent.channel !== "human-review") throw new FollowUpAdapterError("INTENT_NOT_HUMAN_REVIEW");
-    return workflowIntentSchema.parse({ collaborationRef, kind: "human-handoff", reason: `Follow-up ${item.intent.step}: ${item.intent.reasonCodes.join(", ")}` });
+  if (item.kind === "closure") {
+    const c = item.closure;
+    return workflowIntentSchema.parse({ collaborationRef, kind: "close", outcome: OUTCOME[c.reason], reason: `Follow-up closed: ${c.reason} (${c.reasonCodes.join(", ")})` });
   }
-  const c = item.closure;
-  return workflowIntentSchema.parse({ collaborationRef, kind: "close", outcome: OUTCOME[c.reason], reason: `Follow-up closed: ${c.reason} (${c.reasonCodes.join(", ")})` });
+  const intent = item.intent;
+  if (intent.sendPath === "j04Preview") throw new FollowUpAdapterError("INTENT_NOT_ON_WORKFLOW_PATH");
+  if (intent.state !== "proposed") throw new FollowUpAdapterError("INTENT_NOT_PROPOSED");
+  return intent.sendPath === "workflowReminder"
+    ? workflowIntentSchema.parse({ collaborationRef, kind: "reminder", reason: `Follow-up post-grace reminder: ${intent.reasonCodes.join(", ")}` })
+    : workflowIntentSchema.parse({ collaborationRef, kind: "human-handoff", reason: `Follow-up ${intent.step}: ${intent.reasonCodes.join(", ")}` });
 }

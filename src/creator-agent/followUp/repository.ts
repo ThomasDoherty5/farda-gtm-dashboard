@@ -4,7 +4,7 @@ import { digest } from "../config.ts";
 import { reference } from "../actions/contract.ts";
 import type { OperationsScope } from "../operations.ts";
 import { closureEvidenceSchema, FOLLOW_UP_POLICY_VERSION, followUpConfigSchema, outreachStateSchema, postingClockEventSchema, rightsGateInputSchema,
-  sendOutcomeSchema, type ClosureReason, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type SendOutcome,
+  sendOutcomeSchema, workflowHandoffSchema, type ClosureReason, type SendPath, type WorkflowHandoff, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type SendOutcome,
   type StoredIntent, type SupersededBy } from "./contract.ts";
 import { decideClosure, decideReminder, dedupeKeyOf, localDay, type ReminderDecision, type ReminderInput } from "./policy.ts";
 import { applyReviewEvent, initialReviewState, type ReviewEvent, type ReviewState } from "./reviewMachine.ts";
@@ -19,11 +19,15 @@ export type PlanReceipt = { decision: ReminderDecision; proposals: Proposal[] };
 export type ClosureRecord = { collaborationId: string; reason: ClosureReason; evidenceRef: string; reasonCodes: string[]; closedAt: string };
 export type RightsReceipt = { gate: RightsGateResult; proposal: Proposal | null };
 /**
- * Something an operator must settle in J04. `withdrawnWhileInJ04`: this module withdrew an intent that J04 was already
- * approving or running. `lateOutcome`: an outcome arrived for a withdrawn intent; it is kept, never applied.
+ * Something an operator must settle with the approval owner.
+ * - `withdrawnWhileInJ04` / `withdrawnWhileInWorkflow`: this module withdrew an intent that J04, or the collaboration
+ *   workflow, was already holding. The approval, proposal or run still needs cancelling by its owner.
+ * - `outreachUnverifiedWhileLive`: outreach eligibility became unknown while a creator message was live there.
+ * - `lateOutcome`: an outcome arrived for a withdrawn intent; it is kept, never applied.
  */
-export type OutcomeConflict = { conflictRef: string; kind: "withdrawnWhileInJ04" | "lateOutcome"; intentRef: string; collaborationId: string;
-  outcome: SendOutcome | null; intentState: IntentState; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
+export type ConflictKind = "withdrawnWhileInJ04" | "withdrawnWhileInWorkflow" | "outreachUnverifiedWhileLive" | "lateOutcome";
+export type OutcomeConflict = { conflictRef: string; kind: ConflictKind; intentRef: string; collaborationId: string;
+  outcome: SendOutcome | WorkflowHandoff | null; intentState: IntentState; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
 export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent } | { state: "conflict"; intent: StoredIntent; conflict: OutcomeConflict };
 
 const planInputSchema = z.object({ event: postingClockEventSchema.nullable(), collaborationId: reference, outreach: outreachStateSchema, postedVerified: z.boolean() }).strict()
@@ -32,10 +36,18 @@ const reviewEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("submitted"), contentVersion: reference, sourceRef: reference }).strict(),
   z.object({ type: z.literal("decided"), contentVersion: reference, outcome: z.enum(["approved", "revisionRequested", "rejected"]), reviewerRef: reference }).strict(),
 ]);
-/** Not yet sent or uncertain: these can still be withdrawn locally. Withdrawing does not cancel anything already in J04. */
-const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched"];
-/** States in which J04 may still approve or run the message after it is withdrawn here. */
-const LIVE_IN_J04: IntentState[] = ["awaitingApproval", "dispatched"];
+/** Not yet sent or uncertain: these can still be withdrawn locally. Withdrawing does not cancel anything held elsewhere. */
+const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handedOff"];
+/**
+ * Where an intent may still be approved or run after it is withdrawn here. A J04 hold is not terminal and can
+ * resume, so a held approval with a reference is live; a hold that never reached J04 is not.
+ */
+export function liveElsewhere(intent: StoredIntent): "j04" | "workflow" | null {
+  if (intent.state === "awaitingApproval" || intent.state === "dispatched" || intent.state === "approvalHeld" && intent.approvalRef !== null) return "j04";
+  return intent.state === "handedOff" ? "workflow" : null;
+}
+const SEND_PATH: Record<FollowUpStep, SendPath> = { "due-minus-2": "j04Preview", "within-grace": "j04Preview", "post-grace": "workflowReminder",
+  "past-grace": "workflowHandoff", "rights-expiry-warning": "workflowHandoff" };
 const NEXT_STATE: Record<SendOutcome["kind"], IntentState> = { approvalRecorded: "awaitingApproval", approvalHeld: "approvalHeld",
   dispatchPending: "dispatched", sent: "sent", notSent: "notSent", uncertain: "uncertain" };
 const ALLOWED_FROM: Record<SendOutcome["kind"], IntentState[]> = {
@@ -106,14 +118,22 @@ export class FollowUpRepository {
   private writeIntent(intent: StoredIntent) {
     this.db.prepare("UPDATE creator_follow_up_intents SET state=?,body=?,updated_at=? WHERE intent_ref=?").run(intent.state, JSON.stringify(intent), intent.updatedAt, intent.intentRef);
   }
-  /** The strongest hold from earlier creator messages: an open outcome conflict, an unreconciled send, then one in flight. */
-  private priorSend(collaborationId: string): ReminderInput["priorSend"] {
+  /** Holds that apply to any reminder: an open blocking conflict, then an unreconciled send. */
+  private priorHold(collaborationId: string): ReminderInput["priorSend"] {
     if (this.db.prepare("SELECT 1 FROM creator_follow_up_outcome_conflicts WHERE collaboration_id=? AND blocking=1 AND resolved=0 LIMIT 1").get(collaborationId)) return "conflict";
-    const states = new Set(this.db.prepare("SELECT DISTINCT state FROM creator_follow_up_intents WHERE collaboration_id=? AND state IN ('uncertain','dispatched')")
-      .all(collaborationId).map(row => String(row.state)));
-    return states.has("uncertain") ? "uncertain" : states.has("dispatched") ? "inFlight" : "none";
+    return this.db.prepare("SELECT 1 FROM creator_follow_up_intents WHERE collaboration_id=? AND state='uncertain' LIMIT 1").get(collaborationId) ? "uncertain" : "none";
+  }
+  /** Creator messages live in J04 or the workflow, other than the ones this decision would propose again. */
+  private liveCreatorMessages(collaborationId: string, except?: { dueVersion: string; steps: FollowUpStep[] }): StoredIntent[] {
+    return this.intents(collaborationId).filter(i => i.channel === "creator-message" && liveElsewhere(i) !== null &&
+      !(except && i.dueVersion === except.dueVersion && except.steps.includes(i.step)));
   }
   private recordConflict(conflict: Omit<OutcomeConflict, "conflictRef" | "resolvedAt" | "resolvedBy">): OutcomeConflict {
+    // One open conflict per intent and kind when nothing new arrived with it.
+    if (conflict.outcome === null) {
+      const open = this.conflicts(conflict.collaborationId).find(c => !c.resolvedAt && c.intentRef === conflict.intentRef && c.kind === conflict.kind);
+      if (open) return open;
+    }
     const full: OutcomeConflict = { ...conflict, conflictRef: "follow-up-conflict-" + digest([conflict.kind, conflict.intentRef, conflict.outcome, conflict.recordedAt]).slice(0, 32),
       resolvedAt: null, resolvedBy: null };
     this.db.prepare("INSERT INTO creator_follow_up_outcome_conflicts(conflict_ref,intent_ref,collaboration_id,blocking,body,recorded_at) VALUES(?,?,?,?,?,?)")
@@ -121,22 +141,23 @@ export class FollowUpRepository {
     return full;
   }
   /** Inserts at most one intent per collaboration, step and due-date version. Returns the existing one otherwise. */
-  private propose(collaborationId: string, step: FollowUpStep, dueVersion: string, fields: Pick<FollowUpIntent, "channel" | "localDay" | "timezone" | "reasonCodes" | "sourceRef">, at: number): Proposal {
+  private propose(collaborationId: string, step: FollowUpStep, dueVersion: string, fields: Pick<FollowUpIntent, "localDay" | "timezone" | "reasonCodes" | "sourceRef">, at: number): Proposal {
     const existing = this.intentRow("collaboration_id=? AND step=? AND due_version=?", collaborationId, step, dueVersion);
     if (existing) return { intent: existing, created: false };
     const createdAt = new Date(at).toISOString(), key = dedupeKeyOf(collaborationId, step, dueVersion);
-    const body = { collaborationId, step, dueVersion, ...fields, policyVersion: FOLLOW_UP_POLICY_VERSION, sends: false as const };
+    const sendPath = SEND_PATH[step], channel = sendPath === "workflowHandoff" ? "human-review" as const : "creator-message" as const;
+    const body = { collaborationId, step, dueVersion, channel, sendPath, ...fields, policyVersion: FOLLOW_UP_POLICY_VERSION, sends: false as const };
     const intent: StoredIntent = { intentRef: "follow-up-" + key.slice(0, 40), intentVersion: "fu1-" + digest([this.scope, body]), ...body, createdAt,
       state: "proposed", supersededBy: null, supersededFrom: null, approvalRef: null, manifestRef: null, runRef: null, runVersion: null,
-      receiptRefs: [], holdReasons: [], updatedAt: createdAt };
+      workflowProposalRef: null, receiptRefs: [], holdReasons: [], updatedAt: createdAt };
     this.db.prepare("INSERT INTO creator_follow_up_intents VALUES(?,?,?,?,?,?,?,?)")
       .run(intent.intentRef, collaborationId, step, dueVersion, intent.state, JSON.stringify(intent), createdAt, createdAt);
     return { intent, created: true };
   }
   /**
-   * Withdraws intents that are not sent or uncertain, including those already awaiting approval or dispatched.
-   * Withdrawing one that J04 is approving or running opens a blocking conflict, because the approval or run still
-   * needs cancelling by its owner. Later outcomes for withdrawn intents become conflicts too.
+   * Withdraws intents that are not sent or uncertain, including those already awaiting approval, held, dispatched or
+   * handed to the workflow. Withdrawing one that is live elsewhere opens a blocking conflict, because the approval,
+   * proposal or run still needs cancelling by its owner. Later outcomes for withdrawn intents become conflicts too.
    */
   private supersede(collaborationId: string, reason: SupersededBy, select: (intent: StoredIntent) => boolean, at: number) {
     const rows = this.db.prepare(`SELECT body FROM creator_follow_up_intents WHERE collaboration_id=? AND state IN (${WITHDRAWABLE.map(() => "?").join(",")})`)
@@ -146,7 +167,8 @@ export class FollowUpRepository {
       if (!select(intent)) continue;
       const updatedAt = new Date(at).toISOString();
       this.writeIntent({ ...intent, state: "superseded", supersededBy: reason, supersededFrom: intent.state, updatedAt });
-      if (LIVE_IN_J04.includes(intent.state)) this.recordConflict({ kind: "withdrawnWhileInJ04", intentRef: intent.intentRef, collaborationId,
+      const live = liveElsewhere(intent);
+      if (live) this.recordConflict({ kind: live === "j04" ? "withdrawnWhileInJ04" : "withdrawnWhileInWorkflow", intentRef: intent.intentRef, collaborationId,
         outcome: null, intentState: intent.state, blocking: true, recordedAt: updatedAt });
     }
   }
@@ -157,21 +179,30 @@ export class FollowUpRepository {
     return this.once("planReminder", idempotencyKey, input, at => {
       const id = input.collaborationId;
       if (input.outreach === "suppressed") this.supersede(id, "outreachSuppressed", i => i.channel === "creator-message", at);
-      const decide = () => decideReminder({ event: input.event, outreach: input.outreach, postedVerified: input.postedVerified,
-        closure: this.closureOf(id)?.reason ?? null, priorSend: this.priorSend(id) }, this.config, at);
+      // Unknown eligibility keeps live messages (a lookup failure must not burn the reminder slot) but opens a blocking conflict.
+      if (input.outreach === "unknown") for (const intent of this.liveCreatorMessages(id))
+        this.recordConflict({ kind: "outreachUnverifiedWhileLive", intentRef: intent.intentRef, collaborationId: id, outcome: null, intentState: intent.state,
+          blocking: true, recordedAt: new Date(at).toISOString() });
+      const decide = (priorSend = this.priorHold(id)) => decideReminder({ event: input.event, outreach: input.outreach, postedVerified: input.postedVerified,
+        closure: this.closureOf(id)?.reason ?? null, priorSend }, this.config, at);
       const first = decide();
       if (first.kind !== "wait" && first.kind !== "remind" && first.kind !== "escalate") return { decision: first, proposals: [] };
       const reminder = (i: StoredIntent) => i.step !== "rights-expiry-warning";
       // A changed due date withdraws everything from older versions, then the decision is retaken: a withdrawn
       // message that J04 was already handling holds new creator reminders until an operator settles it.
       this.supersede(id, "dueDateChanged", i => reminder(i) && i.dueVersion !== first.dueVersion, at);
-      const decision = decide();
+      const stepsOf = (d: ReminderDecision): FollowUpStep[] => d.kind === "remind" ? [d.step] : d.kind === "escalate" ? [d.step, ...(d.reminder ? [d.reminder] : [])] : [];
+      let decision = decide();
+      // An earlier creator message still awaiting approval, held, dispatched or handed off holds the next step's reminder.
+      if ((decision.kind === "remind" || decision.kind === "escalate") &&
+        this.liveCreatorMessages(id, { dueVersion: decision.dueVersion, steps: stepsOf(decision) }).length) decision = decide("inFlight");
       if (decision.kind !== "wait" && decision.kind !== "remind" && decision.kind !== "escalate") return { decision, proposals: [] };
-      const steps: FollowUpStep[] = decision.kind === "wait" ? [] : decision.kind === "remind" ? [decision.step] : [decision.step, ...(decision.reminder ? [decision.reminder] : [])];
+      const steps = stepsOf(decision);
       // A later step withdraws only proposals that were never handed to J04.
       this.supersede(id, "stepAdvanced", i => reminder(i) && i.state === "proposed" && !steps.includes(i.step), at);
       const fields = { localDay: decision.localDay, timezone: decision.timezone, reasonCodes: decision.reasonCodes, sourceRef: input.event!.sourceRef };
-      const proposals = steps.map(step => this.propose(id, step, decision.dueVersion, { ...fields, channel: step === "past-grace" ? "human-review" : "creator-message" }, at));
+      const dueVersion = decision.dueVersion;
+      const proposals = steps.map(step => this.propose(id, step, dueVersion, fields, at));
       return { decision, proposals };
     });
   }
@@ -185,7 +216,7 @@ export class FollowUpRepository {
     return this.once("recordSendOutcome", idempotencyKey, outcome, (at): OutcomeReceipt => {
       const intent = this.intentRow("intent_ref=?", outcome.intentRef);
       if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
-      if (intent.channel !== "creator-message") throw new FollowUpError("INTENT_NOT_SENDABLE");
+      if (intent.sendPath !== "j04Preview") throw new FollowUpError("INTENT_NOT_ON_J04_PATH");
       const recordedAt = new Date(at).toISOString();
       if (intent.state === "superseded") {
         // A late `sent` receipt is real and stays in the audit log, but the withdrawn intent never becomes sent.
@@ -207,6 +238,31 @@ export class FollowUpRepository {
         runRef: value("runRef") ?? intent.runRef, runVersion: intent.runVersion ?? value("runVersion"),
         holdReasons: outcome.kind === "approvalHeld" ? outcome.reasonCodes : [],
         receiptRefs: "receiptRefs" in outcome ? [...new Set([...intent.receiptRefs, ...outcome.receiptRefs])] : intent.receiptRefs, updatedAt: recordedAt };
+      this.writeIntent(next);
+      return { state: "recorded", intent: next };
+    });
+  }
+
+  /**
+   * Records the collaboration workflow's answer for a workflow-path intent. A recorded proposal moves the intent out
+   * of `proposed`, so it cannot be handed off twice. An uncertain answer waits for the workflow's own key lookup.
+   */
+  recordWorkflowHandoff(raw: unknown, idempotencyKey: string): OutcomeReceipt {
+    const handoff = workflowHandoffSchema.parse(raw);
+    return this.once("recordWorkflowHandoff", idempotencyKey, handoff, (at): OutcomeReceipt => {
+      const intent = this.intentRow("intent_ref=?", handoff.intentRef);
+      if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
+      if (intent.sendPath === "j04Preview") throw new FollowUpError("INTENT_NOT_ON_WORKFLOW_PATH");
+      const recordedAt = new Date(at).toISOString();
+      if (intent.state === "superseded") {
+        const conflict = this.recordConflict({ kind: "lateOutcome", intentRef: intent.intentRef, collaborationId: intent.collaborationId,
+          outcome: handoff, intentState: intent.state, blocking: handoff.result !== "notApplied", recordedAt });
+        return { state: "conflict", intent, conflict };
+      }
+      if (intent.state !== "proposed" && intent.state !== "uncertain") throw new FollowUpError("OUTCOME_OUT_OF_ORDER");
+      if (intent.workflowProposalRef && handoff.result === "recorded" && handoff.proposalRef !== intent.workflowProposalRef) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
+      const state: IntentState = handoff.result === "recorded" ? "handedOff" : handoff.result === "notApplied" ? "notSent" : "uncertain";
+      const next: StoredIntent = { ...intent, state, workflowProposalRef: handoff.result === "recorded" ? handoff.proposalRef : intent.workflowProposalRef, updatedAt: recordedAt };
       this.writeIntent(next);
       return { state: "recorded", intent: next };
     });
@@ -245,7 +301,7 @@ export class FollowUpRepository {
     return this.once("recordRightsCheck", idempotencyKey, [collaborationId, input], at => {
       const gate = evaluatePaidReuse(input, at, this.config.rightsWarningDays);
       if (!gate.warningKey || this.closureOf(collaborationId)) return { gate, proposal: null };
-      const proposal = this.propose(collaborationId, "rights-expiry-warning", gate.warningKey, { channel: "human-review", localDay: localDay(at, this.config.timezone),
+      const proposal = this.propose(collaborationId, "rights-expiry-warning", gate.warningKey, { localDay: localDay(at, this.config.timezone),
         timezone: this.config.timezone, reasonCodes: ["RIGHTS_EXPIRING"], sourceRef: input.chain[0]?.rights?.evidenceRef ?? input.asset.submission.assetId }, at);
       return { gate, proposal };
     });

@@ -5,7 +5,7 @@ import { foundationActionSchema } from "../actions/service.ts";
 import { workflowIntentSchema } from "../collaborationWorkflowSchema.ts";
 import type { FollowUpConfig } from "./contract.ts";
 import { approvalReconciliationFor, collaborationProposalFor, FOLLOW_UP_ACTION_KIND, outcomeFromActionError, outcomeFromActionResponse,
-  previewActionFor, reconciliationFor } from "./actionAdapter.ts";
+  previewActionFor, reconciliationFor, workflowRequestKeyFor } from "./actionAdapter.ts";
 import { FollowUpRepository } from "./repository.ts";
 import { clockEvent, collaborationId, followUpConfig, followUpDatabase, followUpScope, laNoon, postGraceConfig } from "./fixtures.testkit.ts";
 
@@ -37,7 +37,7 @@ describe("follow-up action intents", () => {
     expect(() => previewActionFor(repo.intent(intent.intentRef)!, context)).toThrow("INTENT_NOT_PROPOSED");
     const late = proposed("2026-11-15").intent;
     expect(late.channel).toBe("human-review");
-    expect(() => previewActionFor(late, context)).toThrow("INTENT_NOT_SENDABLE");
+    expect(() => previewActionFor(late, context)).toThrow("INTENT_NOT_ON_J04_PATH");
   });
   it("reconciles an uncertain dispatch with a run lookup, never a fresh attempt", () => {
     const { repo, intent } = proposed();
@@ -89,10 +89,40 @@ describe("follow-up action intents", () => {
     expect(workflowIntentSchema.parse(close)).toMatchObject({ kind: "close", outcome: "canceled" });
     expect(close.reason).toContain("terms-mismatch");
   });
-  it("under postGraceOnly maps the post-grace reminder to the workflow's own reminder proposal", () => {
+  it("gives a postGraceOnly reminder only the workflow path, and a preDue reminder only the J04 path", () => {
     const { proposals } = proposed("2026-11-15", postGraceConfig);
     const reminder = proposals.find(i => i.step === "post-grace")!;
-    expect(foundationActionSchema.parse(previewActionFor(reminder, context))).toMatchObject({ operation: "previewAction" });
+    expect(reminder).toMatchObject({ channel: "creator-message", sendPath: "workflowReminder" });
     expect(workflowIntentSchema.parse(collaborationProposalFor({ kind: "handoff", intent: reminder }, collaborationId))).toMatchObject({ kind: "reminder" });
+    expect(() => previewActionFor(reminder, context)).toThrow("INTENT_NOT_ON_J04_PATH");
+    const preDue = proposed().intent;
+    expect(preDue.sendPath).toBe("j04Preview");
+    expect(() => collaborationProposalFor({ kind: "handoff", intent: preDue }, collaborationId)).toThrow("INTENT_NOT_ON_WORKFLOW_PATH");
+  });
+  it("yields no reminder from a withdrawn post-grace intent on either path", () => {
+    const { repo, proposals } = proposed("2026-11-15", postGraceConfig);
+    const reminder = proposals.find(i => i.step === "post-grace")!;
+    repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
+    const withdrawn = repo.intent(reminder.intentRef)!;
+    expect(withdrawn.state).toBe("superseded");
+    expect(() => collaborationProposalFor({ kind: "handoff", intent: withdrawn }, collaborationId)).toThrow("INTENT_NOT_PROPOSED");
+    expect(() => previewActionFor(withdrawn, context)).toThrow("INTENT_NOT_ON_J04_PATH");
+  });
+  it("hands a workflow reminder off once, then refuses to propose it again", () => {
+    const { repo, proposals } = proposed("2026-11-15", postGraceConfig);
+    const reminder = proposals.find(i => i.step === "post-grace")!;
+    expect(workflowRequestKeyFor(reminder)).toBe("follow-up-workflow:" + reminder.intentRef);
+    const handed = repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1").intent;
+    expect(handed).toMatchObject({ state: "handedOff", workflowProposalRef: "proposal-synthetic" });
+    expect(() => collaborationProposalFor({ kind: "handoff", intent: handed }, collaborationId)).toThrow("INTENT_NOT_PROPOSED");
+    expect(() => repo.recordSendOutcome({ kind: "approvalRecorded", intentRef: reminder.intentRef, approvalRef: "synthetic-approval", manifestRef: "manifest-synthetic" }, "outcome-1"))
+      .toThrow("INTENT_NOT_ON_J04_PATH");
+  });
+  it("leaves an uncertain workflow handoff to the workflow's own key lookup", () => {
+    const { repo, proposals } = proposed("2026-11-15", postGraceConfig);
+    const reminder = proposals.find(i => i.step === "post-grace")!;
+    const uncertain = repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "uncertain" }, "handoff-1").intent;
+    expect(reconciliationFor(uncertain, { ...context, idempotencyKey: "reconcile-1" })).toEqual({ kind: "hold", reasonCode: "WORKFLOW_PROPOSAL_LOOKUP_REQUIRED" });
+    expect(() => collaborationProposalFor({ kind: "handoff", intent: uncertain }, collaborationId)).toThrow("INTENT_NOT_PROPOSED");
   });
 });
