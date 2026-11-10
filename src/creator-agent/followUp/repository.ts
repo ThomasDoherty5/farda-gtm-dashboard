@@ -3,19 +3,28 @@ import { z } from "zod";
 import { digest } from "../config.ts";
 import { reference } from "../actions/contract.ts";
 import type { OperationsScope } from "../operations.ts";
-import { FOLLOW_UP_POLICY_VERSION, followUpConfigSchema, outreachStateSchema, postingClockEventSchema, sendOutcomeSchema,
-  type ClosureReason, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type StoredIntent } from "./contract.ts";
-import { decideClosure, decideReminder, dedupeKeyOf, type ClosureEvidence, type ReminderDecision } from "./policy.ts";
+import { closureEvidenceSchema, FOLLOW_UP_POLICY_VERSION, followUpConfigSchema, outreachStateSchema, postingClockEventSchema, rightsGateInputSchema,
+  sendOutcomeSchema, type ClosureReason, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type SendOutcome,
+  type StoredIntent, type SupersededBy } from "./contract.ts";
+import { decideClosure, decideReminder, dedupeKeyOf, localDay, type ReminderDecision, type ReminderInput } from "./policy.ts";
 import { applyReviewEvent, initialReviewState, type ReviewEvent, type ReviewState } from "./reviewMachine.ts";
-import { evaluatePaidReuse, type RightsGateInput, type RightsGateResult } from "./rightsGate.ts";
+import { evaluatePaidReuse, type RightsGateResult } from "./rightsGate.ts";
 
 export class FollowUpError extends Error {
   readonly code: string; readonly status: number;
   constructor(code: string, status = 409) { super(code); this.code = code; this.status = status; }
 }
-export type PlanReceipt = { decision: ReminderDecision; intent: StoredIntent | null; created: boolean };
+export type Proposal = { intent: StoredIntent; created: boolean };
+export type PlanReceipt = { decision: ReminderDecision; proposals: Proposal[] };
 export type ClosureRecord = { collaborationId: string; reason: ClosureReason; evidenceRef: string; reasonCodes: string[]; closedAt: string };
-export type RightsReceipt = { gate: RightsGateResult; intent: StoredIntent | null; created: boolean };
+export type RightsReceipt = { gate: RightsGateResult; proposal: Proposal | null };
+/**
+ * Something an operator must settle in J04. `withdrawnWhileInJ04`: this module withdrew an intent that J04 was already
+ * approving or running. `lateOutcome`: an outcome arrived for a withdrawn intent; it is kept, never applied.
+ */
+export type OutcomeConflict = { conflictRef: string; kind: "withdrawnWhileInJ04" | "lateOutcome"; intentRef: string; collaborationId: string;
+  outcome: SendOutcome | null; intentState: IntentState; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
+export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent } | { state: "conflict"; intent: StoredIntent; conflict: OutcomeConflict };
 
 const planInputSchema = z.object({ event: postingClockEventSchema.nullable(), collaborationId: reference, outreach: outreachStateSchema, postedVerified: z.boolean() }).strict()
   .refine(v => !v.event || v.event.collaborationId === v.collaborationId, "Event belongs to another collaboration.");
@@ -23,6 +32,20 @@ const reviewEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("submitted"), contentVersion: reference, sourceRef: reference }).strict(),
   z.object({ type: z.literal("decided"), contentVersion: reference, outcome: z.enum(["approved", "revisionRequested", "rejected"]), reviewerRef: reference }).strict(),
 ]);
+/** Not yet sent or uncertain: these can still be withdrawn locally. Withdrawing does not cancel anything already in J04. */
+const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched"];
+/** States in which J04 may still approve or run the message after it is withdrawn here. */
+const LIVE_IN_J04: IntentState[] = ["awaitingApproval", "dispatched"];
+const NEXT_STATE: Record<SendOutcome["kind"], IntentState> = { approvalRecorded: "awaitingApproval", approvalHeld: "approvalHeld",
+  dispatchPending: "dispatched", sent: "sent", notSent: "notSent", uncertain: "uncertain" };
+const ALLOWED_FROM: Record<SendOutcome["kind"], IntentState[]> = {
+  approvalRecorded: ["proposed", "awaitingApproval", "approvalHeld"],
+  approvalHeld: ["proposed", "awaitingApproval", "approvalHeld"],
+  dispatchPending: ["proposed", "awaitingApproval", "dispatched"],
+  sent: ["proposed", "awaitingApproval", "dispatched", "uncertain"],
+  notSent: ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
+  uncertain: ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "uncertain"],
+};
 
 /**
  * Follow-up state on the shared agent SQLite connection. Every mutation runs under BEGIN IMMEDIATE with an
@@ -43,6 +66,8 @@ export class FollowUpRepository {
       CREATE TABLE IF NOT EXISTS creator_follow_up_reviews(collaboration_id TEXT NOT NULL,deliverable_ref TEXT NOT NULL,revision INTEGER NOT NULL,
         body TEXT NOT NULL,recorded_at TEXT NOT NULL,PRIMARY KEY(collaboration_id,deliverable_ref,revision));
       CREATE TABLE IF NOT EXISTS creator_follow_up_closures(collaboration_id TEXT PRIMARY KEY,reason TEXT NOT NULL,body TEXT NOT NULL,closed_at TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS creator_follow_up_outcome_conflicts(conflict_ref TEXT PRIMARY KEY,intent_ref TEXT NOT NULL,collaboration_id TEXT NOT NULL,
+        blocking INTEGER NOT NULL,resolved INTEGER NOT NULL DEFAULT 0,body TEXT NOT NULL,recorded_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS creator_follow_up_requests(request_key TEXT PRIMARY KEY,request_digest TEXT NOT NULL,receipt TEXT NOT NULL);`);
   }
 
@@ -81,69 +106,122 @@ export class FollowUpRepository {
   private writeIntent(intent: StoredIntent) {
     this.db.prepare("UPDATE creator_follow_up_intents SET state=?,body=?,updated_at=? WHERE intent_ref=?").run(intent.state, JSON.stringify(intent), intent.updatedAt, intent.intentRef);
   }
+  /** The strongest hold from earlier creator messages: an open outcome conflict, an unreconciled send, then one in flight. */
+  private priorSend(collaborationId: string): ReminderInput["priorSend"] {
+    if (this.db.prepare("SELECT 1 FROM creator_follow_up_outcome_conflicts WHERE collaboration_id=? AND blocking=1 AND resolved=0 LIMIT 1").get(collaborationId)) return "conflict";
+    const states = new Set(this.db.prepare("SELECT DISTINCT state FROM creator_follow_up_intents WHERE collaboration_id=? AND state IN ('uncertain','dispatched')")
+      .all(collaborationId).map(row => String(row.state)));
+    return states.has("uncertain") ? "uncertain" : states.has("dispatched") ? "inFlight" : "none";
+  }
+  private recordConflict(conflict: Omit<OutcomeConflict, "conflictRef" | "resolvedAt" | "resolvedBy">): OutcomeConflict {
+    const full: OutcomeConflict = { ...conflict, conflictRef: "follow-up-conflict-" + digest([conflict.kind, conflict.intentRef, conflict.outcome, conflict.recordedAt]).slice(0, 32),
+      resolvedAt: null, resolvedBy: null };
+    this.db.prepare("INSERT INTO creator_follow_up_outcome_conflicts(conflict_ref,intent_ref,collaboration_id,blocking,body,recorded_at) VALUES(?,?,?,?,?,?)")
+      .run(full.conflictRef, full.intentRef, full.collaborationId, full.blocking ? 1 : 0, JSON.stringify(full), full.recordedAt);
+    return full;
+  }
   /** Inserts at most one intent per collaboration, step and due-date version. Returns the existing one otherwise. */
-  private propose(collaborationId: string, step: FollowUpStep, dueVersion: string, fields: Pick<FollowUpIntent, "channel" | "localDay" | "timezone" | "reasonCodes" | "sourceRef">, at: number) {
+  private propose(collaborationId: string, step: FollowUpStep, dueVersion: string, fields: Pick<FollowUpIntent, "channel" | "localDay" | "timezone" | "reasonCodes" | "sourceRef">, at: number): Proposal {
     const existing = this.intentRow("collaboration_id=? AND step=? AND due_version=?", collaborationId, step, dueVersion);
     if (existing) return { intent: existing, created: false };
     const createdAt = new Date(at).toISOString(), key = dedupeKeyOf(collaborationId, step, dueVersion);
     const body = { collaborationId, step, dueVersion, ...fields, policyVersion: FOLLOW_UP_POLICY_VERSION, sends: false as const };
     const intent: StoredIntent = { intentRef: "follow-up-" + key.slice(0, 40), intentVersion: "fu1-" + digest([this.scope, body]), ...body, createdAt,
-      state: "proposed", approvalRef: null, manifestRef: null, runRef: null, runVersion: null, receiptRefs: [], updatedAt: createdAt };
+      state: "proposed", supersededBy: null, supersededFrom: null, approvalRef: null, manifestRef: null, runRef: null, runVersion: null,
+      receiptRefs: [], holdReasons: [], updatedAt: createdAt };
     this.db.prepare("INSERT INTO creator_follow_up_intents VALUES(?,?,?,?,?,?,?,?)")
       .run(intent.intentRef, collaborationId, step, dueVersion, intent.state, JSON.stringify(intent), createdAt, createdAt);
     return { intent, created: true };
   }
   /**
-   * A proposed reminder that was never handed to J04 is superseded by a newer due-date version or a later step,
-   * and every proposed intent is superseded on closure. Anything already in J04 stays as it is.
+   * Withdraws intents that are not sent or uncertain, including those already awaiting approval or dispatched.
+   * Withdrawing one that J04 is approving or running opens a blocking conflict, because the approval or run still
+   * needs cancelling by its owner. Later outcomes for withdrawn intents become conflicts too.
    */
-  private supersede(collaborationId: string, keep: { dueVersion: string; step: FollowUpStep | null } | null, at: number) {
-    const rows = this.db.prepare("SELECT body FROM creator_follow_up_intents WHERE collaboration_id=? AND state='proposed'").all(collaborationId);
+  private supersede(collaborationId: string, reason: SupersededBy, select: (intent: StoredIntent) => boolean, at: number) {
+    const rows = this.db.prepare(`SELECT body FROM creator_follow_up_intents WHERE collaboration_id=? AND state IN (${WITHDRAWABLE.map(() => "?").join(",")})`)
+      .all(collaborationId, ...WITHDRAWABLE);
     for (const row of rows) {
       const intent = JSON.parse(String(row.body)) as StoredIntent;
-      if (keep && (intent.step === "rights-expiry-warning" || intent.dueVersion === keep.dueVersion && intent.step === keep.step)) continue;
-      this.writeIntent({ ...intent, state: "superseded", updatedAt: new Date(at).toISOString() });
+      if (!select(intent)) continue;
+      const updatedAt = new Date(at).toISOString();
+      this.writeIntent({ ...intent, state: "superseded", supersededBy: reason, supersededFrom: intent.state, updatedAt });
+      if (LIVE_IN_J04.includes(intent.state)) this.recordConflict({ kind: "withdrawnWhileInJ04", intentRef: intent.intentRef, collaborationId,
+        outcome: null, intentState: intent.state, blocking: true, recordedAt: updatedAt });
     }
   }
 
   planReminder(raw: unknown, idempotencyKey: string): PlanReceipt {
+    if (!this.config.reminderPolicy) throw new FollowUpError("REMINDER_POLICY_UNSET");
     const input = planInputSchema.parse(raw);
     return this.once("planReminder", idempotencyKey, input, at => {
-      const uncertainSend = !!this.db.prepare("SELECT 1 FROM creator_follow_up_intents WHERE collaboration_id=? AND state='uncertain' LIMIT 1").get(input.collaborationId);
-      const decision = decideReminder({ event: input.event, outreach: input.outreach, postedVerified: input.postedVerified,
-        closure: this.closureOf(input.collaborationId)?.reason ?? null, uncertainSend }, this.config, at);
-      if (decision.kind === "wait" || decision.kind === "remind" || decision.kind === "escalate") this.supersede(input.collaborationId, { dueVersion: decision.dueVersion, step: decision.kind === "wait" ? null : decision.step }, at);
-      if (decision.kind !== "remind" && decision.kind !== "escalate") return { decision, intent: null, created: false };
-      const proposed = this.propose(input.collaborationId, decision.step, decision.dueVersion, { channel: decision.kind === "remind" ? "creator-message" : "human-review",
-        localDay: decision.localDay, timezone: decision.timezone, reasonCodes: decision.reasonCodes, sourceRef: input.event!.sourceRef }, at);
-      return { decision, ...proposed };
+      const id = input.collaborationId;
+      if (input.outreach === "suppressed") this.supersede(id, "outreachSuppressed", i => i.channel === "creator-message", at);
+      const decide = () => decideReminder({ event: input.event, outreach: input.outreach, postedVerified: input.postedVerified,
+        closure: this.closureOf(id)?.reason ?? null, priorSend: this.priorSend(id) }, this.config, at);
+      const first = decide();
+      if (first.kind !== "wait" && first.kind !== "remind" && first.kind !== "escalate") return { decision: first, proposals: [] };
+      const reminder = (i: StoredIntent) => i.step !== "rights-expiry-warning";
+      // A changed due date withdraws everything from older versions, then the decision is retaken: a withdrawn
+      // message that J04 was already handling holds new creator reminders until an operator settles it.
+      this.supersede(id, "dueDateChanged", i => reminder(i) && i.dueVersion !== first.dueVersion, at);
+      const decision = decide();
+      if (decision.kind !== "wait" && decision.kind !== "remind" && decision.kind !== "escalate") return { decision, proposals: [] };
+      const steps: FollowUpStep[] = decision.kind === "wait" ? [] : decision.kind === "remind" ? [decision.step] : [decision.step, ...(decision.reminder ? [decision.reminder] : [])];
+      // A later step withdraws only proposals that were never handed to J04.
+      this.supersede(id, "stepAdvanced", i => reminder(i) && i.state === "proposed" && !steps.includes(i.step), at);
+      const fields = { localDay: decision.localDay, timezone: decision.timezone, reasonCodes: decision.reasonCodes, sourceRef: input.event!.sourceRef };
+      const proposals = steps.map(step => this.propose(id, step, decision.dueVersion, { ...fields, channel: step === "past-grace" ? "human-review" : "creator-message" }, at));
+      return { decision, proposals };
     });
   }
 
-  /** Records what the actions service reported. An uncertain send leaves only a reconciliation lookup. */
-  recordSendOutcome(raw: unknown, idempotencyKey: string): StoredIntent {
+  /**
+   * Records what the actions service reported. An uncertain send leaves only a reconciliation lookup. Any outcome
+   * for a withdrawn intent is kept as an operator conflict and never moves that intent.
+   */
+  recordSendOutcome(raw: unknown, idempotencyKey: string): OutcomeReceipt {
     const outcome = sendOutcomeSchema.parse(raw);
-    return this.once("recordSendOutcome", idempotencyKey, outcome, at => {
+    return this.once("recordSendOutcome", idempotencyKey, outcome, (at): OutcomeReceipt => {
       const intent = this.intentRow("intent_ref=?", outcome.intentRef);
       if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
       if (intent.channel !== "creator-message") throw new FollowUpError("INTENT_NOT_SENDABLE");
-      if (intent.state === "sent" || intent.state === "notSent") throw new FollowUpError("INTENT_TERMINAL");
-      const conflict = (field: "approvalRef" | "manifestRef" | "runRef" | "runVersion", value: string | null) => value !== null && intent[field] !== null && intent[field] !== value;
-      const approvalRef = "approvalRef" in outcome ? outcome.approvalRef : null, manifestRef = "manifestRef" in outcome ? outcome.manifestRef : null;
-      const runRef = "runRef" in outcome ? outcome.runRef : null, runVersion = "runVersion" in outcome ? outcome.runVersion : null;
-      if (conflict("approvalRef", approvalRef) || conflict("manifestRef", manifestRef) || conflict("runRef", runRef)) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
-      // Leaving uncertainty needs a reconciled lookup of the same run with a terminal receipt, never a fresh attempt.
-      if (intent.state === "uncertain" && outcome.kind !== "uncertain") {
-        if (outcome.kind !== "sent" && outcome.kind !== "notSent") throw new FollowUpError("UNCERTAIN_REQUIRES_RECONCILIATION");
-        if (!intent.runRef || runRef !== intent.runRef || !outcome.receiptRefs.length) throw new FollowUpError("UNCERTAIN_REQUIRES_RECONCILIATION");
+      const recordedAt = new Date(at).toISOString();
+      if (intent.state === "superseded") {
+        // A late `sent` receipt is real and stays in the audit log, but the withdrawn intent never becomes sent.
+        const conflict = this.recordConflict({ kind: "lateOutcome", intentRef: intent.intentRef, collaborationId: intent.collaborationId, outcome,
+          intentState: intent.state, blocking: outcome.kind !== "notSent", recordedAt });
+        return { state: "conflict", intent, conflict };
       }
-      if (outcome.kind === "approvalRecorded" && !["proposed", "awaitingApproval", "superseded"].includes(intent.state)) throw new FollowUpError("INTENT_ALREADY_DISPATCHED");
-      const state: IntentState = { approvalRecorded: "awaitingApproval", dispatchPending: "dispatched", sent: "sent", notSent: "notSent", uncertain: "uncertain" }[outcome.kind] as IntentState;
-      const next: StoredIntent = { ...intent, state, approvalRef: approvalRef ?? intent.approvalRef, manifestRef: manifestRef ?? intent.manifestRef,
-        runRef: runRef ?? intent.runRef, runVersion: runVersion ?? intent.runVersion,
-        receiptRefs: "receiptRefs" in outcome ? [...new Set([...intent.receiptRefs, ...outcome.receiptRefs])] : intent.receiptRefs, updatedAt: new Date(at).toISOString() };
+      if (intent.state === "sent" || intent.state === "notSent") throw new FollowUpError("INTENT_TERMINAL");
+      const value = <K extends "approvalRef" | "manifestRef" | "runRef" | "runVersion">(field: K) => (field in outcome ? (outcome as Record<K, string | null>)[field] : null);
+      const bound = (["approvalRef", "manifestRef", "runRef", "runVersion"] as const).every(field => value(field) === null || intent[field] === null || intent[field] === value(field));
+      if (!bound) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
+      // Leaving uncertainty needs a reconciled lookup of the same run with a terminal receipt, never a fresh attempt.
+      if (intent.state === "uncertain" && outcome.kind !== "uncertain" &&
+        (!intent.runRef || value("runRef") !== intent.runRef || !("receiptRefs" in outcome) || !outcome.receiptRefs.length))
+        throw new FollowUpError("UNCERTAIN_REQUIRES_RECONCILIATION");
+      if (!ALLOWED_FROM[outcome.kind].includes(intent.state)) throw new FollowUpError("OUTCOME_OUT_OF_ORDER");
+      const next: StoredIntent = { ...intent, state: NEXT_STATE[outcome.kind],
+        approvalRef: value("approvalRef") ?? intent.approvalRef, manifestRef: value("manifestRef") ?? intent.manifestRef,
+        runRef: value("runRef") ?? intent.runRef, runVersion: intent.runVersion ?? value("runVersion"),
+        holdReasons: outcome.kind === "approvalHeld" ? outcome.reasonCodes : [],
+        receiptRefs: "receiptRefs" in outcome ? [...new Set([...intent.receiptRefs, ...outcome.receiptRefs])] : intent.receiptRefs, updatedAt: recordedAt };
       this.writeIntent(next);
-      return next;
+      return { state: "recorded", intent: next };
+    });
+  }
+
+  resolveConflict(conflictRef: string, operatorRef: string, idempotencyKey: string): OutcomeConflict {
+    z.tuple([reference, reference]).parse([conflictRef, operatorRef]);
+    return this.once("resolveConflict", idempotencyKey, [conflictRef, operatorRef], at => {
+      const row = this.db.prepare("SELECT body FROM creator_follow_up_outcome_conflicts WHERE conflict_ref=?").get(conflictRef);
+      if (!row) throw new FollowUpError("RECORD_NOT_FOUND", 404);
+      const conflict = JSON.parse(String(row.body)) as OutcomeConflict;
+      if (conflict.resolvedAt) throw new FollowUpError("CONFLICT_ALREADY_RESOLVED");
+      const resolved = { ...conflict, resolvedAt: new Date(at).toISOString(), resolvedBy: operatorRef };
+      this.db.prepare("UPDATE creator_follow_up_outcome_conflicts SET resolved=1,body=? WHERE conflict_ref=?").run(JSON.stringify(resolved), conflictRef);
+      return resolved;
     });
   }
 
@@ -161,19 +239,22 @@ export class FollowUpRepository {
   }
 
   /** Evaluates paid reuse at the locked clock and raises at most one expiry warning per rights binding. */
-  recordRightsCheck(collaborationId: string, input: RightsGateInput, idempotencyKey: string): RightsReceipt {
+  recordRightsCheck(collaborationId: string, raw: unknown, idempotencyKey: string): RightsReceipt {
     reference.parse(collaborationId);
+    const input = rightsGateInputSchema.parse(raw);
     return this.once("recordRightsCheck", idempotencyKey, [collaborationId, input], at => {
       const gate = evaluatePaidReuse(input, at, this.config.rightsWarningDays);
-      if (!gate.warningKey || this.closureOf(collaborationId)) return { gate, intent: null, created: false };
-      const proposed = this.propose(collaborationId, "rights-expiry-warning", gate.warningKey, { channel: "human-review", localDay: new Date(at).toISOString().slice(0, 10),
+      if (!gate.warningKey || this.closureOf(collaborationId)) return { gate, proposal: null };
+      const proposal = this.propose(collaborationId, "rights-expiry-warning", gate.warningKey, { channel: "human-review", localDay: localDay(at, this.config.timezone),
         timezone: this.config.timezone, reasonCodes: ["RIGHTS_EXPIRING"], sourceRef: input.chain[0]?.rights?.evidenceRef ?? input.asset.submission.assetId }, at);
-      return { gate, ...proposed };
+      return { gate, proposal };
     });
   }
 
-  close(collaborationId: string, evidence: ClosureEvidence, idempotencyKey: string, deliverableRef?: string): ClosureRecord {
+  close(collaborationId: string, raw: unknown, idempotencyKey: string, deliverableRef?: string): ClosureRecord {
     reference.parse(collaborationId);
+    if (deliverableRef !== undefined) reference.parse(deliverableRef);
+    const evidence = closureEvidenceSchema.parse(raw);
     return this.once("close", idempotencyKey, [collaborationId, deliverableRef ?? null, evidence], at => {
       if (this.closureOf(collaborationId)) throw new FollowUpError("FOLLOW_UP_ALREADY_CLOSED");
       const reviewRef = evidence.reason === "posted-verified" ? evidence.delivery.deliverableRef : deliverableRef;
@@ -182,7 +263,7 @@ export class FollowUpRepository {
       if (decision.state !== "closable") throw new FollowUpError(decision.reasonCodes[0] ?? "CLOSURE_REFUSED", 422);
       const record: ClosureRecord = { collaborationId, reason: decision.reason, evidenceRef: decision.evidenceRef, reasonCodes: decision.reasonCodes, closedAt: new Date(at).toISOString() };
       this.db.prepare("INSERT INTO creator_follow_up_closures VALUES(?,?,?,?)").run(collaborationId, record.reason, JSON.stringify(record), record.closedAt);
-      this.supersede(collaborationId, null, at);
+      this.supersede(collaborationId, "closure", () => true, at);
       return record;
     });
   }
@@ -193,6 +274,11 @@ export class FollowUpRepository {
   intents(collaborationId: string): StoredIntent[] {
     return this.db.prepare("SELECT body FROM creator_follow_up_intents WHERE collaboration_id=? ORDER BY created_at,intent_ref").all(collaborationId)
       .map(row => JSON.parse(String(row.body)) as StoredIntent);
+  }
+  /** Every outcome conflict for a collaboration, resolved or not. This is the audit log for late outcomes. */
+  conflicts(collaborationId: string): OutcomeConflict[] {
+    return this.db.prepare("SELECT body FROM creator_follow_up_outcome_conflicts WHERE collaboration_id=? ORDER BY recorded_at,conflict_ref").all(collaborationId)
+      .map(row => JSON.parse(String(row.body)) as OutcomeConflict);
   }
   /** Uncertain creator messages, oldest first. Each needs a reconciliation lookup before anything else happens. */
   pendingReconciliation(limit = 50): StoredIntent[] {

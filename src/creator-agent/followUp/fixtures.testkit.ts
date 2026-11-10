@@ -5,7 +5,10 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof
 
 export const followUpScope = { workspaceId: "synthetic-workspace", accountId: "synthetic-account", environment: "sandbox" as const };
 export const followUpZone = "America/Los_Angeles";
-export const followUpConfig = defaultFollowUpConfig(followUpZone);
+/** No reminder policy: creator reminders are refused. */
+export const unsetConfig = defaultFollowUpConfig(followUpZone);
+export const followUpConfig = { ...unsetConfig, reminderPolicy: "preDue" as const };
+export const postGraceConfig = { ...unsetConfig, reminderPolicy: "postGraceOnly" as const };
 export const collaborationId = "synthetic-collaboration";
 
 export function followUpDatabase(scope = followUpScope) {

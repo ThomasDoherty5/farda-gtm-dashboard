@@ -42,6 +42,19 @@ describe("paid reuse rights gate", () => {
     expect(again.warningKey).toBe(first.warningKey);
     expect(evaluatePaidReuse(gateInput({ rightsVersion: "synthetic-rights-v2" }), later, 14).warningKey).not.toBe(first.warningKey);
   });
+  it("warns on the earliest end date anywhere in the rights chain", () => {
+    const parent = record();
+    const submission = syntheticAsset({ assetId: "synthetic-crop", lineage: { parentAssetId: parent.submission.assetId, parentVersion: 1, changes: ["crop"], editorRef: "synthetic-editor", provenanceRef: "synthetic-edit" } });
+    const child: StoredAsset = { ...record(), submission, submissionHash: digest(submission) };
+    const long = { validUntil: "2026-12-31T00:00:00.000Z", endsAt: "2026-12-30T00:00:00.000Z" };
+    const input: RightsGateInput = { scope: assetTestScope, asset: child, use: syntheticUse(submission.assetId), chain: [
+      { asset: child, rights: syntheticRights(child, long) },
+      { asset: parent, rights: syntheticRights(parent, { ...long, endsAt: "2026-11-25T00:00:00.000Z", rightsVersion: "synthetic-parent-rights-v1" }) }] };
+    const result = evaluatePaidReuse(input, Date.parse("2026-11-20T12:00:00.000Z"), 14);
+    expect(result).toMatchObject({ paidReuse: "allowed", rightsStatus: "granted", expiry: { endsAt: "2026-11-25T00:00:00.000Z", state: "warning", daysRemaining: 5 } });
+    const expired = evaluatePaidReuse(input, Date.parse("2026-11-26T00:00:00.000Z"), 14);
+    expect(expired).toMatchObject({ paidReuse: "blocked", rightsStatus: "expired", expiry: { state: "expired" } });
+  });
   it("only gates paid reuse", () => {
     const input = gateInput({});
     expect(() => evaluatePaidReuse({ ...input, use: { ...input.use, kind: "brand_organic" } }, now, 14)).toThrow("PAID_REUSE_ONLY");

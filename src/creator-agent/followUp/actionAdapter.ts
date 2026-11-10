@@ -53,21 +53,40 @@ export function approvalReconciliationFor(intent: StoredIntent, context: Context
     approvalRef: intent.approvalRef, manifestRef: intent.manifestRef, expectedVersion: context.approvalVersion, payload: {} });
 }
 
-/** Maps an actions-service answer to a follow-up outcome. Approved, queued or running is never treated as sent. */
-export function outcomeFromActionResponse(intentRef: string, response: ActionResponse): SendOutcome {
-  const { approvalRef, manifestRef, runRef } = response;
+const APPROVAL_PENDING_STATES = ["draft", "approvalPending", "approved"];
+/**
+ * Maps an actions-service answer for one intent to a follow-up outcome. Approved, queued or running is never sent.
+ * A blocked answer without a run is a held approval, not a recorded one. The intent's first signed run version
+ * stays the binding: the service accepts any of its signed run versions for a lookup.
+ */
+export function outcomeFromActionResponse(intent: StoredIntent, response: ActionResponse): SendOutcome {
+  const intentRef = intent.intentRef, { approvalRef, manifestRef, runRef } = response;
+  const runVersion = runRef && runRef === intent.runRef && intent.runVersion ? intent.runVersion : runRef ? response.payloadVersion : null;
   if (response.executionCertainty === "uncertain" || ["outcomeUncertain", "reconciling", "partiallySucceeded"].includes(response.state))
-    return { kind: "uncertain", intentRef, approvalRef, manifestRef, runRef, runVersion: runRef ? response.payloadVersion : null };
-  if (!approvalRef || !manifestRef) throw new FollowUpAdapterError("APPROVAL_REFERENCE_MISSING");
+    return { kind: "uncertain", intentRef, approvalRef, manifestRef, runRef, runVersion };
   if (!runRef) {
     if (["failed", "canceled"].includes(response.state)) return { kind: "notSent", intentRef, approvalRef, manifestRef, runRef: null, runVersion: null, receiptRefs: response.receiptRefs };
-    return { kind: "approvalRecorded", intentRef, approvalRef, manifestRef };
+    if (approvalRef && manifestRef && APPROVAL_PENDING_STATES.includes(response.state)) return { kind: "approvalRecorded", intentRef, approvalRef, manifestRef };
+    return { kind: "approvalHeld", intentRef, approvalRef, manifestRef, reasonCodes: heldReasons(response.reasonCodes, "APPROVAL_" + response.state.toUpperCase()) };
   }
-  const runVersion = response.payloadVersion;
+  if (!approvalRef || !manifestRef || !runVersion) throw new FollowUpAdapterError("APPROVAL_REFERENCE_MISSING");
   if (response.state === "succeeded" && response.executionCertainty === "applied" && response.receiptRefs.length)
     return { kind: "sent", intentRef, approvalRef, manifestRef, runRef, runVersion, receiptRefs: response.receiptRefs };
   if (["failed", "canceled"].includes(response.state)) return { kind: "notSent", intentRef, approvalRef, manifestRef, runRef, runVersion, receiptRefs: response.receiptRefs };
   return { kind: "dispatchPending", intentRef, approvalRef, manifestRef, runRef, runVersion };
+}
+const heldReasons = (codes: string[], fallback: string) => {
+  const valid = codes.filter(code => /^[A-Z][A-Z0-9_]{0,99}$/.test(code)).slice(0, 20);
+  return valid.length ? valid : [fallback];
+};
+/**
+ * Maps a thrown actions-service error for one intent. A denial that applied nothing is a held approval; an
+ * uncertain or ambiguous error is uncertain and goes to reconciliation, never a retry.
+ */
+export function outcomeFromActionError(intent: StoredIntent, error: { code: string; executionCertainty: "notApplied" | "applied" | "uncertain" }): SendOutcome {
+  if (error.executionCertainty === "notApplied" && !intent.runRef)
+    return { kind: "approvalHeld", intentRef: intent.intentRef, approvalRef: intent.approvalRef, manifestRef: intent.manifestRef, reasonCodes: heldReasons([error.code], "ACTION_DENIED") };
+  return { kind: "uncertain", intentRef: intent.intentRef, approvalRef: intent.approvalRef, manifestRef: intent.manifestRef, runRef: intent.runRef, runVersion: intent.runVersion };
 }
 
 /**
@@ -79,6 +98,9 @@ const OUTCOME: Record<ClosureRecord["reason"], WorkflowIntent["outcome"]> = {
   "rights-unavailable": "canceled", cancelled: "canceled",
 };
 export function collaborationProposalFor(item: { kind: "handoff"; intent: StoredIntent } | { kind: "closure"; closure: ClosureRecord }, collaborationRef: string): WorkflowIntent {
+  // Under postGraceOnly, the post-grace reminder matches the workflow's own reminder proposal.
+  if (item.kind === "handoff" && item.intent.step === "post-grace")
+    return workflowIntentSchema.parse({ collaborationRef, kind: "reminder", reason: `Follow-up post-grace reminder: ${item.intent.reasonCodes.join(", ")}` });
   if (item.kind === "handoff") {
     if (item.intent.channel !== "human-review") throw new FollowUpAdapterError("INTENT_NOT_HUMAN_REVIEW");
     return workflowIntentSchema.parse({ collaborationRef, kind: "human-handoff", reason: `Follow-up ${item.intent.step}: ${item.intent.reasonCodes.join(", ")}` });
