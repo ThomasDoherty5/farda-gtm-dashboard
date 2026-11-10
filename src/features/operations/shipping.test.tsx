@@ -35,7 +35,8 @@ describe("OPS270-04 in transit excludes confirmed delivered", () => {
     expect(screen.getByRole("heading", { name: "3 in transit" })).toBeInTheDocument();
     expect(screen.getByText(/1 confirmed delivered are not counted/)).toBeInTheDocument();
     const r = rows("shipments-table");
-    expect(r.find((x) => x.textContent!.includes("TEST-SP-0090"))).toHaveTextContent(/Delivered, confirmed.*Not in transit/);
+    expect(r.find((x) => x.textContent!.includes("TEST-SP-0090"))).toBeUndefined();
+    expect(r[0]).toHaveTextContent(/Lost|Returned/);
     expect(r.find((x) => x.textContent!.includes("TEST-SP-0089"))).toHaveTextContent(/Delivered, not confirmed by the carrier.*In transit/);
   });
 });

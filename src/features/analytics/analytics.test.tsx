@@ -243,6 +243,17 @@ describe("paid media (30:349)", () => {
     expect(await screen.findByText(/No assets match these filters\. That is not zero assets/)).toBeInTheDocument();
   });
 
+  it("offers an expired rights filter, which the server accepts, and keeps it in the URL", async () => {
+    const user = userEvent.setup();
+    const router = open("/analytics/paid-media");
+    await user.click(await screen.findByRole("button", { name: "Rights: all states" }));
+    const filter = await openDialog();
+    await user.click(within(filter).getByRole("radio", { name: "expired", hidden: true }));
+    await user.click(within(filter).getByRole("button", { name: "Done", hidden: true }));
+    await waitFor(() => expect(router.state.location.search).toBe("?rights=expired"));
+    expect(await screen.findByRole("button", { name: "Rights: expired" })).toBeInTheDocument();
+  });
+
   it("an unrecognised filter value falls back to all", async () => {
     open("/analytics/paid-media?rights=bogus");
     expect(await screen.findByRole("button", { name: "Rights: all states" })).toBeInTheDocument();

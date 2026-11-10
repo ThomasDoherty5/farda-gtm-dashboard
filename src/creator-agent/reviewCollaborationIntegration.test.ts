@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { collaborationTestSource } from "./collaborationWorkflowFixtures.ts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAgentServer } from "./server.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN, SYNTHETIC_SCOPE } from "./testFixtures.ts";
@@ -13,15 +14,18 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
   let app: ReturnType<typeof createAgentServer>;
   let origin: string;
   let source: CollaborationSourceSnapshot | null;
+  let clock: number;
   beforeEach(async () => {
+    clock = Date.now();
     source = collaborationSnapshotSchema.parse({ scope, id: "synthetic-collaboration", sourceRevision: "synthetic-source-v1", sourceRef: "source:synthetic-collaboration",
-      observedAt: new Date().toISOString(), coverage: "complete", title: "Synthetic collaboration", platform: "Social Cat", creatorRef: null, campaignRef: null,
+      observedAt: new Date(clock).toISOString(), coverage: "complete", title: "Synthetic collaboration", platform: "Social Cat", creatorRef: null, campaignRef: null,
       stage: "Content pending", nextAction: "Review content",
       terms: { kind: "Commission only", agreementRef: null, acceptedAt: null, version: null, brief: null, usage: null, posting: "unknown", due: null,
         graceDays: null, observationUntil: null, retainedSampleCost: null, historicalFee: null },
       sample: { state: null, observedAt: null, sourceRef: null }, suppression: { state: "unknown", sourceRef: null }, history: [], deliverables: [] });
     app = createAgentServer({ databasePath: ":memory:", readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
-      workspaceId: scope.workspaceId, accountId: scope.accountId, collaborationSourceReader: async (_scope, id) => id === "synthetic-collaboration" ? source : null });
+      workspaceId: scope.workspaceId, accountId: scope.accountId, operations: { now: () => clock },
+      collaborationSourceReader: collaborationTestSource(id => id === "synthetic-collaboration" ? source : null,()=>clock) });
     await new Promise<void>(resolve => app.server.listen(0, "127.0.0.1", resolve));
     const address = app.server.address();
     if (!address || typeof address === "string") throw new Error("Expected test server.");
@@ -55,6 +59,7 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
   });
   it("saves only a local proposal and rejects reader, forged actor, dispatch and changed-payload attempts", async () => {
     const read = await post("/v1/read", readRequest("collaborationDetail", "synthetic-collaboration"));
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
     const request = proposal(read.body.dataVersion);
     const initialSource = structuredClone(source);
     expect((await post("/v1/action", request, SYNTHETIC_READ_TOKEN)).status).toBe(403);
@@ -93,6 +98,9 @@ describe("review sprint collaboration authenticated source/proposal boundary", (
     const first = await post("/v1/action", proposal(initial.body.dataVersion));
     expect(first.status).toBe(200);
     for (let index = 0; index < 51; index++) {
+      // Model permitted traffic across multiple windows, retaining all52 receipts and the original history lookup.
+      clock += 2100;
+      source!.observedAt = new Date(clock).toISOString();
       const current = await post("/v1/read", readRequest("collaborationDetail", "synthetic-collaboration"));
       const next = proposal(current.body.dataVersion);
       const response = await post("/v1/action", { ...next, idempotencyKey: "synthetic-following-proposal-" + index,

@@ -11,6 +11,8 @@ import { ReadState } from "@/components/ReadState";
 import { ViewError } from "@/components/ViewError";
 import { ActionError, Details, EXECUTION_LABELS, HistoricalNote, LeaveGuard, SourceDialog, TermsView, blockedReason, dateTime, payloadChanges } from "./shared";
 import type { ApprovalDetail, ApprovalStatus, ApprovalVersion, DecidePayload } from "./types";
+import { nativeApprovalViewSchema, type NativeApprovalView } from "@/creator-agent/actions/views";
+import { NativeApprovalPage } from "./NativeApprovalPage";
 import styles from "./Approvals.module.css";
 
 const STATUS: Record<ApprovalStatus, { label: string; tone: BadgeTone }> = {
@@ -33,11 +35,26 @@ type Res = ReadResponse<ApprovalDetail>;
 export function ApprovalPage() {
   const { approvalId = "" } = useParams();
   const [search] = useSearchParams();
-  const filters = useMemo(() => ({ approvalId }), [approvalId]);
-  const query = useView<{ approvalId: string }, ApprovalDetail>("approvalDetail", filters);
+  const { adapter } = useScope();
+  const versionQuery = search.get("version"), beforeQuery = search.get("beforeVersion"), historyQuery = search.get("view") === "history";
+  const filters = useMemo(() => {
+    const version = (value: string) => /^v?[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value.replace(/^v/, ""))) ? Number(value.replace(/^v/, "")) : 0;
+    return { approvalId, ...(adapter.kind !== "demo" ? {
+      ...(versionQuery !== null ? {manifestVersion:version(versionQuery)} : {}),
+      ...(historyQuery || versionQuery !== null ? {history:true} : {}),
+      ...(beforeQuery !== null ? {beforeVersion:version(beforeQuery)} : {}),
+    } : {}) };
+  }, [approvalId, adapter.kind, versionQuery, historyQuery, beforeQuery]);
+  const query = useView<typeof filters, ApprovalDetail | NativeApprovalView>("approvalDetail", filters);
   const requestedVersion = search.get("version");
   const showHistory = search.get("view") === "history";
   const data = query.data?.data ?? null;
+  // Native data never passes through the legacy creator-message projection.
+  if (data && "kind" in data) {
+    const parsed = nativeApprovalViewSchema.safeParse(data);
+    if (!parsed.success) return <section><h1>Approval unavailable</h1><p role="alert">The native approval response did not match its contract. No action is available.</p></section>;
+    return <>{query.isError && <ViewError error={query.error} subject="This approval" hasPriorData onRetry={() => void query.refetch()} />}<NativeApprovalPage res={{ ...query.data!, data: parsed.data, ...(query.isError || query.isFetching ? { dataState: "stale" as const } : {}) }} refresh={() => void query.refetch()} /></>;
+  }
   const prior = data ? [...data.versions].reverse().find((v) => v.decision)?.version ?? data.currentVersion : null;
 
   return (

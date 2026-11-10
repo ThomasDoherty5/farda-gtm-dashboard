@@ -88,3 +88,9 @@
   .detailTitle { font: var(--text-h3); }
   .refreshRow { align-items: flex-start; }
 }
+
+/* Native opaque source references must wrap without concealing facts or forcing
+   a different column map from the original shipping design. */
+.hub[data-native="true"] .table tbody tr { height: auto; min-height: 108px; }
+.hub[data-native="true"] .strip, .hub[data-native="true"] .small, .hub[data-native="true"] .stack { overflow-wrap: anywhere; }
+.hub[data-native="true"] .rowAction { min-height: 44px; }

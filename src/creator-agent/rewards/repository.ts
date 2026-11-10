@@ -1,10 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { digest } from "../config.ts";
 import { AgentConflict } from "../store.ts";
+import { rewardPolicySnapshotSchema, type CommercialPolicySource } from "../commercialPolicy/contract.ts";
+import { canonicalPurchaseIdentitySchema, canonicalPurchaseReadbackSchema, rewardResourceBasisSchema, type RewardResourceBasis, type CanonicalRewardRequest,
+  type CanonicalRewardCheckpoint, type CanonicalPurchaseIdentity, type CanonicalPurchaseReadback } from "./canonicalContract.ts";
 import {
-  FULFILLMENT_DAYS, allocationSchema, cashMovementSchema, decisionSchema, entitlementSchema, outcomeSchema, prepareSchema, providerStateSchema, purchaseLookupSchema, purchaseReceiptSchema,
+  FULFILLMENT_DAYS, cashMovementSchema, entitlementSchema, outcomeSchema, prepareSchema, providerStateSchema,
   quoteSchema, redemptionViewSchema, ref, rewardPolicySchema, type Entitlement, type PrepareInput, type Quote, type RedemptionState,
   type RedemptionView, type RewardOption, type RewardScope,
 } from "./contract.ts";
@@ -13,12 +15,13 @@ export type RewardProviderIdentity = { providerRef: string; providerBindingRef: 
 
 /** Trusted, server-configured sources. A caller never supplies these objects. */
 export interface RewardAuthority {
+  /** Canonical independently versioned policy source. Legacy DTO callbacks cannot release canonical dispatch. */
+  commercialPolicy?: CommercialPolicySource;
   entitlement?(entitlementRef: string, scope: RewardScope): unknown;
   rewardPolicy?(version: string, scope: RewardScope): unknown;
   quote?(quoteRef: string, scope: RewardScope): unknown;
   provider?(providerRef: string, deliveryRoute: string, scope: RewardScope): unknown;
   allocation?(allocationRef:string, scope:RewardScope): unknown;
-  decision?(sourceRef: string, scope: RewardScope): unknown;
   outcome?(sourceRef: string, scope: RewardScope, provider: RewardProviderIdentity): unknown;
   cashMovement?(sourceRef: string, scope: RewardScope, provider: RewardProviderIdentity): unknown;
   /** The provider purchase executor. Keyed and idempotent at the provider; read() finds an earlier attempt by its key. */
@@ -37,6 +40,8 @@ type Stored = {
   leaseId?: string | null; purchasedAt?: string; outcomeAt?: string; refundedAt?: string; cashAt?: string;
   physicalAt?: string; physicalState?: "purchased" | "shipped" | "delivered" | "failed" | "returned";
   history: { state: RedemptionState; at: string; ref: string | null }[];
+  canonical?: { attempts: CanonicalRewardCheckpoint[] };
+  resourceBases?: RewardResourceBasis[];
 };
 const REVISABLE: RedemptionState[] = ["held", "awaiting-details", "awaiting-approval", "approved", "rejected"];
 const PRE_PURCHASE: RedemptionState[] = [...REVISABLE];
@@ -45,8 +50,6 @@ const NEXT: Partial<Record<RedemptionState, RedemptionState[]>> = {
   purchased: ["shipped", "delivered", "failed"], shipped: ["delivered", "failed", "returned"], delivered: ["returned"], reconciled: ["returned"],
 };
 const REFUNDABLE: RedemptionState[] = ["purchased", "shipped", "delivered", "failed", "returned", "reconciled"];
-/** How long a purchase may run before another call treats the worker as stopped and reads the provider back. */
-const PURCHASE_LEASE_MS = 5 * 60_000;
 const parse = <T>(schema: z.ZodType<T>, value: unknown): T | null => { const r = schema.safeParse(value); return r.success ? r.data : null; };
 const sameScope = (a: RewardScope, b: RewardScope) => a.workspaceId === b.workspaceId && a.accountId === b.accountId;
 const usd = (minor: number) => `$${(minor / 100).toLocaleString("en-US", { minimumFractionDigits: minor % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
@@ -172,6 +175,20 @@ export class RewardRedemptionRepository {
       Date.parse(p.validUntil) > this.now().getTime() ? p : null;
   }
 
+  private policyFor(e: Entitlement) {
+    const source = this.authority.commercialPolicy;
+    if (!source) return parse(rewardPolicySchema, this.authority.rewardPolicy?.(e.rewardVersion, this.scope));
+    const scope = { ...this.scope, environment: "sandbox" as const };
+    const result = rewardPolicySnapshotSchema.safeParse(source.readRewardPolicy({ scope, programmeRef: e.programRef, rewardVersion: e.rewardVersion }));
+    if (!result.success) return null;
+    const p = result.data, now = this.now().getTime();
+    if (digest(p.scope) !== digest(scope) || p.programmeRef !== e.programRef || p.rewardVersion !== e.rewardVersion ||
+        Date.parse(p.observedAt) > now || Date.parse(p.validUntil) <= now) return null;
+    try { source.assertRewardCurrent(p, now); } catch { return null; }
+    return rewardPolicySchema.parse({ scope: this.scope, version: p.rewardVersion,
+      state: p.terms.state === "effective" ? "adopted" : "proposed", adoptionRef: p.terms.adoptionRef, options: p.terms.options });
+  }
+
   /** Prepares, or revises before purchase, the one redemption request for a mature entitlement. Problems hold it with reasons. */
   prepare(body: unknown, key: string): RedemptionView {
     const input = prepareSchema.parse(body);
@@ -190,7 +207,7 @@ export class RewardRedemptionRepository {
       if (active && !REVISABLE.includes(active.state)) throw new AgentConflict("REDEMPTION_ALREADY_IN_PROGRESS");
 
       const reasons: string[] = [];
-      const policySource = parse(rewardPolicySchema, this.authority.rewardPolicy?.(entitlement.rewardVersion,this.scope));
+      const policySource = this.policyFor(entitlement);
       const policy = policySource && sameScope(policySource.scope,this.scope) ? policySource : null;
       if (!policy || policy.version !== entitlement.rewardVersion) reasons.push("REWARD_TERMS_UNAVAILABLE");
       else if (policy.state !== "adopted") reasons.push("REWARD_TERMS_NOT_ADOPTED");
@@ -198,7 +215,6 @@ export class RewardRedemptionRepository {
       if (policy && !option) reasons.push("REWARD_OPTION_NOT_ALLOWED");
       const quoteSource = parse(quoteSchema, this.authority.quote?.(input.quoteRef, this.scope));
       const quote = quoteSource && sameScope(quoteSource.scope,this.scope) ? quoteSource : null;
-      let fardaMinor: number | null = null;
       if (!quote || quote.quoteRef !== input.quoteRef) reasons.push("QUOTE_UNVERIFIED");
       else {
         if (quote.optionId !== input.optionId || (option && quote.providerRef !== option.providerRef)) reasons.push("QUOTE_MISMATCH");
@@ -206,7 +222,7 @@ export class RewardRedemptionRepository {
         if (Date.parse(quote.validUntil) <= now.getTime()) reasons.push("QUOTE_EXPIRED");
         if (quote.creatorFundedMinor > quote.itemMinor) reasons.push("QUOTE_INVALID");
         // Everything Farda pays is inside the cap. An optional creator-funded upgrade never raises Farda's liability.
-        fardaMinor = Math.max(0, quote.itemMinor - quote.creatorFundedMinor) + quote.taxMinor + quote.shippingMinor + quote.bookingMinor + quote.adminMinor;
+        const fardaMinor = Math.max(0, quote.itemMinor - quote.creatorFundedMinor) + quote.taxMinor + quote.shippingMinor + quote.bookingMinor + quote.adminMinor;
         if (fardaMinor > entitlement.amountMinor) reasons.push("ALL_IN_CAP_EXCEEDED");
       }
       const provider = option ? this.provider(option) : null;
@@ -241,183 +257,12 @@ export class RewardRedemptionRepository {
     });
   }
 
-  /** Records the exact founder-authorized J04 decision for this revision and request. A reserve or earned commission is not authority. */
-  decide(redemptionId: string, decisionRef: string, key: string): RedemptionView {
-    return this.apply(key, { op: "decide", redemptionId, decisionRef }, () => {
-      const s = this.load(redemptionId);
-      if (!s) throw new AgentConflict("REDEMPTION_UNKNOWN");
-      if (s.state !== "awaiting-approval") throw new AgentConflict("NOT_AWAITING_APPROVAL");
-      const d = this.currentDecision(s, decisionRef);
-      if (d.decision === "approved") {
-        this.checkBasis(s);
-        this.checkAllocation(s,d.physicalAllocationRef);
-      }
-      this.claimReceipt(decisionRef, s.redemptionId, "decision", d);
-      s.decisionRef = decisionRef;
-      s.physicalAllocationRef = d.physicalAllocationRef;
-      this.move(s, d.decision === "approved" ? "approved" : "rejected", decisionRef);
-      this.save(s);
-      return this.view(s);
-    });
+  /** Retired direct write entry points cannot turn a caller's decision DTO into canonical authority. */
+  decide(_redemptionId: string, _decisionRef: string, _key: string): RedemptionView {
+    throw new RewardSourceUnavailable("CANONICAL_REWARD_ACTION_REQUIRED");
   }
-  private currentDecision(s: Stored, decisionRef: string) {
-    const d = parse(decisionSchema, this.authority.decision?.(decisionRef, this.scope)), now = this.now().getTime();
-    if (!d || !sameScope(d.scope, this.scope) || d.sourceRef !== decisionRef || d.redemptionId !== s.redemptionId) throw new RewardSourceUnavailable("J04_DECISION_UNVERIFIED");
-    if (d.revision !== s.revision || d.requestHash !== s.requestHash) throw new AgentConflict("J04_DECISION_FOR_ANOTHER_REQUEST");
-    if (d.state !== "current" || Date.parse(d.validUntil) <= now) throw new AgentConflict("J04_DECISION_NOT_CURRENT");
-    if (Date.parse(d.decidedAt) > now || Date.parse(d.decidedAt) < Date.parse(s.revisedAt)) throw new AgentConflict("J04_DECISION_PREDATES_REQUEST");
-    return d;
-  }
-
-  private checkAllocation(s:Stored, allocationRef:string|null) {
-    if (s.option?.deliveryRoute !== "farda-physical") {
-      if (allocationRef !== null) throw new AgentConflict("UNEXPECTED_PHYSICAL_ALLOCATION");
-      return;
-    }
-    if (!allocationRef) throw new AgentConflict("PHYSICAL_ALLOCATION_REQUIRED");
-    const a = parse(allocationSchema,this.authority.allocation?.(allocationRef,this.scope));
-    if (!a || !sameScope(a.scope,this.scope) || a.sourceRef !== allocationRef || a.redemptionId !== s.redemptionId ||
-        a.revision !== s.revision || a.requestHash !== s.requestHash || a.optionId !== s.input.optionId ||
-        a.recipientRef !== s.input.recipientRef || Date.parse(a.validUntil) <= this.now().getTime()) throw new AgentConflict("PHYSICAL_ALLOCATION_UNVERIFIED");
-  }
-  private checkBasis(s: Stored) {
-    const now=this.now().getTime();
-    if (!Number.isFinite(Date.parse(s.input.expiresAt)) || Date.parse(s.input.expiresAt) <= now) throw new AgentConflict("REQUEST_EXPIRED");
-    const e=this.entitlement(s.entitlement.entitlementRef);
-    if (e.state !== "mature" || e.fulfilled || Date.parse(e.qualifiedAt)>now ||
-        digest(entitlementBasis(e)) !== digest(entitlementBasis(s.entitlement))) throw new AgentConflict("ENTITLEMENT_CHANGED");
-    const policy=parse(rewardPolicySchema,this.authority.rewardPolicy?.(e.rewardVersion,this.scope));
-    const option=policy?.options.find(o=>o.optionId===s.input.optionId && o.milestone===e.milestone);
-    if (!policy || !sameScope(policy.scope,this.scope) || policy.version!==e.rewardVersion || policy.state!=="adopted" || !s.adoptionRef ||
-        policy.adoptionRef!==s.adoptionRef || !option || digest(option)!==digest(s.option)) throw new AgentConflict("REWARD_TERMS_CHANGED");
-    const quote = s.quote ? parse(quoteSchema, this.authority.quote?.(s.quote.quoteRef, this.scope)) : null;
-    if (!s.quote || !quote || quote.quoteRef !== s.quote.quoteRef || !quote.available || Date.parse(quote.validUntil) <= this.now().getTime()
-      || digest(quote) !== digest(s.quote)) throw new AgentConflict("QUOTE_CHANGED");
-    const provider = this.provider(option);
-    if (!provider || provider.state !== "Ready" || !provider.fundingVerified || !provider.fundingRef || providerBasis(provider)!==s.providerBasis)
-      throw new AgentConflict("PROVIDER_ROUTE_NOT_READY");
-  }
-  private checkPurchasable(s:Stored) {
-    if (!s.decisionRef) throw new AgentConflict("J04_APPROVAL_REQUIRED");
-    const d=this.currentDecision(s,s.decisionRef);
-    if (d.decision!=="approved") throw new AgentConflict("J04_APPROVAL_REQUIRED");
-    if (d.physicalAllocationRef!==s.physicalAllocationRef) throw new AgentConflict("PHYSICAL_ALLOCATION_CHANGED");
-    this.checkBasis(s);
-    this.checkAllocation(s,d.physicalAllocationRef);
-  }
-
-  /**
-   * Purchases once. The state is committed as purchasing, under a lease, before the executor runs; an error or unreadable receipt leaves
-   * it uncertain. A call during an unexpired lease is refused. After the lease expires (a stopped worker), or once uncertain, the next
-   * call reads the provider by the same key before any retry. A late result never moves a record that has already moved on.
-   */
-  async purchase(redemptionId: string, key: string): Promise<RedemptionView> {
-    if (!key?.trim() || key.length > 240) throw new AgentConflict("IDEMPOTENCY_KEY_REQUIRED");
-    const executor = this.authority.executor;
-    const claim = this.tx(() => {
-      const hash = digest({ op:"purchase", redemptionId });
-      const prior = this.db.prepare("SELECT hash FROM reward_commands WHERE key=?").get(key);
-      if (prior && prior.hash !== hash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
-      const s = this.load(redemptionId);
-      if (!s) throw new AgentConflict("REDEMPTION_UNKNOWN");
-      if (prior && s.transactionRef) return { state:s, mode:"complete" as const };
-      const resumed = s.state === "purchasing" || s.state === "uncertain";
-      if (!executor) {
-        if (resumed) throw new RewardPurchaseUnknown("PURCHASE_EXECUTOR_UNAVAILABLE");
-        throw new RewardSourceUnavailable("PURCHASE_EXECUTOR_UNAVAILABLE");
-      }
-      const now = this.now().getTime();
-      if (resumed && s.purchaseLeaseUntil && Date.parse(s.purchaseLeaseUntil) > now) throw new RewardPurchaseUnknown("PURCHASE_IN_FLIGHT");
-      if (!resumed) {
-        if (s.state !== "approved") throw new AgentConflict(PRE_PURCHASE.includes(s.state) ? "J04_APPROVAL_REQUIRED" : "ALREADY_PURCHASED");
-        this.checkPurchasable(s);
-        s.purchaseKey = "purchase:" + digest([this.scope, s.redemptionId, s.revision, s.requestHash]);
-        s.purchaseAttempted = true;
-        this.move(s, "purchasing", s.decisionRef);
-      }
-      if (!s.purchaseKey) throw new RewardPurchaseUnknown("PURCHASE_KEY_UNAVAILABLE");
-      if (!prior) this.db.prepare("INSERT INTO reward_commands VALUES(?,?,?)").run(key,hash,JSON.stringify({redemptionId}));
-      s.leaseId = randomUUID();
-      s.purchaseLeaseUntil = new Date(now + PURCHASE_LEASE_MS).toISOString();
-      this.save(s);
-      return { state:s, mode:resumed ? "recover" as const : "dispatch" as const };
-    });
-    const prepared=claim.state;
-    if (claim.mode === "complete") return this.view(prepared);
-    const purchaseKey=prepared.purchaseKey!;
-    const providerRef=prepared.option!.providerRef;
-    let receipt: z.infer<typeof purchaseReceiptSchema> | null = null;
-    try {
-      if (claim.mode === "recover") {
-        const readStarted=this.now().getTime();
-        const lookup=parse(purchaseLookupSchema,await executor!.read(purchaseKey,this.providerIdentity(prepared)));
-        if (lookup?.state === "found") receipt=lookup.receipt;
-        else if (lookup?.state !== "notFound" || lookup.purchaseKey !== purchaseKey || lookup.providerRef !== providerRef || lookup.providerBindingRef !== prepared.providerBindingRef ||
-          Date.parse(lookup.checkedAt)<readStarted || Date.parse(lookup.checkedAt)>this.now().getTime()) {
-          return this.finishPurchase(prepared,null,"PURCHASE_READBACK_UNVERIFIED");
-        }
-      }
-      if (!receipt) {
-        // Re-read ownership and sources after asynchronous lookup, immediately before invoking the same keyed provider operation.
-        const current=this.tx(() => {
-          const s=this.load(redemptionId)!;
-          if (s.leaseId!==prepared.leaseId || !s.purchaseLeaseUntil || Date.parse(s.purchaseLeaseUntil)<=this.now().getTime())
-            throw new RewardPurchaseUnknown("PURCHASE_LEASE_CHANGED");
-          this.checkPurchasable(s);
-          return s;
-        });
-        try {
-          receipt=parse(purchaseReceiptSchema,await executor!.purchase(purchaseKey,{
-            scope:this.scope, redemptionId, revision:current.revision, requestHash:current.requestHash, providerRef,
-            providerBindingRef:current.providerBindingRef, fundingRef:current.fundingRef, deliveryRoute:current.option!.deliveryRoute,
-            optionId:current.input.optionId, quoteRef:current.input.quoteRef, recipientRef:current.input.recipientRef,
-            capMinor:current.entitlement.amountMinor, currency:current.entitlement.currency, physicalAllocationRef:current.physicalAllocationRef,
-          }));
-        } catch { return this.finishPurchase(prepared,null,"PURCHASE_RESPONSE_UNVERIFIED"); }
-      }
-    } catch (cause) {
-      const reason=cause instanceof AgentConflict || cause instanceof RewardPurchaseUnknown || cause instanceof RewardSourceUnavailable ? cause.message : "PURCHASE_READBACK_UNVERIFIED";
-      this.finishPurchase(prepared,null,reason);
-      throw new RewardPurchaseUnknown(reason);
-    }
-    return this.finishPurchase(prepared,receipt,"PURCHASE_RESPONSE_UNVERIFIED");
-  }
-
-  private finishPurchase(prepared:Stored, receipt:z.infer<typeof purchaseReceiptSchema>|null, reason:string) {
-    try { return this.tx(() => {
-      const s=this.load(prepared.redemptionId)!;
-      if (s.leaseId !== prepared.leaseId || !["purchasing","uncertain"].includes(s.state)) return this.view(s);
-      s.purchaseLeaseUntil=null;
-      s.leaseId=null;
-      const start=s.history.find(h=>h.state==="purchasing")?.at;
-      const matches=receipt && start && receipt.purchaseKey===s.purchaseKey && this.providerMatches(s,receipt) &&
-        Date.parse(receipt.purchasedAt)>=Date.parse(start) && Date.parse(receipt.purchasedAt)<=this.now().getTime();
-      if (matches) {
-        const duplicate=this.db.prepare(`SELECT redemption_id FROM reward_redemptions WHERE redemption_id!=? AND
-          (json_extract(body,'$.transactionRef')=? OR json_extract(body,'$.providerOrderRef')=?) AND
-          (json_extract(body,'$.option.providerRef') IS NULL OR (json_extract(body,'$.option.providerRef')=? AND
-          (json_extract(body,'$.providerBindingRef') IS NULL OR json_extract(body,'$.providerBindingRef')=?))) LIMIT 1`).get(
-            s.redemptionId,receipt.transactionRef,receipt.providerOrderRef,receipt.providerRef,receipt.providerBindingRef);
-        const used=this.db.prepare("SELECT redemption_id,kind FROM reward_receipts WHERE source_ref=?").get(this.providerReceiptKey(s,receipt.transactionRef,"purchase"));
-        if (!duplicate && (!used || (used.redemption_id===s.redemptionId && used.kind==="purchase"))) {
-          this.claimProviderReceipt(s,receipt.transactionRef,"purchase",receipt);
-          Object.assign(s,{providerOrderRef:receipt.providerOrderRef,transactionRef:receipt.transactionRef,chargedMinor:receipt.chargedMinor,
-            purchasedAt:receipt.purchasedAt,physicalAt:receipt.purchasedAt,physicalState:"purchased"});
-          s.heldReasons=receipt.chargedMinor>s.entitlement.amountMinor ? ["CHARGE_EXCEEDS_CAP"] : [];
-          this.move(s,"purchased",receipt.transactionRef);
-          this.save(s);
-          return this.view(s);
-        }
-        reason="PURCHASE_RECEIPT_REUSED";
-      }
-      if (s.state!=="uncertain") this.move(s,"uncertain",null);
-      s.heldReasons=[reason];
-      this.save(s);
-      return this.view(s);
-    }); } catch {
-      // A provider may already have charged the scoped key. A failed local commit requires keyed reconciliation.
-      throw new RewardPurchaseUnknown("PURCHASE_RECEIPT_RECONCILIATION_REQUIRED");
-    }
+  async purchase(_redemptionId: string, _key: string): Promise<RedemptionView> {
+    throw new RewardSourceUnavailable("CANONICAL_REWARD_ACTION_REQUIRED");
   }
 
   /**
@@ -509,6 +354,138 @@ export class RewardRedemptionRepository {
     });
   }
 
+  /** Private domain basis for the canonical action registry. It never issues approval or an execution lease. */
+  canonicalRequest(redemptionId: string): CanonicalRewardRequest {
+    const s = this.load(redemptionId);
+    if (!s) throw new AgentConflict("REDEMPTION_UNKNOWN");
+    return structuredClone({ redemptionId: s.redemptionId, revision: s.revision, requestHash: s.requestHash, revisedAt: s.revisedAt,
+      entitlement: s.entitlement, input: s.input, option: s.option, quote: s.quote,
+      legacyAttempt: s.purchaseAttempted && !s.canonical, canonicalDispatchKey: s.canonical?.attempts[0]?.identity.dispatchKey ?? null });
+  }
+
+  /** Freeze only resource requirements from the server-built preview; execution always reacquires current authority. */
+  freezeResourceBasis(raw: RewardResourceBasis): void {
+    const basis = rewardResourceBasisSchema.parse(raw);
+    this.tx(() => {
+      const s = this.load(basis.redemptionId);
+      if (!s || s.revision !== basis.revision || s.requestHash !== basis.requestHash) throw new AgentConflict("REWARD_REQUEST_CHANGED");
+      const previous = s.resourceBases?.find(b => b.payloadHash === basis.payloadHash);
+      if (previous) {
+        if (digest(previous) !== digest(basis)) throw new AgentConflict("REWARD_RESOURCE_BASIS_CHANGED");
+        return;
+      }
+      s.resourceBases = [...(s.resourceBases ?? []), basis];
+      this.save(s, this.db.prepare("SELECT active FROM reward_redemptions WHERE redemption_id=?").get(s.redemptionId)?.active === 1);
+    });
+  }
+
+  resourceBasis(redemptionId: string, revision: number, payloadHash: string): RewardResourceBasis {
+    const s = this.load(redemptionId), found = s?.resourceBases?.find(b => b.revision === revision && b.payloadHash === payloadHash);
+    if (!found) throw new RewardSourceUnavailable("REWARD_RESOURCE_BASIS_UNVERIFIED");
+    return rewardResourceBasisSchema.parse(structuredClone(found));
+  }
+
+  /** Domain checkpoint only: the existing native job owns the lease, attempt and financial grants. */
+  beginCanonicalPurchase(checkpoint: CanonicalRewardCheckpoint, assertCurrent: () => void): void {
+    const input = structuredClone(checkpoint), identity = canonicalPurchaseIdentitySchema.parse(input.identity);
+    this.tx(() => {
+      const s = this.load(identity.redemptionId);
+      if (!s || s.revision !== identity.revision || s.requestHash !== identity.requestHash) throw new AgentConflict("REWARD_REQUEST_CHANGED");
+      if (digest(identity.scope) !== digest({ ...this.scope, environment: "sandbox" })) throw new AgentConflict("REWARD_SCOPE_DENIED");
+      if (s.purchaseAttempted && !s.canonical) throw new RewardPurchaseUnknown("LEGACY_REWARD_ATTEMPT_UNVERIFIED");
+      const attempts = s.canonical?.attempts ?? [], previous = attempts.at(-1);
+      if (previous) {
+        if (previous.identity.dispatchKey !== identity.dispatchKey || digest(previous.binding) !== digest(input.binding) ||
+            previous.decisionReceiptRef !== input.decisionReceiptRef) throw new RewardPurchaseUnknown("REWARD_ORIGINAL_OPERATION_REQUIRED");
+        if (previous.receipt) throw new AgentConflict("REWARD_ALREADY_PURCHASED");
+        if (previous.identity.attemptNumber === identity.attemptNumber) {
+          if (digest(previous) !== digest(input)) throw new RewardPurchaseUnknown("REWARD_ATTEMPT_CHANGED");
+          // Calling execute twice for the same started domain attempt is never permission for another provider call.
+          throw new RewardPurchaseUnknown("REWARD_ATTEMPT_ALREADY_STARTED");
+        }
+        if (identity.attemptNumber !== previous.identity.attemptNumber + 1 || !previous.closed)
+          throw new RewardPurchaseUnknown("REWARD_ORIGINAL_ATTEMPT_UNRESOLVED");
+      } else if (identity.attemptNumber !== 1 || !PRE_PURCHASE.includes(s.state)) throw new AgentConflict("REWARD_ATTEMPT_INVALID");
+      if (attempts.length >= 100 || input.closed !== null || input.receipt !== null || input.binding.actionKind !== "reward.redeem" ||
+          input.binding.phase !== "rewardRedemption" || input.binding.payloadHash !== identity.payloadHash ||
+          digest(input.binding.scope) !== digest(identity.scope) || Date.parse(input.startedAt) > this.now().getTime() ||
+          Date.parse(input.startedAt) < Date.parse(s.revisedAt) || !Number.isFinite(Date.parse(input.startedAt)))
+        throw new AgentConflict("REWARD_ATTEMPT_INVALID");
+      assertCurrent();
+      s.canonical = { attempts: [...attempts, input] };
+      s.purchaseKey = identity.dispatchKey; s.purchaseAttempted = true; s.purchaseLeaseUntil = null; s.leaseId = null;
+      s.decisionRef = input.decisionReceiptRef; s.physicalAllocationRef = input.physicalAllocationRef;
+      if (!previous) this.move(s, "approved", input.decisionReceiptRef);
+      this.move(s, "purchasing", input.decisionReceiptRef); this.save(s);
+    });
+  }
+
+  /** Stored original identity survives restart; source readback never manufactures a new approval or operation key. */
+  canonicalCheckpoint(redemptionId: string, identity: CanonicalPurchaseIdentity): CanonicalRewardCheckpoint {
+    const request = canonicalPurchaseIdentitySchema.parse(identity), s = this.load(redemptionId);
+    const found = s?.canonical?.attempts.find(attempt => digest(attempt.identity) === digest(request));
+    if (!found || redemptionId !== request.redemptionId) throw new RewardPurchaseUnknown("REWARD_ORIGINAL_ATTEMPT_UNVERIFIED");
+    return structuredClone(found);
+  }
+
+  recordCanonicalReadback(redemptionId: string, identity: CanonicalPurchaseIdentity, raw: unknown): CanonicalPurchaseReadback {
+    const input = canonicalPurchaseReadbackSchema.safeParse(raw);
+    const unknown: CanonicalPurchaseReadback = { state: "unknown", reasonCode: "REWARD_READBACK_UNVERIFIED" };
+    return this.tx(() => {
+      const s = this.load(redemptionId);
+      if (!s) throw new RewardPurchaseUnknown("REWARD_ORIGINAL_ATTEMPT_UNVERIFIED");
+      const original = s.canonical?.attempts.find(attempt => digest(attempt.identity) === digest(identity));
+      if (!original) throw new RewardPurchaseUnknown("REWARD_ORIGINAL_ATTEMPT_UNVERIFIED");
+      if (original.receipt) return structuredClone(original.receipt);
+      // A late observation of a closed old attempt is historical. It cannot replace a newer attempt's current state.
+      const isCurrent = digest(s.canonical!.attempts.at(-1)!.identity) === digest(original.identity);
+      if (original.closed && input.success && digest(input.data) === digest(original.closed)) return structuredClone(original.closed);
+      const hold = (reasonCode: string): CanonicalPurchaseReadback => {
+        if (isCurrent) {
+          if (s.state !== "uncertain") this.move(s, "uncertain", null);
+          s.heldReasons = [reasonCode]; this.save(s);
+        }
+        return { state: "unknown", reasonCode };
+      };
+      const result = input.success ? input.data : unknown;
+      if (result.state !== "unknown") {
+        const actual = result as Record<string, unknown>;
+        const matched = Object.entries(identity).every(([key, value]) => digest(actual[key]) === digest(value));
+        const observed = Date.parse(result.observedAt), now = this.now().getTime();
+        if (!matched || observed < Date.parse(original.startedAt) || observed > now || !Number.isFinite(observed))
+          return hold("REWARD_READBACK_IDENTITY_MISMATCH");
+        if (result.state === "notApplied") {
+          if (Date.parse(result.validUntil) <= now || Date.parse(result.validUntil) <= observed) return hold("REWARD_CLOSURE_EXPIRED");
+          if (original.closed && digest(original.closed) !== digest(result)) return hold("REWARD_CLOSURE_CHANGED");
+          if (!isCurrent) return hold("REWARD_OLD_ATTEMPT_READBACK");
+          original.closed = result;
+          s.heldReasons = ["REWARD_TERMINAL_ATTEMPT_CLOSED"];
+          this.move(s, "uncertain", result.receiptRef); this.save(s);
+          return structuredClone(result);
+        }
+        const receipt = result.receipt;
+        if (original.closed || receipt.purchaseKey !== identity.dispatchKey || !this.providerMatches(s, receipt) ||
+            Date.parse(receipt.purchasedAt) < Date.parse(original.startedAt) || Date.parse(receipt.purchasedAt) > observed)
+          return hold("REWARD_PURCHASE_RECEIPT_MISMATCH");
+        const duplicate = this.db.prepare(`SELECT redemption_id FROM reward_redemptions WHERE redemption_id!=? AND
+          (json_extract(body,'$.transactionRef')=? OR json_extract(body,'$.providerOrderRef')=?) AND
+          (json_extract(body,'$.option.providerRef') IS NULL OR (json_extract(body,'$.option.providerRef')=? AND
+          (json_extract(body,'$.providerBindingRef') IS NULL OR json_extract(body,'$.providerBindingRef')=?))) LIMIT 1`).get(
+          s.redemptionId, receipt.transactionRef, receipt.providerOrderRef, receipt.providerRef, receipt.providerBindingRef);
+        if (duplicate) return hold("PURCHASE_RECEIPT_REUSED");
+        this.claimProviderReceipt(s, receipt.transactionRef, "purchase", receipt);
+        this.claimProviderReceipt(s, receipt.providerOrderRef, "purchase-order", receipt);
+        original.receipt = result;
+        Object.assign(s, { providerOrderRef: receipt.providerOrderRef, transactionRef: receipt.transactionRef, chargedMinor: receipt.chargedMinor,
+          purchasedAt: receipt.purchasedAt, physicalAt: receipt.purchasedAt, physicalState: "purchased" });
+        s.heldReasons = receipt.chargedMinor > s.entitlement.amountMinor ? ["CHARGE_EXCEEDS_CAP"] : [];
+        this.move(s, "purchased", receipt.transactionRef); this.save(s);
+        return structuredClone(result);
+      }
+      return hold(result.reasonCode);
+    });
+  }
+
   read(redemptionId: string): RedemptionView | null { const s = this.load(redemptionId); return s ? this.view(s) : null; }
   activeFor(entitlementRef: string): RedemptionView | null {
     const row = this.db.prepare("SELECT body FROM reward_redemptions WHERE entitlement_ref=? AND active=1").get(ref.parse(entitlementRef));
@@ -521,15 +498,9 @@ export class RewardRedemptionRepository {
     const initiateBy = start === null ? null : new Date(start + FULFILLMENT_DAYS * 86_400_000).toISOString();
     const overdue = initiateBy !== null && PRE_PURCHASE.includes(s.state) && now > Date.parse(initiateBy);
     const fardaQuotedMinor = s.quote ? Math.max(0, s.quote.itemMinor - s.quote.creatorFundedMinor) + s.quote.taxMinor + s.quote.shippingMinor + s.quote.bookingMinor + s.quote.adminMinor : null;
-    let availability: RedemptionView["availability"] = s.policyState === "proposed" ? "proposed" : "unavailable";
+    const availability: RedemptionView["availability"] = s.policyState === "proposed" ? "proposed" : "unavailable";
     const heldReasons = new Set(s.heldReasons);
-    if (s.state === "approved") {
-      try {
-        if (!this.authority.executor) throw new RewardSourceUnavailable("PURCHASE_EXECUTOR_UNAVAILABLE");
-        this.checkPurchasable(s);
-        availability="executable";
-      } catch (error) { heldReasons.add(error instanceof AgentConflict || error instanceof RewardSourceUnavailable ? error.message : "SOURCE_UNAVAILABLE"); }
-    }
+    if (s.state === "approved") heldReasons.add("CANONICAL_REWARD_ACTION_REQUIRED");
     if (overdue) heldReasons.add("INITIATION_OVERDUE");
     return redemptionViewSchema.parse({
       kind: "reward-redemption", redemptionId: s.redemptionId, revision: s.revision, state: s.state,

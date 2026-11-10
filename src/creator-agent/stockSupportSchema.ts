@@ -60,7 +60,7 @@ export const policy="stock-support-review.v1";
 export const requestReceipt=z.object({requestKey:id,actorRef:id,state:z.enum(["recorded","absent","rejected"]),baseVersion:id.nullable(),actionRef:id.nullable(),
   digest:z.string().regex(/^[0-9a-f]{64}$/).nullable(),payloadDigest:z.string().regex(/^[0-9a-f]{64}$/).nullable()}).strict();
 const pendingReview=z.object({id,kind:z.enum(["requestStockTransfer","requestSupportHandoff"]),from:stockHome.nullable(),to:stockHome.nullable(),sku:id.nullable(),units:quantity,reasonCode:id}).strict();
-const viewHead={pending:z.object({total:count,rows:z.array(pendingReview).max(20)}).strict(),actorRef:id,revision:id,observedAt:instant,coverage:z.enum(["complete","partial"]),stale:z.boolean(),reconciliation:requestReceipt.nullable()};
+const viewHead={readAccess:z.object({validUntil:instant}).strict().nullable().optional(),pending:z.object({total:count,rows:z.array(pendingReview).max(20)}).strict(),actorRef:id,revision:id,observedAt:instant,coverage:z.enum(["complete","partial"]),stale:z.boolean(),reconciliation:requestReceipt.nullable()};
 export const nativeInventorySchema=z.object({...viewHead,kind:z.literal("source-stock"),selected:inventoryFilters.omit({proposalRequestKey:true}),
   currentWindow:id.nullable(),windows:z.array(windowSchema),skus:z.array(id),period:periodStock.nullable()}).strict();
 export const nativeSupportSchema=z.object({...viewHead,kind:z.literal("source-support"),caseId:id,cases:z.array(supportCase),allTimeOpen:quantity,cohort:cohortSchema.nullable()}).strict();

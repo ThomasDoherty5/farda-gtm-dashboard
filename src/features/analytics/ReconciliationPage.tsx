@@ -1,3 +1,6 @@
+import type { NativeLaunchReconciliation } from "@/creator-agent/analytics/views";
+import { NativeReconciliation } from "./NativeReconciliation";
+import { useReportingPeriod } from "./reportingPeriod";
 import { Link } from "react-router-dom";
 import { useView } from "@/adapter/useView";
 import { Badge } from "@/components/Badge";
@@ -18,14 +21,15 @@ const STATUS: Record<MatrixRow["status"], { label: string; tone: "success" | "da
 
 /** Source freshness and the overview-to-detail reconciliation matrix (GTM275). Read-only; it explains numbers and changes none. */
 export function ReconciliationPage() {
-  const query = useView<Record<string, never>, ReconciliationData>("launchReconciliation", {});
+  const period = useReportingPeriod();
+  const query = useView<Record<string, never>, ReconciliationData | NativeLaunchReconciliation>("launchReconciliation", {}, period);
   return (
     <section aria-labelledby="recon-title" className={styles.page}>
       <PageHeader id="recon-title" title="Do the pages agree?" subtitle="Each source's freshness, and every figure the Overview shares with a detail page.">
         <LinkButton variant="secondary" to="/launch" style={{ minWidth: 172 }}>Back to the snapshot</LinkButton>
       </PageHeader>
       <ViewShell query={query} subject="Reconciliation" emptyTitle="Nothing to reconcile" emptyBody="The source responded, but there is no freshness or reconciliation data to show.">
-        {(data) => <Body data={data} />}
+        {(data) => data.datasetKey === "analytics-native" ? <NativeReconciliation data={data} refresh={() => void query.refetch()} refreshing={query.isFetching} /> : <Body data={data} />}
       </ViewShell>
     </section>
   );

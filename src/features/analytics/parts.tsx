@@ -2,6 +2,8 @@ import { useId, useState, type ReactNode } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
 import { staleReasonText } from "@/adapter/freshness";
+import { ReportingPeriodForm } from "./reportingPeriod";
+import { useSourceLease } from "@/adapter/useSourceLease";
 import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Button, LinkButton } from "@/components/Button";
@@ -10,6 +12,8 @@ import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
 import type { Provenance } from "@/fixtures/analytics";
+import { z } from "zod";
+import { sourceStatusSchema, type SourceStatus } from "@/adapter/viewSchemas/analytics";
 import styles from "./Analytics.module.css";
 
 export const usd = (m: Money) => formatMoney(m);
@@ -150,13 +154,40 @@ export function Table({ caption, columns, rows, tight = false, cell12 = false, t
  * Loading, failure, stale, partial and empty states shared by every analytics read. Stale and partial data stays
  * visible but is labeled; an empty source answer is not shown as zero.
  */
+const SOURCE_NAMES: Record<SourceStatus["source"], string> = { orders: "Orders", adPlatforms: "Ad platforms", sessions: "Storefront sessions", support: "Support and reviews" };
+const SOURCE_STATE_WORDS: Record<SourceStatus["state"], string> = {
+  current: "current", noChange: "current, no change", partial: "partial", stale: "stale", error: "sync failed", neverSynced: "never synced",
+  unconfigured: "not connected", unavailable: "could not be read", invalid: "returned unverified data",
+};
+/** Each served source's own state. A source that is not connected is shown as such; its figures read N/A, never zero. */
+export function SourceStates({ sources }: { sources: SourceStatus[] | undefined }) {
+  const attention = (sources ?? []).filter((s) => s.state !== "current" && s.state !== "noChange");
+  if (!attention.length) return null;
+  return (
+    <Alert state="warning" title="Some sources are not current" testId="source-states">
+      <p>{attention.map((s) => `${SOURCE_NAMES[s.source]}: ${SOURCE_STATE_WORDS[s.state]}`).join(" · ")}. Figures that depend on them read N/A, not zero.</p>
+    </Alert>
+  );
+}
+/** Only a served read's per-source states. Other views use a "sources" field for different rows (the launch snapshot), so the shape is checked. */
+const sourcesOf = (data: unknown) => {
+  if (!data || typeof data !== "object" || !("sources" in data)) return undefined;
+  const parsed = z.array(sourceStatusSchema).safeParse((data as { sources: unknown }).sources);
+  return parsed.success ? parsed.data : undefined;
+};
+
 export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }: { query: UseQueryResult<ReadResponse<D>, Error>; subject: string; emptyTitle: string; emptyBody: string; children: (data: D, res: ReadResponse<D>) => ReactNode }) {
-  const res = query.data;
+  const candidate = query.data?.data;
+  const native = candidate && typeof candidate === "object" && "datasetKey" in candidate && candidate.datasetKey === "analytics-native";
+  const provenance = native && "provenance" in candidate ? candidate.provenance as { validUntil: string } : null;
+  const expired = useSourceLease(provenance?.validUntil);
+  const res = native && (query.isError || expired) ? undefined : query.data;
   const freshness = res?.sourceFreshness[0];
   return (
     <>
       {query.isPending && <SkeletonCard label={`Loading ${subject.toLowerCase()}…`} />}
       {query.isError && <ViewError error={query.error} subject={subject} hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
+      {expired && <EmptyState state="Error" title="Reporting access lease expired" alert><p>Refresh to verify current access before viewing reporting evidence.</p><Button onClick={() => void query.refetch()}>Refresh reporting evidence</Button></EmptyState>}
       {res?.dataState === "stale" && (
         <Alert state="warning" title="Source data is stale">
           <p>{staleReasonText(freshness)}. Values below are from the last successful sync, {freshness?.lastSourceSuccessAt ? dateTime(freshness.lastSourceSuccessAt) : "at an unknown time"}, not current.</p>
@@ -164,9 +195,10 @@ export function ViewShell<D>({ query, subject, emptyTitle, emptyBody, children }
       )}
       {res?.dataState === "partial" && (
         <Alert state="warning" title="Partial data">
-          <p>{res.coverage.observedCount} of {res.coverage.expectedCount} source records are available. Totals cover only those records.</p>
+          <p>{res.coverage.expectedCount === null ? `${res.coverage.observedCount ?? "Unknown"} source records observed; total coverage is unknown.` : `${res.coverage.observedCount ?? "Unknown"} of ${res.coverage.expectedCount} source records are available.`} Totals cover only those records.</p>
         </Alert>
       )}
+      <SourceStates sources={sourcesOf(res?.data)} />
       {query.isPlaceholderData && <span role="status" className="visually-hidden">Updating results…</span>}
       {res && (res.data && res.dataState !== "empty" ? <div style={{ display: "contents" }} aria-busy={query.isPlaceholderData || undefined}>{children(res.data, res)}</div> : <EmptyState state="Empty" title={emptyTitle}><p>{emptyBody}</p></EmptyState>)}
     </>
@@ -182,7 +214,8 @@ export function PeriodDialog({ open, onClose, period }: { open: boolean; onClose
   const demo = useIsDemo();
   return (
     <Dialog open={open} title="A consistent reporting window." badge={demo ? "Demo" : undefined} onClose={onClose}>
-      <p>{demo ? `This demo uses ${period ?? "one fixed window"}. ` : ""}Keep the same period across revenue, costs and attribution. A live implementation applies the chosen date range to every panel and labels incomplete periods.</p>
+      <p>{demo ? `This demo uses ${period ?? "one fixed window"}. ` : `Current source window: ${period ?? "Unknown"}. `}Keep the same period across revenue, costs and attribution. Incomplete source periods stay labeled.</p>
+      {!demo && open && <ReportingPeriodForm onApplied={onClose} />}
       <Button variant="secondary" onClick={onClose}>{demo ? "Keep demo period" : "Close"}</Button>
     </Dialog>
   );
@@ -223,26 +256,28 @@ export function HandoffDialog({ open, onClose, title, rows, children, action }: 
 
 /**
  * A filter that lives in the URL. The button shows the current choice, only allowed values are offered, and choosing
- * applies at once so Back restores the previous choice. It never writes to a source.
+ * applies at once by default. Native remote lists opt into committing on Done so changing the query cannot unmount
+ * an open choice dialog; Escape discards that draft. The owner retains URL history. It never writes to a source.
  */
-export function ChoiceButton({ legend, title, options, value, onChange, width, buttonLabel }: { legend: string; title: string; options: { value: string; label: string }[]; value: string; onChange: (value: string) => void; width?: number; buttonLabel: (current: { value: string; label: string }) => string }) {
+export function ChoiceButton({ legend, title, options, value, onChange, width, buttonLabel, applyOnDone = false }: { legend: string; title: string; options: { value: string; label: string }[]; value: string; onChange: (value: string) => void; width?: number; buttonLabel: (current: { value: string; label: string }) => string; applyOnDone?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(value);
   const group = useId();
   const current = options.find((o) => o.value === value) ?? options[0]!;
   return (
     <>
-      <Button variant="secondary" aria-haspopup="dialog" style={width ? { minWidth: width } : undefined} onClick={() => setOpen(true)}>{buttonLabel(current)}</Button>
+      <Button variant="secondary" aria-haspopup="dialog" style={width ? { minWidth: width } : undefined} onClick={() => { setDraft(value); setOpen(true); }}>{buttonLabel(current)}</Button>
       <Dialog open={open} title={title} onClose={() => setOpen(false)}>
         <fieldset className={styles.options}>
           <legend>{legend}</legend>
           {options.map((o) => (
             <label key={o.value} className={styles.option} htmlFor={`${group}-${o.value}`}>
-              <input id={`${group}-${o.value}`} type="radio" name={group} checked={o.value === current.value} onChange={() => onChange(o.value)} />
+              <input id={`${group}-${o.value}`} type="radio" name={group} checked={o.value === (applyOnDone ? draft : current.value)} onChange={() => applyOnDone ? setDraft(o.value) : onChange(o.value)} />
               {o.label}
             </label>
           ))}
         </fieldset>
-        <Button onClick={() => setOpen(false)}>Done</Button>
+        <Button onClick={() => { setOpen(false); if (applyOnDone && draft !== value) onChange(draft); }}>Done</Button>
       </Dialog>
     </>
   );

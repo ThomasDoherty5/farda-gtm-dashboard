@@ -1,8 +1,8 @@
 # Live adapter: the front-end half
 
-`src/adapter/liveAdapter.ts` implements `FardaAdapter` over an injected `Transport` (`src/adapter/transport.ts`). **Stage: fixture-complete, front-end half only.** No backend exists to talk to. Nothing here is integration-verified or production-authorized, and the tests prove the front end against test doubles, not against a service.
+`src/adapter/liveAdapter.ts` implements `FardaAdapter` over an injected `Transport` (`src/adapter/transport.ts`). The original front-end tests use test doubles. The authenticated service now exists in `src/creator-agent/server.ts`; its separate HTTP, SQLite, source-family and browser evidence is mapped in [adapter-conformance.md](adapter-conformance.md). Release evidence determines each family's verified stage. An implemented route does not establish a connected provider or production authorization.
 
-The adapter proposes no backend URL, path, header or sign-in flow. The only configuration is the reserved `VITE_FARDA_ADAPTER_BASE_URL`, which `selectAdapter` passes untouched to a host-supplied transport factory. With no factory the default transport sends nothing and every call answers `INTEGRATION_PENDING`, so nothing changes on screen until a real transport is plugged in.
+The adapter keeps provider credentials outside the frontend. `VITE_FARDA_ADAPTER_BASE_URL` selects the configured HTTP transport; the paths and session envelope are recorded in [adapter-decisions.md](adapter-decisions.md). Without a configured transport, reads remain `INTEGRATION_PENDING` and never fall back to demo data.
 
 ## The seam
 
@@ -18,7 +18,7 @@ The transport resolves the raw JSON body of a successful answer or rejects with 
 
 | Concern | Behavior | Tested in |
 | -- | -- | -- |
-| Shape | Reads, actions and saves are parsed with the contract's zod schemas (`wire.ts` adds the save response and the error body). A bad shape never reaches a screen. Unknown envelope fields are dropped, not rejected (see T-05). | `liveAdapter.test.ts` |
+| Shape | Reads, actions and saves are parsed with the contract's zod schemas (`contract.ts` holds the save response schema, D-14; `wire.ts` adds the error body). A bad shape never reaches a screen. Unknown envelope fields are dropped, not rejected (see T-05). | `liveAdapter.test.ts` |
 | Scope | The response scope must equal the requested scope (workspace, environment, accounts as a set), for reads, actions and saves. A request for another environment is refused before anything is sent. | `liveAdapter.test.ts`, conformance `SCOPE-*` |
 | 401, expired session | `UNAUTHENTICATED` or `SESSION_EXPIRED`, never retryable. `useView` and `useAction` drop protected data. The status wins over a body claiming another code. | `liveAdapter.test.ts`, conformance `AUTH-*` |
 | 403 | `FORBIDDEN` or `SOURCE_AUTHORITY_DENIED`, never retryable, with a fixed neutral message that says nothing about what exists. | same |
@@ -72,11 +72,19 @@ No new code is introduced. The adapter uses only codes already in `errors.ts`: `
 
 | ID | Question or proposal | Used in | Status |
 | -- | -- | -- | -- |
-| T-01 | The error body on the wire is `AdapterErrorBody` (`code`, `message`, `requestId`, `correlationId`, `retryable`, `retryAfterMs`, `fieldErrors?`, `currentVersion?`, `executionCertainty?`), as JSON, with the HTTP status or equivalent. Today it exists only in `errors.ts`; `wire.ts` holds its zod mirror. Freeze it in the contract. | `wire.ts`, `liveAdapter.ts` | proposed |
-| T-02 | `SaveResourceResponse` has no zod schema in `contract.ts`. `wire.ts` holds a mirror. Move it into the contract at the freeze. | `wire.ts` | proposed |
+| T-01 | The error body on the wire is `AdapterErrorBody` (`code`, `message`, `requestId`, `correlationId`, `retryable`, `retryAfterMs`, `fieldErrors?`, `currentVersion?`, `executionCertainty?`, `reasonCodes?`, `rowIndex?`), as JSON, with the HTTP status or equivalent. Policy reasons are bounded semantic codes; import row indexes are 0–99 or null. Both server and live adapter remove source/version/field/reason/index hints on 401/403 while retaining validated original outcome certainty. `errors.ts` and the Zod mirror in `wire.ts` define the current shape. | `wire.ts`, `liveAdapter.ts` | proposed |
+| T-02 | **Done (D-14, docs/adapter-decisions.md: freeze the save response schema).** `saveResourceResponseSchema` now lives in `contract.ts` beside the `SaveResourceResponse` type; `wire.ts` re-exports it for the live adapter, and the conformance suite uses it instead of a local mirror. Like the rest of the contract it is a build default, not verified against a service. | `contract.ts`, `wire.ts`, `liveAdapter.ts`, `conformance.ts` | decided |
 | T-03 | A replay of an idempotency key returns the first answer, **including its original `requestId`**. The adapter therefore does not require a write's `requestId` to equal the request's, while it does for reads. The freeze should say whether a replay keeps the original `requestId` (as the demo does) or echoes the new one, so the adapter can check it. | `liveAdapter.ts`, conformance `IDEM-2` | proposed |
 | T-04 | `executionCertainty` rule on the wire: a server that rejects before any effect says `notApplied`. When it says nothing, the adapter assumes `uncertain` for any write that may have reached it, and `notApplied` for 401, 403, 404, 422, 429. Confirm or replace. | `liveAdapter.ts` | proposed |
 | T-05 | The contract schemas strip unknown fields. The adapter returns the stripped envelope, so an extra field never reaches a screen, but a backend that adds fields is not told. Decide whether the contract becomes strict (conformance `SCHEMA-3`). | `liveAdapter.ts`, `conformance.ts` | proposed |
 | T-06 | Which operations may answer `succeeded` or `partiallySucceeded`: the adapter allows it only with a receipt, and never for `previewAction`, `requestApproval` or `decideApproval`. `running` is also refused for those three. Confirm against the approval contract (THO-277). | `liveAdapter.ts` | proposed |
 | T-07 | A 429 should carry `retryAfterMs` in the body or the transport failure. The adapter passes it through and does not retry a 429 itself. | `liveAdapter.ts` | proposed |
 | T-08 | Timeout default is 30 seconds per attempt and two attempts for writes. These are front-end defaults, not a service agreement. | `liveAdapter.ts` | proposed |
+
+### Registered runtime reads
+
+`runDetail` can return the strict `registered-runtime-run` variant. Its client-safe schema is in `jobs/runtimeViews.ts`; server-only machine, cryptography and source modules never enter the browser bundle. Opaque scoped run/item/registration references and display aliases replace source/provider/owner/receipt locators. Named-person and source activation fences run after awaited reads. A denial removes protected cached evidence.
+
+The server exposes `/v1/runtime/machine` only to a distinct private machine credential and exact short-lived source proof of operation/input/scope. Strict compiled registrations supply the executors; request bodies cannot install tools, URLs, code, permission flags or source items. The old generic worker and legacy operations routes cannot bypass runtime ownership. Public reads consume the existing transport admission once; standalone runtime gateways keep their own admission by default. Default source/activation bindings are unconfigured.
+
+The run screen reuses the original run/recovery structure and shows actual checkpoints, partial source-window coverage, takeover ownership and measured invocations. Billed Zapier/MCP tasks, model tokens and cost stay unknown without immutable source receipts. A source observation, local proposal and native action receipt are distinct outcomes. UI source adaptations replace historical creator-message text with the actual registered read/proposal state; they do not claim full pixel parity with historical domain content.

@@ -3,6 +3,8 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { fulfillmentProposalSchema, fulfillmentPreviewPayload } from "@/creator-agent/fulfillmentDomain/contract";
+import { exportViewSchemas } from "@/creator-agent/actions/exportViews";
 import { createDemoAdapter } from "../demoAdapter";
 import { AdapterError } from "../errors";
 import { SCHEMA_VERSION, type ReadRequest } from "../contract";
@@ -21,9 +23,11 @@ import { opsActionSchemas, opsViewSchemas } from "./ops";
 import { recruitmentViewSchemas } from "./recruitment";
 import { scorecardsViewSchemas } from "./scorecards";
 import { shippingHubViewSchemas } from "./shippingHub";
-import { settingsViewSchemas } from "./settings";
+import {controlSections,nativeOperationsControlSchema} from "@/creator-agent/operationsControlsSchema";
+import { settingsActionSchemas, settingsViewSchemas } from "./settings";
 
-const AREAS = [analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
+const nativeOnlyViews={...exportViewSchemas,fulfillmentProposal:fulfillmentProposalSchema};
+const AREAS = [nativeOnlyViews,analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
 let n = 0;
 const read = (viewKey: string, filters: unknown = {}): ReadRequest<unknown> => ({
@@ -41,7 +45,7 @@ describe("the view schema registry", () => {
     expect(total).toBeGreaterThan(40);
   });
   it("holds every area's action payload schemas exactly once", () => {
-    const total = [approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas].reduce((sum, a) => sum + Object.keys(a).length, 0);
+    const total = [{previewFulfillmentDecision:{payload:fulfillmentPreviewPayload}}, approvalActionSchemas, lifecycleActionSchemas, opsActionSchemas, settingsActionSchemas].reduce((sum, a) => sum + Object.keys(a).length, 0);
     expect(Object.keys(actionPayloadSchemas)).toHaveLength(total);
   });
   it("refuses a key that two areas both claim, instead of ignoring one of them", () => {
@@ -108,6 +112,7 @@ describe("the live adapter checks data against the registry", () => {
 
 /** Real demo ids for the views that need a record. Several per view where the demo serves different states. */
 const WITH_RECORD: Record<string, unknown[]> = {
+  operationsControl: controlSections.map(section=>({section})),
   approvalDetail: [{ approvalId: "demo-approval-exact" }, { approvalId: "demo-approval-expired" }, { approvalId: "demo-approval-conflict" }],
   runDetail: [{ runId: "demo-run-approval" }, { runId: "demo-run-batch" }, { runId: "demo-run-uncertain" }, { runId: "demo-run-noevidence" }],
   hourlyRun: [{ runId: "demo-run-hourly" }],
@@ -133,7 +138,11 @@ const WITH_RECORD: Record<string, unknown[]> = {
 
 describe("every view the demo can serve passes its own schema through the live adapter", () => {
   const live = createLiveAdapter("sandbox", { transport: served(), retryDelayMs: 0 });
-  const keys = Object.keys(viewSchemas);
+  const keys = Object.keys(viewSchemas).filter(key=>!(key in nativeOnlyViews));
+
+  it.each(Object.keys(nativeOnlyViews))("%s has no demo export or invented recovery receipt",async viewKey=>{
+    await expect(createDemoAdapter().readView({...read(viewKey),requestedScope:{...scope,environment:"demo"}})).rejects.toMatchObject({body:{code:"INTEGRATION_PENDING"}});
+  });
 
   it("reads each registered view that needs no filters, and none is rejected for its shape", async () => {
     let read_ok = 0;
@@ -166,6 +175,19 @@ describe("every view the demo can serve passes its own schema through the live a
       }
     }
     expect(reads).toBeGreaterThanOrEqual(Object.keys(WITH_RECORD).length);
+  });
+
+  it("checks every explicit operations section without inventing native authority or receipts",async()=>{
+    for(const section of controlSections){
+      const response=await live.readView(read("operationsControl",{section,proposalRequestKey:"synthetic-pending-request"}));
+      const data=nativeOperationsControlSchema.parse(response.data);
+      expect(data.section).toBe(section);expect(data.records[0]?.title).toBe("Demo · "+section+" evidence");
+      expect(data.sourceState).toBe("notConnected");expect(data.sourceObservedAt).toBeNull();
+      expect(data.actions).toEqual([]);expect(data.healthTargets).toEqual([]);expect(data.proposalReconciliation?.state).toBe("unverified");
+      expect(response.capabilities.every(c=>c.state!=="available")).toBe(true);
+    }
+    for(const filters of [{},{section:"unknown"},{section:"team",secret:"private"}])
+      expect((await fail(live.readView(read("operationsControl",filters)))).category).toBe("validation");
   });
 
   it("a record that does not exist is a not-found, not a malformed answer", async () => {

@@ -1,4 +1,5 @@
 import type { FardaAdapter, ReadOptions } from "./adapter";
+import {nativeOperationsControlSchema,operationsControlFilters,type NativeOperationsControl} from "@/creator-agent/operationsControlsSchema";
 import { SCHEMA_VERSION, type ActionRequest, type ActionResponse, type ReadRequest, type ReadResponse, type SaveResourceRequest, type SaveResourceResponse } from "./contract";
 import { createDemoEvidence } from "./demoEvidence";
 import { createDemoApprovals } from "./demoApprovals";
@@ -20,7 +21,7 @@ import { readCreatorsView } from "./demoCreators";
 import { createDemoSettings } from "./demoSettings";
 import { respondWith } from "./demoViews";
 import { branchesDemo } from "@/fixtures/pipelineBranches";
-import { discoveryDemo } from "@/fixtures/discovery";
+import { discoveryDemo, sourcingPlanDemo } from "@/fixtures/discovery";
 import { filterRecruitment, invitationDemo, RECRUITMENT_DEFAULT, type RecruitmentData } from "@/fixtures/recruitment";
 import { DEFAULT_PIPELINE_FILTERS, filterPipeline, type PipelineFilters } from "@/fixtures/pipeline";
 import { AdapterError } from "./errors";
@@ -30,9 +31,12 @@ import { DEMO_NOW, overviewOriginal, type OverviewData, type OverviewFixtureKey 
  * Deterministic demo adapter. Frozen clock, environment "demo", no network, no provider dispatch.
  * Approvals run on an in-memory state machine with labeled synthetic receipts (see demoApprovals).
  * Overview capabilities report "unverified" so nothing can look sent or paid.
+ * `writes: "unavailable"` is the unavailable-backend scenario for actions and saves (conformance PENDING-4): every write is
+ * refused as `SOURCE_UNAVAILABLE` before any demo service sees it, so nothing is applied and the answer says `notApplied`.
  */
-export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string } = {}): FardaAdapter {
+export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyMs?: number; actorRole?: string; writes?: "available" | "unavailable" } = {}): FardaAdapter {
   const fixture = opts.fixture ?? "FX-01-happy-read";
+  const writesUnavailable = opts.writes === "unavailable";
   const latencyMs = opts.latencyMs ?? 0;
   /**
    * The policy guard runs inside the approval service, after its stored-result replay, so a retry of a dispatch that
@@ -68,6 +72,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (request.requestedScope.environment !== "demo")
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null });
       await wait(latencyMs, options?.signal);
+      if (request.viewKey === "operationsControl") return readDemoOperationsControl(request) as ReadResponse<T>;
       if (request.viewKey === "nightlyReconciliation") return reconciliation.read(request) as ReadResponse<T>;
       const settingsView = settings.read(request);
       if (settingsView) return settingsView as ReadResponse<T>;
@@ -85,6 +90,8 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
       if (financeView) return financeView as ReadResponse<T>;
       if (request.viewKey === "discoverySummary")
         return respondWith(request, { ...discoveryDemo, versions: { ...discoveryDemo.versions, policyVersion: policy.policy.version } }, { dataVersion: "discovery-demo@1", capabilities: [{ actionKind: "startLiveDiscovery", state: "unverified", reasonCodes: ["SOURCE_ACCESS_UNVERIFIED"] }, { actionKind: "requestBatchApproval", state: "available", reasonCodes: [] }] }) as ReadResponse<T>;
+      if (request.viewKey === "sourcingPlan")
+        return respondWith(request, sourcingPlanDemo, { dataVersion: "sourcing-plan-demo@1", dataState: "unavailable", capabilities: [{ actionKind: "startLiveDiscovery", state: "held", reasonCodes: ["SOURCE_AUTOMATION_NOT_CONNECTED"] }] }) as ReadResponse<T>;
       if (isMonitorView(request.viewKey)) return readMonitorView<T>(request, fixture);
       if (request.viewKey === "assessmentRecord") return readAssessment<T>(request as ReadRequest<{ creatorId: string; assessmentId: string }>, fixture);
       if (request.viewKey === "offerRewards") return readRewards<T>(request as ReadRequest<{ offerId: string; scenario?: string }>, fixture);
@@ -114,6 +121,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (writesUnavailable) writeUnavailable(request.requestId);
       if (reconciliation.handles(request)) return reconciliation.submit(request as ActionRequest<never>);
       const settingsAction = settings.submit(request);
       if (settingsAction) return settingsAction;
@@ -133,6 +141,7 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
         throw new AdapterError({ code: "FORBIDDEN", message: "Demo adapter only serves the demo environment.", requestId: request.requestId, correlationId: null, retryable: false, retryAfterMs: null, executionCertainty: "notApplied" });
       requireIdempotencyKey(request);
       await wait(latencyMs, options?.signal);
+      if (writesUnavailable) writeUnavailable(request.requestId);
       if (settings.handlesSave(request)) return settings.save(request) as Promise<SaveResourceResponse<T>>;
       if (lifecycle.handlesSave(request)) return lifecycle.save(request) as Promise<SaveResourceResponse<T>>;
       if (request.resourceKind === "actionDraft") return offers.save(request as unknown as SaveResourceRequest<never>) as unknown as Promise<SaveResourceResponse<T>>;
@@ -141,10 +150,38 @@ export function createDemoAdapter(opts: { fixture?: OverviewFixtureKey; latencyM
   };
 }
 
+/** Explicit, read-only synthetic native shapes; never source permission or a stored provider receipt. */
+function readDemoOperationsControl(request:ReadRequest<unknown>):ReadResponse<NativeOperationsControl>{
+  const parsed=operationsControlFilters.safeParse(request.filters);
+  if(!parsed.success)err("VALIDATION_FAILED","Choose an explicit operations-control section.",request.requestId);
+  const f=parsed.data;
+  if(f.targetRef||f.jobRef)err("RECORD_NOT_FOUND","Native opaque records are not present in the demo.",request.requestId);
+  const details:Record<NativeOperationsControl["section"],[string,string][]>= {
+    connections:[["Provider","Synthetic provider"],["Permission","Unknown"],["Source health","Not connected"]],
+    team:[["Provider role","Unknown"],["Owner","Unknown"],["Backup","Unknown"]],
+    runs:[["Job category","Daily evidence review"],["Finite plan","Synthetic example only"],["Named assignment","Unknown"]],
+    reports:[["Cadence","Weekdays — synthetic draft"],["Timezone","America/Los_Angeles"],["Destination","Unknown"],["Last complete","Unknown"]],
+    capabilities:[["Attribution test","Refund reversal — synthetic example"],["Observed result","Unknown"],["Permission","Unverified"]],
+    reconciliation:[["Grain","Order — synthetic example"],["Currency","USD"],["Source amount","Unknown"],["Mirror amount","Unknown"],["Field ownership","Unknown"]],
+  };
+  const version="oc1-"+"d".repeat(64);
+  const data=nativeOperationsControlSchema.parse({kind:"native-operations-controls",section:f.section,version,observedAt:DEMO_NOW,
+    actorRef:"agent-reader",role:"reader",sourceState:"notConnected",sourceObservedAt:null,
+    records:[{id:"demo-control-"+f.section,title:"Demo · "+f.section+" evidence",details:details[f.section]}],actions:[],healthTargets:[],localRuns:[],
+    localCoverage:{returned:0,total:0,partial:false},runFilterEvidence:{matched:0,unknownPlatform:0,assignment:"named-principal-unverified"},handoffs:[],history:[],historyCoverage:{returned:0,total:0,partial:false},
+    proposalReconciliation:f.proposalRequestKey?{requestKey:f.proposalRequestKey,actorRef:"agent-reader",state:"unverified",baseVersion:null,actionRef:null,manifestDigest:null,payloadDigest:null,createdAt:null,reason:null}:null});
+  return respondWith(request,data,{dataVersion:version,capabilities:[{actionKind:"proposeOperationsReview",state:"denied",reasonCodes:["DEMO_NO_SOURCE_AUTHORITY"]},{actionKind:"refreshOperationsHealth",state:"held",reasonCodes:["DEMO_NO_SOURCE_AUTHORITY"]}]});
+}
+
 /** A write with no idempotency key can't be retried safely, so it is refused before anything is applied. */
 function requireIdempotencyKey(request: { idempotencyKey: string; requestId: string }) {
   if (typeof request.idempotencyKey === "string" && request.idempotencyKey.trim() !== "") return;
   throw new AdapterError({ code: "VALIDATION_FAILED", message: "A write needs an idempotency key. Nothing was applied.", requestId: request.requestId, correlationId: `demo-${request.requestId}`, retryable: false, retryAfterMs: null, executionCertainty: "notApplied", fieldErrors: { idempotencyKey: "An idempotency key is required." } });
+}
+
+/** Refused before any demo service runs, so the server can prove nothing was applied. */
+function writeUnavailable(requestId: string): never {
+  throw new AdapterError({ code: "SOURCE_UNAVAILABLE", message: "The data service could not be reached. Nothing was applied.", requestId, correlationId: `demo-${requestId}`, retryable: true, retryAfterMs: null, executionCertainty: "notApplied" });
 }
 
 function wait(ms: number, signal?: AbortSignal) {

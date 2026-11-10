@@ -1,4 +1,7 @@
-import { Link } from "react-router-dom";
+import { NativeOperationsGrant } from "./NativeOperationsGrant";
+import { operationsEvidenceLabel, operationsHref, operationsContext } from "./nativeRead";
+import { Link, useSearchParams } from "react-router-dom";
+import { useScope } from "@/adapter/scope";
 import { useView } from "@/adapter/useView";
 import type { HealthGroup, OpsHealth } from "@/adapter/opsHealth";
 import { Kpi, KpiRow } from "@/components/Kpi";
@@ -8,7 +11,6 @@ import { LinkButton } from "@/components/Button";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { FlatTable, HalfColumns, Notice, Page, PageHeader, Panel } from "@/components/Panels";
 import { ViewError } from "@/components/ViewError";
-import { orderDemo } from "@/fixtures/operations";
 import { figure } from "./format";
 import type { Money } from "@/adapter/contract";
 
@@ -34,28 +36,35 @@ const COLUMNS = [{ label: "Group", width: 180 }, { label: "Order to shipped", wi
  * makes no fidelity claim. Every average is derived from the shipment ledger, so the tables can't disagree with the Operations screens.
  */
 export function OpsHealthPage() {
-  const query = useView<Record<string, never>, OpsHealth>("opsHealth", {});
+  const [search] = useSearchParams();
+  const { adapter } = useScope();
+  const filters: Record<string, string> = {};
+  if (adapter.kind !== "demo") for (const name of ["home", "startAt", "endAt", "timezone"]) { const value = search.get(name); if (value !== null) filters[name] = value; }
+  const query = useView<Record<string, string>, OpsHealth>("opsHealth", filters);
   const d = query.data?.data ?? null;
   return (
     <Page aria-labelledby="health-title">
       <PageHeader id="health-title" title="Issues and fulfillment health" subtitle="Support handoffs, refunds, and how fast orders ship and arrive.">
-        <LinkButton to="/analytics/fulfillment" variant="secondary" style={{ minWidth: 200 }}>Fulfillment overview</LinkButton>
+        <LinkButton to={operationsHref("/analytics/fulfillment", operationsContext(search, d))} variant="secondary" style={{ minWidth: 200 }}>Fulfillment overview</LinkButton>
       </PageHeader>
       {query.isPending && <SkeletonCard label="Loading health figures…" />}
       {query.isError && <ViewError error={query.error} subject="Health figures" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && !d && <EmptyState state="Empty" title="No health data yet"><p>The source responded without shipments or issues.</p></EmptyState>}
-      {d && <Body d={d} />}
+      {query.data && !d && (query.data.dataState === "empty" && query.data.coverage.complete ? <EmptyState state="Empty" title="No health data yet"><p>The source responded without shipments or issues.</p></EmptyState> : <EmptyState state="Error" title="Health evidence unavailable" alert><p>Incomplete or stale evidence cannot establish that no shipments or issues exist.</p></EmptyState>)}
+      {d && <NativeOperationsGrant data={d} refresh={() => { void query.refetch(); }}><Body d={d} /></NativeOperationsGrant>}
     </Page>
   );
 }
 
 function Body({ d }: { d: OpsHealth }) {
   const { issues, fulfillment: f } = d;
+  const [search] = useSearchParams();
+  const context = operationsContext(search, d);
+  const demo = operationsEvidenceLabel(d) === "Demo data";
   const week = issues.tags.reduce((n, t) => ({ now: n.now + t.thisWeek, before: n.before + t.lastWeek }), { now: 0, before: 0 });
   return (
     <>
-      <Notice tone="violet" label="Demo" title="Synthetic data · no Figma source" testId="health-notice">
-        {`Built from a demo shipment ledger and issue tags. This view has no Figma frame, so no design fidelity is claimed. These counts come from a sample ledger of ${d.integrity.shipments} shipments, not the period total on the Fulfillment overview, so the two numbers differ. A shipment counts as shipped when the carrier accepts it, not when a label is bought.`}
+      <Notice tone="violet" label={operationsEvidenceLabel(d)} title={`${operationsEvidenceLabel(d)} · no Figma source`} testId="health-notice">
+        {`Built from ${demo ? "a demo shipment ledger" : "source-reported shipment evidence"} and issue tags. This view has no Figma frame, so no design fidelity is claimed. These counts come from a sample ledger of ${d.integrity.shipments} shipments, not the period total on the Fulfillment overview, so the two numbers differ. A shipment counts as shipped when the carrier accepts it, not when a label is bought.`}
       </Notice>
       <KpiRow>
         <Kpi label="Order to shipped" context={`${f.all.orderToShipped.sample} shipped orders in the sample ledger`} testId="metric-Order to shipped">{days(f.all.orderToShipped)}</Kpi>
@@ -67,7 +76,7 @@ function Body({ d }: { d: OpsHealth }) {
         <Panel title="By home" subtitle="Averages over shipped or delivered orders" testId="by-home">
           <FlatTable caption="Fulfillment health by home" columns={COLUMNS} rows={groupRows(f.byHome)} testId="health-by-home" />
         </Panel>
-        <Panel title="By carrier" subtitle="Carriers are placeholders in the demo" testId="by-carrier">
+        <Panel title="By carrier" subtitle={demo ? "Carriers are placeholders in the demo" : "Source-reported carrier groups"} testId="by-carrier">
           <FlatTable caption="Fulfillment health by carrier" columns={COLUMNS} rows={groupRows(f.byCarrier)} testId="health-by-carrier" />
         </Panel>
       </HalfColumns>
@@ -79,7 +88,7 @@ function Body({ d }: { d: OpsHealth }) {
             rows={issues.tags.map((t) => ({ key: t.tag, cells: [t.tag, String(t.thisWeek), String(t.lastWeek), trend(t.thisWeek, t.lastWeek)] }))}
           />
           <p data-testid="fin-usage">{`Fin: ${issues.fin.resolutions} resolutions · ${finUsage(issues.fin.cost, issues.fin.cap)} · ${issues.fin.periodLabel}`}</p>
-          <Link to="/support/cases/TEST-ISS-021">Open the handoff queue</Link>
+          <Link to={demo ? "/support/cases/TEST-ISS-021" : operationsHref("/operations?view=shipping", context)}>Open the handoff queue</Link>
         </Panel>
         <Panel title="Orders that did not ship cleanly" subtitle="One order, reservation and shipment identity" testId="order-exceptions">
           <FlatTable
@@ -87,7 +96,7 @@ function Body({ d }: { d: OpsHealth }) {
             columns={[{ label: "Order", width: 150 }, { label: "State", width: 170 }, { label: "Reservation", width: 150 }, { label: "Shipment", width: 140 }, { label: "What it means", width: 340 }]}
             rows={d.orders.map((o) => ({
               key: o.orderRef,
-              cells: [orderDemo(o.orderRef) ? <Link key="o" to={`/orders/${o.orderRef}`}>{o.orderRef}</Link> : o.orderRef, <Badge key="s" tone={o.state === "Lost" || o.state === "Returned" ? "danger" : "warning"} width={150}>{o.state}</Badge>, o.reservationRef, o.shipmentRef ?? "No shipment", o.note],
+              cells: [<Link key="o" to={operationsHref(`/orders/${encodeURIComponent(o.orderRef)}`, context)}>{o.orderRef}</Link>, <Badge key="s" tone={o.state === "Lost" || o.state === "Returned" ? "danger" : "warning"} width={150}>{o.state}</Badge>, o.reservationRef, o.shipmentRef ?? "No shipment", o.note],
             }))}
             testId="order-exceptions-table"
           />

@@ -11,6 +11,9 @@ on:
       - deploy/**
       - tools/creator-agent/**
       - src/creator-agent/**
+      - src/adapter/contract.ts
+      - src/adapter/commissionPolicy.ts
+      - src/adapter/viewSchemas/**
       - src/features/scorecards/scorecardMath.ts
       - src/test/creatorQualification.ts
   push:
@@ -24,6 +27,9 @@ on:
       - deploy/**
       - tools/creator-agent/**
       - src/creator-agent/**
+      - src/adapter/contract.ts
+      - src/adapter/commissionPolicy.ts
+      - src/adapter/viewSchemas/**
       - src/features/scorecards/scorecardMath.ts
       - src/test/creatorQualification.ts
   workflow_dispatch:
@@ -55,6 +61,8 @@ jobs:
         run: node --test --test-concurrency=1 tools/creator-agent/deployment.test.mjs
       - name: Build the API-only deployment image
         run: docker build --file tools/creator-agent/Dockerfile --tag "$FARDA_CONTAINER_IMAGE" .
+      - name: Verify packaged server imports without provider configuration
+        run: docker run --rm --entrypoint node "$FARDA_CONTAINER_IMAGE" --input-type=module --eval "await import('./src/creator-agent/server.ts');"
       - name: Verify container authentication, approved bindings, persistence and backup
         env:
           FARDA_RUN_CONTAINER_SMOKE: '1'

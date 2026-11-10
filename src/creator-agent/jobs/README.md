@@ -1,5 +1,7 @@
 # Durable no-source job foundation
 
+This section documents the original local-only slice and its compatibility behavior. The later source runtime and approved-execution contracts are documented in [runtime.md](./runtime.md); their reserved handlers do not run through the original local worker.
+
 This module is the bounded THO-355 delivery under THO-285. It borrows the existing scoped SQLite handle and creates only `job_*` tables. It does not create another database, scheduler, credential store, provider executor or LLM. Root service composition owns authentication and must not expose the raw connection.
 
 `JobRepository(db, options)` accepts server-owned scope, optional clock, trusted activation resolver and synchronous capability resolver. New definitions are disabled. `activate` accepts only an exact server-resolved decision/hash; no resolver means no activation. Where a capability binding is present, `resolveCapability` must call THO-356 `requireReady(binding)` with the pinned exact binding. Missing/stale/revoked proof holds work. A capability is not business release approval. A null capability is explicitly N/A only because both current handlers have no source dispatcher.

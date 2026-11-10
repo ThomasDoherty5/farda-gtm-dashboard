@@ -1,5 +1,8 @@
+import { OperationsPeriodControl } from "@/features/operations/OperationsPeriodControl";
+import { OperationsCohortProvider, useOperationsCohort } from "@/features/operations/OperationsCohortContext";
+import { operationsHref } from "@/features/operations/nativeRead";
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useScope } from "@/adapter/scope";
 import { HOMES } from "@/fixtures/operations";
 import { breadcrumbsFor } from "@/routes/breadcrumbs";
@@ -31,7 +34,7 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
       // While a lazy screen loads, React keeps the previous screen's heading in the DOM but hidden: it is not the new page's heading.
       const h = heading();
       const target = h && h.getClientRects().length > 0 ? h : el;
-      if (target !== el) target.tabIndex = -1;
+      if (target !== el) target.setAttribute("tabindex", "-1");
       target.focus();
       return target !== el && document.activeElement === target;
     };
@@ -61,17 +64,26 @@ function useRouteAnnouncement(main: RefObject<HTMLElement>, pathname: string) {
 }
 
 /** Application shell (Figma 10:218): skip link, horizontal navigation, workspace menu and main landmark. */
-export function Shell() {
-  const { adapter } = useScope();
+export function Shell() { return <OperationsCohortProvider><ShellBody /></OperationsCohortProvider>; }
+
+function ShellBody() {
+  const { cohort } = useOperationsCohort();
+  const { adapter, scope, principal } = useScope();
   const { pathname, search } = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [periodOpen, setPeriodOpen] = useState(false);
+  const workspaceTrigger = useRef<HTMLButtonElement | null>(null);
+  const navigate = useNavigate();
   const mainRef = useRef<HTMLElement>(null);
   useRouteAnnouncement(mainRef, pathname);
   const section = sectionOf(pathname);
   const shippingHub = pathname === "/operations" && new URLSearchParams(search).get("view") === "hub";
   const compactOperations = pathname === "/operations" && !shippingHub;
   const demo = adapter.environment === "demo";
+  const principalMark=principal.split(/[^a-zA-Z0-9]+/).filter(Boolean).slice(0,2).map(part=>part[0]!.toUpperCase()).join("") || "?";
   const crumbs = breadcrumbsFor(pathname, search);
+  const operationsSearch = new URLSearchParams(search);
+  if (!demo && cohort) for (const name of ["home", "startAt", "endAt", "timezone"] as const) operationsSearch.set(name, cohort[name]);
 
   return (
     <div className={styles.canvas}>
@@ -93,11 +105,13 @@ export function Shell() {
             </ul>
           </nav>
           {/* Figma 12:708 ends the 1024 navigation in "More"; 12:653 replaces it with "Menu" at 390. Both open the workspace menu, which lists every section. */}
-          <button type="button" className={`${styles.navItem} ${styles.more}`} aria-haspopup="dialog" onClick={() => setMenuOpen(true)}>More</button>
-          <button type="button" className={styles.menuButton} aria-haspopup="dialog" onClick={() => setMenuOpen(true)}>Menu</button>
+          <button type="button" className={`${styles.navItem} ${styles.more}`} aria-haspopup="dialog" onClick={event => { workspaceTrigger.current = event.currentTarget; setMenuOpen(true); }}>More</button>
+          <button type="button" className={styles.menuButton} aria-haspopup="dialog" onClick={event => { workspaceTrigger.current = event.currentTarget; setMenuOpen(true); }}>Menu</button>
           <span className={styles.spacer} />
           {demo && <Badge tone="violet" width={132} testId="demo-banner">Demo workspace</Badge>}
-          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label="Open workspace menu" onClick={() => setMenuOpen(true)}>{demo ? "TD" : "Menu"}</button>
+          {!demo && <span className={styles.sourceWorkspace}><Badge tone="violet" width={132} testId="source-workspace">{scope.environment === "sandbox" ? "Sandbox" : "Production"}</Badge></span>}
+          {/* The accessible name starts with the visible initials (WCAG 2.5.3, axe label-content-name-mismatch). Where the native "Menu" text shows instead, the name still contains it. */}
+          <button type="button" className={styles.profile} aria-haspopup="dialog" aria-label={`${demo ? "TD" : principalMark}, open workspace menu`} onClick={event => { workspaceTrigger.current = event.currentTarget; setMenuOpen(true); }}>{demo ? "TD" : <><span className={styles.nativeMenuText}>Menu</span><span className={styles.sourceProfile}>{principalMark}</span></>}</button>
           <nav aria-label="Breadcrumb" className={styles.crumbs}>
             <ol>
               {crumbs.map((c, i) => (
@@ -124,20 +138,27 @@ export function Shell() {
             })}
           </ul>
         </nav>
-        {compactOperations && <nav aria-label="Operations home and health" className={styles.operationsControls}>
+        {(compactOperations || !demo && pathname === "/operations") && <nav aria-label="Operations home and health" className={styles.operationsControls}>
+          {!demo && <Button variant="secondary" disabledReason={cohort ? undefined : "A current source-bound reporting period is unavailable."} onClick={() => { setMenuOpen(false); setPeriodOpen(true); }}>Reporting period</Button>}
           {["all", ...HOMES].map(home => {
-            const filters = new URLSearchParams(search);
+            if (!demo && !cohort) return <Button key={home} variant="secondary" disabledReason="A current source-bound home and reporting period are unavailable.">{home === "all" ? "All homes" : "Home " + home}</Button>;
+            const filters = new URLSearchParams(operationsSearch);
             const current = (filters.get("home") ?? "all") === home;
-            if (home === "all") filters.delete("home"); else filters.set("home", home);
+            if (home === "all" && demo) filters.delete("home"); else filters.set("home", home);
             const query = filters.toString();
             return <LinkButton key={home} to={pathname + (query ? "?" + query : "")} variant={current ? "primary" : "secondary"}
               aria-current={current ? "true" : undefined} onClick={() => setMenuOpen(false)}>{home === "all" ? "All homes" : "Home " + home}</LinkButton>;
           })}
-          <LinkButton to="/analytics/fulfillment?view=health" onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton>
+          {demo || cohort ? <><LinkButton to={operationsHref("/analytics/fulfillment?view=health", operationsSearch)} onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton><LinkButton to={operationsHref("/operations?view=shipping", operationsSearch)} onClick={() => setMenuOpen(false)}>Review shipping</LinkButton></> : <><Button disabledReason="Current source reporting context is unavailable.">Issues and fulfillment health</Button><Button disabledReason="Current source reporting context is unavailable.">Review shipping</Button></>}
         </nav>}
         {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}
         <Button variant="secondary" onClick={() => setMenuOpen(false)}>Close menu</Button>
       </Dialog>
+      {!demo && <OperationsPeriodControl trigger={false} open={periodOpen} onOpenChange={open => { setPeriodOpen(open); if (!open) queueMicrotask(() => workspaceTrigger.current?.focus()); }} scope={cohort} onApply={(startAt,endAt) => {
+        if (!cohort) return;
+        const next = new URLSearchParams(operationsSearch); next.set("startAt",startAt); next.set("endAt",endAt);
+        navigate(`${pathname}?${next}`);
+      }} />}
     </div>
   );
 }

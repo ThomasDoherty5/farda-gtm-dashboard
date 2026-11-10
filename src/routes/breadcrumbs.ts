@@ -28,7 +28,8 @@ export function breadcrumbsFor(pathname: string, rawSearch = ""): Crumb[] {
   if (screen) {
     const params = matchPath({ path: screen.path, end: true }, pathname)?.params ?? {};
     const record = Object.values(params).filter((v): v is string => Boolean(v)).at(-1) ?? null;
-    crumbs.push({ label: clean(screen.screen) });
+    const registeredRun = screen.path === "/runs/:runId" && record?.startsWith("rt-run-");
+    crumbs.push({ label: screen.path === "/finance/settlements/:settlementId" ? "Settlement" : registeredRun ? "Registered source run" : clean(screen.screen) });
     if (record) crumbs.push({ label: record });
   }
   return crumbs.length ? crumbs : [{ label: "Page not found" }];

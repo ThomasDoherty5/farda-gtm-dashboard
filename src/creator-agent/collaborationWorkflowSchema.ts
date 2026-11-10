@@ -41,7 +41,14 @@ export const collaborationSnapshotSchema = z.object({
   if(x.deliverables.some(d=>d.publication.observedAt && Date.parse(d.publication.observedAt)>Date.parse(x.observedAt))) c.addIssue({code:"custom",message:"Future publication observation."});
 });
 export type CollaborationSourceSnapshot=z.infer<typeof collaborationSnapshotSchema>;
-export type CollaborationSourceReader=(scope:CollaborationSourceSnapshot["scope"],id:string,referenceKey?:string)=>Promise<CollaborationSourceSnapshot|null>;
+export const collaborationReadBindingSchema=z.object({scope,principalRef:ref,operation:z.enum(["read","propose"]),
+  collaborationId:ref,requestDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const collaborationSourceResultSchema=z.object({snapshot:collaborationSnapshotSchema.nullable(),absence:z.enum(["verified","unknown"]),authority:z.object({
+  binding:collaborationReadBindingSchema,sourceVersion:ref.nullable(),permissionVersion:ref,observedAt:instant,validUntil:instant}).strict()}).strict();
+export type CollaborationReadBinding=z.infer<typeof collaborationReadBindingSchema>;
+export type CollaborationSourceResult=z.infer<typeof collaborationSourceResultSchema>;
+export type CollaborationSourceReader={read(binding:CollaborationReadBinding,referenceKey:string,signal?:AbortSignal):Promise<unknown>;
+  assertCurrent(result:CollaborationSourceResult,binding:CollaborationReadBinding,now:number):void};
 export const intentKinds=["review","request-revision","reject-content","approve-content","reminder","human-handoff","suppress","close","repeat","new-collaboration"] as const;
 export const workflowIntentSchema=z.object({collaborationRef:ref,kind:z.enum(intentKinds),reason:z.string().trim().min(1).max(1000),
   deliverableRef:ref.optional(),submissionVersion:ref.optional(),outcome:z.enum(["declined","no-response","opted-out","canceled","completed"]).optional()}).strict();
@@ -50,7 +57,7 @@ const proposal=z.object({id:ref,kind:z.enum(intentKinds),digest:z.string().regex
   deliverableRef:ref.nullable(),submissionVersion:ref.nullable(),outcome:workflowIntentSchema.shape.outcome.unwrap().nullable()}).strict();
 export const proposalReconciliationSchema=z.object({requestKey:z.string().min(1).max(240),actorRef:ref,state:z.enum(["recorded","notRecorded","notApplied"]),
   reasonCode:z.literal("STALE_VERSION").nullable(),currentVersion:ref.nullable(),proposal:proposal.nullable()}).strict().refine(x=>(x.state==="recorded")===(x.proposal!==null) && (x.state==="notApplied")===(x.reasonCode!==null && x.currentVersion!==null),"Invalid request reconciliation.");
-export const nativeCollaborationSchema=z.object({kind:z.literal("source-collaboration"),collaborationRef:ref,sourceRef:ref,observedAt:instant,coverage:z.enum(["complete","partial"]),
+export const nativeCollaborationSchema=z.object({readAccess:z.object({validUntil:instant}).strict().nullable().optional(),kind:z.literal("source-collaboration"),collaborationRef:ref,sourceRef:ref,observedAt:instant,coverage:z.enum(["complete","partial"]),
   title:note,platform:note.nullable(),creatorRef:ref.nullable(),campaignRef:ref.nullable(),stage:note.nullable(),nextAction:note.nullable(),
   terms:collaborationSnapshotSchema.innerType().shape.terms,sample:collaborationSnapshotSchema.innerType().shape.sample,suppression:collaborationSnapshotSchema.innerType().shape.suppression,
   history:z.array(fact).max(80),deliverables:z.array(workflowDeliverableSchema).max(100),

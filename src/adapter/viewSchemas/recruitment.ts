@@ -1,5 +1,6 @@
+import { nativeBulkViewSchema } from "../../creator-agent/bulk/views.ts";
 /**
- * Runtime schemas for recruitmentQueue, invitationDraft, batchDetail, pipelineSummary and discoverySummary.
+ * Runtime schemas for recruitmentQueue, invitationDraft, batchDetail, pipelineSummary, discoverySummary and sourcingPlan.
  *
  * Unknown versus zero: several fields are `number | null` in the fixtures, where null means unknown (pipeline
  * `reached` and `medianDays`, batch `nativeInvitations`). They accept null and never coerce it to 0. Fields that
@@ -15,11 +16,14 @@
  * (10), and `current` must name every exclusive current-stage bucket (10).
  */
 import { z } from "zod";
-import { scorecardPreviewSchema } from "@/creator-agent/scorecardPreview";
-import { livePipelineSchema } from "@/creator-agent/funnelContract";
-import { agentSourcingSchema } from "@/creator-agent/readViews";
-import { provenanceValueSchema } from "../contract";
-import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives";
+import { nativeSourcingPlanSchema } from "../../creator-agent/sourcing/views.ts";
+import { nativeInvitationViewSchema, nativeRecruitmentBatchSchema } from "../../creator-agent/recruitment/contract.ts";
+import { scorecardPreviewSchema } from "../../creator-agent/scorecardPreview.ts";
+import { livePipelineSchema } from "../../creator-agent/funnelContract.ts";
+import { agentSourcingSchema, nativeRecruitmentViewSchema } from "../../creator-agent/readViews.ts";
+import { provenanceValueSchema } from "../contract.ts";
+import { count, countsByOwner, minorUnits, money, owner, percent, text, unknownMarker } from "./acquisitionPrimitives.ts";
+import { sourcingPlanSchema } from "../../creator-agent/sourcing/contract.ts";
 
 /* ---------- recruitmentQueue ---------- */
 
@@ -47,8 +51,8 @@ const recruitmentQueue = z.object({
 
 /* ---------- invitationDraft ---------- */
 
-const invitationDraft = z.object({
-  datasetKey: text,
+const demoInvitationDraft = z.object({
+  datasetKey: z.literal("invitation-demo"),
   creators: z.array(z.object({ handle: text, suppression: z.enum(["clear", "suppressed"]), identity: z.literal("resolved") })),
   products: z.array(z.object({ name: text, listing: z.literal("unverified") })),
   program: z.object({ maxCommissionPct: percent, maxValidityDays: z.number().int().positive(), label: text }),
@@ -59,7 +63,29 @@ const invitationDraft = z.object({
   draftVersion: text,
   automateInvitations: z.literal("off"),
   sampleRequest: z.object({ id: text, handle: text, nativeDeadline: text, lastRead: text }),
-});
+}).strict();
+
+/** Native transport identity does not imply production evidence: sandbox test sources remain explicitly synthetic. */
+const nativeProvenance = z.object({ kind: z.literal("source"), evidenceStage: z.enum(["synthetic", "source"]),
+  observedAt: z.string().datetime({ offset: true }), eventAt: z.string().datetime({ offset: true }).nullable(),
+  sourceId: z.string().min(1).nullable(), canonicalId: z.string().min(1).nullable(), provenanceRef: z.string().min(1),
+}).strict();
+function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(schema: z.ZodObject<T, U>, identity: string) {
+  return schema.extend({ datasetKey: z.literal(identity), synthetic: z.boolean(), provenance: nativeProvenance }).strict().superRefine((value, ctx) => {
+    const provenance = value.provenance;
+    if (!provenance) {
+      ctx.addIssue({ code: "custom", path: ["provenance"], message: "Native records require source provenance." });
+      return;
+    }
+    if (value.synthetic !== (provenance.evidenceStage === "synthetic"))
+      ctx.addIssue({ code: "custom", path: ["synthetic"], message: "Evidence stage and synthetic marker must agree." });
+    if (provenance.eventAt && Date.parse(provenance.eventAt) > Date.parse(provenance.observedAt))
+      ctx.addIssue({ code: "custom", path: ["provenance", "eventAt"], message: "A source event cannot follow its observation." });
+  });
+}
+
+export const nativeInvitationDraftSchema = nativeRecord(demoInvitationDraft, "invitation-native");
+const invitationDraft = z.union([nativeInvitationViewSchema, nativeInvitationDraftSchema, demoInvitationDraft]);
 
 /* ---------- batchDetail ---------- */
 
@@ -184,10 +210,12 @@ const historicalDiscoverySummary = z.object({
 const discoverySummary = z.union([historicalDiscoverySummary, agentSourcingSchema]);
 
 export const recruitmentViewSchemas: Record<string, z.ZodTypeAny> = {
-  recruitmentQueue,
+  recruitmentQueue: z.union([nativeRecruitmentViewSchema, recruitmentQueue]),
   invitationDraft,
-  batchDetail: z.union([scorecardPreviewSchema, batchDetail]),
+  batchDetail: z.union([nativeBulkViewSchema,nativeRecruitmentBatchSchema, scorecardPreviewSchema, batchDetail]),
   pipelineSummary: z.union([livePipelineSchema, pipelineSummary]),
   pipelineBranches: z.union([livePipelineSchema, pipelineBranches]),
   discoverySummary,
+  /** The served daily plan detail (THO-287). Strict: unknown counts carry a reason and unlike capacity units never merge. */
+  sourcingPlan: z.union([nativeSourcingPlanSchema, sourcingPlanSchema]),
 };

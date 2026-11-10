@@ -2,16 +2,24 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { digest } from "./config.ts";
+import { boundedSourceRead } from "./actions/readBoundary.ts";
+import { assertSynchronousVoid } from "./sourceFence.ts";
 import type { OperationsScope } from "./operations.ts";
 import { inventoryFilters,supportFilters,inventorySnapshotSchema,supportSnapshotSchema,nativeInventorySchema,nativeSupportSchema,transferIntent,handoffIntent,available,positionHold,policy,requestReceipt,type InventorySnapshot,type SupportSnapshot } from "./stockSupportSchema.ts";
 
-export type StockSupportSource={
-  readInventory:(scope:OperationsScope)=>Promise<InventorySnapshot>;
-  readSupport:(scope:OperationsScope)=>Promise<SupportSnapshot>;
-};
+const sourceRef=z.string().trim().min(1).max(500),sourceInstant=z.string().datetime({offset:true});
+export const stockSupportBindingSchema=z.object({scope:z.object({workspaceId:sourceRef,accountId:sourceRef,environment:z.literal("sandbox")}).strict(),
+  principalRef:z.enum(["agent-reader","agent-reviewer"]),operation:z.enum(["read","propose"]),viewKey:z.enum(["inventoryOverview","supportWorkspace"]),requestDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const stockSupportAuthoritySchema=z.object({binding:stockSupportBindingSchema,sourceVersion:sourceRef,permissionVersion:sourceRef,observedAt:sourceInstant,validUntil:sourceInstant}).strict();
+export type StockSupportBinding=z.infer<typeof stockSupportBindingSchema>;
+export type StockSupportSourceResult={snapshot:InventorySnapshot|SupportSnapshot;authority:z.infer<typeof stockSupportAuthoritySchema>};
+export type StockSupportSource={readInventory(binding:StockSupportBinding,signal?:AbortSignal):Promise<unknown>;
+  readSupport(binding:StockSupportBinding,signal?:AbortSignal):Promise<unknown>;
+  assertCurrent(result:StockSupportSourceResult,binding:StockSupportBinding,now:number):void};
+export type StockSupportCaller={assertCurrent():void;signal?:AbortSignal};
 export class StockSupportError extends Error {
-  readonly code:string;readonly status:number;readonly currentVersion?:string;
-  constructor(code:string,status:number,currentVersion?:string){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;}
+  readonly code:string;readonly status:number;readonly currentVersion?:string;readonly executionCertainty:"notApplied"|"uncertain";
+  constructor(code:string,status:number,currentVersion?:string,certainty:"notApplied"|"uncertain"="notApplied"){super(code);this.code=code;this.status=status;this.currentVersion=currentVersion;this.executionCertainty=certainty;}
 }
 type View="inventoryOverview"|"supportWorkspace";
 const id=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,179}$/);
@@ -34,13 +42,28 @@ export function createStockSupportWorkflow(db:DatabaseSync,scope:OperationsScope
     request_hash TEXT NOT NULL, status TEXT NOT NULL, version TEXT NOT NULL, receipt TEXT NOT NULL,
     sku TEXT, from_home TEXT, units INTEGER, manifest TEXT);
     CREATE INDEX IF NOT EXISTS stock_support_pending_stock ON stock_support_reviews(sku,from_home,status);`);
-  async function snapshot(view:View){
+  async function snapshot(view:View,actor:string,operation:"read"|"propose",request:unknown,caller?:StockSupportCaller){
     if(!source)throw new StockSupportError("INTEGRATION_PENDING",503);
-    const result=view==="inventoryOverview"?inventorySnapshotSchema.safeParse(await source.readInventory(scope)):supportSnapshotSchema.safeParse(await source.readSupport(scope));
+    const binding=stockSupportBindingSchema.parse({scope,principalRef:actor,operation,viewKey:view,requestDigest:digest(request)});
+    const assertCaller=()=>{if(caller?.signal?.aborted)fail("REQUEST_CANCELLED",499);if(caller)assertSynchronousVoid(caller.assertCurrent);};
+    const sourceFailure=(error:unknown):never=>{if(error instanceof StockSupportError && [401,403].includes(error.status))fail("STOCK_SUPPORT_SOURCE_DENIED",error.status);
+      if(error instanceof StockSupportError && error.status===409)fail("STOCK_SUPPORT_SOURCE_CHANGED",409);
+      if(caller?.signal?.aborted)fail("REQUEST_CANCELLED",499);return fail("STOCK_SUPPORT_SOURCE_UNAVAILABLE",503);};
+    assertCaller();
+    if(typeof source.assertCurrent!=="function")fail("SOURCE_RESPONSE_INVALID",502);
+    let raw:unknown;try{raw=await boundedSourceRead(()=>view==="inventoryOverview"?source.readInventory(structuredClone(binding),caller?.signal):source.readSupport(structuredClone(binding),caller?.signal),caller?.signal);}catch(error){sourceFailure(error);}
+    assertCaller();
+    const result=z.object({snapshot:view==="inventoryOverview"?inventorySnapshotSchema:supportSnapshotSchema,authority:stockSupportAuthoritySchema}).strict().safeParse(raw);
     if(!result.success)throw new StockSupportError("SOURCE_RESPONSE_INVALID",502);
-    if(scopeDigest(result.data.scope)!==scopeDigest(scope))throw new StockSupportError("SOURCE_SCOPE_DENIED",403);
-    if(Date.parse(result.data.observedAt)>now())throw new StockSupportError("SOURCE_RESPONSE_INVALID",502);
-    return result.data;
+    const packet=result.data,s=packet.snapshot;
+    if(scopeDigest(s.scope)!==scopeDigest(scope))throw new StockSupportError("SOURCE_SCOPE_DENIED",403);
+    if(Date.parse(s.observedAt)>now())throw new StockSupportError("SOURCE_RESPONSE_INVALID",502);
+    const assertCurrent=()=>{assertCaller();const proof=packet.authority,time=now();
+      if(digest(proof.binding)!==digest(binding)||proof.sourceVersion!==s.revision)fail("SOURCE_RESPONSE_INVALID",502);
+      if(!Number.isFinite(time)||Date.parse(proof.observedAt)>time||Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+15*60_000)<=time)fail("STOCK_SUPPORT_ACCESS_EXPIRED",409);
+      try{assertSynchronousVoid(()=>source.assertCurrent(structuredClone(packet),structuredClone(binding),time));}catch(error){sourceFailure(error);}assertCaller();
+      if(Math.min(Date.parse(proof.validUntil),Date.parse(proof.observedAt)+15*60_000)<=now())fail("STOCK_SUPPORT_ACCESS_EXPIRED",409);};
+    assertCurrent();return {snapshot:s,assertCurrent,readAccess:{validUntil:new Date(Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)).toISOString()}};
   }
   function filtersFor(view:View,filters:unknown){
     const result=(view==="inventoryOverview"?inventoryFilters:supportFilters).safeParse(filters);
@@ -80,32 +103,35 @@ export function createStockSupportWorkflow(db:DatabaseSync,scope:OperationsScope
     });
     return {total,rows};
   }
-  async function read(view:View,filters:unknown,actorRef:string){
+  async function read(view:View,filters:unknown,actorRef:string,caller?:StockSupportCaller){
     const f=filtersFor(view,filters);
     if(f.proposalRequestKey && actorRef!=="agent-reviewer")throw new StockSupportError("SOURCE_SCOPE_DENIED",403);
-    const s=await snapshot(view),target=targetOf(f),v=version(s,view,target),stale=!fresh(s.observedAt,now());
-    const head={pending:pendingReviews(view,f,"periods" in s && !("caseId" in f)?f.windowRef??s.currentWindow:null),actorRef,revision:v,observedAt:s.observedAt,coverage:s.coverage,stale,reconciliation:f.proposalRequestKey?receipt(f.proposalRequestKey,actorRef,view,target):null};
+    const observed=await snapshot(view,actorRef,"read",f,caller),s=observed.snapshot,target=targetOf(f),v=version(s,view,target),stale=!fresh(s.observedAt,now());
+    const assertCurrent=()=>{observed.assertCurrent();if(stale!==!fresh(s.observedAt,now())||version(s,view,target)!==v)fail("STOCK_SUPPORT_SOURCE_CHANGED",409);};
+    const absent=()=>{assertCurrent();if(stale||s.coverage!=="complete")throw new StockSupportError(stale?"SOURCE_STALE":"SOURCE_COVERAGE_PARTIAL",503);
+      return {data:null,version:null,observedAt:s.observedAt,partial:false,stale:false,empty:true,assertCurrent};};
+    const head={readAccess:observed.readAccess,pending:pendingReviews(view,f,"periods" in s && !("caseId" in f)?f.windowRef??s.currentWindow:null),actorRef,revision:v,observedAt:s.observedAt,coverage:s.coverage,stale,reconciliation:f.proposalRequestKey?receipt(f.proposalRequestKey,actorRef,view,target):null};
     if(head.reconciliation?.state==="absent" && (stale||s.coverage!=="complete"))throw new StockSupportError(stale?"SOURCE_STALE":"SOURCE_COVERAGE_PARTIAL",409);
     if("periods" in s && !("caseId" in f)){
       const windowRef=f.windowRef??s.currentWindow;
       const period=s.periods.find(p=>p.window.ref===windowRef);
-      if(f.windowRef && !period)throw new StockSupportError("RECORD_NOT_FOUND",404);
+      if(f.windowRef && !period)return absent();
       const match=(r:{home:string;sku:string})=>(!f.home||r.home===f.home)&&(!f.sku||r.sku===f.sku);
       const skus=period?[...new Set([...period.positions,...period.movements,...period.transfers].map(r=>r.sku))].sort():[];
       const data=nativeInventorySchema.parse({...head,kind:"source-stock",selected:{...(f.home?{home:f.home}:{}),...(f.sku?{sku:f.sku}:{}),...(f.windowRef?{windowRef:f.windowRef}:{})},
         currentWindow:s.currentWindow,windows:s.periods.map(p=>p.window),skus,period:period?{window:period.window,positions:period.positions.filter(match),
           movements:period.movements.filter(match),transfers:period.transfers.filter(t=>(!f.sku||t.sku===f.sku)&&(!f.home||t.from===f.home||t.to===f.home))}:null});
-      return {data,version:v,observedAt:s.observedAt,partial:s.coverage==="partial",stale,empty:!s.periods.length};
+      assertCurrent();return {data,version:v,observedAt:s.observedAt,partial:s.coverage==="partial",stale,empty:!s.periods.length,assertCurrent};
     }
     if(!("cases" in s)||!("caseId" in f))throw new StockSupportError("INVALID_REQUEST",400);
-    if(f.caseId!=="queue" && !s.cases.some(c=>c.id===f.caseId))throw new StockSupportError(s.coverage==="partial"?"SOURCE_COVERAGE_PARTIAL":"RECORD_NOT_FOUND",s.coverage==="partial"?503:404);
+    if(f.caseId!=="queue" && !s.cases.some(c=>c.id===f.caseId))return absent();
     const data=nativeSupportSchema.parse({...head,kind:"source-support",caseId:f.caseId,cases:s.cases,allTimeOpen:s.allTimeOpen,cohort:s.cohort});
-    return {data,version:v,observedAt:s.observedAt,partial:s.coverage==="partial",stale,empty:!s.cases.length&&!s.cohort&&s.allTimeOpen===null};
+    assertCurrent();return {data,version:v,observedAt:s.observedAt,partial:s.coverage==="partial",stale,empty:!s.cases.length&&!s.cohort&&s.allTimeOpen===null,assertCurrent};
   }
   function ack(r:z.infer<typeof requestReceipt>){
     return {actionRef:r.actionRef!,payloadVersion:r.digest!,policyVersion:policy,receiptRefs:["proposal:"+r.actionRef],state:"approvalPending" as const};
   }
-  async function propose(raw:unknown,actorRef:string){
+  async function propose(raw:unknown,actorRef:string,caller?:StockSupportCaller){
     if(actorRef!=="agent-reviewer")throw new StockSupportError("SOURCE_SCOPE_DENIED",403);
     const parsed=actionSchema.safeParse(raw);if(!parsed.success)throw new StockSupportError("VALIDATION_FAILED",422);
     const a=parsed.data;if(a.requestedScope.workspaceId!==scope.workspaceId||a.requestedScope.accountIds[0]!==scope.accountId)throw new StockSupportError("SOURCE_SCOPE_DENIED",403);
@@ -113,18 +139,20 @@ export function createStockSupportWorkflow(db:DatabaseSync,scope:OperationsScope
     const view:View=transfer?"inventoryOverview":"supportWorkspace";
     const target=transfer?targetOf(transfer.scope):(a.payload as z.infer<typeof handoffIntent>).caseId;
     const requestHash=digest([scope,actorRef,a.actionKind,a.payload,a.expectedVersion]);
-    const s=await snapshot(view);
+    const observed=await snapshot(view,actorRef,"propose",a,caller),s=observed.snapshot;
+    const publish=<T extends object>(value:T)=>{const fence=()=>{try{observed.assertCurrent();}catch(error){if(error instanceof StockSupportError)throw new StockSupportError(error.code,error.status,undefined,"uncertain");throw new StockSupportError("STOCK_SUPPORT_SOURCE_UNAVAILABLE",503,undefined,"uncertain");}};
+      Object.defineProperty(value,"assertCurrent",{value:fence,enumerable:false});fence();return value as T&{assertCurrent():void};};
     // Re-read upstream membership and coverage even on an idempotent retry.
-    if("cases" in s && !s.cases.some(c=>c.id===target))throw new StockSupportError("RECORD_NOT_FOUND",404);
-    if(transfer && "periods" in s && !s.periods.some(p=>p.window.ref===transfer.windowRef && p.positions.some(r=>r.sku===transfer.sku && r.home===transfer.from)))throw new StockSupportError("RECORD_NOT_FOUND",404);
+    if("cases" in s && !s.cases.some(c=>c.id===target) || transfer && "periods" in s && !s.periods.some(p=>p.window.ref===transfer.windowRef && p.positions.some(r=>r.sku===transfer.sku && r.home===transfer.from))){observed.assertCurrent();throw new StockSupportError(!fresh(s.observedAt,now())?"SOURCE_STALE":s.coverage==="partial"?"SOURCE_COVERAGE_PARTIAL":"RECORD_NOT_FOUND",!fresh(s.observedAt,now())||s.coverage==="partial"?503:404);}
     db.exec("BEGIN IMMEDIATE");
     let closed=false;
     try{
+      observed.assertCurrent();
       const row=db.prepare("SELECT request_hash,version,receipt,status FROM stock_support_reviews WHERE request_key=?").get(a.idempotencyKey);
       if(row){
         if(row.request_hash!==requestHash)throw new StockSupportError("IDEMPOTENCY_CONFLICT",409);
         if(row.status==="rejected")throw new StockSupportError("STALE_VERSION",409,String(row.version));
-        const result=ack(requestReceipt.parse(JSON.parse(String(row.receipt))));db.exec("COMMIT");return result;
+        const result=ack(requestReceipt.parse(JSON.parse(String(row.receipt))));observed.assertCurrent();db.exec("COMMIT");closed=true;return publish(result);
       }
       if(!fresh(s.observedAt,now()))throw new StockSupportError("SOURCE_STALE",409);
       if(s.coverage!=="complete")throw new StockSupportError("SOURCE_COVERAGE_PARTIAL",409);
@@ -133,7 +161,7 @@ export function createStockSupportWorkflow(db:DatabaseSync,scope:OperationsScope
         const r=requestReceipt.parse({requestKey:a.idempotencyKey,actorRef,state:status,baseVersion:a.expectedVersion,actionRef:id,digest:hash,payloadDigest:digest(a.payload)});
         db.prepare("INSERT INTO stock_support_reviews(request_key,actor,view,target,request_hash,status,version,receipt,sku,from_home,units,manifest) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
           .run(a.idempotencyKey,actorRef,view,target,requestHash,status,current,JSON.stringify(r),transfer?.sku??null,transfer?.from??null,transfer?.units??null,manifest);
-        db.exec("COMMIT");closed=true;return r;
+        observed.assertCurrent();if(!fresh(s.observedAt,now()))fail("SOURCE_STALE",409);db.exec("COMMIT");closed=true;return r;
       };
       if(current!==a.expectedVersion){save("rejected",null,null,null);throw new StockSupportError("STALE_VERSION",409,current);}
       if(transfer && "periods" in s){
@@ -152,7 +180,7 @@ export function createStockSupportWorkflow(db:DatabaseSync,scope:OperationsScope
         if(!c.handoffAllowed || c.state==="Resolved" || c.state==="Unknown")throw new StockSupportError("CASE_HANDOFF_HELD",409);
       }else throw new StockSupportError("INVALID_REQUEST",400);
       const manifest={scope,sourceRevision:s.revision,current,actorRef,actionKind:a.actionKind,payload:a.payload,policy};
-      return ack(save("recorded","review-"+randomUUID(),digest(manifest),JSON.stringify(manifest)));
+      return publish(ack(save("recorded","review-"+randomUUID(),digest(manifest),JSON.stringify(manifest))));
     }catch(error){if(!closed)db.exec("ROLLBACK");throw error;}
   }
   return {read,propose};

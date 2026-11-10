@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { SCHEMA_VERSION, type ReadResponse } from "@/adapter/contract";
 import { protectedRead, assertScopeMatches } from "@/adapter/useView";
@@ -28,6 +28,13 @@ type Props={data:NativeCollaborationData;res:ReadResponse<unknown>;tab:string;op
 export function NativeCollaboration({data,res,tab,openEvidence,reload}:Props){
   const [selection,setSelection]=useState<Selection|null>(null),[reason,setReason]=useState(""),[outcome,setOutcome]=useState<WorkflowIntent["outcome"]>("completed");
   const context=useScope(), client=useQueryClient();
+  const binding=JSON.stringify([scopeKey(context),data.collaborationRef,data.sourceRef,data.actorRef]);
+  const snapshot=JSON.stringify([data,res.dataVersion,res.capabilities]);
+  const validUntil=data.readAccess?.validUntil;
+  const current=useRef<{binding:string;snapshot:string;validUntil?:string;adapter:typeof context.adapter}|null>(null);
+  useLayoutEffect(()=>{current.current={binding,snapshot,validUntil,adapter:context.adapter};return()=>{current.current=null;};},[binding,snapshot,validUntil,context.adapter]);
+  const stillCurrent=(exact=false)=>{const value=current.current;return !!value&&value.binding===binding&&value.adapter===context.adapter&&(!exact||value.snapshot===snapshot)&&
+    (value.validUntil==null||Number.isFinite(Date.parse(value.validUntil))&&Date.parse(value.validUntil)>Date.now());};
   const markerKey="collaboration-pending:"+JSON.stringify([scopeKey(context),data.sourceRef]);
   const [pending,setPending]=useState<PendingProposal|null>(()=>savedPending(markerKey));
   const [absentKey,setAbsentKey]=useState<string|null>(null);
@@ -48,6 +55,7 @@ export function NativeCollaboration({data,res,tab,openEvidence,reload}:Props){
   const dirty=!!selection && !!reason.trim() && !pending;
   const close=()=>{if(dirty)setDiscard(true);else setSelection(null);};
   async function reconcile(marker:PendingProposal) {
+    if(!stillCurrent())return;
     setReviewing(true);setAbsentKey(null);
     try {
       const requestId="collaboration-reconcile-"+crypto.randomUUID();
@@ -59,6 +67,7 @@ export function NativeCollaboration({data,res,tab,openEvidence,reload}:Props){
         assertScopeMatches(answer,context.scope);
         return answer;
       });
+      if(!stillCurrent())return;
       const parsed=nativeCollaborationSchema.safeParse(latest.data);
       if(!parsed.success || parsed.data.stale || parsed.data.coverage!=="complete" || parsed.data.collaborationRef!==data.collaborationRef ||
           parsed.data.actorRef!==marker.actorRef || parsed.data.proposalReconciliation?.requestKey!==marker.requestKey ||
@@ -80,35 +89,41 @@ export function NativeCollaboration({data,res,tab,openEvidence,reload}:Props){
     finally{setReviewing(false);}
   }
   async function sendOriginal(initialMarker:PendingProposal,intent:WorkflowIntent,retry:boolean){
+    if(!stillCurrent(true))return;
     let marker=initialMarker;
     setAbsentKey(null);saveMarker(marker);
     try {
       const receipt=await action.mutateAsync({operation:"requestApproval",actionKind:"proposeCollaborationReview",entityRefs:[],approvalRef:null,manifestRef:null,
         idempotencyKey:marker.requestKey,expectedVersion:marker.baseVersion,payload:intent});
+      if(!stillCurrent())return;
       if(receipt.state!=="approvalPending" || receipt.executionCertainty!=="applied" || !receipt.receiptRefs.includes("proposal:"+receipt.actionRef) || !/^[a-f0-9]{64}$/.test(receipt.payloadVersion)){
         setAck("Proposal acknowledgment unverified. Reconcile the exact request before continuing.");return;
       }
       marker={...marker,actionRef:receipt.actionRef,digest:receipt.payloadVersion};saveMarker(marker);await reconcile(marker);
     }catch(error){
+      if(!stillCurrent())return;
       if(!retry && (error as {body?:{executionCertainty?:string}})?.body?.executionCertainty==="notApplied")saveMarker(null);
       else setAck("Proposal outcome unverified. Read the exact request receipt again before continuing.");
     }
   }
   async function retryOriginal(){
-    if(!pending || pending.actorRef!==data.actorRef || absentKey!==pending.requestKey || reviewing || action.isPending)return;
-    if(await reasonFingerprint(reason)!==pending.reasonHash){setAck("Enter the original proposal reason to retry this exact request.");return;}
+    if(!stillCurrent(true) || !pending || pending.actorRef!==data.actorRef || absentKey!==pending.requestKey || reviewing || action.isPending)return;
+    const fingerprint=await reasonFingerprint(reason);
+    if(!stillCurrent(true))return;
+    if(fingerprint!==pending.reasonHash){setAck("Enter the original proposal reason to retry this exact request.");return;}
     const intent:WorkflowIntent={collaborationRef:data.collaborationRef,kind:pending.kind,reason:reason.trim(),
       ...(pending.deliverableRef?{deliverableRef:pending.deliverableRef,submissionVersion:pending.submissionVersion??undefined}:{}),
       ...(pending.outcome?{outcome:pending.outcome as WorkflowIntent["outcome"]}:{})};
     await sendOriginal(pending,intent,true);
   }
   async function submit(){
-    if(!selection || !reason.trim() || reason.trim().length>1000 || savedPending(markerKey) || action.isPending || selection.version!==res.dataVersion)return;
+    if(!stillCurrent(true) || !selection || !reason.trim() || reason.trim().length>1000 || savedPending(markerKey) || action.isPending || selection.version!==res.dataVersion)return;
     const intent:WorkflowIntent={collaborationRef:data.collaborationRef,kind:selection.kind,reason:reason.trim(),...(selection.deliverableRef?{deliverableRef:selection.deliverableRef,submissionVersion:selection.submissionVersion}:{}),
       ...(selection.kind==="close"?{outcome}: {})};
     let marker:PendingProposal;
     try{marker=await pendingProposal(intent,selection.version,data.actorRef);}catch{setAck("The proposal could not be verified locally. No request was submitted.");return;}
-    if(savedPending(markerKey))return;
+    // Do not start an unsent proposal after hashing outlives its protected read.
+    if(!stillCurrent(true) || savedPending(markerKey))return;
     await sendOriginal(marker,intent,false);
   }
   const agreement=t.agreementRef && t.acceptedAt ? "Agreement recorded "+t.acceptedAt : "Acceptance unverified";

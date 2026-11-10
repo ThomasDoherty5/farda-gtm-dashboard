@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import type { AssessmentData } from "@/adapter/demoScorecards";
 import { useView } from "@/adapter/useView";
 import type { AgentAssessmentRecord } from "@/creator-agent/readViews";
@@ -10,6 +10,8 @@ import { AcquisitionTabs } from "@/features/acquisition/AcquisitionTabs";
 import { QualificationDetails, decisionLabel, rating } from "@/features/acquisition/AgentQualification";
 import { evidenceReviewPath } from "@/features/acquisition/creatorReviewPaths";
 import { ViewShell } from "@/features/analytics/parts";
+import { CommercialEligibility } from "@/features/commercial/CommercialEligibility";
+import { commercialSelectionFromSearch } from "@/features/commercial/selection";
 import { CommerceView } from "./CommerceView";
 import { ScorecardView } from "./ScorecardView";
 import a from "@/features/analytics/Analytics.module.css";
@@ -22,19 +24,23 @@ import styles from "@/features/acquisition/Acquisition.module.css";
  */
 export function AssessmentPage() {
   const { creatorId = "", assessmentId = "" } = useParams();
-  const query = useView<{ creatorId: string; assessmentId: string }, AssessmentData | AgentAssessmentRecord>("assessmentRecord", { creatorId, assessmentId });
+  const [search] = useSearchParams();
+  const selection = commercialSelectionFromSearch(search);
+  const filters = { creatorId, assessmentId, ...(selection ?? {}) };
+  const query = useView<typeof filters, AssessmentData | AgentAssessmentRecord>("assessmentRecord", filters);
   const record = query.data?.data ?? null;
+  if (selection === null) return <section className={a.page}><h1>Creator assessment</h1><EmptyState state="Error" title="Invalid commercial selection" alert><p>Use one exact offer ID, saved version and supported phase. No current eligibility is displayed.</p></EmptyState></section>;
   return (
     <section aria-labelledby="assessment-title" data-figma-source={record ? (record.kind === "creator-v3" ? "102:364" : record.kind === "content-v2" ? "37:74" : record.kind === "tiktok-commerce-v2" ? "37:251" : "65:814") : undefined} className={a.page}>
       {!record && <h1 id="assessment-title" style={{ font: "var(--text-h1)", margin: 0 }}>Creator assessment</h1>}
       <ViewShell query={query} subject="The assessment" emptyTitle="No assessment" emptyBody="The source responded, but there is no assessment record to show.">
-        {(data) => data.kind === "creator-v3" ? (data.creatorId === creatorId && data.assessmentId === assessmentId ? <CurrentAssessment record={data} /> : <><h1 id="assessment-title" style={{ font: "var(--text-h1)", margin: 0 }}>Creator assessment</h1><EmptyState state="Error" title="Assessment identity mismatch" alert><p>The returned record does not match this creator and saved run. No assessment is displayed.</p></EmptyState></>) : data.kind === "sc-commerce-v2" ? <CommerceView record={data} /> : <ScorecardView record={data} />}
+        {(data, response) => data.kind === "creator-v3" ? (data.creatorId === creatorId && data.assessmentId === assessmentId ? <CurrentAssessment record={data} current={!query.isError && !query.isFetching && !query.isPlaceholderData && response.dataState !== "stale"} /> : <><h1 id="assessment-title" style={{ font: "var(--text-h1)", margin: 0 }}>Creator assessment</h1><EmptyState state="Error" title="Assessment identity mismatch" alert><p>The returned record does not match this creator and saved run. No assessment is displayed.</p></EmptyState></>) : data.kind === "sc-commerce-v2" ? <CommerceView record={data} /> : <ScorecardView record={data} />}
       </ViewShell>
     </section>
   );
 }
 
-function CurrentAssessment({ record }: { record: AgentAssessmentRecord }) {
+function CurrentAssessment({ record, current }: { record: AgentAssessmentRecord; current: boolean }) {
   const reviewPath = record.evidenceId === null ? null : evidenceReviewPath(record.creatorId, record.evidenceId);
   return <>
     <div className={styles.titleRow}>
@@ -47,6 +53,7 @@ function CurrentAssessment({ record }: { record: AgentAssessmentRecord }) {
       {!record.stale && !record.superseded && <LinkButton variant="secondary" to={`/offers/new?${new URLSearchParams({creator: record.creatorId, route: record.agentEvidence.checkoutRoute, brief: record.qualification.briefId})}`}>Draft creator offer</LinkButton>}
     </div>
     <AcquisitionTabs current="Daily sourcing" evidencePath={reviewPath} />
+    <CommercialEligibility data={record.commercialEligibility} current={current}/>
     <section className={styles.card} aria-labelledby="saved-run-title">
       <h2 id="saved-run-title" className={styles.h2}>Saved assessment</h2>
       <p className={styles.small}>Recorded <time dateTime={record.recordedAt}>{record.recordedAt}</time> · Revision {record.revision} · {record.stale ? "Stale" : "Current saved run"}. Configuration values below belong to this saved run; current publications are listed in daily sourcing.</p>

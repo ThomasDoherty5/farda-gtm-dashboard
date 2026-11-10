@@ -1,3 +1,6 @@
+import { digest } from "../config.ts";
+import { MonitorError } from "./reader.ts";
+import type { MonitorSourceReader } from "./contract.ts";
 import { monitorSnapshotSchema,type MonitorSnapshot } from "./contract.ts";
 export const monitorScope={workspaceId:"synthetic-workspace",accountId:"synthetic-account",environment:"sandbox" as const};
 export const monitorTime=Date.parse("2026-11-06T10:00:00Z");
@@ -35,4 +38,26 @@ export function intakeFixture(){
     handoffs:[{target:"notion-creator-crm",key:"n-"+id,state:"confirmed",receiptRef:"notion-"+id,revision:1,canonicalReceiptRef:null},
       {target:"sheets-watchlist",key:"s-"+id,state:"confirmed",receiptRef:"sheets-"+id,revision:1,canonicalReceiptRef:"notion-"+id}],
     sourceStatus:"verified" as const}))};
+}
+
+/** Optional read-only control evidence with no message body or external destination. */
+export function addMonitorReviewEvidence(snapshot:MonitorSnapshot){
+  const m=snapshot.members[0]!,at=snapshot.runs[0]!.checks[0]!.at!;
+  snapshot.reviewEvidence=[{creatorId:m.creatorId,revision:m.revision,network:m.network,account:m.account,profileId:m.profileId,
+    access:"authorized",observedAt:at,receipt:"synthetic-review-packet",historyComplete:true,
+    history:[{id:"synthetic-intake-event",at,kind:"identity",decision:"quarantined",receipt:"synthetic-original-receipt",
+      identityEvidence:["synthetic-original-profile-proof"],decisionReceipt:"synthetic-decision-receipt"}],
+    candidates:[{creatorId:m.creatorId,network:m.network,account:m.account,profileId:m.profileId,receipt:"synthetic-candidate-a"},
+      {creatorId:"synthetic-competing-creator",network:m.network,account:m.account,profileId:"synthetic-competing-profile",receipt:"synthetic-candidate-b"}],exclusion:null}];
+  snapshot.runs[0]!.inbox=[{id:"synthetic-message-event",creatorId:m.creatorId,network:m.network,account:m.account,profileId:m.profileId,
+    at,receipt:"synthetic-message-receipt",kind:"statusChange",interpretation:"suggestion",context:{access:"authorized",observedAt:at,conversationId:"synthetic-conversation",
+      messageId:"synthetic-message",sourceVersion:"synthetic-message-v1",currentStatus:"draft",proposedStatus:"ready",expectedVersion:"synthetic-status-v1"}}];
+  return snapshot;
+}
+
+/** Explicit fictional current-grant owner; never used by production source composition. */
+export function monitorTestSource(current:()=>MonitorSnapshot|null,now:()=>number=Date.now,beforeRead?:()=>void|Promise<void>):MonitorSourceReader {
+  return {async read(binding){await beforeRead?.();const snapshot=structuredClone(current()),time=now();return {snapshot,authority:{binding:structuredClone(binding),
+    sourceVersion:snapshot?.version??null,permissionVersion:"fictional-monitor-permission-v1",observedAt:new Date(time).toISOString(),validUntil:new Date(time+15*60_000).toISOString()}};},
+    assertCurrent(result,binding){if(result.authority.permissionVersion!=="fictional-monitor-permission-v1"||digest(result.authority.binding)!==digest(binding)||digest(result.snapshot)!==digest(current()))throw new MonitorError("MONITOR_SOURCE_CHANGED",409);}};
 }

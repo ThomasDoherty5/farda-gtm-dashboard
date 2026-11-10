@@ -65,7 +65,7 @@ test.describe("shell navigation by width", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/operations");
     await expect(primary(page)).toHaveText(["Overview", "Creators", "Operations", "Finance", "Automations"]);
-    await expect(page.getByRole("button", { name: "Open workspace menu" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "TD, open workspace menu" })).toBeVisible();
     await expect(page.getByRole("button", { name: "More" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Menu", exact: true })).toHaveCount(0);
   });

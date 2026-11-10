@@ -18,8 +18,19 @@ describe("FE00-04 breadcrumbs", () => {
     expect(breadcrumbsFor("/creators/tiktok", "?view=board").at(-1)!.label).toBe("TikTok current funnel");
   });
 
+  it("does not infer a settlement provider from opaque IDs or untrusted query labels", () => {
+    for (const ref of ["sf1-collabs-looking", "sf1-tiktok-looking"]) {
+      expect(breadcrumbsFor(`/finance/settlements/${ref}`, "?provider=tiktok").at(-2)?.label).toBe("Settlement");
+    }
+  });
+
   it("drops the design code from a screen name", () => {
     expect(breadcrumbsFor("/creators/discovery").at(-1)!.label).toBe("Daily sourcing and invitation plan");
+  });
+
+  it("does not label every registered cadence as an hourly run", () => {
+    expect(breadcrumbsFor("/runs/rt-run-synthetic").at(-2)?.label).toBe("Registered source run");
+    expect(breadcrumbsFor("/runs/demo-run").at(-2)?.label).toBe("Hourly run");
   });
 
   it("an address outside the manifest says so rather than inventing a trail", () => {

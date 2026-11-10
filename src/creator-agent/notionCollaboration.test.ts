@@ -13,10 +13,19 @@ const collab=row(target,collabs,{Name:{type:"title",title:[{plain_text:"Syntheti
 const material=row(asset,content,{Collaboration:{type:"relation",relation:[{id:target}]},"Status":{type:"status",status:{name:"Live"}},
   "Published":date("2026-10-30"),"Live URL":{type:"url",url:"https://example.test/post"},"Ad rights approved":{type:"checkbox",checkbox:true},"Rights expire":date("2026-12-31")});
 const list=(results:unknown[],overrides={})=>({object:"list",results,has_more:false,next_cursor:null,...overrides});
+import { digest } from "./config.ts";
+import { collaborationSourceResultSchema,type CollaborationReadBinding,type CollaborationSourceResult } from "./collaborationWorkflowSchema.ts";
+const collaborationAuthority={observe:(binding:CollaborationReadBinding,snapshot:CollaborationSourceResult["snapshot"],time:number)=>({binding,sourceVersion:snapshot?.sourceRevision??null,permissionVersion:"fictional-explicit-current-grant",observedAt:new Date(time).toISOString(),validUntil:new Date(time+60_000).toISOString()}),assertCurrent:(result:CollaborationSourceResult,binding:CollaborationReadBinding)=>{expect(result.authority.binding).toEqual(binding);expect(result.authority.sourceVersion).toBe(result.snapshot?.sourceRevision??null);}};
 const setup=(respond:(url:URL,body:Record<string,unknown>|null)=>Response,token:string|null="test-read")=>createNotionDriveAssetSource({
-  scope:{workspaceId:scope.workspaceId,accountId:scope.accountId},notionToken:async()=>token,collaborationDataSourceId:collabs,contentDataSourceId:content
+  collaborationAuthority,scope:{workspaceId:scope.workspaceId,accountId:scope.accountId},notionToken:async()=>token,collaborationDataSourceId:collabs,contentDataSourceId:content
 },{fetch:async(u,opts)=>respond(u as URL,opts?.body ? JSON.parse(String(opts.body)):null),clock:()=>collabTestAt});
+const read=async(provider:ReturnType<typeof setup>,selected=scope)=>collaborationSourceResultSchema.parse(await provider.readCollaborationSnapshot.read({scope:selected,principalRef:"agent-reader",operation:"read",collaborationId:target,requestDigest:digest({target})},"server-secret")).snapshot;
 describe("existing native registry as the collaboration source",()=>{
+  it("does not query a real collection without an explicit current authority owner",async()=>{
+    let calls=0;const provider=createNotionDriveAssetSource({scope:{workspaceId:scope.workspaceId,accountId:scope.accountId},notionToken:async()=>"test-read",collaborationDataSourceId:collabs,contentDataSourceId:content},
+      {fetch:async()=>{calls++;return Response.json(list([]));},clock:()=>collabTestAt});
+    await expect(read(provider)).rejects.toMatchObject({code:"SOURCE_AUTHORITY_UNCONFIGURED",status:503});expect(calls).toBe(0);
+  });
   it("uses the fixed collections and exact relation, preserves voluntary terms, and never converts a mirror post/rights flag into native proof",async()=>{
     const seen:string[]=[];
     const provider=setup((url,body)=>{
@@ -25,7 +34,7 @@ describe("existing native registry as the collaboration source",()=>{
       if(url.pathname.endsWith(content+"/query")){expect(body?.filter).toEqual({property:"Collaboration",relation:{contains:target}});return Response.json(list([material]));}
       return Response.json(collab);
     });
-    const data=await provider.readCollaborationSnapshot(scope,target,"server-secret");
+    const data=await read(provider);
     expect(seen).toHaveLength(3);expect(data).toMatchObject({coverage:"complete",terms:{posting:"voluntary",due:null,graceDays:null,observationUntil:"2026-11-01"},
       suppression:{state:"unknown"},sample:{state:"Delivery recorded"}});
     expect(data!.deliverables[0]).toMatchObject({stage:"Live",submissionVersion:null,reportedPublishedAt:"2026-10-30",reportedLink:true,
@@ -38,13 +47,13 @@ describe("existing native registry as the collaboration source",()=>{
     expect(projected.terms).toMatchObject({posting:"unknown",due:null,graceDays:null});
   });
   it("distinguishes a complete empty lookup from incomplete reads, changed versions, wrong relation and missing access",async()=>{
-    expect(await setup(()=>Response.json(list([]))).readCollaborationSnapshot(scope,target)).toBeNull();
-    await expect(setup(()=>Response.json(list([],{request_status:{type:"incomplete"}}))).readCollaborationSnapshot(scope,target)).rejects.toMatchObject({code:"SOURCE_COVERAGE_INCOMPLETE"});
-    await expect(setup(()=>Response.json(list([])),null).readCollaborationSnapshot(scope,target)).rejects.toMatchObject({code:"SOURCE_ACCESS_UNAVAILABLE"});
-    await expect(setup(()=>Response.json(list([]))).readCollaborationSnapshot({...scope,accountId:"other"},target)).rejects.toMatchObject({status:403});
-    await expect(setup(url=>url.pathname.includes("pages/")?Response.json({...collab,last_edited_time:"2026-11-06T18:00:01Z"}):
-      Response.json(list(url.pathname.endsWith(collabs+"/query")?[collab]:[]))).readCollaborationSnapshot(scope,target)).rejects.toMatchObject({code:"SOURCE_VERSION_CHANGED"});
-    await expect(setup(url=>Response.json(list(url.pathname.endsWith(collabs+"/query")?[collab]:[row(asset,content,{Collaboration:{type:"relation",relation:[{id:id(8)}]}})])))
-      .readCollaborationSnapshot(scope,target)).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
+    expect(await read(setup(()=>Response.json(list([]))))).toBeNull();
+    await expect(read(setup(()=>Response.json(list([],{request_status:{type:"incomplete"}}))))).rejects.toMatchObject({code:"SOURCE_COVERAGE_INCOMPLETE"});
+    await expect(read(setup(()=>Response.json(list([])),null))).rejects.toMatchObject({code:"SOURCE_ACCESS_UNAVAILABLE"});
+    await expect(read(setup(()=>Response.json(list([]))),{...scope,accountId:"other"})).rejects.toMatchObject({status:403});
+    await expect(read(setup(url=>url.pathname.includes("pages/")?Response.json({...collab,last_edited_time:"2026-11-06T18:00:01Z"}):
+      Response.json(list(url.pathname.endsWith(collabs+"/query")?[collab]:[]))))).rejects.toMatchObject({code:"SOURCE_VERSION_CHANGED"});
+    await expect(read(setup(url=>Response.json(list(url.pathname.endsWith(collabs+"/query")?[collab]:[row(asset,content,{Collaboration:{type:"relation",relation:[{id:id(8)}]}})])))
+      )).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
   });
 });

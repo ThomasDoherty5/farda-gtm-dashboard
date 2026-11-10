@@ -5,6 +5,8 @@ import type { ActionResponse, ReadResponse } from "@/adapter/contract";
 import { useAction } from "@/adapter/useAction";
 import { useView } from "@/adapter/useView";
 import { parseScorecardSelection } from "@/creator-agent/scorecardPreview";
+import { NativeBulkPage } from "./NativeBulkPage";
+import { NativeBatchPage } from "./NativeBatchPage";
 import { ScorecardPreviewPage } from "./ScorecardPreview";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -48,7 +50,9 @@ const parseTab = (raw: string | null): Tab => (raw === "exceptions" || raw === "
 export function BatchPage() {
   const { batchId } = useParams();
   const [search] = useSearchParams();
-  if (batchId !== "scorecard-preview") return <ExecutionBatchPage />;
+  const scope = useScope();
+  if (batchId !== "scorecard-preview" && search.get("context") === "bulk" && scope.adapter.kind !== "demo") return <NativeBulkPage />;
+  if (batchId !== "scorecard-preview") return scope.adapter.kind === "demo" ? <ExecutionBatchPage /> : <NativeBatchPage />;
   const selection = parseScorecardSelection(search);
   if (!selection) return <EmptyState state="Empty" title="Invalid assessment selection"><p>Select up to 25 different saved creators from daily sourcing.</p><LinkButton to="/creators/discovery">Daily sourcing</LinkButton></EmptyState>;
   return <ScorecardPreviewPage selection={selection} />;

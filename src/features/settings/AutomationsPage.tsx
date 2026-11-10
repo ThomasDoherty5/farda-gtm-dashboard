@@ -1,3 +1,4 @@
+import { NativeOperationsControls } from "./NativeOperationsControls";
 import { useId, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AdapterError } from "@/adapter/errors";
@@ -41,6 +42,7 @@ function RunsPage() {
   const filters = useSavedDisplayFilters(tab);
   const query = useOperationsPages<AutomationData | SavedRuns>("automationRuns", filters);
   const [taskOpen, setTaskOpen] = useState(false);
+  const [controlsReady,setControlsReady]=useState(false);
   const demo = adapter.kind === "demo";
   const data = query.data?.data ?? null;
   const taskBlocked = query.data ? blockedReason(query.data, "requestTask") : "Available once runs have loaded.";
@@ -49,7 +51,7 @@ function RunsPage() {
     <Page labelledBy="automations-title" source="14:637">
       <PageHeader id="automations-title" title="Every action, accounted for." subtitle="Runs · Zapier orchestration and browser execution share one traceable handoff.">
         <LinkButton variant="secondary" to="/automations?tab=zaps" style={{ minWidth: 176 }}>View Zapier</LinkButton>
-        <Button aria-haspopup="dialog" style={{ minWidth: 176 }} disabledReason={taskBlocked} onClick={() => setTaskOpen(true)}>Request task</Button>
+        <Button aria-haspopup="dialog" style={{ minWidth: 176 }} disabledReason={demo?taskBlocked:controlsReady?null:"Available once current control evidence has loaded."} onClick={() => setTaskOpen(true)}>Request task</Button>
       </PageHeader>
       <AutomationNav current={tab} width={152} />
       <CadenceNotice title="Daily sourcing and hourly monitoring" funnel>
@@ -64,6 +66,7 @@ function RunsPage() {
       {query.isError && <ViewError error={query.error} subject="Automation runs" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
       {query.data && (data && "kind" in data ? <SavedRunsPanel data={data} tab={tab} /> : data && demo ? <Body data={data} tab={tab} /> : <EmptyState state="Empty" title="No automation runs yet"><p>No account-scoped run data is available.</p></EmptyState>)}
       {query.paging}
+      {!demo && <NativeOperationsControls section={tab === "runs" ? "runs" : "reports"} onReady={setControlsReady} taskOpen={taskOpen} onTaskClose={()=>setTaskOpen(false)}/>}
       {data && !("kind" in data) && demo && <TaskDialog open={taskOpen} data={data} demo={demo} onClose={() => setTaskOpen(false)} />}
     </Page>
   );

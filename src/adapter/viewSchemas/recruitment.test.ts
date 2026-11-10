@@ -24,7 +24,7 @@ const batchBase: BatchData = {
 
 describe("recruitment view schemas", () => {
   it("covers exactly the recruitment, invitation, batch, pipeline, pipeline branches and discovery view keys", () => {
-    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineBranches", "pipelineSummary", "recruitmentQueue"]);
+    expect(Object.keys(schemas).sort()).toEqual(["batchDetail", "discoverySummary", "invitationDraft", "pipelineBranches", "pipelineSummary", "recruitmentQueue", "sourcingPlan"]);
   });
 
   describe("every demo variant parses unchanged", () => {

@@ -1,3 +1,5 @@
+import { NativeReturn } from "./NativeReturn";
+import { useScope } from "@/adapter/scope";
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import type { ReadResponse } from "@/adapter/contract";
@@ -27,13 +29,14 @@ const money = (m: { minorUnits: number; currency: string }) => formatMoneyExact(
  * needs source receipts that a click can never supply.
  */
 export function ReturnPage() {
+  const { adapter } = useScope();
   const { returnId = "" } = useParams();
   const [search] = useSearchParams();
   const scenario = search.get("scenario") ?? undefined;
-  const query = useView<{ returnId: string; scenario?: string }, ReturnDetail>("returnDetail", scenario ? { returnId, scenario } : { returnId });
+  const query = useView<{ returnId: string; scenario?: string }, ReturnDetail>("returnDetail", adapter.kind === "demo" && scenario ? { returnId, scenario } : { returnId });
   return (
     <RecordShell query={query} id="return-title" title={`Return ${returnId}`} subject="return" figma="12:292">
-      {(res, r) => (r.state === "resolved" && r.resolved ? <Resolved r={r} /> : <Active key={r.version} res={res} r={r} />)}
+      {(res, r) => adapter.kind !== "demo" ? <NativeReturn record={r} /> : (r.state === "resolved" && r.resolved ? <Resolved r={r} /> : <Active key={r.version} res={res} r={r} />)}
     </RecordShell>
   );
 }
@@ -79,6 +82,7 @@ const RESOLUTIONS = (amount: string): { value: ReturnResolution; label: string }
 ];
 
 function Active({ res, r }: { res: ReadResponse<ReturnDetail>; r: ReturnDetail }) {
+  const { adapter } = useScope();
   const [source, setSource] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
   const saved: Draft = r.selected;
@@ -86,12 +90,14 @@ function Active({ res, r }: { res: ReadResponse<ReturnDetail>; r: ReturnDetail }
   const action = useAction<Payload>();
   const dirty = draft.disposition !== saved.disposition || draft.resolution !== saved.resolution || draft.reason !== saved.reason;
   const fieldErrors = action.error instanceof AdapterError ? (action.error.body.fieldErrors ?? {}) : {};
-  const prepareBlocked = blockedReason(res, "prepareReturnTask");
-  const closeBlocked = blockedReason(res, "closeReturn");
+  const prepareBlocked = adapter.kind === "demo" ? blockedReason(res, "prepareReturnTask") : "An exact source-bound return preview is not connected. No inventory, refund or replacement request can be sent.";
+  const closeBlocked = adapter.kind === "demo" ? blockedReason(res, "closeReturn") : "Source receipt-gated closure is not connected.";
   const amount = money(r.refundAmount);
 
-  const prepare = () =>
+  const prepare = () => {
+    if (prepareBlocked || action.isPending) return;
     action.mutate({ operation: "requestApproval", actionKind: "prepareReturnTask", entityRefs: [], expectedVersion: r.version, approvalRef: null, manifestRef: null, payload: { returnRef: r.returnRef, ...draft } });
+  };
 
   return (
     <>

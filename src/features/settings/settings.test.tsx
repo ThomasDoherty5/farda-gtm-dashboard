@@ -246,10 +246,15 @@ describe("automation runs (14:637)", () => {
   });
 
   it("shows a pending state live", async () => {
-    renderRoute("/automations", createLiveAdapter("sandbox"));
+    const adapter=createLiveAdapter("sandbox"),submit=vi.spyOn(adapter,"submitAction");
+    renderRoute("/automations", adapter);
     expect(await screen.findByRole("alert")).toHaveTextContent("not connected");
     expect(screen.queryByTestId("run-list")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Request task" })).toHaveAttribute("aria-disabled", "true");
+    const button=screen.getByRole("button", { name: "Request task" });
+    expect(button).toHaveAttribute("aria-disabled", "true");
+    await userEvent.setup().click(button);
+    expect(screen.queryByRole("dialog",{name:"Choose a registered task",hidden:true})).not.toBeInTheDocument();
+    expect(submit).not.toHaveBeenCalled();
   });
 });
 

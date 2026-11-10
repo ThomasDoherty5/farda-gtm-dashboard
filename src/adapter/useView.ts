@@ -32,10 +32,11 @@ let requestCounter = 0;
  * With `keepPrevious`, a changed filter keeps showing the last acknowledged data (`isPlaceholderData`) until the new answer
  * arrives, so a control that lives beside the data isn't torn down by its own change.
  */
-export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean } = {}) {
+export function useView<F, T>(viewKey: string, filters: F, period: Period | null = null, options: { keepPrevious?: boolean; page?: {cursor:string|null;limit:number} } = {}) {
   const ctx = useScope();
   const client = useQueryClient();
-  const queryKey = [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period];
+  const page = options.page ?? {cursor:null,limit:50};
+  const queryKey = [...scopeKey(ctx), SCHEMA_VERSION, viewKey, filters, period, ...(options.page ? [page] : [])];
   return useQuery<ReadResponse<T>, Error>({
     ...(options.keepPrevious ? { placeholderData: keepPreviousData } : {}),
     queryKey,
@@ -60,7 +61,7 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
             filters,
             period,
             sort: [],
-            page: { cursor: null, limit: 50 },
+            page,
             requestId,
           },
           { signal },

@@ -1,0 +1,107 @@
+import { createContext, useContext, useId, type ReactNode } from "react";
+const SyntheticSource = createContext(true);
+import type { ReadResponse } from "@/adapter/contract";
+import type { NativeCommissionLedger, NativePayable, NativeSettlement, SettlementRecord } from "@/creator-agent/settlements/contract";
+import { Kpi } from "@/components/Kpi";
+import { Badge } from "@/components/Badge";
+import { Button, LinkButton } from "@/components/Button";
+import { DataTable } from "@/components/DataTable";
+import { Dialog } from "@/components/Dialog";
+import { FactList, PageHeader } from "@/components/Panels";
+import { SectionTabs } from "@/components/SectionTabs";
+import { useSourceLease } from "@/features/commercial/useSourceLease";
+import styles from "./NativeFinance.module.css";
+
+export type NativeFinanceData = NativeCommissionLedger | NativePayable | NativeSettlement;
+export type MoneyFact = SettlementRecord["eligibleBase"];
+export const stateText: Record<SettlementRecord["state"], string> = { estimated: "Estimated", earned: "Earned", held: "Held", disputed: "Disputed", approved: "Approved", billed: "Billed", awaitingCreator: "Waiting for creator activation", awaitingProvider: "Awaiting provider", merchantPaid: "Merchant paid", creatorPaid: "Creator paid", failed: "Failed", adjusted: "Adjusted", reconciled: "Reconciled", requested: "Requested", executed: "Executed", reversed: "Reversed", unknown: "Unknown" };
+export const reasonText = (reason: string) => reason.toLowerCase().replaceAll("_", " ");
+export function exactMoney(value: { minorUnits: number; currency: string }) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: value.currency, currencyDisplay: "code" }).format(value.minorUnits / 100);
+}
+export function moneyFact(fact: MoneyFact): string {
+  return fact.state === "known" ? exactMoney(fact.value) : `${fact.state === "notApplicable" ? "N/A" : "Unknown"} · ${reasonText(fact.reasonCode)}`;
+}
+export const observed = (value: string | null) => value ? new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "Unknown";
+export const recordPath = (record: SettlementRecord) => record.provider === "externalManual" ? `/finance/payables/${encodeURIComponent(record.ref)}` : `/finance/settlements/${encodeURIComponent(record.ref)}`;
+
+/** A source display grant is distinct from a financial fact or permission to mutate. */
+export function FinanceGrant({ data, response, refresh, titleId, title, children }: { data: NativeFinanceData; response: ReadResponse<NativeFinanceData>; refresh: () => void; titleId: string; title: string; children: ReactNode }) {
+  const leased = useSourceLease(data.source.validUntil);
+  const canDisplay = leased && !["unconfigured", "unavailable"].includes(data.source.state);
+  if (!canDisplay) return <><PageHeader id={titleId} title={title} /><div role="alert"><p>Current source access is unavailable or expired. Refresh to verify access before viewing protected financial evidence.</p><Button variant="secondary" onClick={refresh}>Refresh source evidence</Button></div></>;
+  return <SyntheticSource.Provider value={data.source.synthetic}><div className={styles.content}>
+    {children}
+    <div className={styles.source} role="status"><Badge tone={data.source.synthetic ? "violet" : "neutral"}>{data.source.synthetic ? "Synthetic source evidence" : "Source evidence"}</Badge><span>Observed {observed(data.source.observedAt)} · {data.source.state}. {response.dataState === "partial" ? "Some source data is missing. " : ""}No payment is authorized by this view.</span><Button variant="ghost" onClick={refresh}>Refresh source evidence</Button></div>
+  </div></SyntheticSource.Provider>;
+}
+
+export function NativeFinanceTabs({ current, payout }: { current: "commissions" | "payouts"; payout?: SettlementRecord }) {
+  return <SectionTabs label="Commission sections" tabs={[
+    { label: "Commissions", to: "/finance/commissions", current: current === "commissions", width: 109 },
+    { label: "Payouts", to: payout ? recordPath(payout) : "/finance/commissions#native-ledger-records", current: current === "payouts", width: 100 },
+    { label: "Economics", to: "/finance/commissions#contribution", width: 100 },
+    { label: "Provider access", to: "/settings/capabilities", width: 137 },
+  ]} />;
+}
+
+/** The service validates destinations; the browser additionally withdraws an expired link. */
+export function FinanceSourceLink({ record, kind, label, current = true, targetRef, compact = false }: { compact?: boolean; record: SettlementRecord; kind: SettlementRecord["links"][number]["kind"]; label: string; current?: boolean; targetRef?: string }) {
+  const synthetic = useContext(SyntheticSource);
+  const matches = record.links.filter(link => link.kind === kind && (targetRef === undefined || link.targetRef === targetRef));
+  const link = matches.length === 1 ? matches[0] : undefined;
+  const leased = useSourceLease(link?.validUntil);
+  const safe = !synthetic && current && leased && link?.state === "verified" && link.url && /^https:\/\//i.test(link.url);
+  const reason = matches.length > 1 ? "Source links conflict. Ask the source owner." : compact ? "Source link unavailable; refresh access." : "Source link unavailable. Refresh source access.";
+  return safe ? <LinkButton variant="secondary" to={link.url!} target="_blank" rel="noopener noreferrer">{label}<span className="visually-hidden"> (external source, opens in a new tab)</span></LinkButton>
+    : <FinancialHeldButton reason={reason}>{label}</FinancialHeldButton>;
+}
+
+/** Keep the visible explanation grouped with its control instead of making it a header flex item. */
+export function FinancialHeldButton({ reason, children }: { reason: string; children: ReactNode }) {
+  const reasonId = useId();
+  return <span className={styles.sourceLink}><Button variant="secondary" disabledReason={reason} reasonFor={reasonId}>{children}</Button><span id={reasonId} className={styles.sourceLinkReason}>{reason}</span></span>;
+}
+
+export function FinancialEvidenceDialog({ record, onClose }: { record: SettlementRecord | null; onClose: () => void }) {
+  return <Dialog open={!!record} title="Financial source evidence" onClose={onClose}>
+    {record && <div className={styles.content}>
+      <FactList label="Source identity" rows={[["Record", record.ref], ["Provider", record.provider], ["Account", record.accountRef], ["Creator", record.creatorRef], ["Component", record.componentRef], ["Native reference", record.nativeRef ?? "Unknown · not supplied"], ["Current state", stateText[record.state]], ["Version", record.version]]} />
+      <h3>Independent source facts</h3>
+      {record.facts.length ? <ul className={styles.evidence}>{record.facts.map(fact => <li key={fact.ref}>{stateText[fact.state]} · {fact.amount ? exactMoney(fact.amount) : "Amount unknown"} · event {observed(fact.eventAt)} · observed {observed(fact.observedAt)} · evidence {fact.evidenceRef}</li>)}</ul> : <p>No financial event evidence was returned.</p>}
+      <h3>Immutable paid receipts</h3>
+      {record.receipts.length ? <ul className={styles.evidence}>{record.receipts.map(receipt => <li key={receipt.ref}>{receipt.ref} · {exactMoney(receipt.amount)} · settled {observed(receipt.settledAt)} · observed {observed(receipt.observedAt)} · {receipt.evidenceRef}</li>)}</ul> : <p>No paid receipt was returned. This does not prove payment or nonpayment.</p>}
+      <h3>Append-only adjustments</h3>
+      {record.adjustments.length ? <ul className={styles.evidence}>{record.adjustments.map(adjustment => <li key={adjustment.ref}>{adjustment.ref} · {adjustment.reason} · {exactMoney(adjustment.amount)} · original receipt {adjustment.receiptRef} · effective {observed(adjustment.effectiveAt)} · {adjustment.evidenceRef}</li>)}</ul> : <p>No adjustment evidence was returned.</p>}
+      <h3>Payee and order crosswalk</h3>
+      <FactList label="Financial evidence crosswalk" rows={[["Payee", record.crosswalk.payeeRef ?? "Unknown"], ["Order", record.crosswalk.orderRef ?? "Unknown"], ["Crosswalk state", record.crosswalk.state], ["Evidence", record.crosswalk.evidenceRefs.join(", ") || "Unknown"], ["Observed", observed(record.crosswalk.observedAt)]]} />
+      <h3>Statement candidates and differences</h3>
+      {record.candidates.length ? <DataTable caption="Read-only statement differences" columns={[{label:"Statement / component"},{label:"Candidate amount"},{label:"Source net accrued"},{label:"Candidate minus source"},{label:"Period / evidence"}]} rows={record.candidates.map(candidate=>[
+        `${candidate.statementRef} / ${candidate.componentRef}`, exactMoney(candidate.amount), record.netAccrued ? moneyFact(record.netAccrued) : "Unknown",
+        statementDifference(record,candidate), `${observed(candidate.periodStart)} – ${observed(candidate.periodEnd)} · ${candidate.evidenceRef}${candidate.problem ? ` · Unresolved: ${candidate.problem}` : ""}`,
+      ])} /> : <p>No statement candidates were supplied. A zero difference or confirmed match cannot be inferred.</p>}
+      <h3>Accounting and reconciliation context</h3>
+      <FactList label="Financial accounting context" rows={[["State",record.accounting.state],["QuickBooks posting",record.accounting.qboRef??"Unknown"],["Accounting policy",record.accounting.policyRef??"Unknown"],["Policy version",record.accounting.policyVersion??"Unknown"],["Accounting evidence",record.accounting.evidenceRef??"Unknown"]]} />
+      <p>A candidate difference is arithmetic on the same source component and currency, not a confirmed accounting match. Review the exact approval preview before posting; settlement must not book a second commission expense.</p>
+      <p>Viewing this evidence does not confirm a match, change an original receipt or create a payment.</p>
+      <FinanceSourceLink record={record} kind="evidence" label="Open source evidence" />
+    </div>}
+    <Button variant="secondary" onClick={onClose}>Close evidence</Button>
+  </Dialog>;
+}
+
+export function RecordNavigation({ record, children }: { record: SettlementRecord; children: ReactNode }) { return <LinkButton variant="secondary" to={recordPath(record)}>{children}</LinkButton>; }
+
+export function NativeMoneyKpi({ label, fact, context }: { label: string; fact: MoneyFact; context: string }) {
+  return <Kpi label={label} context={fact.state === "known" ? context : `${reasonText(fact.reasonCode)}. ${context}`}>{fact.state === "known" ? exactMoney(fact.value) : fact.state === "unknown" ? "Unknown" : "N/A"}</Kpi>;
+}
+/** Short display reference only; full source identifiers remain in the evidence dialog and exact links. */
+export const displayReference = (ref: string) => ref.length > 32 ? `…${ref.slice(-12)}` : ref;
+
+function statementDifference(record: SettlementRecord, candidate: SettlementRecord["candidates"][number]): string {
+  const net=record.netAccrued;
+  if(candidate.componentRef!==record.componentRef || net?.state!=="known" || candidate.amount.currency!==net.value.currency) return "Unknown · comparable source basis unavailable";
+  const difference=BigInt(candidate.amount.minorUnits)-BigInt(net.value.minorUnits);
+  const absolute=difference<0n?-difference:difference;
+  return `${net.value.currency} ${difference<0n?"−":""}${(absolute/100n).toLocaleString("en-US")}.${String(absolute%100n).padStart(2,"0")}`;
+}

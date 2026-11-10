@@ -1,3 +1,4 @@
+import { NativeSetupFlowPage } from "./NativeLifecycleViews";
 import { useState } from "react";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -18,6 +19,11 @@ import styles from "./Lifecycle.module.css";
  * configures, enables or sends anything, and each customer communication stays in the owning provider.
  */
 export function SetupFlowPage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoSetupFlowPage /> : <NativeSetupFlowPage />;
+}
+
+function DemoSetupFlowPage() {
   const { adapter } = useScope();
   const query = useView<{ flow: string }, EmailFlowData>("emailFlow", { flow: "setup" });
   const [providerOpen, setProviderOpen] = useState(false);

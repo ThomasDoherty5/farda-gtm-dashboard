@@ -7,9 +7,9 @@ import { createOperations } from "../operations.ts";
 import { digest } from "../config.ts";
 import { evt, fixtureRef } from "../funnelFixtures.testkit.ts";
 import type { FunnelEvent } from "../funnelContract.ts";
-import { createMonitorReader } from "./reader.ts";
+import { createMonitorReader,MonitorError } from "./reader.ts";
 import { nativeContentSchema,nativePostSchema,nativeWatchlistSchema,nativeRunSchema,monitorSnapshotSchema } from "./contract.ts";
-import { intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
+import { addMonitorReviewEvidence,monitorTestSource,intakeFixture,monitorFixture,monitorScope as scope,monitorTime } from "./fixtures.testkit.ts";
 let now=monitorTime,store:AgentStore,ops:ReturnType<typeof createOperations>,funnel:FunnelRepository,secret:string,snapshot=monitorFixture(),members=intakeFixture();
 const proofs=new Map<string,string>();
 beforeEach(()=>{now=monitorTime;snapshot=monitorFixture();members=intakeFixture();proofs.clear();store=new AgentStore(":memory:",scope);
@@ -17,8 +17,34 @@ beforeEach(()=>{now=monitorTime;snapshot=monitorFixture();members=intakeFixture(
   funnel=new FunnelRepository(store.database,scope,{resolve:async(_scope,_envelope,ref)=>proofs.has(ref)?{...scope,eventHash:proofs.get(ref)!}:null},()=>new Date(now));});
 afterEach(()=>{ops.close();store.close();});
 const open=(connected=true)=>createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},
-  ...(connected?{source:async()=>structuredClone(snapshot)}:{}),now:()=>now});
+  ...(connected?{source:monitorTestSource(()=>snapshot,()=>now)}:{}),now:()=>now});
 const page={limit:100,cursor:null};
+describe("captured monitor source authority",()=>{
+  const using=(source:ReturnType<typeof monitorTestSource>)=>createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},source,now:()=>now});
+  it.each(["denied","revision"] as const)("refuses a captured fresh packet after awaited %s",async(change)=>{
+    let denied=false;const source=monitorTestSource(()=>{if(denied)throw new MonitorError("PRIVATE_OWNER_TOKEN",403);return snapshot;},()=>now),read=source.read;
+    source.read=async(binding,signal)=>{const packet=await read(binding,signal);await Promise.resolve();if(change==="denied")denied=true;else snapshot.version="new-source-revision";return packet;};
+    await expect(using(source).read("contentMonitor",{},page)).rejects.toMatchObject({code:change==="denied"?"MONITOR_SOURCE_DENIED":"MONITOR_SOURCE_CHANGED",status:change==="denied"?403:409});
+  });
+  it.each(["read","assert"] as const)("normalizes private typed %s failures",async(stage)=>{
+    for(const status of [403,409]){const source=monitorTestSource(()=>snapshot,()=>now),error=Object.assign(new MonitorError("PRIVATE_OWNER_TOKEN",status),{currentVersion:"private-owner-version"});
+      if(stage==="read")source.read=async()=>{throw error;};else source.assertCurrent=()=>{throw error;};
+      try{await using(source).read("contentMonitor",{},page);throw new Error("Expected source rejection");}catch(e){expect(e).toMatchObject({code:status===403?"MONITOR_SOURCE_DENIED":"MONITOR_SOURCE_CHANGED",status});expect(e).not.toHaveProperty("currentVersion");expect(String(e)).not.toContain("PRIVATE_OWNER_TOKEN");}}
+  });
+  it("preserves a separate access deadline, rejects expired publication and refuses incomplete absence",async()=>{
+    const source=monitorTestSource(()=>snapshot,()=>now),reader=using(source),result=await reader.read("contentMonitor",{},page);
+    expect(result.data?.readAccess?.validUntil).toBe(new Date(now+15*60_000).toISOString());now+=15*60_000;
+    expect(()=>result.assertCurrent()).toThrow("MONITOR_SOURCE_ACCESS_EXPIRED");
+    for(const state of ["partial","stale"]){snapshot=monitorFixture();snapshot.runs=[];snapshot.coverage=state==="partial"?"partial":"complete";if(state==="stale")now=monitorTime+91*60_000;
+      await expect(reader.read("hourlyRun",{runId:"missing-run"},page)).rejects.toMatchObject({code:"MONITOR_SOURCE_COVERAGE_UNVERIFIED",status:503});}
+    now=monitorTime;snapshot=monitorFixture();snapshot.runs=[];expect((await reader.read("hourlyRun",{runId:"missing-run"},page)).data).toBeNull();
+  });
+  it.each(["missing","async","nonvoid"] as const)("refuses %s current fences",async(kind)=>{
+    const source=monitorTestSource(()=>snapshot,()=>now);
+    Object.assign(source,{assertCurrent:kind==="missing"?undefined:kind==="async"?async()=>undefined:()=>true});
+    await expect(using(source).read("contentMonitor",{},page)).rejects.toBeInstanceOf(MonitorError);
+  });
+});
 function event(id:string,type:FunnelEvent["eventType"],over:Partial<FunnelEvent>={}):FunnelEvent{
   const ref=(name:string,sourceId:string)=>({...fixtureRef(name,sourceId),accountId:scope.accountId});
   return evt(id,type,"fixture-opportunity",5,{creatorRef:ref("notion","canonical-a"),campaignCohortRef:ref("notion","campaign-a"),
@@ -114,6 +140,38 @@ describe("source-backed monitoring views",()=>{
     now+=5000;await ingest(order("ambiguous-order","EXAMPLE_A",1000,"two"));
     expect(await read()).toMatchObject({orders:null,net:null});
   });
+  it("expires the monitor at the server's 90-minute ceiling despite an extended source lease",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000,reader=open();
+    now=cutoff-1;
+    expect(nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data)).toMatchObject({sourceState:"current",active:1});
+    now=cutoff;
+    const expired=await reader.read("watchlist",{},page);
+    expect(expired).toMatchObject({stale:true,partial:true});
+    expect(nativeWatchlistSchema.parse(expired.data)).toMatchObject({sourceState:"expired",active:0});
+    const content=nativeContentSchema.parse((await reader.read("contentMonitor",{network:"instagram"},page)).data);
+    expect(content).toMatchObject({sourceState:"expired",total:1,views:null,orders:null});
+    expect(content.posts[0]!.measurement?.views).toBe(0); // Historical facts remain visible, never current totals.
+  });
+  it("bounds continuation expiry to the original observation even when the next read renews the lease",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000,reader=open();
+    now=cutoff-1000;
+    const first=await reader.read("contentMonitor",{}, {limit:1,cursor:null});
+    expect(first.hasMore).toBe(true);
+    now=cutoff;snapshot.observedAt=new Date(now).toISOString();
+    await expect(reader.read("contentMonitor",{}, {limit:1,cursor:first.nextCursor})).rejects.toThrow("MONITOR_CURSOR_EXPIRED");
+  });
+  it("checks the maximum observation age after a slow source read",async()=>{
+    snapshot.validUntil=new Date(now+24*3600_000).toISOString();
+    const cutoff=Date.parse(snapshot.observedAt)+90*60_000;
+    now=cutoff-1;
+    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,
+      source:monitorTestSource(()=>snapshot,()=>now,()=>{now=cutoff;})});
+    const result=await reader.read("watchlist",{},page);
+    expect(result.stale).toBe(true);
+    expect(nativeWatchlistSchema.parse(result.data)).toMatchObject({sourceState:"expired",active:0});
+  });
   it("shows first-observed removals without inventing an earlier publication date, and new source facts invalidate a continuation",async()=>{
     await ingest(event("first-seen-removed","removed",{occurredAt:null,details:{postId:"REMOVED_FIRST",blockers:[]}}));
     const reader=open(false),result=nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data);
@@ -122,9 +180,7 @@ describe("source-backed monitoring views",()=>{
     expect(detail.publicationHistory.map(h=>h.state)).toEqual(["deleted"]);
   });
   it("anchors an initial snapshot after awaited source verification and never extends an existing cursor lease",async()=>{
-    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,source:async()=>{
-      now+=100;snapshot.observedAt=new Date(now).toISOString();return structuredClone(snapshot);
-    }});
+    const reader=createMonitorReader({db:store.database,scope,secret,funnel,intake:{monitorMembership:()=>members},now:()=>now,source:monitorTestSource(()=>snapshot,()=>now,()=>{now+=100;snapshot.observedAt=new Date(now).toISOString();})});
     const first=await reader.read("contentMonitor",{}, {limit:1,cursor:null});
     expect(Date.parse(nativeContentSchema.parse(first.data).observedAt)).toBe(now);
     now+=15*60_000;
@@ -164,5 +220,113 @@ describe("source-backed monitoring views",()=>{
     const second=structuredClone(snapshot.posts[0]!);second.postId="OTHER_BASIS";second.originalUrl=null;second.measurements[0]!.semantics="cumulative";
     snapshot.posts.push(second);
     expect(nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data)).toMatchObject({views:null,rate:null,metricBasis:null});
+  });
+});
+
+describe("bounded native monitor control evidence",()=>{
+  it("projects exact history, competing identity and message/status context without raw identifiers",async()=>{
+    addMonitorReviewEvidence(snapshot);
+    const reader=open(),w=nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r.state).toBe("identity-review");expect(w.active).toBe(0);
+    expect(r.review).toMatchObject({state:"current",historyComplete:true,history:[{decision:"quarantined",at:snapshot.reviewEvidence![0]!.history[0]!.at,identityEvidence:[expect.stringMatching(/^identity-evidence-/)],decisionReceipt:expect.stringMatching(/^receipt-/)}]});
+    expect(r.review?.candidates).toHaveLength(2);
+    expect(r.messages).toHaveLength(1);expect(r.messages?.[0]).toMatchObject({network:"instagram",account:expect.stringMatching(/^account-/),detail:{state:"current",currentStatus:"draft",proposedStatus:"ready",expectedVersion:expect.stringMatching(/^version-/)}});
+    const run=nativeRunSchema.parse((await reader.read("hourlyRun",{runId:w.latestRunRef},page)).data);
+    expect(run.observations[0]).toEqual(r.messages![0]);
+    for(const raw of ["synthetic-conversation","synthetic-message-event","synthetic-original-profile-proof","synthetic-competing-creator","publishing-a"])
+      expect(JSON.stringify(w)).not.toContain(raw);
+  });
+  it("keeps optional evidence backward compatible and does not invent intake history",async()=>{
+    const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data);
+    expect(w.profiles[0]?.review).toMatchObject({state:"unavailable",history:[]});
+  });
+  it.each(["creatorId","revision","profileId"] as const)("rejects foreign %s review joins",async key=>{
+    addMonitorReviewEvidence(snapshot);const r=snapshot.reviewEvidence![0]!;
+    if(key==="revision")r.revision++;else r[key]="foreign-identity";
+    expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    await expect(open().read("watchlist",{},page)).rejects.toThrow("MONITOR_SOURCE_INVALID");
+  });
+  it("rejects duplicate evidence, foreign candidate context and future event/history evidence",()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.reviewEvidence!.push(structuredClone(snapshot.reviewEvidence![0]!));expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.reviewEvidence!.pop();snapshot.reviewEvidence![0]!.candidates[0]!.account="foreign-account";expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot.reviewEvidence![0]!.candidates[0]!.account="publishing-a";
+    snapshot.reviewEvidence![0]!.history[0]!.at=new Date(now+1).toISOString();expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+    snapshot=addMonitorReviewEvidence(monitorFixture());snapshot.runs[0]!.inbox[0]!.context!.observedAt=new Date(now+1).toISOString();expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+  });
+  it("withholds denied and independently expired evidence even when the outer snapshot is fresh",async()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.reviewEvidence![0]!.access="denied";snapshot.runs[0]!.inbox[0]!.context!.access="denied";
+    let w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r.review).toMatchObject({state:"denied",history:[],candidates:[],receipt:null});expect(r.messages![0]!.detail).toMatchObject({state:"denied",conversationId:null,currentStatus:null});
+    snapshot.reviewEvidence![0]!.access="authorized";snapshot.runs[0]!.inbox[0]!.context!.access="authorized";
+    now+=91*60_000;snapshot.observedAt=new Date(now).toISOString();snapshot.validUntil=new Date(now+3600_000).toISOString();
+    w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data);r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(w.sourceState).toBe("current");expect(r.review).toMatchObject({state:"expired",history:[]});expect(r.messages![0]!.detail).toMatchObject({state:"expired",messageId:null});
+  });
+  it("quarantines conflicting canonical owners without selecting another creator's history",async()=>{
+    addMonitorReviewEvidence(snapshot);members.records.push({...structuredClone(members.records[0]!),creatorId:"competing-owner"});members.total++;
+    const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+    expect(r).toMatchObject({state:"identity-review",review:{state:"quarantined",history:[],candidates:[]},messages:[]});
+  });
+  it("deduplicates repeated exact source events across runs and invalidates cursors on review changes",async()=>{
+    addMonitorReviewEvidence(snapshot);snapshot.runs.push({...structuredClone(snapshot.runs[0]!),id:"another-run"});
+    const reader=open(),w=nativeWatchlistSchema.parse((await reader.read("watchlist",{},page)).data);
+    expect(w.profiles.find(p=>p.network==="instagram")!.messages).toHaveLength(1);
+    const first=await reader.read("watchlist",{}, {limit:1,cursor:null});snapshot.reviewEvidence![0]!.historyComplete=false;
+    await expect(reader.read("watchlist",{}, {limit:1,cursor:first.nextCursor})).rejects.toThrow("MONITOR_SNAPSHOT_CHANGED");
+  });
+});
+
+it("counts the destination review set independently of current monitoring-state filter",async()=>{
+  addMonitorReviewEvidence(snapshot);
+  const data=nativeWatchlistSchema.parse((await open().read("watchlist",{state:"active"},page)).data);
+  expect(data).toMatchObject({total:0,pending:0,pendingReviewTotal:1});
+});
+it("rejects conflicting repeated message facts rather than selecting an arbitrary run",()=>{
+  addMonitorReviewEvidence(snapshot);snapshot.runs.push({...structuredClone(snapshot.runs[0]!),id:"conflicting-run"});
+  snapshot.runs[1]!.inbox[0]!.context!.proposedStatus="closed";
+  expect(monitorSnapshotSchema.safeParse(snapshot).success).toBe(false);
+});
+it("preserves dated exclusion reason and owner receipts without treating last check as the decision time",async()=>{
+  addMonitorReviewEvidence(snapshot);members.records[0]!.suppressed=true;
+  const at=new Date(now-3600_000).toISOString();snapshot.reviewEvidence![0]!.exclusion={at,reasonCode:"suppressed",owner:"private-source-owner",receipt:"private-exclusion-receipt"};
+  const data=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=data.profiles.find(p=>p.network==="instagram")!;
+  expect(r).toMatchObject({state:"excluded",review:{exclusion:{at,reasonCode:"suppressed",owner:expect.stringMatching(/^owner-/),receipt:expect.stringMatching(/^receipt-/)}}});
+  expect(r.lastCheck).not.toBe(at);expect(JSON.stringify(r)).not.toContain("private-source-owner");
+});
+
+it.each(["denied","expired"] as const)("does not resolve a known ambiguous identity when its evidence becomes %s",async state=>{
+  addMonitorReviewEvidence(snapshot);
+  if(state==="denied")snapshot.reviewEvidence![0]!.access="denied";
+  else {now+=91*60_000;snapshot.observedAt=new Date(now).toISOString();snapshot.validUntil=new Date(now+3600_000).toISOString();}
+  const w=nativeWatchlistSchema.parse((await open().read("watchlist",{},page)).data),r=w.profiles.find(p=>p.network==="instagram")!;
+  expect(w).toMatchObject({sourceState:"current",active:0,pendingReviewTotal:1});
+  expect(r).toMatchObject({state:"identity-review",review:{state,candidates:[],history:[],receipt:null}});
+});
+
+describe("permitted handle search",()=>{
+  it("matches the unique active creator/network/account handle while preserving source and network filters",async()=>{
+    const reader=open(),result=await reader.read("contentMonitor",{q:" @TEST.A "},page),data=nativeContentSchema.parse(result.data);
+    expect(data).toMatchObject({total:1,sourceState:"current",views:0,posts:[{network:"instagram",measurement:{views:0}}]});
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a",network:"tiktok"},page)).data).total).toBe(0);
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a",source:"tiktok-affiliate"},page)).data).total).toBe(0);
+    snapshot.posts[0]!.account="different-publishing-account";
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{q:"test.a"},page)).data).total).toBe(0);
+  });
+  it("does not use quarantined or unavailable handles and preserves partial no-match semantics",async()=>{
+    addMonitorReviewEvidence(snapshot);
+    let data=nativeContentSchema.parse((await open().read("contentMonitor",{q:"test.a"},page)).data);
+    expect(data).toMatchObject({total:0,sourceState:"current",views:null});
+    snapshot=monitorFixture();
+    const unavailable=createMonitorReader({db:store.database,scope,secret,funnel,now:()=>now,source:monitorTestSource(()=>snapshot,()=>now),
+      intake:{monitorMembership:()=>({...members,records:members.records.map(r=>({...r,sourceStatus:"unavailable" as const}))})}});
+    expect(nativeContentSchema.parse((await unavailable.read("contentMonitor",{q:"test.a"},page)).data).total).toBe(0);
+    snapshot.coverage="partial";
+    const result=await open().read("contentMonitor",{q:"test.a"},page);data=nativeContentSchema.parse(result.data);
+    expect(result.partial).toBe(true);expect(data).toMatchObject({total:0,sourceState:"partial",views:null});
+  });
+  it("does not guess which profile owns a post when multiple profiles share its exact creator/account/network",async()=>{
+    members.records[0]!.profiles.push({...members.records[0]!.profiles[0]!,sourceId:"another-profile",handle:"another.handle"});
+    const data=nativeContentSchema.parse((await open().read("contentMonitor",{q:"test.a"},page)).data);
+    expect(data.total).toBe(0);
   });
 });

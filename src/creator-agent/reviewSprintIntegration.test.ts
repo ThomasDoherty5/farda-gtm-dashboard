@@ -45,7 +45,7 @@ describe("review sprint authenticated evidence boundary", () => {
     const current = await read(); expect(current.status).toBe(200);
     const request = saveRequest(current.body.data as Json);
     expect((await post("/v1/save", request, SYNTHETIC_READ_TOKEN)).status).toBe(403);
-    expect((await post("/v1/save", { ...request, requestedScope: { ...SYNTHETIC_SCOPE, accountIds: ["synthetic-foreign"] } })).status).toBe(400);
+    expect((await post("/v1/save", { ...request, requestedScope: { ...SYNTHETIC_SCOPE, accountIds: ["synthetic-foreign"] } })).status).toBe(403);
     expect((await post("/v1/save", { ...request, resourceKind: "evidenceDraft" })).status).toBe(422);
     expect((await post("/v1/save", { ...request, payload: { ...request.payload, reviewer: "forged-founder" } })).status).toBe(422);
     expect((await read()).body.data).toEqual(current.body.data);

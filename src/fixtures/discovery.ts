@@ -4,6 +4,7 @@
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
 import { BASE_POLICY, type AcquisitionTerms } from "@/adapter/commissionPolicy";
+import type { SourcingPlan } from "@/creator-agent/sourcing/contract";
 import { DEMO_NOW } from "./overview";
 
 export type CapacityRow = { id: "social-cat" | "tiktok-shop" | "shared"; source: string; evidence: string; meaning: string; next: string };
@@ -108,3 +109,9 @@ export const RUN_STATES: RunStateRow[] = [
   { key: "failed", label: "Failed", meaning: "The source reported an error", next: "Review the cause, then retry", batchState: null },
   { key: "uncertain", label: "Uncertain", meaning: "No receipt and no refusal", next: "Reconcile before any retry", batchState: "reconcile" },
 ];
+
+/** The demo has no J19 source. Its served plan detail says so instead of presenting the synthetic plan as a source read. */
+export const sourcingPlanDemo: SourcingPlan = {
+  kind: "agent-sourcing-plan", observedAt: DEMO_NOW, sourceAsOf: null, sourceVersion: null, validUntil: null,
+  freshness: "unknown", coverage: "unknown", sourceState: "unconfigured", missingReason: "DEMO_HAS_NO_SOURCING_SOURCE", plan: null,
+};

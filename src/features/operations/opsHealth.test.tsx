@@ -9,9 +9,9 @@ import { renderRoute } from "@/test/renderWithAdapter";
 const PATH = "/analytics/fulfillment?view=health";
 
 describe("issues and fulfillment health", () => {
-  it("says it is synthetic and has no Figma source", async () => {
+  it("says it is demo data and has no Figma source", async () => {
     renderRoute(PATH, createDemoAdapter());
-    expect(await screen.findByTestId("health-notice")).toHaveTextContent(/Synthetic data · no Figma source/);
+    expect(await screen.findByTestId("health-notice")).toHaveTextContent(/Demo data · no Figma source/);
     expect(screen.getByTestId("health-notice")).toHaveTextContent(/no design fidelity is claimed/);
   });
 

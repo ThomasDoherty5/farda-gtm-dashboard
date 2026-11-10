@@ -63,6 +63,23 @@ describe("default transport", () => {
 });
 
 describe("failures map to the right categories", () => {
+  it.each([
+    ["SOURCE_ACTION_UNSUPPORTED", "capabilityHold"], ["DISPATCH_SHARED_QUOTA_UNVERIFIED", "resourceHold"],
+    ["DISPATCH_BUDGET_REQUIRED", "resourceHold"], ["DISPATCH_NO_ACTIVE_LEASE", "resourceHold"],
+    ["APPROVAL_REQUEST_UNVERIFIED", "approvalHold"],
+  ])("preserves the distinct guarded-dispatch error %s", async (code, category) => {
+    const error = await fail(live(failingTransport(() => new TransportFailure("http", { status: 409,
+      body: { code, executionCertainty: "notApplied" } }))).submitAction(dispatch()));
+    expect(error.body.code).toBe(code); expect(error.category).toBe(category); expect(error.body.retryable).toBe(false);
+  });
+  it.each(["applied", "uncertain"] as const)("retains validated %s certainty from an unfamiliar server authorization code", async certainty => {
+    const log: TransportRequest[] = [];
+    const transport: Transport = { send: async request => { log.push(request); throw new TransportFailure("http", {
+      status: 403, body: { code: "NEW_SERVER_ACTOR_FENCE", message: "private source identity", executionCertainty: certainty } }); } };
+    const error = await fail(live(transport).submitAction(dispatch()));
+    expect(error.body).toMatchObject({ code: "FORBIDDEN", executionCertainty: certainty, retryable: false });
+    expect(error.category).toBe("forbidden"); expect(error.message).not.toContain("private"); expect(log).toHaveLength(1);
+  });
   const cases: [string, TransportFailure, string, string][] = [
     ["401", new TransportFailure("http", { status: 401 }), "UNAUTHENTICATED", "unauthenticated"],
     ["401 with an expiry body", new TransportFailure("http", { status: 401, body: { code: "SESSION_EXPIRED" } }), "SESSION_EXPIRED", "unauthenticated"],
@@ -73,6 +90,9 @@ describe("failures map to the right categories", () => {
     ["404", new TransportFailure("http", { status: 404 }), "RECORD_NOT_FOUND", "notFound"],
     ["429", new TransportFailure("http", { status: 429, retryAfterMs: 2000 }), "RATE_LIMITED", "rateLimited"],
     ["503", new TransportFailure("http", { status: 503 }), "SOURCE_UNAVAILABLE", "unavailable"],
+    ["unconnected sourcing", new TransportFailure("http", { status: 503, body: { code: "SOURCING_SOURCE_UNCONFIGURED" } }), "SOURCING_SOURCE_UNCONFIGURED", "unavailable"],
+    ["sourcing denial", new TransportFailure("http", { status: 403, body: { code: "SOURCING_SOURCE_DENIED" } }), "SOURCING_SOURCE_DENIED", "forbidden"],
+    ["expired sourcing access", new TransportFailure("http", { status: 409, body: { code: "SOURCING_PUBLICATION_EXPIRED" } }), "SOURCING_PUBLICATION_EXPIRED", "conflict"],
     ["500 with an unknown code", new TransportFailure("http", { status: 500, body: { code: "WHAT" } }), "SOURCE_UNAVAILABLE", "unavailable"],
     ["network loss", new TransportFailure("network"), "SOURCE_UNAVAILABLE", "unavailable"],
     ["transport timeout", new TransportFailure("timeout"), "TIMEOUT", "unavailable"],
@@ -93,6 +113,36 @@ describe("failures map to the right categories", () => {
       const e = await fail(live(failingTransport(() => new TransportFailure("http", { status, body: { code: "FORBIDDEN", message: "Creator ZZ exists in another workspace" } }))).readView(read()));
       expect(e.body.retryable).toBe(false);
       expect(e.message).not.toMatch(/Creator ZZ/);
+    }
+  });
+  it.each([
+    [403, "SOURCE_SCOPE_DENIED", "applied", "forbidden"],
+    [401, "SESSION_EXPIRED", "uncertain", "unauthenticated"],
+  ] as const)("preserves a typed %i write outcome without exposing denied source details", async (status, code, executionCertainty, category) => {
+    const body = { code, executionCertainty, retryable: true, message: "Synthetic private source observation exists",
+      currentVersion: "private-version", fieldErrors: { owner: "private owner" }, reasonCodes: ["PRIVATE_REASON"], rowIndex: 3 };
+    for (const call of [(a: ReturnType<typeof live>) => a.submitAction(act()), (a: ReturnType<typeof live>) => a.saveResource(save())]) {
+      const error = await fail(call(live(failingTransport(() => new TransportFailure("http", { status, body })))));
+      expect(error.category).toBe(category);
+      expect(error.body).toMatchObject({ code, executionCertainty, retryable: false });
+      expect(error.message).not.toContain("Synthetic private");
+      for (const field of ["currentVersion", "fieldErrors", "reasonCodes", "rowIndex"]) expect(error.body).not.toHaveProperty(field);
+    }
+  });
+  it("keeps typed policy import reasons and row index on permitted validation responses", async () => {
+    const body = { code: "POLICY_VIOLATION", reasonCodes: ["GUARANTEED_FEE_FORBIDDEN"], rowIndex: 4, executionCertainty: "notApplied" };
+    const error = await fail(live(failingTransport(() => new TransportFailure("http", { status: 422, body }))).saveResource(save()));
+    expect(error.body).toMatchObject(body); expect(error.category).toBe("validation");
+  });
+  it("does not trust malformed certainty claims on an authentication refusal", async () => {
+    for (const status of [401, 403]) for (const body of [
+      { code: "SOURCE_SCOPE_DENIED", executionCertainty: "definitely-applied" },
+      { code: "SOURCE_SCOPE_DENIED", executionCertainty: "applied", retryable: "yes" },
+      { executionCertainty: "uncertain", message: "Synthetic private source observation exists" },
+    ]) {
+      const error = await fail(live(failingTransport(() => new TransportFailure("http", { status, body }))).submitAction(act()));
+      expect(error.body).toMatchObject({ code: status === 401 ? "UNAUTHENTICATED" : "FORBIDDEN", executionCertainty: "notApplied", retryable: false });
+      expect(error.message).not.toContain("Synthetic private");
     }
   });
   it("429 keeps the retry delay", async () => {
@@ -211,6 +261,36 @@ describe("answers are validated before a screen sees them", () => {
     expect((await fail(live(rawTransport({ ...res, resourceRef: "other" })).saveResource(req))).body.code).toBe("OUTCOME_UNCERTAIN");
     const noRecord = Object.fromEntries(Object.entries(res).filter(([k]) => k !== "record"));
     expect((await fail(live(rawTransport(noRecord)).saveResource(req))).body.code).toBe("OUTCOME_UNCERTAIN");
+  });
+});
+
+describe("bounded observation refresh", () => {
+  const observation = (over: Partial<ActionRequest<unknown>> = {}) => act({ operation: "refreshObservation", actionKind: "refreshOperationsHealth",
+    approvalRef: null, manifestRef: null, expectedVersion: "oc1-" + "a".repeat(64), payload: { targetRef: "synthetic-opaque-target" }, ...over });
+  it("sends the bounded observation without inventing an input run and still rejects an unverified answer", async () => {
+    const log: TransportRequest[] = [];
+    const transport: Transport = { send: async request => { log.push(request); return {}; } };
+    const error = await fail(live(transport).submitAction(observation()));
+    expect(error.body).toMatchObject({ code: "OUTCOME_UNCERTAIN", executionCertainty: "uncertain" });
+    expect(log).toHaveLength(1);
+    expect(log[0]!.envelope).toMatchObject({ operation: "refreshObservation", actionKind: "refreshOperationsHealth" });
+    expect(log[0]!.envelope).not.toHaveProperty("runRef");
+  });
+  it("cannot borrow observation refresh for run control or carry approval/execution references", async () => {
+    const log: TransportRequest[] = [];
+    const adapter = live({ send: async request => { log.push(request); return {}; } });
+    for (const over of [{ actionKind: "pauseRun" }, { actionKind: "dispatchApprovedAction" }, { runRef: "invented-run" },
+      { approvalRef: "existing-approval" }, { manifestRef: "existing-manifest" }]) {
+      expect((await fail(adapter.submitAction(observation(over)))).body).toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+    }
+    expect(log).toEqual([]);
+  });
+  it("rejects a caller-supplied endpoint before any transport attempt", async () => {
+    const log: TransportRequest[] = [];
+    const adapter = live({ send: async request => { log.push(request); return {}; } });
+    expect((await fail(adapter.submitAction(observation({ payload: { targetRef: "synthetic-opaque-target", endpoint: "https://example.invalid" } })))).body)
+      .toMatchObject({ code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
+    expect(log).toEqual([]);
   });
 });
 

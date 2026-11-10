@@ -2,22 +2,27 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { digest } from "../config.ts";
 import { AgentConflict } from "../store.ts";
-import { assessmentBasisSchema, costKeys, offerRecordSchema, offerTermsSchema, providerFactsSchema, routeId, scopeSchema,
+import { assessmentBasisSchema, costKeys, offerRecordSchema, providerFactsSchema, routeId, scopeSchema,
   type AssessmentBasis, type OfferRecord, type OfferScope, type OfferTerms, type ProviderFacts } from "./contract.ts";
 import { offerScenario, proposalBlockers } from "./economics.ts";
+import { commercialPolicyHash } from "../commercialPolicy/authority.ts";
+import type { CommercialPolicySnapshot } from "../commercialPolicy/contract.ts";
+import { OfferCommercialPolicy, OfferPolicyError, offerPhaseSchema, providerMaterial, type OfferPhase, type OfferPolicyAuthority, type OfferPolicyProof } from "./policy.ts";
+import { parseOfferTerms } from "./validation.ts";
+import { evaluateCommercialTerms } from "../commercialPolicy/evaluate.ts";
 import { offerJobRequestSchema, scopeMatchesJob, jobResult, type OfferJobEnvelope } from "./job.ts";
 import { projectRewards, rewardSourceSchema, type RewardSource } from "./rewards.ts";
 
-const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:true});
+const id=z.string().trim().min(1).max(180), time=z.string().datetime({offset:true}).refine(value=>Number.isFinite(Date.parse(value)));
 const proofSchema=z.object({scope:scopeSchema,creatorId:id,provider:providerFactsSchema.shape.provider,programRef:id,sourceRef:id,validUntil:time}).strict();
 const capabilityPacket=proofSchema.extend({facts:providerFactsSchema}).strict();
 const costPacket=proofSchema.extend({costKey:z.enum(costKeys),minor:z.number().int().nonnegative(),currency:z.literal("USD"),productRef:id,productRevision:id}).strict();
 const fundingPacket=proofSchema.extend({scenario:z.enum(["base","downside"]),bundle:z.enum(["single","duo","trio"]),currency:z.literal("USD"),advertisedDiscountMinor:z.number().int().nonnegative(),reimbursedMinor:z.number().int().nonnegative(),feeTreatment:id}).strict();
-const decisionPacket=proofSchema.extend({offerId:routeId,manifestHash:z.string().length(64),version:id,decision:z.enum(["owner-approved","creator-accepted"]),occurredAt:time,acceptedDeliverableIds:z.array(id).max(50).optional()}).strict();
+const decisionPacket=proofSchema.extend({offerId:routeId,manifestHash:z.string().length(64),version:id,providerAccountRef:id.optional(),decision:z.enum(["owner-approved","creator-accepted"]),occurredAt:time,acceptedDeliverableIds:z.array(id).max(50).optional()}).strict();
 const storedDecisionSchema=decisionPacket.extend({assessment:assessmentBasisSchema.optional()}).strict();
 type Change="owner-approved"|"creator-accepted";
-type Snapshot={offerId:string;version:string;revision:number;recordedAt:string;manifestHash:string;terms:OfferTerms;assessment:AssessmentBasis|null;provider:ProviderFacts|null;verifiedCosts:string[]; verifiedFunding?:string[]};
-export interface OfferAuthority {
+type Snapshot={offerId:string;version:string;revision:number;recordedAt:string;manifestHash:string;terms:OfferTerms;assessment:AssessmentBasis|null;provider:ProviderFacts|null;verifiedCosts:string[]; verifiedFunding?:string[];commercialPolicy?:CommercialPolicySnapshot|null};
+export interface OfferAuthority extends OfferPolicyAuthority {
   assessment?(creatorId:string):AssessmentBasis|null;
   provider?(terms:OfferTerms,scope:OfferScope):unknown;
   cost?(sourceRef:string,scope:OfferScope):unknown;
@@ -27,22 +32,27 @@ export interface OfferAuthority {
 }
 export class OfferSourceUnavailable extends Error {}
 const parse=<T>(schema:z.ZodType<T>,input:unknown)=>{const r=schema.safeParse(input);return r.success?r.data:null;};
+const observed=(read:()=>unknown):unknown=>{try{return read();}catch{return null;}};
 const sameScope=(a:OfferScope,b:OfferScope)=>a.workspaceId===b.workspaceId&&a.accountId===b.accountId;
 export class OfferRepository {
   private readonly db: DatabaseSync;
   private readonly scope: OfferScope;
   private readonly authority: OfferAuthority;
-  constructor(db:DatabaseSync, scope:OfferScope, authority:OfferAuthority={}) {
-    this.db=db; this.scope=scope; this.authority=authority;
+  private readonly now: () => number;
+  private readonly commercial: OfferCommercialPolicy;
+  constructor(db:DatabaseSync, scope:OfferScope, authority:OfferAuthority={}, options:{now?:()=>number}={}) {
+    this.db=db; this.scope=scope; this.authority=authority; this.now=options.now??Date.now;
     scopeSchema.parse(scope);
     const actual=db.prepare("SELECT workspace_id,account_id FROM agent_scope WHERE id=1").get();
     if(actual?.workspace_id!==scope.workspaceId || actual.account_id!==scope.accountId) throw new Error("DATABASE_SCOPE_MISMATCH");
+    this.commercial=new OfferCommercialPolicy(db,{...scope,environment:"sandbox"},authority,this.now);
     db.exec(`CREATE TABLE IF NOT EXISTS offer_versions (offer_id TEXT NOT NULL, revision INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(offer_id,revision));
       CREATE TABLE IF NOT EXISTS offer_commands (key TEXT PRIMARY KEY, hash TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS offer_job_receipts (offer_id TEXT NOT NULL,correlation_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(offer_id,correlation_id));
       CREATE TABLE IF NOT EXISTS offer_decisions (offer_id TEXT NOT NULL, revision INTEGER NOT NULL, kind TEXT NOT NULL, source_ref TEXT NOT NULL UNIQUE, body TEXT NOT NULL, PRIMARY KEY(offer_id,revision,kind));
       CREATE TABLE IF NOT EXISTS offer_rewards (creator_id TEXT NOT NULL, source_ref TEXT NOT NULL UNIQUE, observed_at TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(creator_id,observed_at));
-      CREATE TABLE IF NOT EXISTS offer_reward_awards (creator_id TEXT NOT NULL,tier TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(creator_id,tier));`);
+      CREATE TABLE IF NOT EXISTS offer_reward_awards (creator_id TEXT NOT NULL,tier TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(creator_id,tier));
+      CREATE TABLE IF NOT EXISTS offer_reward_awards_v2 (creator_id TEXT NOT NULL,earned_ref TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(creator_id,earned_ref));`);
   }
   private apply<T>(key:string,command:unknown,fn:()=>T):T {
     if(!key?.trim() || key.length>240) throw new Error("IDEMPOTENCY_KEY_REQUIRED");
@@ -62,11 +72,11 @@ export class OfferRepository {
     return row?JSON.parse(String(row.body)) as Snapshot:null;
   }
   private model(terms:OfferTerms) {
-    const b=parse(assessmentBasisSchema,this.authority.assessment?.(terms.creatorId));
+    const b=parse(assessmentBasisSchema,observed(()=>this.authority.assessment?.(terms.creatorId)));
     return b && b.creatorId===terms.creatorId && b.route===terms.checkoutRoute && b.modelId===(terms.checkoutRoute==="website"?"WEBSITE-AFFILIATE-v3":"TIKTOK-SHOP-AFFILIATE-v3")?b:null;
   }
   private provider(terms:OfferTerms,now:string) {
-    const p=parse(capabilityPacket,this.authority.provider?.(terms,this.scope));
+    const p=parse(capabilityPacket,observed(()=>this.authority.provider?.(terms,this.scope)));
     if(!p || !sameScope(p.scope,this.scope) || p.creatorId!==terms.creatorId || p.provider!==terms.provider || p.programRef!==terms.programRef ||
       p.facts.provider!==p.provider || p.facts.programRef!==p.programRef || p.facts.sourceRef!==p.sourceRef ||
       [p.validUntil,p.facts.validUntil].some(t=>Date.parse(t)<=Date.parse(now)) || Date.parse(p.facts.observedAt)>Date.parse(now))return null;
@@ -75,7 +85,7 @@ export class OfferRepository {
   private costs(terms:OfferTerms,now:string) {
     return costKeys.filter(key=>{
       const cost=terms.costs[key]; if(cost.minor===null || !cost.sourceRef) return false;
-      const proof=parse(costPacket,this.authority.cost?.(cost.sourceRef,this.scope));
+      const proof=parse(costPacket,observed(()=>this.authority.cost?.(cost.sourceRef!,this.scope)));
       return !!proof && sameScope(proof.scope,this.scope) && proof.sourceRef===cost.sourceRef && proof.creatorId===terms.creatorId &&
         proof.provider===terms.provider && proof.programRef===terms.programRef && proof.costKey===key && proof.minor===cost.minor &&
         proof.productRef===terms.manifest.productRef && proof.productRevision===terms.manifest.productRevision && Date.parse(proof.validUntil)>Date.parse(now);
@@ -84,15 +94,20 @@ export class OfferRepository {
   private funding(terms:OfferTerms,now:string) {
     return (["base","downside"] as const).filter(label=>{
       const l=terms[label]; if(!l.platformFundingRef || l.fundedCouponMinor===null)return false;
-      const p=parse(fundingPacket,this.authority.funding?.(l.platformFundingRef,this.scope));
+      const p=parse(fundingPacket,observed(()=>this.authority.funding?.(l.platformFundingRef!,this.scope)));
       return !!p && sameScope(p.scope,this.scope) && p.creatorId===terms.creatorId && p.provider===terms.provider && p.programRef===terms.programRef &&
         p.sourceRef===l.platformFundingRef && p.scenario===label && p.bundle===l.bundle && p.reimbursedMinor===l.fundedCouponMinor &&
         p.advertisedDiscountMinor===l.platformCouponMinor && Date.parse(p.validUntil)>Date.parse(now);
     });
   }
   private project(s:Snapshot):OfferRecord {
-    const now=new Date().toISOString(),current=this.model(s.terms), provider=this.provider(s.terms,now);
-    const providerCurrent=provider && digest(provider)===digest(s.provider)?provider:null;
+    const now=new Date(this.now()).toISOString(),current=this.model(s.terms), provider=this.provider(s.terms,now);
+    const policy=this.commercial.policy(s.terms,s.commercialPolicy?commercialPolicyHash(s.commercialPolicy):null);
+    const replies=this.commercial.replies(s.terms,provider?.providerAccountRef);
+    if(replies.held.length)policy.reasonCodes.push("CREATOR_FEE_REQUEST");
+    const prices=s.commercialPolicy?.pricing.bundles;
+    const providerCurrent=provider && digest(providerMaterial(provider))===digest(providerMaterial(s.provider))?provider:null;
+    policy.reasonCodes.push(...evaluateCommercialTerms(s.terms,policy.snapshot,providerCurrent,this.now()));
     const currentCosts=this.costs(s.terms,now).filter(key=>s.verifiedCosts.includes(key));
     const decisions=this.db.prepare("SELECT kind,source_ref FROM offer_decisions WHERE offer_id=? AND revision=?").all(s.offerId,s.revision);
     const approved=decisions.find(d=>d.kind==="owner-approved"), accepted=decisions.find(d=>d.kind==="creator-accepted");
@@ -101,15 +116,31 @@ export class OfferRepository {
     const exact=!!current && !current.stale && !!current.configHash && current.termsRevision===s.manifestHash;
     return offerRecordSchema.parse({kind:"agent-offer",offerId:s.offerId,version:s.version,revision:s.revision,recordedAt:s.recordedAt,manifestHash:s.manifestHash,
       terms:s.terms,assessment:exact?current:s.assessment,draftAssessment:s.assessment,assessmentCurrent:exact,
-      scenarios:[offerScenario(s.terms,"base"),offerScenario(s.terms,"downside")],provider:providerCurrent,
-      blockers:proposalBlockers(s.terms,providerCurrent,new Set(currentCosts),now,new Set(this.funding(s.terms,now).filter(k=>s.verifiedFunding?.includes(k)))),state:accepted?"accepted":approved?"approved":"proposed",
-      ownerApprovalRef:approved?String(approved.source_ref):null,acceptedRef:accepted?String(accepted.source_ref):null,history,historyTotal:s.revision});
+      scenarios:[offerScenario(s.terms,"base",prices),offerScenario(s.terms,"downside",prices)],provider:providerCurrent,
+      blockers:[...proposalBlockers(s.terms,providerCurrent,new Set(currentCosts),now,new Set(this.funding(s.terms,now).filter(k=>s.verifiedFunding?.includes(k))),prices),...policy.reasonCodes],state:accepted?"accepted":approved?"approved":"proposed",
+      ownerApprovalRef:approved?String(approved.source_ref):null,acceptedRef:accepted?String(accepted.source_ref):null,history,historyTotal:s.revision,
+      commercial:{state:policy.reasonCodes.length?(policy.snapshot?.state==="proposed"?"proposed":policy.snapshot?"held":"unknown"):"effective",
+        policyVersion:policy.snapshot?.version??null,policyHash:policy.snapshot?commercialPolicyHash(policy.snapshot):null,pricingVersion:s.commercialPolicy?.pricing.version??null,
+        pricingBasis:s.commercialPolicy?"source":"candidate",bundles:s.commercialPolicy?.pricing.bundles??null,
+        rewardVersion:policy.snapshot?.performanceReward?.rewardVersion??null,reasonCodes:[...new Set(policy.reasonCodes)],replyRevision:replies.revision}});
   }
   matchesOfferVersion(id:string,version:string,manifestHash:string):boolean {
     const latest=this.snapshot(id);
     return !!latest && latest.version===version && latest.manifestHash===manifestHash;
   }
   readOffer(id:string,revision?:number) {const s=this.snapshot(routeId.parse(id),revision);return s?this.project(s):null;}
+  /** Read the original immutable draft command. Absence never closes a delayed save. */
+  readSaveRequest(offerId:string,expectedVersion:string|null,requestKey:string,payloadDigest:string) {
+    routeId.parse(offerId);id.parse(requestKey);z.string().regex(/^[a-f0-9]{64}$/).parse(payloadDigest);
+    const row=this.db.prepare("SELECT hash,body FROM offer_commands WHERE key=?").get(requestKey);
+    const base={requestKey,expectedVersion,payloadDigest,confersRetry:false as const};
+    if(!row)return {...base,state:"notFound" as const,record:null};
+    const parsed=offerRecordSchema.safeParse(JSON.parse(String(row.body)));
+    if(!parsed.success||parsed.data.offerId!==offerId||row.hash!==payloadDigest||
+      digest({id:offerId,expected:expectedVersion,terms:parsed.data.terms,job:null,operation:"offer-propose"})!==payloadDigest)
+      throw new OfferPolicyError("OFFER_SAVE_RECOVERY_MISMATCH",{status:403,reasonCodes:["OFFER_SAVE_RECOVERY_MISMATCH"]});
+    return {...base,state:"recorded" as const,record:parsed.data};
+  }
   private withJob(record:OfferRecord,job?:OfferJobEnvelope):OfferRecord {
     if(!job)return record;
     if(this.readJobReceipt(record.offerId,job.correlationId))throw new AgentConflict("JOB_CORRELATION_ALREADY_USED");
@@ -120,69 +151,133 @@ export class OfferRepository {
     const row=this.db.prepare("SELECT body FROM offer_job_receipts WHERE offer_id=? AND correlation_id=?").get(id,correlationId);
     return row?JSON.parse(String(row.body)) as ReturnType<typeof jobResult>:null;
   }
+  private saveCore(id:string,expected:string|null,terms:OfferTerms,job?:OfferJobEnvelope) {
+    if(job && (Date.parse(job.requestedAt)>this.now() || job.deadline!==null && (Date.parse(job.deadline)<Date.parse(job.requestedAt) || Date.parse(job.deadline)<=this.now())))
+      throw new AgentConflict("JOB_OUTSIDE_EXECUTION_WINDOW");
+    const prior=this.snapshot(id);
+    if((prior?.version??null)!==expected)throw new AgentConflict("VERSION_CONFLICT");
+    if(prior && prior.terms.creatorId!==terms.creatorId)throw new AgentConflict("CREATOR_IDENTITY_CHANGED");
+    const recordedAt=new Date(this.now()).toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt),verifiedFunding=this.funding(terms,recordedAt);
+    const commercialPolicy=this.commercial.policy(terms).snapshot;
+    try {offerScenario(terms,"base",commercialPolicy?.pricing.bundles);offerScenario(terms,"downside",commercialPolicy?.pricing.bundles);}
+    catch {throw new AgentConflict("INVALID_PRICE_ALLOCATION");}
+    const manifestHash=digest({scope:this.scope,offerId:id,terms,provider:providerMaterial(provider),verifiedCosts,verifiedFunding,commercialPolicy:commercialPolicy?commercialPolicyHash(commercialPolicy):null});
+    if(prior && prior.manifestHash===manifestHash)return this.withJob(this.project(prior),job);
+    const revision=(prior?.revision??0)+1;
+    const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,verifiedFunding,assessment,commercialPolicy};
+    this.db.prepare("INSERT INTO offer_versions VALUES(?,?,?)").run(id,revision,JSON.stringify(snapshot));
+    return this.withJob(this.project(snapshot),job);
+  }
   saveFromAdapter(id:string,expected:string|null,input:unknown,key:string,job?:OfferJobEnvelope) {
-    const terms=offerTermsSchema.parse(input);routeId.parse(id);
-    if(id==="new")throw new AgentConflict("RESERVED_OFFER_ID");
-    return this.apply(key,{id,expected,terms,job:job??null,operation:"offer-propose"},()=>{
-      if(job && (Date.parse(job.requestedAt)>Date.now() || job.deadline!==null && (Date.parse(job.deadline)<Date.parse(job.requestedAt) || Date.parse(job.deadline)<=Date.now())))
-        throw new AgentConflict("JOB_OUTSIDE_EXECUTION_WINDOW");
-      const prior=this.snapshot(id);
-      if((prior?.version??null)!==expected)throw new AgentConflict("VERSION_CONFLICT");
-      if(prior && prior.terms.creatorId!==terms.creatorId)throw new AgentConflict("CREATOR_IDENTITY_CHANGED");
-      const recordedAt=new Date().toISOString(),assessment=this.model(terms),provider=this.provider(terms,recordedAt),verifiedCosts=this.costs(terms,recordedAt),verifiedFunding=this.funding(terms,recordedAt);
-      // Receipt/term basis is independent of score so a new score can bind the immutable manifest hash without creating a cycle.
-      const manifestHash=digest({scope:this.scope,offerId:id,terms,provider,verifiedCosts,verifiedFunding});
-      if(prior && prior.manifestHash===manifestHash)return this.withJob(this.project(prior),job);
-      const revision=(prior?.revision??0)+1;
-      const snapshot:Snapshot={offerId:id,revision,version:`v${revision}`,recordedAt,manifestHash,terms,provider,verifiedCosts,verifiedFunding,assessment};
-      this.db.prepare("INSERT INTO offer_versions VALUES(?,?,?)").run(id,revision,JSON.stringify(snapshot));
-      return this.withJob(this.project(snapshot),job);
-    });
+    const terms=parseOfferTerms(input);routeId.parse(id);
+    if(["new","import"].includes(id))throw new AgentConflict("RESERVED_OFFER_ID");
+    const saved=this.apply(key,{id,expected,terms,job:job??null,operation:"offer-propose"},()=>this.saveCore(id,expected,terms,job));
+    return this.readOffer(id,saved.revision)!;
+  }
+  importBatch(input:unknown,key:string,actorRef:string) {
+    const raw=z.object({rows:z.array(z.object({offerId:routeId,expectedVersion:id.nullable(),terms:z.unknown()}).strict()).min(1).max(100)}).strict().parse(input);
+    const command={rows:raw.rows.map((row,rowIndex)=>{
+      try{return {...row,terms:parseOfferTerms(row.terms)};}catch(error){if(error instanceof OfferPolicyError)throw new OfferPolicyError(error.code,{status:error.status,reasonCodes:error.reasonCodes,rowIndex});throw error;}
+    })};
+    id.parse(actorRef);
+    if(new Set(command.rows.map(row=>row.offerId)).size!==command.rows.length)throw new AgentConflict("DUPLICATE_OFFER_ID");
+    if(command.rows.some(row=>["new","import"].includes(row.offerId)))throw new AgentConflict("RESERVED_OFFER_ID");
+    const receipt=this.apply(key,{operation:"offer-import",actorRef,command},()=>({records:command.rows.map(row=>{
+      const result=this.saveCore(row.offerId,row.expectedVersion,row.terms);return {offerId:result.offerId,revision:result.revision,version:result.version,manifestHash:result.manifestHash};
+    }),sourceEffects:"none" as const}));
+    return {...receipt,records:receipt.records.map(row=>({receipt:row,current:this.readOffer(row.offerId,row.revision)!}))};
+  }
+  observeReply(offerId:string,expectedVersion:string,sourceRef:string,key:string,actorRef:string) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const prior=this.commercial.lookupReply(offerId,expectedVersion,sourceRef,key,actorRef);
+      if(prior){const current=this.readOffer(offerId);this.db.exec("COMMIT");return {receipt:prior,current,autoCounterOffer:false,sourceEffects:"none"};}
+      const record=this.readOffer(routeId.parse(offerId));
+      if(!record || record.version!==expectedVersion)throw new AgentConflict("VERSION_CONFLICT");
+      const receipt=this.commercial.observeReply(record,sourceRef,key,actorRef);
+      if(this.snapshot(offerId)?.version!==expectedVersion)throw new AgentConflict("VERSION_CONFLICT");
+      const current=this.readOffer(offerId);this.db.exec("COMMIT");return {receipt,current,autoCounterOffer:false,sourceEffects:"none"};
+    }catch(error){this.db.exec("ROLLBACK");throw error;}
+  }
+  private currentDecision(record:OfferRecord,sourceRef:string|null,kind:Change) {
+    if(!sourceRef)return null;
+    const proof=parse(decisionPacket,observed(()=>this.authority.decision?.(sourceRef,this.scope)));
+    return proof && sameScope(proof.scope,this.scope) && proof.sourceRef===sourceRef && proof.offerId===record.offerId && proof.version===record.version && proof.manifestHash===record.manifestHash &&
+      proof.creatorId===record.terms.creatorId && proof.provider===record.terms.provider && proof.programRef===record.terms.programRef && proof.decision===kind &&
+      !!proof.providerAccountRef && proof.providerAccountRef===record.provider?.providerAccountRef &&
+      Date.parse(proof.occurredAt)>=Date.parse(record.recordedAt) && Date.parse(proof.occurredAt)<=this.now() && Date.parse(proof.validUntil)>this.now()?proof:null;
+  }
+  readEligibility(offerId:string,phase:OfferPhase="invitation") {
+    offerPhaseSchema.parse(phase);
+    const record=this.readOffer(offerId);if(!record)return null;
+    let acceptedUntil:string|null=null;
+    if(phase!=="invitation" && record.acceptedRef) {
+      const owner=this.currentDecision(record,record.ownerApprovalRef,"owner-approved"),accepted=this.currentDecision(record,record.acceptedRef,"creator-accepted");
+      if(owner && accepted && Date.parse(accepted.occurredAt)>=Date.parse(owner.occurredAt))
+        acceptedUntil=new Date(Math.min(Date.parse(owner.validUntil),Date.parse(accepted.validUntil))).toISOString();
+    }
+    return this.commercial.evaluate(record,phase,this.commercial.policy(record.terms).snapshot,acceptedUntil);
+  }
+  resolvePolicyProof(offerId:string,phase:OfferPhase) {return this.readEligibility(offerId,phase);}
+  assertPolicyProof(proof:OfferPolicyProof,now:number) {
+    const actualNow=this.now();
+    if(!Number.isSafeInteger(now) || now>actualNow || !Number.isFinite(Date.parse(proof.observedAt)) || !Number.isFinite(Date.parse(proof.validUntil)) || Date.parse(proof.observedAt)>now || Date.parse(proof.validUntil)<=actualNow)throw new OfferPolicyError("OFFER_POLICY_PROOF_STALE");
+    const current=this.readEligibility(proof.offerId,proof.phase)?.proof;
+    const material=(p:OfferPolicyProof)=>{const {observedAt:_observed,validUntil:_until,...rest}=p;void _observed;void _until;return rest;};
+    if(!current || digest(material(current))!==digest(material(proof)))throw new OfferPolicyError("OFFER_POLICY_PROOF_STALE");
   }
   proposeJob(id:string,input:unknown,key:string) {
+    if(input!==null && typeof input==="object" && "terms" in input)parseOfferTerms(input.terms);
     const {envelope,expectedVersion,terms}=offerJobRequestSchema.parse(input);
     if(!scopeMatchesJob(envelope,this.scope,id,expectedVersion,terms,key))throw new AgentConflict("JOB_SCOPE_OR_INPUT_MISMATCH");
     this.saveFromAdapter(id,expectedVersion,terms,key,envelope);
     return this.readJobReceipt(id,envelope.correlationId)!;
   }
   decision(id:string,input:{version:string;sourceRef:string;kind:Change},key:string) {
-    return this.apply(key,{id,...input,operation:"offer-decision"},()=>{
+    const saved=this.apply(key,{id,...input,operation:"offer-decision"},()=>{
       const s=this.snapshot(routeId.parse(id));
       if(!s || s.version!==input.version)throw new AgentConflict("VERSION_CONFLICT");
-      const p=parse(decisionPacket,this.authority.decision?.(input.sourceRef,this.scope)),now=Date.now();
+      const p=parse(decisionPacket,observed(()=>this.authority.decision?.(input.sourceRef,this.scope))),now=this.now();
       if(!p || !sameScope(p.scope,this.scope) || p.sourceRef!==input.sourceRef || p.offerId!==id || p.version!==s.version || p.manifestHash!==s.manifestHash ||
         p.creatorId!==s.terms.creatorId || p.provider!==s.terms.provider || p.programRef!==s.terms.programRef || p.decision!==input.kind ||
         Date.parse(p.validUntil)<=now || Date.parse(p.occurredAt)>now || Date.parse(p.occurredAt)<Date.parse(s.recordedAt))
         throw new OfferSourceUnavailable("EXACT_VERSION_DECISION_UNVERIFIED");
       if(p.acceptedDeliverableIds?.some(id=>!s.terms.manifest.deliverables.some(d=>d.id===id))) throw new AgentConflict("DELIVERABLE_OUTSIDE_MANIFEST");
       const record=this.project(s);
+      if(!p.providerAccountRef || p.providerAccountRef!==record.provider?.providerAccountRef)throw new OfferSourceUnavailable("EXACT_VERSION_DECISION_UNVERIFIED");
       if(record.blockers.length)throw new AgentConflict("OFFER_ECONOMICS_HELD");
       const basis=record.assessment;
       if(!record.assessmentCurrent || !basis || (basis.state!=="prospectiveInviteEligible" && basis.state!=="activationReady"))
         throw new AgentConflict("CURRENT_INVITATION_SCORECARD_REQUIRED");
+      if(this.readEligibility(id,"invitation")?.state!=="eligible")throw new OfferSourceUnavailable("OFFER_SOURCE_FENCE_UNAVAILABLE");
       if(input.kind==="creator-accepted") {
         const row=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=? AND kind='owner-approved'").get(id,s.revision);
         if(!row)throw new AgentConflict("OWNER_APPROVAL_REQUIRED");
-        const owner=storedDecisionSchema.parse(JSON.parse(String(row.body)));
-        if(Date.parse(owner.validUntil)<=now || Date.parse(p.occurredAt)<Date.parse(owner.occurredAt))
+        const owner=this.currentDecision(record,record.ownerApprovalRef,"owner-approved");
+        if(!owner || Date.parse(p.occurredAt)<Date.parse(owner.occurredAt))
           throw new AgentConflict("CURRENT_OWNER_APPROVAL_REQUIRED");
       }
       const old=this.db.prepare("SELECT source_ref FROM offer_decisions WHERE offer_id=? AND revision=? AND kind=?").get(id,s.revision,input.kind);
       if(old && old.source_ref!==input.sourceRef)throw new AgentConflict("DECISION_ALREADY_RECORDED");
       const reused=this.db.prepare("SELECT offer_id,revision,kind FROM offer_decisions WHERE source_ref=?").get(input.sourceRef);
       if(reused && (reused.offer_id!==id || reused.revision!==s.revision || reused.kind!==input.kind))throw new AgentConflict("DECISION_RECEIPT_REUSED");
+      try {
+        if(!this.authority.assertCurrent)throw new Error("Missing source fence");
+        this.authority.assertCurrent({scope:{...this.scope,environment:"sandbox"},offerId:id,offerVersion:s.version,manifestHash:s.manifestHash,
+          provider:record.provider,assessment:record.assessment,decisionRefs:[...new Set([record.ownerApprovalRef,record.acceptedRef,p.sourceRef].filter((ref):ref is string=>ref!==null))],
+          suppression:this.commercial.suppression(record.terms.creatorId),resolvedReplies:this.commercial.replies(record.terms,record.provider?.providerAccountRef).resolutions},this.now());
+      } catch {throw new OfferSourceUnavailable("EXACT_VERSION_DECISION_UNVERIFIED");}
       if(!old)this.db.prepare("INSERT INTO offer_decisions VALUES(?,?,?,?,?)").run(id,s.revision,input.kind,input.sourceRef,JSON.stringify({...p,assessment:basis}));
       return this.project(s);
     });
+    return this.readOffer(id,saved.revision)!;
   }
   acceptedTerms(id:string) {
     const record=this.readOffer(id);
-    if(!record?.acceptedRef || !record.provider || record.blockers.length)return null;
-    const decisions=this.db.prepare("SELECT body FROM offer_decisions WHERE offer_id=? AND revision=?").all(id,record.revision);
-    const expiries=[record.provider.validUntil,...decisions.map(row=>storedDecisionSchema.parse(JSON.parse(String(row.body))).validUntil)];
-    if(record.terms.expiresAt)expiries.push(record.terms.expiresAt);
-    const validUntil=new Date(Math.min(...expiries.map(t=>Date.parse(t)))).toISOString();
-    if(Date.parse(validUntil)<=Date.now())return null;
+    const eligibility=this.readEligibility(id,"activation");
+    if(!record?.acceptedRef || !record.provider || record.blockers.length || eligibility?.state!=="eligible" || !eligibility.proof)return null;
+    const validUntil=eligibility.proof.validUntil;
+    if(Date.parse(validUntil)<=this.now())return null;
     return {offerId:id,version:record.version,manifestHash:record.manifestHash,creatorId:record.terms.creatorId,route:record.terms.checkoutRoute,
       validUntil,currency:record.terms.commission.currency,commission:record.terms.commission,provider:record.provider,acceptedRef:record.acceptedRef};
   }
@@ -199,15 +294,17 @@ export class OfferRepository {
     return row?rewardSourceSchema.parse(JSON.parse(String(row.body))):null;
   }
   private awards(creator:string):RewardSource["awards"] {
-    return this.db.prepare("SELECT body FROM offer_reward_awards WHERE creator_id=?").all(creator).map(r=>JSON.parse(String(r.body)));
+    const old=this.db.prepare("SELECT body FROM offer_reward_awards WHERE creator_id=?").all(creator).map(r=>JSON.parse(String(r.body)) as RewardSource["awards"][number]);
+    const current=this.db.prepare("SELECT body FROM offer_reward_awards_v2 WHERE creator_id=?").all(creator).map(r=>JSON.parse(String(r.body)) as RewardSource["awards"][number]);
+    return [...new Map([...old,...current].map(row=>[row.earnedRef,row])).values()];
   }
   readRewards(id:string) {
     const s=this.snapshot(routeId.parse(id));return s?projectRewards(id,s.terms.creatorId,s.version,this.rewards(s.terms.creatorId),this.awards(s.terms.creatorId)):null;
   }
   recordReward(id:string,ref:string,key:string) {
     return this.apply(key,{id,ref,operation:"reward-observation"},()=>{
-      const s=this.snapshot(id),raw=parse(rewardSourceSchema,this.authority.reward?.(ref,this.scope));
-      if(!s || !raw || raw.sourceRef!==ref || !sameScope(raw.scope,this.scope) || raw.creatorId!==s.terms.creatorId || Date.parse(raw.observedAt)>Date.now())
+      const s=this.snapshot(id),raw=parse(rewardSourceSchema,observed(()=>this.authority.reward?.(ref,this.scope)));
+      if(!s || !raw || raw.sourceRef!==ref || !sameScope(raw.scope,this.scope) || raw.creatorId!==s.terms.creatorId || Date.parse(raw.observedAt)>this.now())
         throw new OfferSourceUnavailable("REWARD_SOURCE_UNVERIFIED");
       const prior=this.rewards(raw.creatorId);
       if(prior && Date.parse(prior.observedAt)>=Date.parse(raw.observedAt)) {
@@ -220,7 +317,7 @@ export class OfferRepository {
       try { result=projectRewards(id,raw.creatorId,s.version,raw,this.awards(raw.creatorId)); }
       catch (error) { if(error instanceof Error && /^(CONFLICTING_|REDEMPTION_)/.test(error.message))throw new AgentConflict(error.message); throw error; }
       this.db.prepare("INSERT INTO offer_rewards VALUES(?,?,?,?)").run(raw.creatorId,ref,new Date(raw.observedAt).toISOString(),JSON.stringify(raw));
-      for(const a of raw.awards)this.db.prepare("INSERT INTO offer_reward_awards VALUES(?,?,?) ON CONFLICT(creator_id,tier) DO UPDATE SET body=excluded.body").run(raw.creatorId,a.tier,JSON.stringify(a));
+      for(const a of raw.awards)this.db.prepare("INSERT INTO offer_reward_awards_v2 VALUES(?,?,?) ON CONFLICT(creator_id,earned_ref) DO UPDATE SET body=excluded.body").run(raw.creatorId,a.earnedRef,JSON.stringify(a));
       return result;
     });
   }

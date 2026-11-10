@@ -1,5 +1,5 @@
 import { LeaveGuard } from "@/components/LeaveGuard";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, LinkButton } from "@/components/Button";
 import { Field, SelectField, TextField } from "@/components/Field";
@@ -9,7 +9,10 @@ import { Badge } from "@/components/Badge";
 import { useView } from "@/adapter/useView";
 import { useSave } from "@/adapter/useSave";
 import { AdapterError } from "@/adapter/errors";
-import { BUNDLES, TIERS, costKeys, newOfferTerms, offerTermsSchema, type OfferTerms, type OfferRecord, type RewardRecord } from "@/creator-agent/offers/contract";
+import { BUNDLES, CANDIDATE_VERSION, TIERS, costKeys, newOfferTerms, offerTermsSchema, type OfferTerms, type OfferRecord, type RewardRecord } from "@/creator-agent/offers/contract";
+import { CommercialEligibility } from "@/features/commercial/CommercialEligibility";
+import { commercialAssessmentPath } from "@/features/commercial/selection";
+import type { CommercialEligibilityView } from "@/creator-agent/commercialPolicy/views";
 import { Card, KpiCard, KpiGrid } from "@/features/analytics/parts";
 import a from "@/features/analytics/Analytics.module.css";
 import s from "./Scorecards.module.css";
@@ -66,8 +69,9 @@ function ScenarioFields({label,scenario,onChange}:{label:"Base"|"Downside";scena
       .map(([key,title])=><NumberField key={key} label={`${label} ${title} (USD)`} value={scenario[key]} scale={100} onChange={n=>set(key,key==="fundedCouponMinor"?n:n??0)}/>)}
   </div></fieldset>;
 }
-export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}) {
-  const baseTerms=useRef(record.terms);
+export type CommercialOfferRecord = OfferRecord & { commercialEligibility?: CommercialEligibilityView };
+export function AgentOffer({record,canEdit,current=true}:{record:CommercialOfferRecord;canEdit:boolean;current?:boolean}) {
+  const [baseTerms,setBaseTerms]=useState(record.terms);
   const [draft,setDraft]=useState(record.terms), [editingVersion,setEditingVersion]=useState(record.version);
   const [errors,setErrors]=useState<string[]>([]), [review,setReview]=useState(false);
   const save=useSave<OfferTerms,OfferRecord>();
@@ -78,12 +82,17 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
     if(!parsed.success){setErrors(parsed.error.issues.map(i=>`${i.path.join(".")}: ${i.message}`));return;}
     setErrors([]);
     save.mutate({resourceKind:"actionDraft",resourceRef:record.offerId,expectedVersion:editingVersion,payload:parsed.data},
-      {onSuccess:r=>{baseTerms.current=r.record.terms;setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
+      {onSuccess:r=>{setBaseTerms(r.record.terms);setDraft(r.record.terms);setEditingVersion(r.resourceVersion);}});
   };
-  const reload=()=>{baseTerms.current=record.terms;setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
+  const reload=()=>{setBaseTerms(record.terms);setDraft(record.terms);setEditingVersion(record.version);setErrors([]);save.reset();};
   const provider=record.provider, saved=record.terms;
+  const sourcePricing=record.commercial?.pricingBasis==="source";
+  const candidatePricing=!sourcePricing && saved.pricingVersion===CANDIDATE_VERSION;
+  const buyerPrices=sourcePricing?record.commercial?.bundles:candidatePricing?BUNDLES:null;
+  const dirty = JSON.stringify(draft)!==JSON.stringify(baseTerms);
+  const eligibilityCurrent = current && !dirty && record.version === editingVersion;
   return <>
-    <LeaveGuard dirty={JSON.stringify(draft)!==JSON.stringify(baseTerms.current)} subject="offer draft" />
+    <LeaveGuard dirty={dirty} subject="offer draft" />
     <div className={a.titleRow}><div className={a.heading}><h1 id="offer-title">Terms that make sense.</h1><p>{saved.creatorId} · {saved.recruitmentSource} · {saved.publishingNetwork} · {saved.checkoutRoute}</p></div>
       <Button variant="secondary" loading={save.isPending} disabledReason={canEdit?null:"Read-only access. A reviewer can save draft changes."} onClick={submit}>Save offer draft</Button>
       <Button aria-haspopup="dialog" onClick={()=>setReview(true)}>Review commitment</Button></div>
@@ -91,7 +100,7 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
       {save.error instanceof AdapterError && save.error.category==="conflict" && <Button variant="secondary" onClick={reload}>Load latest saved terms</Button>}</div>}
     {save.isSuccess && <p role="status">Draft saved as {save.data.resourceVersion}.</p>}
     {record.version!==editingVersion && <p role="status">There is a newer saved version. <Button variant="ghost" onClick={reload}>Load latest saved terms</Button></p>}
-    <div className={a.btnRow}>{record.assessment && <LinkButton variant="secondary" to={`/creators/${encodeURIComponent(saved.creatorId)}/assessments/${encodeURIComponent(record.assessment.runId)}`}>Saved scorecard</LinkButton>}
+    <div className={a.btnRow}>{record.commercialEligibility?.reasonCodes.some(code=>code==="OFFER_VERSION_REQUIRED"||code==="OFFER_VERSION_MISMATCH") && <LinkButton variant="secondary" to={`/offers/${encodeURIComponent(record.offerId)}?${new URLSearchParams({offerVersion:record.version,phase:record.commercialEligibility.phase})}`}>Select displayed saved version {record.version}</LinkButton>}{record.assessment && <LinkButton variant="secondary" to={commercialAssessmentPath(saved.creatorId,record.assessment.runId,{offerId:record.offerId,offerVersion:record.version,phase:record.commercialEligibility?.phase})}>Saved scorecard</LinkButton>}
       <LinkButton variant="secondary" to={`/offers/${record.offerId}/rewards`}>Milestone rewards</LinkButton></div>
     <section className={s.hist} aria-label="Draft scenario"><Badge tone={record.state==="proposed"?"warning":"violet"}>{record.state}</Badge>
       <p className={a.small}>{record.offerId} · {record.version} · {record.assessment ? `${record.assessment.modelId} · ${record.assessmentCurrent?"current assessment":"review this terms revision"}` : "No saved route-matched assessment"}.</p></section>
@@ -136,19 +145,22 @@ export function AgentOffer({record,canEdit}:{record:OfferRecord;canEdit:boolean}
         ["Deliverables",saved.manifest.deliverables.length?saved.manifest.deliverables.map(x=>`${x.id} · ${x.quantity} × ${x.format} · ${x.network} · ${x.dueAt??"No date agreed"}`).join("; "):"No agreed posting obligation"],
       ]}/></details>
     </Card>
-    <Card labelledBy="projection" className={a.card20}><h2 id="projection">Offer economics</h2><p className={a.small}>Candidate CEO-v1 buyer prices · USD · shipping before tax.</p>
-      <DataTable caption="Buyer prices" columns={[{label:"Bundle"},{label:"Merchandise"},{label:"Shipping"},{label:"Delivered before tax"}]} rows={BUNDLES.map(b=>[b.id,money(b.merchandiseMinor),money(b.shippingMinor),money(b.merchandiseMinor+b.shippingMinor)])}/>
+    <Card labelledBy="projection" className={a.card20}><h2 id="projection">Offer economics</h2><p className={a.small}>{sourcePricing?`Saved source buyer prices · ${record.commercial?.pricingVersion??"Version unknown"}`:candidatePricing?"Candidate CEO-v1 buyer prices · owner approval pending":`Buyer price catalogue unverified · ${saved.pricingVersion}`} · USD · shipping before tax.</p>
+      {buyerPrices?.length?<DataTable caption="Buyer prices" columns={[{label:"Bundle"},{label:"Merchandise"},{label:"Shipping"},{label:"Delivered before tax"}]} rows={buyerPrices.map(b=>[b.id,money(b.merchandiseMinor),money(b.shippingMinor),money(b.merchandiseMinor+b.shippingMinor)])}/>:<p role="status">The saved source price catalogue is unavailable. Refresh source evidence before reviewing a commitment.</p>}
       <KpiGrid>{record.scenarios.map(x=><KpiCard key={x.label} label={`${x.label} cohort contribution`} context={`${x.orders} orders · ${x.seededCreators} seeded creators`}>{money(x.contributionMinor)}</KpiCard>)}</KpiGrid>
       <DataTable caption="Saved cohort scenarios" columns={[{label:"Scenario"},{label:"Commission accrued"},{label:"Sample and postage"},{label:"Planning reserve"},{label:"Break-even orders"},{label:"Missing inputs"}]} rows={record.scenarios.map(v=>[v.label,money(v.commissionMinor),money(v.sampleMinor),money(v.reserveMinor),v.breakEvenOrders??"Unknown or unprofitable",v.missing.join(", ")||"None"])}/>
       <p className={a.small}>Provider rate {provider?rate(provider.actualCommission.standardRateBps):"Unknown"} · eligible retained merchandise · refund rule {provider?.refundRule??"Unknown"} · attribution {provider?.attributionWindowDays==null?"Unknown":`${provider.attributionWindowDays} days`} · payout {provider?.payoutSchedule??"Unknown"}.</p>
     </Card>
+    {dirty && <p role="status">Unsaved edits are outside the saved commercial check. Save this draft and review its new exact version.</p>}
+    <CommercialEligibility data={record.commercialEligibility} current={eligibilityCurrent}/>
     <Card labelledBy="gates" className={a.card20}><h2 id="gates">Commitment gates</h2>
       <p>Owner approval · {record.ownerApprovalRef??"Awaiting exact-version receipt"} · Creator acceptance · {record.acceptedRef??"Awaiting source-confirmed terms"}.</p>
       <ul>{record.blockers.map(x=><li key={x}>{x}</li>)}</ul>
       <details><summary>Version history ({record.historyTotal})</summary><DataTable caption="Immutable offer versions" columns={[{label:"Version"},{label:"Saved"},{label:"Manifest"}]} rows={record.history.map(v=>[v.version,v.at,v.hash.slice(0,12)])}/></details>
     </Card>
     <Dialog open={review} title="Review commitment" onClose={()=>setReview(false)}>
-      <p>{record.state} · {record.version} · {record.blockers.length} unresolved commercial conditions.</p>
+      <p>Saved {record.version} · {record.state}. {dirty ? "Unsaved edits have not been checked." : "This review uses the exact saved version."}</p>
+      <CommercialEligibility data={record.commercialEligibility} current={eligibilityCurrent}/>
       <p>Owner approval, source-confirmed terms and separate fulfillment approvals control commitments.</p><Button variant="secondary" onClick={()=>setReview(false)}>Close review</Button>
     </Dialog>
   </>;

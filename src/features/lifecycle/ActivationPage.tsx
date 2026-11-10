@@ -1,3 +1,4 @@
+import { NativeActivationPage } from "./NativeLifecycleViews";
 import { useId, useState } from "react";
 import type { ReadResponse } from "@/adapter/contract";
 import { useScope } from "@/adapter/scope";
@@ -18,6 +19,11 @@ import styles from "./Lifecycle.module.css";
  * outcome, and every share is derived from the counts; a share of zero units is unknown, not 0%.
  */
 export function ActivationPage() {
+  const { adapter } = useScope();
+  return adapter.kind === "demo" ? <DemoActivationPage /> : <NativeActivationPage />;
+}
+
+function DemoActivationPage() {
   const { adapter } = useScope();
   const query = useView<Record<string, never>, ActivationData>("activationRetention", {});
   const [dialog, setDialog] = useState<"contract" | "cohort" | null>(null);

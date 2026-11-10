@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import { scopeKey, useScope } from "@/adapter/scope";
 import { useSearchParams } from "react-router-dom";
 import type { SavedBinding, SavedBindings, SavedRuns } from "@/creator-agent/operationsView";
@@ -20,14 +20,15 @@ function useSelection(key: string) {
   const [params, setParams] = useSearchParams();
   const ctx = useScope();
   const context = JSON.stringify([scopeKey(ctx), params.get("tab"), params.get("savedSearch"), params.get("savedState")]);
-  const previous = useRef(context);
-  const changed = previous.current !== context;
+  // A selection carried across a tab, search, state or scope change is withheld until the URL drops it.
+  const [previous, setPrevious] = useState(context);
+  const [carried, setCarried] = useState(false);
+  if (previous !== context) { setPrevious(context); setCarried(params.has(key)); }
+  else if (carried && !params.has(key)) setCarried(false);
   useEffect(() => {
-    if (previous.current === context) return;
-    previous.current = context;
-    if (params.has(key)) setParams(p => { const next = new URLSearchParams(p); next.delete(key); return next; }, {replace:true});
-  }, [context, key, params, setParams]);
-  return { id: changed ? null : params.get(key), select: (id: string | null) => {
+    if (carried) setParams(p => { const next = new URLSearchParams(p); next.delete(key); return next; }, {replace:true});
+  }, [carried, key, setParams]);
+  return { id: carried || previous !== context ? null : params.get(key), select: (id: string | null) => {
     const next = new URLSearchParams(params);
     if (id) next.set(key, id); else next.delete(key);
     setParams(next, { replace: id === null });
@@ -110,12 +111,12 @@ export function SavedRunsPanel({ data, tab }: { data: SavedRuns; tab: "runs" | "
     {visible.length ? <DataTable variant="dense" caption="Saved run traces" columns={[{ label: "Run / job" }, { label: "State" }, { label: "Observed" }, { label: "Next action" }]} rows={visible.map(run =>
       [<span key="run">{run.id}<br />{run.job} · v{run.version}</span>, run.state, stamp(run.observedAt), <Button key="detail" variant="secondary" aria-haspopup="dialog" onClick={() => selection.select(run.id)}>Inspect run</Button>])} />
       : <p>{data.coverage.total ? "No displayed runs match this search." : "No runs are saved in this workspace and account. Provider run volume is unknown."}</p>}
-    <Small>Ledger read {stamp(data.observedAt)}. Result receipts identify saved local work.</Small>
+    <Small>Ledger read {stamp(data.observedAt)}. Result receipts identify saved artifacts and recorded source outcomes.</Small>
     <Dialog open={Boolean(selected)} title="Saved run trace" onClose={() => selection.select(null)}>
       <Button variant="secondary" style={{ position: "sticky", top: 0, zIndex: 1 }} onClick={() => selection.select(null)}>Close</Button>
       {selected && <DetailRows rows={[["Run", selected.id], ["Job / version", selected.job + " · v" + selected.version], ["Correlation", selected.correlation],
         ["Mode / state", selected.mode + " · " + selected.state], ["Observed", stamp(selected.observedAt)], ["Completed items", selected.completed + " of " + selected.items],
-        ["Blockers", selected.blockers.join(", ") || "None recorded"], ["Local result receipts", String(selected.receiptCount)], ["First local receipt", selected.receipt ?? "None recorded"]]} />}
+        ["Blockers", selected.blockers.join(", ") || "None recorded"], ["Recorded result receipts", String(selected.receiptCount)], ["First recorded receipt", selected.receipt ?? "None recorded"]]} />}
     </Dialog>
   </Panel></>;
 }

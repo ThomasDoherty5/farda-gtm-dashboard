@@ -2,22 +2,25 @@
 
 Recorded 2026-11-04. These answer the open questions in the backend requirements proposal (PR #48, D-1 to D-18) and the four contract gaps (Q-01 to Q-04 in `docs/intake.md`).
 
-**Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. Nothing here has been verified against a real service.
+**Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. These decisions originally preceded the service. Current native-service evidence is mapped in `docs/adapter-conformance.md`; evidence for one implemented family does not establish all decisions or production authorization.
 
 ## Owner acceptance, 2026-11-06
 
-Thomas Doherty reviewed these defaults on 2026-11-06 and accepted every one that doesn't commit money, data retention or a vendor. The backend owner can still change any of them, using the same rule as above.
+Thomas Doherty reviewed these defaults as they stood on 2026-11-06. He accepted every one that doesn't commit money, data retention or a vendor. The backend owner can still change any of them, using the same rule as above. Where a decision changed on main after that review, the table says so.
 
 | Decision | Status | Note |
 | -- | -- | -- |
 | Q-01 to Q-04 | Accepted | Already implemented in the client contract. |
 | D-1 | Accepted, except the identity provider | HTTPS, same origin, `HttpOnly` cookie session, CSRF header and the four paths are accepted. The identity provider is not chosen; the owner decided on 2026-11-06 to choose it before production. Until then, sandbox keeps the deployed service's separate reader and reviewer credentials. |
 | D-2, D-3, D-4 | Accepted | Who holds each D-3 role is assigned separately. |
-| D-5 | Accepted, with a USD 500 threshold | Owner decision on 2026-11-06: a second person approves anything that spends money, messages a creator or changes policy; the founder-only threshold is USD 500 instead of the default USD 1,000. |
-| D-6 to D-15 | Accepted | |
+| D-5 | Accepted with a USD 500 threshold; later additions not reviewed | Owner decision on 2026-11-06: a second person approves anything that spends money, messages a creator or changes policy, and the founder-only threshold is USD 500 instead of USD 1,000. Main already records USD 500. After the review, the backend owner added two rules: commission invitation and activation need a distinct founder, and a generic reviewer credential is not a named human or founder grant. The owner hasn't reviewed those additions yet. |
+| D-6, D-8, D-9 | Revised after acceptance | The owner accepted the earlier wording on 2026-11-06. The backend owner then rewrote all three on main on 2026-11-07 (UTC). The owner hasn't reviewed the new wording yet. |
+| D-7, D-10 to D-15 | Accepted | |
 | D-16 | Held | Retention periods need CPA and legal confirmation. Financial record rules and privacy law apply, and the product is health-adjacent. |
 | D-17 | Held | A safe design, but a second deployment and database cost money. No paid infrastructure is approved. |
 | D-18 | Accepted | Build-order guidance. The existing child tickets keep their owners. |
+
+The "Bounded native observation refresh" section was added on main after the review. The owner hasn't reviewed it yet.
 
 Principles behind every choice: the server is the only authority (a hidden button is never authorization); a small team needs fewer moving parts, not more; money and outbound messages get a second person; an unknown outcome is never retried blind; nothing in the browser holds a secret.
 
@@ -38,11 +41,11 @@ Principles behind every choice: the server is the only authority (a hidden butto
 | D-2 Operation names and versions | Keep `viewKey` and `actionKind` as the operation names. `schemaVersion` is a date string. Adding an optional field needs no new version; removing or retyping one does. The server accepts the current version and the previous one for 30 days and answers anything else with a typed `VALIDATION_FAILED` that names the supported versions. |
 | D-3 Role model | Five roles: `founder`, `operator`, `reviewer`, `finance`, `viewer`, plus a non-human `runner` for the job service. Fields are filtered on the server per role (payout and bank details: `finance` and `founder` only; creator contact data: `operator`, `reviewer`, `founder`). A role never narrows by hiding a button. |
 | D-4 Scope narrowing | Refuse, do not narrow. A request that names a workspace, account or environment outside the grant gets `FORBIDDEN`. The response scope equals the requested scope or the answer is discarded (the client already does this). |
-| D-5 Approval authority | Requester and approver must be different people for anything that spends money, sends to a creator, or changes policy. Founder-only: changing the acquisition policy, settling a historical fixed-fee liability, the launch Go decision, enabling production for a source account, and any single commitment over USD 500 (owner decision 2026-11-06; the original default was USD 1,000). Authority failure is one form: `FORBIDDEN` with reason `AUTHORITY_REQUIRED` naming the role; state failure (expired, changed, already decided) is `approvalHold`. |
-| D-6 Slack trust | Verify every Slack request with the signing secret and reject timestamps older than 5 minutes. Map a Slack user to a Farda user only through an explicit link made by a founder. One decision wins: the decision is a compare-and-set on the approval version, first valid write wins, and the second caller gets a conflict that names the stored decision. |
+| D-5 Approval authority | Requester and approver must be different people for anything that spends money, sends to a creator, changes policy, or commits a commission invitation/activation. Invitation and activation require a distinct founder even with no immediate cash charge. Founder-only: changing the acquisition policy, settling a historical fixed-fee liability, the launch Go decision, enabling production for a source account, and any single commitment over USD 500 under the current adopted action contract. The older USD 1,000 build default is superseded. Authority failure is one form: `FORBIDDEN` with reason `AUTHORITY_REQUIRED` naming the role; state failure (expired, changed, already decided) is `approvalHold`. A generic reviewer credential is not a named human or founder grant. |
+| D-6 Slack trust | Verify original Slack-signed raw requests with the signing secret and reject ingress timestamps older than 5 minutes. A transformed relay needs its own authenticated ingress and independent verification of the original Slack event; it is not the original signed body. Map a Slack user to a Farda user only through an explicit authorized link. The current live default is a verified Slack-origin decision persisted and read back in Linear; app live concurrence remains disabled until adopted. One exact decision wins by compare-and-set on the approval version, preserving the confirmed source receipt. |
 | D-7 Shape of `controlRun` | Pause, cancel and retry of a batch or monitor run stay under `controlRun`, with `runRef` at the top level. `previewAction` is a separate action kind and never changes state. |
-| D-8 Idempotency retention | Keys are scoped to principal and action kind and kept 14 days with the stored response. A key reused after expiry is a new command, still protected by the expected-version check. |
-| D-9 Duplicates and replays | Same key and same payload returns the stored answer unchanged, with no extra code. Same key and a different payload is `MANIFEST_CHANGED`. "Already done" is the stored state, not a separate code. |
+| D-8 Idempotency retention | Response-cache keys are scoped to principal and action kind and kept 14 days. Cache expiry does not expire durable action/item identity, a started attempt or an unresolved external-effect fence. Neither the same key nor a new key may bypass original-outcome reconciliation and renewed preflight. |
+| D-9 Duplicates and replays | Same key and same payload preserves the original immutable business receipt, without another effect. The transport envelope echoes the current requestId and verified scope; current authorization and holds are projected separately from historical receipt content. Same key and a different payload is `MANIFEST_CHANGED`. "Already done" is the stored outcome, not a new approval or proof of current readiness. |
 | D-10 Version token | An opaque string chosen by the server, carried in `expectedVersion` and `dataVersion`. The client compares for equality only and never parses it. |
 | D-11 Filters, period, sort, search | Shared names: `period` (an ISO date range or a named preset), `sort` (a list of field and direction), `q` (text search). An unknown filter is `VALIDATION_FAILED` in sandbox and production. `scenario` and `fixture` are accepted only in demo and rejected elsewhere. |
 | D-12 HTTP for holds and uncertain results | Holds (approval, capability, resource) are 409. An uncertain write is never a 2xx: it is an error with code `OUTCOME_UNCERTAIN`, `executionCertainty: uncertain`, and a status the proxy would not cache (502 or 504). Success is a 2xx only with the authoritative acknowledgment. |
@@ -69,8 +72,16 @@ Writes (`/v1/action`, `/v1/save`) carry the CSRF token from the session call in 
 ## What changes in the code because of these
 
 - Q-01 to Q-04 and D-13 change `src/adapter/contract.ts`, the demo services, the schemas in `src/adapter/viewSchemas/`, and the screens that switch on state. They ship in their own PR with tests.
-- D-1 and D-11 define what a reference service built for testing implements. That service (`tools/reference-server/`) is a test double, not the production backend, and it is the only thing that implements the paths above.
+- D-1 and D-11 define the reference test service in `tools/reference-server/`. The authenticated native service in `src/creator-agent/server.ts` also implements the paths above, with its independently tested source-family owners. The reference service remains a test double and is never evidence of provider integration.
 - Everything else is for the backend owner.
+
+## Bounded native observation refresh
+
+The native health control uses the additive `refreshObservation` operation with the exact `refreshOperationsHealth` action and typed scoped target. It creates no input run reference: the existing bounded J14 service owns any resulting run and its configured probe, approval, activation and lease gates. `controlRun` and `reconcileRun` still require their real existing run references under Q-03.
+
+The adapter rejects other action kinds, arbitrary payload fields and approval, manifest, entity or run references on observation refresh. The service returns actual observation receipts and preserves denied, stale, held and uncertain states; a prior observation remains historical when current permission or freshness changes. This operation does not authorize a business write, provider permission grant or general tool execution.
+
+A validated write-error outcome remains authoritative when access is lost after submission. HTTP 401/403 still clears protected data, uses a neutral authorization message and prevents automatic retry; it does not overwrite a typed `applied` or `uncertain` outcome with `notApplied`. Original-key reconciliation remains required before another observation or proposal.
 
 ## Not decided here
 

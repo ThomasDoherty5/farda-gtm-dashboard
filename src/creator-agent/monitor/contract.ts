@@ -17,13 +17,23 @@ const observation = z.object({at:instant,receipt:ref,definition:text,window:text
 const access = z.enum(["authorized","denied","loginRequired","throttled","unavailable","unknown"]);
 const checkState = z.enum(["changed","unchanged","skipped","failed","deferred","unknown"]);
 const sourceScope=z.object({workspaceId:ref,accountId:ref,environment:z.literal("sandbox")}).strict();
+const historyEntry=z.object({id:ref,at:instant,kind:z.enum(["signup","identity","enrollment","exclusion"]),
+  decision:z.enum(["pending","resolved","quarantined","enrolled","excluded"]),receipt:ref,
+  identityEvidence:z.array(ref).min(1).max(10),decisionReceipt:ref}).strict();
+const candidate=z.object({creatorId:ref,network,account:ref,profileId:ref,receipt:ref}).strict();
+const exclusion=z.object({at:instant,reasonCode:z.enum(["suppressed","closed","manual-review"]),owner:ref,receipt:ref}).strict();
+const reviewEvidence=z.object({creatorId:ref,revision:count,network,account:ref,profileId:ref,access,observedAt:instant,receipt:ref,
+  historyComplete:z.boolean(),history:z.array(historyEntry).max(50),candidates:z.array(candidate).max(10),exclusion:exclusion.nullable()}).strict();
+const sourceStatus=z.enum(["unknown","draft","ready","published","received","closed"]);
+const messageEvidence=z.object({access,observedAt:instant,conversationId:ref,messageId:ref,sourceVersion:ref,
+  currentStatus:sourceStatus.nullable(),proposedStatus:sourceStatus.nullable(),expectedVersion:ref.nullable()}).strict();
 const member=z.object({creatorId:ref,revision:count,network,account:ref,profileId:ref,notionReceipt:ref,sheetsReceipt:ref,cohort:ref.nullable(),
   // Independently verified J01 link/suppression receipt only when supplied by the trusted Sheets/Notion source owner.
   verification:z.object({identityReceipt:ref,suppressionReceipt:ref,sheetsCanonicalReceipt:ref}).strict().optional()}).strict();
 const check=z.object({creatorId:ref,network,account:ref,profileId:ref,state:checkState,access,at:instant.nullable(),lastSuccessAt:instant.nullable(),
   receipt:ref.nullable(),checkpoint:ref.nullable(),owner:ref.nullable(),reason:text.nullable()}).strict();
 const inbox=z.object({id:ref,creatorId:ref,network,account:ref,profileId:ref,at:instant,receipt:ref,kind:z.enum(["reply","statusChange","post"]),
-  interpretation:z.enum(["observed","suggestion"])}).strict();
+  interpretation:z.enum(["observed","suggestion"]),context:messageEvidence.optional()}).strict();
 const run=z.object({id:ref,observedAt:instant,receipt:ref,snapshotSize:count,complete:z.boolean(),timezone:ref.nullable(),
   schedule:z.enum(["enabled","paused","disabled","unknown"]),nextRun:instant.nullable(),retryPolicy:text.nullable(),jobId:ref.nullable(),
   checks:z.array(check).max(2000),inbox:z.array(inbox).max(2000)}).strict().superRefine((run,ctx)=>{
@@ -38,7 +48,7 @@ const run=z.object({id:ref,observedAt:instant,receipt:ref,snapshotSize:count,com
       ["changed","unchanged"].includes(item.state) && (!item.receipt || !item.at || item.access!=="authorized"))
       ctx.addIssue({code:"custom",message:"A successful profile check requires current dated source evidence."});
     const checked=new Set(run.checks.filter(c=>c.state==="changed" || c.state==="unchanged").map(c=>JSON.stringify([c.creatorId,c.network,c.account,c.profileId])));
-    for(const event of run.inbox) if(Date.parse(event.at)>Date.parse(run.observedAt) ||
+    for(const event of run.inbox) if(Date.parse(event.at)>Date.parse(run.observedAt) || event.context && (Date.parse(event.context.observedAt)>Date.parse(run.observedAt) || Date.parse(event.context.observedAt)<Date.parse(event.at)) ||
       !checked.has(JSON.stringify([event.creatorId,event.network,event.account,event.profileId])))
       ctx.addIssue({code:"custom",message:"An observation must belong to a checked profile in this run."});
   });
@@ -65,8 +75,23 @@ export function originalPostUrl(network:"instagram"|"tiktok",postId:string,input
 }
 /** Only a trusted server-side J08/Sheets reader supplies this packet; there is no browser write or ingestion endpoint. */
 export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,observedAt:instant,validUntil:instant,
-  coverage:z.enum(["complete","partial"]),members:z.array(member).max(2000),posts:z.array(post).max(2000),runs:z.array(run).max(100)}).strict().superRefine((s,ctx)=>{
+  coverage:z.enum(["complete","partial"]),reviewEvidence:z.array(reviewEvidence).max(2000).optional(),members:z.array(member).max(2000),posts:z.array(post).max(2000),runs:z.array(run).max(100)}).strict().superRefine((s,ctx)=>{
     const unique=(rows:string[])=>new Set(rows).size===rows.length;
+    const reviewKey=(r:{creatorId:string;revision:number;network:string;account:string;profileId:string})=>JSON.stringify([r.creatorId,r.revision,r.network,r.account,r.profileId]);
+    if(!unique((s.reviewEvidence??[]).map(reviewKey)))ctx.addIssue({code:"custom",message:"Duplicate profile review evidence."});
+    const sourceEvents=new Map<string,string>();
+    for(const event of s.runs.flatMap(run=>run.inbox)){
+      const key=JSON.stringify([event.network,event.account,event.id]),facts=JSON.stringify(event),prior=sourceEvents.get(key);
+      if(prior!==undefined&&prior!==facts)ctx.addIssue({code:"custom",message:"Conflicting repeated source event evidence requires reconciliation."});
+      sourceEvents.set(key,facts);
+    }
+    for(const r of s.reviewEvidence??[]){
+      if(s.members.filter(m=>reviewKey(m)===reviewKey(r)).length!==1 || Date.parse(r.observedAt)>Date.parse(s.observedAt) ||
+        r.history.some(h=>Date.parse(h.at)>Date.parse(r.observedAt)) || r.exclusion && Date.parse(r.exclusion.at)>Date.parse(r.observedAt) ||
+        r.candidates.some(c=>c.network!==r.network || c.account!==r.account) || !unique(r.history.map(h=>h.id)) ||
+        !unique(r.candidates.map(c=>JSON.stringify([c.creatorId,c.profileId]))))
+        ctx.addIssue({code:"custom",message:"Review evidence must match one exact member and dated, same-account source facts."});
+    }
     if(Date.parse(s.validUntil)<=Date.parse(s.observedAt) || s.runs.some(r=>Date.parse(r.observedAt)>Date.parse(s.observedAt)) ||
       s.posts.some(p=>p.publishedAt && Date.parse(p.publishedAt)>Date.parse(s.observedAt) || p.visibilityAt && Date.parse(p.visibilityAt)>Date.parse(s.observedAt) ||
         p.publicationHistory?.some(h=>Date.parse(h.at)>Date.parse(s.observedAt)||p.publishedAt && Date.parse(h.at)<Date.parse(p.publishedAt)) ||
@@ -75,7 +100,14 @@ export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,obser
       ctx.addIssue({code:"custom",message:"Publication and run identities must be unique."});
   });
 export type MonitorSnapshot=z.infer<typeof monitorSnapshotSchema>;
-export type MonitorSourceReader=(scope:MonitorSnapshot["scope"])=>Promise<MonitorSnapshot|null>;
+export const monitorReadBindingSchema=z.object({scope:sourceScope,principalRef:z.enum(["agent-reader","agent-reviewer"]),
+  viewKey:z.enum(["contentMonitor","watchlist","hourlyRun","postPerformance"]),requestDigest:z.string().regex(/^[a-f0-9]{64}$/)}).strict();
+export const monitorSourceResultSchema=z.object({snapshot:monitorSnapshotSchema.nullable(),authority:z.object({binding:monitorReadBindingSchema,
+  sourceVersion:ref.nullable(),permissionVersion:ref,observedAt:instant,validUntil:instant}).strict()}).strict();
+export type MonitorReadBinding=z.infer<typeof monitorReadBindingSchema>;
+export type MonitorSourceResult=z.infer<typeof monitorSourceResultSchema>;
+export type MonitorSourceReader={read(binding:MonitorReadBinding,signal?:AbortSignal):Promise<unknown>;
+  assertCurrent(result:MonitorSourceResult,binding:MonitorReadBinding,now:number):void};
 export const monitorViewKeys=["contentMonitor","watchlist","hourlyRun","postPerformance"] as const;
 export type MonitorViewKey=typeof monitorViewKeys[number];
 const sourceFilter=z.enum(["all","social-cat","tiktok-affiliate"]);
@@ -86,27 +118,33 @@ export const monitorFilters={
     cohort:z.enum(["all","launch-a"]).default("all")}).strict(),hourlyRun:z.object({runId:ref}).strict(),postPerformance:z.object({postId:ref}).strict(),
 };
 
-const meta=z.object({observedAt:instant,sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
+const meta=z.object({observedAt:instant,readAccess:z.object({validUntil:instant}).strict().nullable().optional(),sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
   sourceVersion:ref.nullable(),latestRunRef:ref.nullable(),membershipComplete:z.boolean()}).strict();
 const outputObservation=observation;
 const outputPost=z.object({id:ref,creator:ref,network,enrollmentSource:acquisition,originalUrl:z.string().url().nullable(),
   account:ref,campaign:ref,campaignReceipt:ref,collaborationRef:ref.nullable(),creative:ref.nullable(),deliverable:ref.nullable(),publishedAt:instant.nullable(),publicationReceipt:ref,
   visibility:publicationState,visibilityReceipt:ref.nullable(),visibilityAt:instant.nullable(),access,checkpointHours:count.nullable(),
   measurement:outputObservation.nullable(),attribution:attribution.nullable(),conflict:z.boolean()}).strict();
+const reviewState=z.enum(["current","expired","quarantined","denied","loginRequired","throttled","unavailable","unknown"]);
+const outputReview=z.object({state:reviewState,observedAt:instant.nullable(),receipt:ref.nullable(),historyComplete:z.boolean(),
+  history:z.array(historyEntry).max(50),candidates:z.array(candidate).max(10),exclusion:exclusion.nullable()}).strict();
+const outputMessage=z.object({id:ref,network,account:ref,profile:ref,at:instant,receipt:ref,kind:inbox.shape.kind,interpretation:inbox.shape.interpretation,
+  detail:z.object({state:reviewState,observedAt:instant.nullable(),conversationId:ref.nullable(),messageId:ref.nullable(),sourceVersion:ref.nullable(),
+    currentStatus:sourceStatus.nullable(),proposedStatus:sourceStatus.nullable(),expectedVersion:ref.nullable()}).strict().optional()}).strict();
 const outputMember=z.object({creator:ref,network:network.nullable(),account:ref.nullable(),profile:ref.nullable(),handle:ref.nullable(),
   state:z.enum(["active","identity-review","excluded","eligibility-unverified"]),source:ref.nullable(),cohort:ref.nullable(),notionReceipt:ref.nullable(),
-  sheetsReceipt:ref.nullable(),lastCheck:instant.nullable(),reason:text}).strict();
+  sheetsReceipt:ref.nullable(),lastCheck:instant.nullable(),reason:text,review:outputReview.optional(),messages:z.array(outputMessage).max(100).optional()}).strict();
 const outputCheck=z.object({profile:ref,network,state:checkState,access,at:instant.nullable(),lastSuccessAt:instant.nullable(),receipt:ref.nullable(),
   checkpoint:ref.nullable(),owner:ref.nullable(),reason:text.nullable()}).strict();
 export const nativeContentSchema=meta.extend({kind:z.literal("saved-content-monitor"),posts:z.array(outputPost),total:count,
   views:count.nullable(),rate:z.number().finite().nonnegative().nullable(),orders:count.nullable(),net:money.nullable(),window:ref,
   metricBasis:z.object({definition:text,window:text,semantics:z.enum(["cumulative","interval"]),context:z.enum(["organic","paid","mixed"])}).strict().nullable()});
 export const nativeWatchlistSchema=meta.extend({kind:z.literal("saved-monitor-watchlist"),profiles:z.array(outputMember),total:count,
-  active:count,pending:count,excluded:count,unverified:count});
+  active:count,pending:count,pendingReviewTotal:count.optional(),excluded:count,unverified:count});
 export const nativeRunSchema=meta.extend({kind:z.literal("saved-monitor-run"),runId:ref,runAt:instant,runReceipt:ref,snapshotSize:count,
   complete:z.boolean(),checks:z.array(outputCheck),counts:z.object({changed:count,unchanged:count,skipped:count,failed:count,deferred:count,unknown:count}).strict(),timezone:ref.nullable(),
   schedule:z.enum(["enabled","paused","disabled","unknown"]),nextRun:instant.nullable(),retryPolicy:text.nullable(),
-  observations:z.array(z.object({id:ref,profile:ref,at:instant,receipt:ref,kind:inbox.shape.kind,interpretation:inbox.shape.interpretation}).strict())});
+  observations:z.array(outputMessage)});
 export const nativePostSchema=meta.extend({kind:z.literal("saved-monitor-post"),post:outputPost,history:z.array(outputObservation),publicationHistory:z.array(visibilityHistory)});
 export type NativeContent=z.infer<typeof nativeContentSchema>;
 export type NativeWatchlist=z.infer<typeof nativeWatchlistSchema>;

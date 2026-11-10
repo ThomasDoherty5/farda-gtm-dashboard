@@ -62,6 +62,12 @@ export function createOperations(database: string | DatabaseType, scope: Operati
   let closed = false;
   const close = () => { if (closed) return; closed = true; try { connectionLedger.close(); } finally { if (ownsDatabase) operationDb.close(); } };
   const safeScope = { workspaceId: scope.workspaceId, accountIds: [scope.accountId], environment: scope.environment, authorizationScopeVersion: "operations.scope.v1" };
+  // Only these original observation handlers inherit legacy API authority. New source-owned families
+  // must explicitly expose their own named/source-authorized projections and controls.
+  const legacyHandlers = new Set(["record-reference.v1", "draft-reference.v1", "probe-provider-health.v1"]);
+  const sourceOwned = (handler: string) => !legacyHandlers.has(handler);
+  const publicJobPredicate = "json_extract(d.body,'$.handler') IN ('record-reference.v1','draft-reference.v1','probe-provider-health.v1')";
+  const publicRunPredicate = "json_extract(definition,'$.handler') IN ('record-reference.v1','draft-reference.v1','probe-provider-health.v1')";
 
   async function handle({ req, res, role, reply, bodyOf }: HttpContext): Promise<boolean> {
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -69,6 +75,9 @@ export function createOperations(database: string | DatabaseType, scope: Operati
     if (!/^\/v1\/(connections|jobs|job-runs)(\/|$)/.test(path)) return false;
     const respond = (status: number, data: unknown) => { reply(res, status, { schemaVersion: OPERATIONS_SCHEMA_VERSION, scope: safeScope, data: safeOperationsProjection(data), sourceEffect: "none" }); return true; };
     const notFound = () => { reply(res, 404, { code: "RECORD_NOT_FOUND", executionCertainty: "notApplied" }); return true; };
+    // Source-owned actions use the current named actor, immutable key/version and protected projection boundary.
+    // A generic reviewer credential cannot control them, and a legacy read cannot reveal their private references.
+    const sourceBoundary = () => { reply(res, 403, { code: "SOURCE_ACTION_BOUNDARY_REQUIRED", executionCertainty: "uncertain" }); return true; };
     if (req.method === "GET") {
       const collection = ["/v1/connections", "/v1/jobs", "/v1/job-runs"].includes(path);
       const history = path.endsWith("/history");
@@ -81,21 +90,24 @@ export function createOperations(database: string | DatabaseType, scope: Operati
       }
       if (path === "/v1/jobs") {
         const total = Number(operationDb.prepare("SELECT COUNT(*) AS total FROM job_heads").get()?.total ?? 0);
-        const records = operationDb.prepare("SELECT job_id FROM job_heads ORDER BY job_id LIMIT ?").all(limit).map((row) => jobs.getJob(String(row.job_id)));
-        return respond(200, { records, total, partial: total > records.length });
+        const restricted = Number(operationDb.prepare(`SELECT COUNT(*) AS n FROM job_heads h JOIN job_definitions d ON d.job_id=h.job_id AND d.version=h.version WHERE NOT (${publicJobPredicate})`).get()?.n ?? 0);
+        const records = operationDb.prepare(`SELECT h.job_id FROM job_heads h JOIN job_definitions d ON d.job_id=h.job_id AND d.version=h.version WHERE ${publicJobPredicate} ORDER BY h.job_id LIMIT ?`).all(limit).map((row) => jobs.getJob(String(row.job_id)));
+        return respond(200, { records, total, partial: total > records.length, ...(restricted ? { restrictedCount: restricted } : {}) });
       }
       if (path === "/v1/job-runs") {
         const total = Number(operationDb.prepare("SELECT COUNT(*) AS total FROM job_runs").get()?.total ?? 0);
-        const records = operationDb.prepare("SELECT run_id FROM job_runs ORDER BY observed_at DESC,run_id DESC LIMIT ?").all(limit).map((row) => {
+        const restricted = Number(operationDb.prepare(`SELECT COUNT(*) AS n FROM job_runs WHERE NOT (${publicRunPredicate})`).get()?.n ?? 0);
+        const records = operationDb.prepare(`SELECT run_id FROM job_runs WHERE ${publicRunPredicate} ORDER BY observed_at DESC,run_id DESC LIMIT ?`).all(limit).map((row) => {
           const { items, ...summary } = jobs.getRun(String(row.run_id));
           return { ...summary, itemCount: items.length, itemsIncluded: false };
         });
-        return respond(200, { records, total, partial: total > records.length });
+        return respond(200, { records, total, partial: total > records.length, ...(restricted ? { restrictedCount: restricted } : {}) });
       }
       const job = /^\/v1\/jobs\/([^/]+)$/.exec(path);
-      if (job) return respond(200, jobs.getJob(identifier(job[1]!)));
+      if (job) { const record = jobs.getJob(identifier(job[1]!)); return sourceOwned(record.definition.handler) ? sourceBoundary() : respond(200, record); }
       const run = /^\/v1\/job-runs\/([^/]+)(?:\/(history))?$/.exec(path);
-      if (run) return respond(200, run[2] ? jobs.history(identifier(run[1]!), limit) : jobs.getRun(identifier(run[1]!)));
+      if (run) { const record = jobs.getRun(identifier(run[1]!)); return sourceOwned(record.definition.handler) ? sourceBoundary()
+        : respond(200, run[2] ? jobs.history(identifier(run[1]!), limit) : record); }
       return false;
     }
     if (req.method !== "POST") return false;
@@ -114,14 +126,22 @@ export function createOperations(database: string | DatabaseType, scope: Operati
       if (connection[2] === "verify") { const input = verifyConnection.parse(body); return respond(200, await connectionLedger.verify(connection[1]!, input.receiptRef, input.expectedRevision)); }
       const input = revokeConnection.parse(body); return respond(200, connectionLedger.revoke(connection[1]!, input.reasonCode, input.expectedRevision));
     }
-    if (path === "/v1/jobs/register") { const input = registerJob.parse(body); return respond(200, jobs.register(input.definition, input.expectedVersion)); }
+    if (path === "/v1/jobs/register") { const input = registerJob.parse(body);
+      if (sourceOwned(input.definition.handler)) return sourceBoundary();
+      try { if (sourceOwned(jobs.getJob(input.definition.jobId).definition.handler)) return sourceBoundary(); }
+      catch (error) { if (!(error instanceof JobConflict) || error.message !== "JOB_NOT_FOUND") throw error; }
+      return respond(200, jobs.register(input.definition, input.expectedVersion)); }
     if (path === "/v1/jobs/ingress") {
       const key = req.headers["idempotency-key"];
       if (typeof key !== "string" || !key.trim() || key.length > 240) { reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED", executionCertainty: "notApplied" }); return true; }
-      return respond(200, jobs.ingest(jobEventSchema.parse(body), key));
+      const input = jobEventSchema.parse(body);
+      if (sourceOwned(jobs.getJob(input.jobId).definition.handler)) return sourceBoundary();
+      return respond(200, jobs.ingest(input, key));
     }
-    if (pause) { const input = pauseJob.parse(body); return respond(200, jobs.setJobControl(identifier(pause[1]!), input.version, "pause")); }
-    if (control) { const input = controlRun.parse(body); return respond(200, jobs.controlRun(identifier(control[1]!), input.command)); }
+    if (pause) { const input = pauseJob.parse(body), id = identifier(pause[1]!);
+      return sourceOwned(jobs.getJob(id).definition.handler) ? sourceBoundary() : respond(200, jobs.setJobControl(id, input.version, "pause")); }
+    if (control) { const input = controlRun.parse(body), id = identifier(control[1]!);
+      return sourceOwned(jobs.getRun(id).definition.handler) ? sourceBoundary() : respond(200, jobs.controlRun(id, input.command)); }
     return false;
   }
   return { ledger: connectionLedger, jobs, handle, close };

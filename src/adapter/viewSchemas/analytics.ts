@@ -14,7 +14,11 @@
  * - The helpers below are repeated in the sibling files on purpose, so each file stands alone.
  */
 import { z } from "zod";
-import { moneySchema, provenanceValueSchema } from "../contract";
+import { nativeOverviewSummarySchema, nativeAttributionSchema, nativePaidMediaSchema, nativeLaunchSnapshotSchema,
+  nativeLaunchReconciliationSchema, nativeCampaignFunnelSchema, nativeMetricDictionarySchema } from "../../creator-agent/analytics/views.ts";
+import { freshnessStateSchema, moneySchema, provenanceValueSchema, valueStateSchema } from "../contract";
+import { nativeReadinessViewSchema } from "../../creator-agent/actions/views";
+import { nativeSiteTrafficViewSchema } from "../../creator-agent/siteTraffic/views";
 
 const count = z.number().int().nonnegative();
 const nonNegativeMoney = moneySchema.extend({ minorUnits: z.number().int().nonnegative() });
@@ -35,7 +39,33 @@ const postCounters = z.object({
 const channelKey = z.enum(["shopify", "tiktok"]);
 const channelTotals = z.object({ key: channelKey, label: z.string(), netReceipts: nonNegativeMoney, orders: count });
 
-export const overviewSummarySchema = z.object({
+/**
+ * A measure computed by the creator-agent service (THO-293 sandbox reads): its numerator, denominator, window, provenance and
+ * D-13 freshness travel with it. Known needs a finite value; unknown and not applicable carry null and a reason, never 0.
+ */
+const measureOperand = z.object({ label: z.string(), value: z.number().finite().nullable(), reasonCode: z.string().nullable() });
+export const measureSchema = z.object({
+  key: z.string().min(1), label: z.string(), unit: z.enum(["usdMinor", "count", "multiple", "percent", "stars"]),
+  state: valueStateSchema, value: z.number().finite().nullable(), reasonCode: z.string().nullable(),
+  numerator: measureOperand, denominator: measureOperand.nullable(),
+  window: z.object({ start: date, end: date, timezone: z.string().min(1) }), provenance: z.array(z.string()), freshnessState: freshnessStateSchema,
+  definition: z.string().min(1),
+}).superRefine((m, ctx) => {
+  if ((m.state === "known") !== (m.value !== null) || (m.state !== "known") !== (m.reasonCode !== null))
+    ctx.addIssue({ code: "custom", message: "A measure is known with a value, or unknown/not applicable with a reason." });
+});
+export type Measure = z.infer<typeof measureSchema>;
+const measures = z.array(measureSchema).max(60);
+/** Each served source's own state. Unconfigured, unavailable and invalid are states shown on the page, not an error for the view. */
+export const sourceStatusSchema = z.object({
+  source: z.enum(["orders", "adPlatforms", "sessions", "support"]),
+  state: z.enum(["current", "noChange", "partial", "stale", "error", "neverSynced", "unconfigured", "unavailable", "invalid"]),
+  reasonCode: z.string().nullable(),
+});
+export type SourceStatus = z.infer<typeof sourceStatusSchema>;
+const sources = z.array(sourceStatusSchema).min(1).max(4);
+
+const overviewOriginalSchema = z.object({
   datasetKey: z.literal("overview-original"),
   orders: provenanceValueSchema(count),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
@@ -53,6 +83,21 @@ export const overviewSummarySchema = z.object({
   attributedNetSales: provenanceValueSchema(nonNegativeMoney),
   posts: z.array(postCounters),
 });
+
+/** Served by the creator-agent from trusted order and ad-platform readers. A channel without a synced feed is null per day, never 0. */
+const overviewObservedSchema = overviewOriginalSchema.extend({
+  datasetKey: z.literal("overview-observed"),
+  marketingSpend: nonNegativeMoney.nullable(),
+  newRetainedCustomers: count.nullable(),
+  daily: z.array(z.object({ date, shopify: count.nullable(), tiktok: count.nullable() })),
+  window: z.object({ start: date, end: date, timezone: z.string().min(1) }),
+  // The content monitor is its own read (THO-299); this projection never invents posts.
+  posts: z.array(postCounters).max(0),
+  measures,
+  sources,
+});
+
+export const overviewSummarySchema = z.discriminatedUnion("datasetKey", [overviewOriginalSchema, overviewObservedSchema]);
 
 /* ---------- Launch snapshot ---------- */
 
@@ -124,7 +169,7 @@ export const attributionSchema = z.object({
   reportScope: metricObservationScope.optional(), receiptScope: metricObservationScope.optional(), retainedCustomerScope: metricObservationScope.optional(),
   netReceipts: provenanceValueSchema(nonNegativeMoney),
   orders: provenanceValueSchema(count),
-  retainedUnits: count,
+  retainedUnits: count.nullish().transform(v => v ?? null),
   contribution: provenanceValueSchema(moneySchema),
   marketingSpend: nonNegativeMoney.nullish().transform(v => v ?? null),
   newRetainedCustomers: count.nullish().transform(v => v ?? null),
@@ -135,7 +180,10 @@ export const attributionSchema = z.object({
   attribution: z.array(z.object({ key: z.enum(["code", "utm", "platform", "unattributed"]), label: z.string(), orders: count })),
   creators: z.array(z.object({ handle: z.string(), roi: z.number().finite() })),
   provenance: provenanceDisclosure,
+  measures: measures.optional(),
+  sources: sources.optional(),
 }).superRefine((v, ctx) => {
+  if (v.datasetKey === "overview-original" && v.retainedUnits === null) ctx.addIssue({ code: "custom", message: "The demo states its retained units." });
   const amounts = [v.marketingSpend, v.netReceipts.value, v.contribution.value, ...v.channels.map(c => c.netReceipts), ...v.weeks.flatMap(w => [w.shopify, w.tiktok])];
   if (amounts.some(m => m && m.currency !== "USD")) ctx.addIssue({ code: "custom", message: "This report requires comparable USD amounts." });
 });
@@ -156,12 +204,14 @@ export const paidMediaSchema = z.object({
       label: z.string(),
       clicks: count,
       impressions: count,
-      rights: z.enum(["cleared", "expiring", "notGranted", "unknown"]),
+      rights: z.enum(["cleared", "expiring", "expired", "notGranted", "unknown"]),
       expiresInDays: count.nullable(),
     }),
   ),
   assetTotal: count,
   provenance: provenanceDisclosure,
+  measures: measures.optional(),
+  sources: sources.optional(),
 }).superRefine((v, ctx) => {
   const amounts = [v.creatorSampleEconomics, ...v.channels.flatMap(c => [c.spend, c.platformPurchaseValue])];
   if (amounts.some(m => m && m.currency !== "USD") || new Set(v.channels.map(c => c.key)).size !== v.channels.length)
@@ -255,13 +305,13 @@ export const metricDictionarySchema = z.object({
 
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const analyticsViewSchemas: Record<string, z.ZodTypeAny> = {
-  launchReconciliation: launchReconciliationSchema,
-  overviewSummary: overviewSummarySchema,
-  launchSnapshot: launchSnapshotSchema,
-  launchControl: launchControlSchema,
-  attribution: attributionSchema,
-  paidMedia: paidMediaSchema,
-  campaignFunnel: campaignFunnelSchema,
-  customerJourney: customerJourneySchema,
-  metricDictionary: metricDictionarySchema,
+  launchReconciliation: z.union([nativeLaunchReconciliationSchema, launchReconciliationSchema]),
+  overviewSummary: z.union([nativeOverviewSummarySchema, overviewSummarySchema]),
+  launchSnapshot: z.union([nativeLaunchSnapshotSchema, launchSnapshotSchema]),
+  launchControl: z.union([nativeReadinessViewSchema, launchControlSchema]),
+  attribution: z.union([nativeAttributionSchema, attributionSchema]),
+  paidMedia: z.union([nativePaidMediaSchema, paidMediaSchema]),
+  campaignFunnel: z.union([nativeCampaignFunnelSchema, campaignFunnelSchema]),
+  customerJourney: z.union([nativeSiteTrafficViewSchema, customerJourneySchema]),
+  metricDictionary: z.union([nativeMetricDictionarySchema, metricDictionarySchema]),
 };

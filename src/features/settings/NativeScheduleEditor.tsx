@@ -50,7 +50,7 @@ export function NativeScheduleEditor({data,res,reload}:{data:NativeScheduleDetai
           return;
         }
         setEdit(previous => previous && JSON.stringify(scheduleDraftSchema.safeParse(previous.value).data ?? previous.value) !== JSON.stringify(sent) ? {...previous,base:receipt.resourceVersion} : null);
-        setMessage(`Saved draft ${receipt.resourceVersion} at ${receipt.persistedAt}. Schedule disabled.`);
+        setMessage(`Saved draft ${receipt.resourceVersion} at ${receipt.persistedAt}. This save does not activate or change the source schedule.`);
       },
       onError: error => {
         if (error instanceof AdapterError && error.body.executionCertainty === "uncertain") setReconciliation({state:"required"});
@@ -70,17 +70,17 @@ export function NativeScheduleEditor({data,res,reload}:{data:NativeScheduleDetai
     <LeaveGuard dirty={dirty && !save.isPending} subject="schedule draft" />
     <Split>
       <Panel title="Registered job" headingId="registered-job-title" note="Saved job registry">
-        <DetailRows rows={[["Definition version",String(data.jobVersion)],["Schedule","Disabled"],["Draft version",data.draft ? data.draftVersion : "No saved draft"],
+        <DetailRows rows={[["Definition version",String(data.jobVersion)],["Draft activation","Not enabled by this draft"],["Draft version",data.draft ? data.draftVersion : "No saved draft"],
           ["Saved at",data.updatedAt ?? "No saved draft"],["Read at",data.observedAt]]}/>
         {data.savedForJobVersion !== null && data.savedForJobVersion !== data.jobVersion && <p role="status">This draft was saved for job version {data.savedForJobVersion}. Review it against the current job before saving.</p>}
-        <p className={kit.small}>Provider triggers and delivery receipts are unavailable for this draft.</p>
+        <p className={kit.small}>This record contains saved draft settings only. Inspect the separate source service evidence below for installed runtime cadence, source configuration and delivery receipts. Missing source evidence remains unknown.</p>
       </Panel>
       <Panel title="Schedule" headingId="schedule-settings-title" testId="schedule-settings" note={data.draft ? "Edit the saved draft." : "Choose an initial draft. The suggested values have not been saved."}>
         <SelectField label="Cadence" value={value.cadence} onChange={v=>update({cadence:v as NativeScheduleDraft["cadence"]})} options={[...CADENCES]}/>
         <TextField label="Local time" value={value.localTime} onChange={v=>update({localTime:v})} error={invalid.success ? null : "Use HH:MM between 00:00 and 23:59."}/>
         <SelectField label="Time zone" value={value.timezone} onChange={v=>update({timezone:v as NativeScheduleDraft["timezone"]})} options={TIMEZONES.map(v=>({label:v,value:v}))}/>
         <label><input type="checkbox" checked={value.activeCohortOverride} onChange={e=>update({activeCohortOverride:e.target.checked})}/> Request active-cohort override in this draft</label>
-        <p className={kit.small} data-testid="next-run">{next ? `Preview from the saved read time: ${next.label} (${value.timezone}).` : "Preview unavailable for this draft."} Schedule disabled. {DST_POLICY}</p>
+        <p className={kit.small} data-testid="next-run">{next ? `Draft preview from the saved read time: ${next.label} (${value.timezone}).` : "Preview unavailable for this draft."} This is not an active trigger or a promised run. {DST_POLICY}</p>
         {save.error && <ActionError error={save.error}/>}
         {reconciliation && <section aria-label="Unverified schedule save">
           <p role="alert">Save unverified. Your edits are preserved. Read the saved job before deciding whether to save again.</p>

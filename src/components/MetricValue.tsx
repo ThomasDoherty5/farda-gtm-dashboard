@@ -4,6 +4,11 @@ const REASONS: Record<string, string> = {
   NO_COMPLETE_POSTS: "No post has complete likes, comments, shares and views.",
   ZERO_VIEWS: "Views are zero, so a rate cannot be calculated.",
   SHARES_UNAVAILABLE: "Shares are unavailable from the source.",
+  MONITOR_SEPARATE: "Read on the content monitor page.",
+  LANDED_COST_SOURCE_UNCONFIGURED: "Landed costs are not connected.",
+  ORDER_FEED_MISSING: "An order channel is not reported.",
+  ORDER_FEED_NEVER_SYNCED: "An order channel has never synced.",
+  ATTRIBUTION_NOT_EVALUATED: "Some orders are not yet attributed.",
 };
 
 export const formatMoney = (m: Money) =>
