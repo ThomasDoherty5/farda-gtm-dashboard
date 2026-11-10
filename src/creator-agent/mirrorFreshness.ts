@@ -193,11 +193,13 @@ export function summarizeMirrorFreshness(policy: MirrorPolicy, evidence: MirrorF
  * stated state disagrees with its evidence is `unknown`. The badge and the detail both read through this.
  */
 export function mirrorFreshnessStateOf(summary: MirrorFreshnessSummary | null | undefined): MirrorFreshnessState {
-  if (!summary || !(MIRROR_IDS as readonly string[]).includes(summary.mirrorId)) return "unknown";
+  if (!summary || !(MIRROR_IDS as readonly string[]).includes(summary.mirrorId) || !summary.policy || !summary.evidence) return "unknown";
   const base = PROPOSED_DEFAULT_MIRROR_POLICIES[summary.mirrorId];
-  const derived = classifyMirrorFreshness({ ...summary.policy, mirrorId: summary.mirrorId, label: base.label, provider: base.provider },
-    summary.evidence, Date.parse(summary.checkedAt)).state;
-  return derived === summary.state ? derived : "unknown";
+  try {
+    const derived = classifyMirrorFreshness({ ...summary.policy, mirrorId: summary.mirrorId, label: base.label, provider: base.provider },
+      summary.evidence, Date.parse(summary.checkedAt)).state;
+    return derived === summary.state ? derived : "unknown";
+  } catch { return "unknown"; } // A malformed wire summary is never trusted.
 }
 
 export type MirrorFreshnessTone = "success" | "neutral" | "warning" | "danger";
@@ -228,8 +230,8 @@ export function mirrorFreshnessDetail(summary: MirrorFreshnessSummary | null | u
   return { state, ...words, reasonCodes: trusted ? summary.reasonCodes : ["MIRROR_STATE_UNVERIFIED"],
     lastCompleteRunAt: trusted ? summary.evidence.lastComplete?.finishedAt ?? null : null,
     coverageWatermark: trusted ? summary.evidence.lastComplete?.coverageWatermark ?? null : null,
-    ageMinutes: trusted ? summary.ageMinutes : null, staleAfterMinutes: summary?.policy.staleAfterMinutes ?? null,
-    thresholdBasis: summary?.policy.basis ?? null };
+    ageMinutes: trusted ? summary.ageMinutes : null, staleAfterMinutes: summary?.policy?.staleAfterMinutes ?? null,
+    thresholdBasis: summary?.policy?.basis ?? null };
 }
 
 /**

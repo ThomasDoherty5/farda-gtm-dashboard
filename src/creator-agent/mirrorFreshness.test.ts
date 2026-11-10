@@ -153,6 +153,11 @@ describe("one derivation for the badge, the detail and D-13 (AC7)", () => {
     expect(toD13SourceFreshness(forged)).toBeNull();
     expect(planMirrorIncidents(forged, [{ incidentId: "mfi-" + "a".repeat(32), mirrorId: row.mirrorId, state: "stale", openedAfterRunSequence: 0 }], 9).clear).toEqual([]);
     expect(mirrorFreshnessBadge(null).state).toBe("unknown");
+    // A malformed wire summary reads as unknown instead of throwing.
+    const { policy: _policy, ...noPolicy } = summaryOf(row);
+    void _policy;
+    expect(mirrorFreshnessDetail(noPolicy as never)).toMatchObject({ state: "unknown", staleAfterMinutes: null });
+    expect(mirrorFreshnessBadge({ ...summaryOf(row), evidence: { latestRun: 7, lastComplete: "x" } } as never).state).toBe("unknown");
   });
 
   it("reuses the analytics freshness words where the states overlap", () => {
