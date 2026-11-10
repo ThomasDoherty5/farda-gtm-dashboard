@@ -45,7 +45,7 @@ test("loads the next real ledger page, resets a filtered scan, recovers an expir
   const denials=page.getByRole("heading",{name:"Sign in again"});
   await expect(denials).toHaveCount(2); // Both independently scoped readers lose their grant.
   await expect(denials.nth(0)).toBeVisible();
-  await expect(page.getByRole("region",{name:"Task and recovery controls",exact:true}).getByRole("heading",{name:"Sign in again"})).toBeVisible();
+  await expect(page.getByRole("region",{name:"Task and recovery controls evidence and review controls",exact:true}).getByRole("heading",{name:"Sign in again"})).toBeVisible();
   await expect(panel).toHaveCount(0);
 });
 test("opens a registered job, saves and reloads its draft, preserves a conflicting edit, and keeps execution disabled",async({page,browser})=>{

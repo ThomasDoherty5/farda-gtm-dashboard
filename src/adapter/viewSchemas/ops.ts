@@ -20,7 +20,7 @@
  */
 import { z } from "zod";
 import { approvalRefSchema } from "../../creator-agent/approvals/contract.ts";
-import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema,nativeOperationsShipmentSchema } from "./nativeOperations.ts";
+import { nativeOperationsExtensions,nativeQueueSourceSchema,nativeStockSummarySchema,nativeOperationsShipmentSchema,operationsSummaryBasisSchema } from "./nativeOperations.ts";
 import { nativeInventorySchema, nativeSupportSchema, transferIntent, handoffIntent } from "../../creator-agent/stockSupportSchema.ts";
 import { moneySchema, provenanceValueSchema } from "../contract.ts";
 import { receiptBackedResponse } from "./approvals.ts";
@@ -323,7 +323,7 @@ function nativeRecord<T extends z.ZodRawShape, U extends z.UnknownKeysParam>(sch
 }
 
 export const nativeOpsReadViewSchemas: Record<string, z.ZodTypeAny> = {
-  operationsOverview: nativeRecord(operationsOverviewSchema.innerType().extend({queue:z.object({rows:z.array(queueRow.extend({sourceFacts:nativeQueueSourceSchema})),total:count}),stock:z.array(nativeStockSummarySchema)}), "operations-native").superRefine((v, ctx) => {
+  operationsOverview: nativeRecord(operationsOverviewSchema.innerType().extend({summaryBasis:operationsSummaryBasisSchema.nullable().default(null),queue:z.object({rows:z.array(queueRow.extend({sourceFacts:nativeQueueSourceSchema})),total:count}),stock:z.array(nativeStockSummarySchema)}), "operations-native").superRefine((v, ctx) => {
     if (v.queue.rows.length > v.queue.total) ctx.addIssue({ code: "custom", path: ["queue", "total"], message: "Queue total is smaller than the rows returned" });
   }),
   orderDetail: nativeRecord(orderDetailSchema.innerType(), "operations-native").superRefine((v, ctx) => {

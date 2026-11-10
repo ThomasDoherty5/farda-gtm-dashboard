@@ -26,7 +26,7 @@ export const nativeFulfillmentEventSchema=z.object({
 });
 export const nativeOperationsLinkSchema=z.object({kind:z.enum(["order","shipment","return","sample","approval","support"]),targetRef:ref,
   state:z.enum(["verified","missing","expired","denied"]),url:z.string().url().nullable(),observedAt:instant.nullable(),validUntil:instant.nullable()}).strict();
-export const nativeOperationsExtensions={reportingScope:operationsReportingScopeSchema.nullable().default(null),summaryBasis:operationsSummaryBasisSchema.nullable().default(null),
+export const nativeOperationsExtensions={reportingScope:operationsReportingScopeSchema.nullable().default(null),
   nativeEvents:z.array(nativeFulfillmentEventSchema).max(100).default([]),sourceLinks:z.array(nativeOperationsLinkSchema).max(30).default([])};
 export const nativeStockSummarySchema=z.object({home,onHand:count.nullable(),reserved:count.nullable(),capacity:count.nullable(),threshold:count.nullable()}).strict();
 export const nativeQueueSourceSchema=dispatchSourceFactsSchema.nullable().default(null);

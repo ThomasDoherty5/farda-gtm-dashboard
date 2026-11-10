@@ -41,6 +41,20 @@ describe("operations reader", () => {
     expect(result.version).toMatch(/^ops1-[a-f0-9]{64}$/);
   });
 
+  it.each(operationsReadViewKeys.filter(key => key !== "operationsOverview"))("refuses overview-only summary evidence on %s", async viewKey => {
+    const summaryBasis = {
+      scope: { home: "all", startAt: "2026-11-01T00:00:00.000Z", endAt: "2026-11-06T00:00:00.000Z", timezone: "UTC", basis: "requestedAt" },
+      latency: { definition: "Fictional latency", denominator: 1, totalDays: 1, precision: 1, evidenceRef: "synthetic-private-latency", version: "synthetic-private-latency-v1" },
+      shippingCost: { definition: "Fictional cost", denominator: 1, totalMinorUnits: 100, currency: "USD", evidenceRef: "synthetic-private-cost", version: "synthetic-private-cost-v1" },
+    };
+    for (const role of ["reader", "reviewer"] as const) for (const value of [null, summaryBasis]) {
+      const record = { ...(operationsRecord(viewKey) as object), summaryBasis: value };
+      const error = await failure(reader(async () => operationsSnapshot(viewKey, { record })).read(viewKey, operationsReadTestFilters[viewKey], role));
+      expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", status: 502, reasonCodes: ["OPERATIONS_RECORD_INVALID"] });
+      expect(JSON.stringify(error)).not.toContain("synthetic-private-");
+    }
+  });
+
   it("keeps unknown provenance values unknown instead of zero", async () => {
     const result = await reader(async () => operationsSnapshot("orderDetail", { record: nativeOrderRecord("TEST-SH-1044") })).read("orderDetail", { orderId: "TEST-SH-1044" }, "reader");
     expect((result.data as { total: unknown }).total).toMatchObject({ state: "unknown", value: null, reasonCode: "PAYMENT_RECEIPT_UNAVAILABLE" });
