@@ -17,6 +17,8 @@ import { usd } from "@/fixtures/values";
 import styles from "./Finance.module.css";
 import { contributionOf, explain, figureText, grossMarginOf, ueFormat } from "./unitEconomics";
 
+const payoutCount = (n: number) => `${n} ${n === 1 ? "payout" : "payouts"}`;
+
 const whole = (minor: number) => formatMoney(usd(minor));
 const k = (minor: number) => `$${(minor / 100000).toFixed(1)}k`;
 const MONTHS = ["Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan"];
@@ -139,7 +141,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
           <FlatTable
             caption="Payout reconciliation by channel"
             columns={[{ label: "Channel", width: 266 }, { label: "Matched", width: 160 }, { label: "Needs review", width: 162 }]}
-            rows={data.payouts.map((r) => ({ key: r.channel, cells: [r.channel, `${r.matched} payouts`, `${r.needsReview} payout`] }))}
+            rows={data.payouts.map((r) => ({ key: r.channel, cells: [r.channel, payoutCount(r.matched), payoutCount(r.needsReview)] }))}
           />
           <span><Badge tone="warning" width={242}>{review} differences to resolve</Badge></span>
           <LinkButton to="/finance/close/2026-10" style={{ minWidth: 254, alignSelf: "flex-start" }}>Review month-end close</LinkButton>
