@@ -39,7 +39,7 @@ describe("J20 runtime executor", () => {
   const build = (reader: ScriptedReader) => {
     const ledger = new VideoEvidenceLedger(store, runtimeSyntheticScope, { now: () => Date.parse("2026-11-08T13:00:00Z") });
     const inputs = new Map([[SUBJECT, syntheticInput(3)]]);
-    return createVideoEvidenceExecutor({ collector: new VideoEvidenceCollector(ledger, reader), loadInput: async (subject) => inputs.get(subject),
+    return createVideoEvidenceExecutor({ collector: new VideoEvidenceCollector(ledger, reader, {}), loadInput: async (subject) => inputs.get(subject),
       ownerRef: "owner:synthetic-reviewer", handoffRef: "handoff:synthetic-login" });
   };
 
@@ -72,6 +72,28 @@ describe("J20 runtime executor", () => {
     expect(reader.calls).not.toContain("read:SYNTH3");
   });
 
+  it("resumes through the real runtime after a resolved login takeover, without re-reading committed posts", async () => {
+    const reader = new ScriptedReader().observe(1).observe(3);
+    reader.meta.set("SYNTH2", { state: "loginRequired", source_ref: "synthetic:login", observed_at: AT, reason_code: "SOURCE_LOGIN_REQUIRED" });
+    const f = createRuntimeTestkit(db, { registration: j20Registration(), executor: build(reader) });
+    await f.initialize();
+    const run = await f.fire();
+    const held = await f.runtime.work({ runRef: run.run.runId }, f.machine);
+    expect(held.run.state).toBe("held");
+    expect(held.takeovers[0]).toMatchObject({ kind: "login", resolved: false });
+    const callsWhileHeld = reader.calls.length;
+    await f.runtime.work({ runRef: run.run.runId }, f.machine);
+    expect(reader.calls).toHaveLength(callsWhileHeld);
+    reader.observe(2);
+    const request = { runRef: run.run.runId, itemRef: run.run.items[0]!.itemId, expectedVersion: 1, receiptRef: "receipt:synthetic-login-resolved", requestKey: "synthetic-login-recovery" };
+    await f.runtime.resolveTakeover(request, f.machine);
+    const done = await f.runtime.work({ runRef: run.run.runId }, f.machine);
+    expect(done.run.state).toBe("completed");
+    expect(reader.calls).toEqual(["read:SYNTH1", "review:SYNTH1", "read:SYNTH2", "read:SYNTH2", "review:SYNTH2", "read:SYNTH3", "review:SYNTH3"]);
+    expect(store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_records").get()?.n).toBe(3);
+    expect(store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_access_events WHERE json_extract(body,'$.state')='loginRequired'").get()?.n).toBe(1);
+  });
+
   it("maps each collector outcome to a valid runtime step", async () => {
     const context = (cursor: string | null = null): RuntimeExecutionContext => ({
       registration: j20Registration(), window: { windowRef: "w", registrationRef: "synthetic-j20", registrationVersion: 1, intendedAt: AT, windowStart: AT, windowEnd: AT, eventRef: null },
@@ -85,6 +107,12 @@ describe("J20 runtime executor", () => {
       const step = await build(reader).execute(context());
       expect(runtimeStepSchema.parse(step)).toMatchObject(expected);
     }
+    // Every evidence ref written in a step is reported, and recordCount counts those records, not source calls.
+    const all = new ScriptedReader().observe(1).observe(2).observe(3);
+    const ledger = new VideoEvidenceLedger(store, runtimeSyntheticScope);
+    const wide = createVideoEvidenceExecutor({ collector: new VideoEvidenceCollector(ledger, all, {}), loadInput: async () => syntheticInput(3),
+      ownerRef: "owner:synthetic-reviewer", handoffRef: "handoff:synthetic-login", callsPerStep: 10 });
+    expect(await wide.execute(context())).toMatchObject({ state: "completed", recordCount: 3, evidenceRefs: ["instagram:SYNTH1:v1", "instagram:SYNTH2:v1", "instagram:SYNTH3:v1"] });
     const invalid = new ScriptedReader();
     invalid.meta.set("SYNTH1", { state: "observed", observation: { invented: true } });
     expect(await build(invalid).execute(context())).toEqual({ state: "held", reasonCode: "SOURCE_RESPONSE_INVALID" });

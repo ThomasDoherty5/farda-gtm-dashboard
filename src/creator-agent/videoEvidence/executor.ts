@@ -35,7 +35,8 @@ export function createVideoEvidenceExecutor(options: {
         throw error;
       }
       context.assertCurrent();
-      const evidenceRefs = [...new Set(step.receipts.map((r) => r.evidenceRef))].slice(0, Math.min(100, step.recordCount));
+      // Every distinct evidence ref written or reused in this step. recordCount is that same distinct-record count.
+      const evidenceRefs = [...new Set(step.receipts.map((r) => r.evidenceRef))];
       if (step.state === "completed")
         return { state: "completed", evidenceRefs, recordCount: step.recordCount, sourceReceiptRef: `j20-run:${digest({ run: context.runRef, item: context.itemRef, refs: step.output.evidenceRecordRefs })}` };
       if (step.state === "checkpoint")

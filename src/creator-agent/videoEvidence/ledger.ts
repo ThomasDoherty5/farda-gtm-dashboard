@@ -42,7 +42,8 @@ export class VideoEvidenceLedger {
       CREATE TRIGGER IF NOT EXISTS video_evidence_records_no_delete BEFORE DELETE ON video_evidence_records BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;
       CREATE TRIGGER IF NOT EXISTS video_evidence_access_no_update BEFORE UPDATE ON video_evidence_access_events BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;
       CREATE TRIGGER IF NOT EXISTS video_evidence_access_no_delete BEFORE DELETE ON video_evidence_access_events BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;
-      CREATE TRIGGER IF NOT EXISTS video_evidence_stages_no_update BEFORE UPDATE ON video_evidence_stages BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;`);
+      CREATE TRIGGER IF NOT EXISTS video_evidence_stages_no_update BEFORE UPDATE ON video_evidence_stages BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;
+      CREATE TRIGGER IF NOT EXISTS video_evidence_stages_no_delete BEFORE DELETE ON video_evidence_stages BEGIN SELECT RAISE(ABORT,'VIDEO_EVIDENCE_IMMUTABLE'); END;`);
     if (this.db.prepare("SELECT version FROM video_evidence_meta WHERE id=1").get()?.version !== 1) throw new VideoEvidenceError("UNSUPPORTED_VIDEO_EVIDENCE_SCHEMA", 500);
   }
 
