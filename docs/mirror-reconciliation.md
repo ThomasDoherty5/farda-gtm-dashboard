@@ -19,7 +19,7 @@ A schedule has a `checkId` and a `version`. It also sets:
 - a daily local `runAt`;
 - `cutoffLagMinutes`;
 - `coverage.lookbackDays`, the number of past due days each run rechecks;
-- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`) and the currencies always compared.
+- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`), the currencies always compared, and optionally `mirroredFields`, the mirrored fields compared beyond amount and presence. Only `record-status` can be declared, and none is declared by default.
 
 A period is one local day. Its cutoff is the end of the day plus the lag. A period cannot be checked before its cutoff. `duePeriods` and `nextRunAt` derive the run plan from the record, including across DST changes. Where a DST change skips local midnight, as in America/Santiago or America/Havana, the day starts at the first instant after the skipped time. Where midnight occurs twice, the day starts at the first one.
 
@@ -46,7 +46,7 @@ For each group, the comparator compares counts, money totals and keys. It classi
 | `orphan` | A mirror row belongs to a scope and grain that no expected source dataset owns. The source side of that group is a known empty set once the mirror read of that scope is complete, so the group can match and its orphans can clear. Without that mirror read it stays `unknown`. |
 | `duplicate` | A key appears more than once on one side. Duplicates are counted within each side. |
 | `amount` | A key appears once on each side, both reads and both rows are complete, and the amounts differ. |
-| `field` | As for `amount`, but the mirrored `record-status` field differs. It is compared only when the source row carries a known status, so rows without one behave as before. |
+| `field` | As for `amount`, but the mirrored `record-status` field differs. It is compared only when the dataset declares `record-status` in `mirroredFields` and the source row carries a known status. A mirror with no status column therefore shows no difference. Existing findings and their fingerprints are unchanged. |
 
 A finding is raised only when the reads prove it. A partial source read cannot show that a mirror key is missing from the source. A complete mirror read can still show that a source key is missing from the mirror.
 

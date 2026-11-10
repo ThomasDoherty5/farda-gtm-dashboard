@@ -29,11 +29,20 @@ const timezone = z.string().min(1).max(64).refine(v => { try { new Intl.DateTime
 const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), "Use a real date.");
 const minorUnits = z.number().int().safe();
 
+/** Optional mirrored fields an expected dataset can declare. Each is a conflict `field` value. */
+export const MIRRORED_FIELD_NAMES = ["record-status"] as const satisfies readonly ReconciliationConflict["field"][];
+
 export const expectedDatasetSchema = z.object({
   scope: ref(80), grain: z.enum(GRAINS), amountField: z.enum(AMOUNT_FIELDS),
   /** Currencies always compared for this dataset, so a complete read with no rows is a known zero rather than an absent row. */
   currencies: z.array(currency).min(1).max(10),
-}).strict().refine(d => new Set(d.currencies).size === d.currencies.length, "Duplicate currency.");
+  /**
+   * Mirrored fields compared beyond the amount and the record's presence. None by default: a mirror without a status column
+   * would otherwise show a difference on every record whose source carries a status.
+   */
+  mirroredFields: z.array(z.enum(MIRRORED_FIELD_NAMES)).max(MIRRORED_FIELD_NAMES.length).optional(),
+}).strict().refine(d => new Set(d.currencies).size === d.currencies.length, "Duplicate currency.")
+  .refine(d => new Set(d.mirroredFields ?? []).size === (d.mirroredFields ?? []).length, "Duplicate mirrored field.");
 
 /** AC1: the check schedule record. */
 export const checkScheduleSchema = z.object({
@@ -57,7 +66,8 @@ export type RecordStatus = (typeof RECORD_STATUSES)[number];
 
 /**
  * One source or mirror row. `read` is the row-level coverage flag: a partial row was seen but its amount is not trusted.
- * `status` is an optional mirrored field. It is compared only when the source row carries a known status.
+ * `status` is an optional mirrored field. It is compared only when the dataset declares `record-status` and the source row
+ * carries a known status.
  */
 export const reconciliationRowSchema = z.object({
   key: ref(200), scope: ref(80), grain: z.enum(GRAINS), period: localDate, currency, amountMinor: minorUnits,

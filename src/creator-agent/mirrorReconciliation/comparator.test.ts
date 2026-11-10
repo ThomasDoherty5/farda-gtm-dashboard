@@ -87,21 +87,33 @@ describe("mirror reconciliation comparator", () => {
     for (const f of result.findings) expect(f.conflict).toMatchObject({ state: "open", repairAllowed: false, receiptRef: null });
   });
 
-  it("AC3: compares the mirrored status field only when the source vouches for it", () => {
-    const result = compare(schedule, input({
+  it("AC3: compares the mirrored status field only where the dataset declares it and the source vouches for it", () => {
+    const declared = checkScheduleSchema.parse({ ...schedule, expectedDatasets: schedule.expectedDatasets.map(d =>
+      d.grain === "order" ? { ...d, mirroredFields: ["record-status"] } : d) });
+    const rows = {
       sourceRows: [row("order-1", 1000, { status: "confirmed" }), row("order-2", 500, { status: "unknown" }), row("order-3", 200),
         row("order-4", 100, { status: "closed" })],
       mirrorRows: [row("order-1", 1000, { status: "pending" }), row("order-2", 500, { status: "open" }), row("order-3", 200, { status: "open" }),
-        row("order-4", 100)] }), AT);
+        row("order-4", 100)] };
+    const result = compare(declared, input(rows), AT);
     expect(result.findings.map(f => [f.recordKey, f.side, f.conflict.category, f.conflict.field, f.conflict.sourceValue, f.conflict.mirrorValue,
       f.conflict.ownership]).sort()).toEqual([
       ["order-1", "both", "field", "record-status", { kind: "state", value: "confirmed" }, { kind: "state", value: "pending" }, "source"],
       ["order-4", "both", "field", "record-status", { kind: "state", value: "closed" }, null, "source"]]);
     for (const f of result.findings) expect(reconciliationConflictSchema.safeParse(f.conflict).success).toBe(true);
-    // Rows without a status keep the fingerprints they had before the field was added.
+    // Undeclared, as by default: a mirror with no status column shows no difference, whatever the source carries.
+    expect(compare(schedule, input(rows), AT).findings).toEqual([]);
+    expect(() => checkScheduleSchema.parse({ ...schedule, expectedDatasets: [{ ...schedule.expectedDatasets[0]!,
+      mirroredFields: ["record-status", "record-status"] }] })).toThrow();
+    // Statuses and the declaration leave existing findings and their fingerprints unchanged.
     const plain = compare(schedule, input({ sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 900)] }), AT);
-    const withUnknown = compare(schedule, input({ sourceRows: [row("order-1", 1000, { status: "unknown" })], mirrorRows: [row("order-1", 900)] }), AT);
-    expect(withUnknown.findings.map(f => f.fingerprint)).toEqual(plain.findings.map(f => f.fingerprint));
+    for (const s of [schedule, declared]) {
+      const withStatus = compare(s, input({ sourceRows: [row("order-1", 1000, { status: "confirmed" })], mirrorRows: [row("order-1", 900, { status: "confirmed" })] }), AT);
+      expect(withStatus.findings.map(f => f.fingerprint)).toEqual(plain.findings.map(f => f.fingerprint));
+    }
+    expect(plain.findings.map(f => f.fingerprint)).toEqual([digest({ checkId: schedule.checkId, scope: "synthetic-store-a", grain: "order", period: DAY,
+      currency: "GBP", recordKey: "order-1", side: "both", category: "amount", field: "net-sales", sourceValue: { kind: "money", minorUnits: 1000, currency: "GBP" },
+      mirrorValue: { kind: "money", minorUnits: 900, currency: "GBP" } })]);
   });
 
   it("AC4: a partial source read raises no missing-source finding and never reports a clean zero", () => {
