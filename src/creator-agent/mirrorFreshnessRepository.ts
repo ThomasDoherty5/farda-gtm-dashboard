@@ -66,7 +66,7 @@ export class MirrorFreshnessRepository {
   }
 
   /**
-   * Records one finished run. Replaying the same run is a no-op; a different body under the same id or a future finish is
+   * Records one finished run for a bound mirror. Replaying the same run is a no-op; a different body under the same id or a future finish is
    * refused. An overlapping complete run whose watermark is older than one already recorded is a legitimate older claim and
    * is stored; classification reads the highest watermark. The only impossible watermark, one past the run's own finish, is
    * refused by the schema.
@@ -74,6 +74,8 @@ export class MirrorFreshnessRepository {
   recordRun(raw: unknown): { run: MirrorRun; duplicate: boolean } {
     const parsed = mirrorRunSchema.safeParse(raw);
     if (!parsed.success) throw new MirrorFreshnessError("INVALID_MIRROR_RUN", 422);
+    // Only a bound run recorder may write runs; anything else would be evidence no check is configured to judge.
+    if (!this.policies[parsed.data.mirrorId].runsBound) throw new MirrorFreshnessError("MIRROR_RUNS_NOT_BOUND", 409);
     const normal = (value: string) => new Date(value).toISOString();
     const run: MirrorRun = { ...parsed.data, startedAt: normal(parsed.data.startedAt), finishedAt: normal(parsed.data.finishedAt),
       coverageWatermark: parsed.data.coverageWatermark === null ? null : normal(parsed.data.coverageWatermark) };
@@ -94,8 +96,10 @@ export class MirrorFreshnessRepository {
 
   private summarize(mirrorId: MirrorId, at: number) {
     const latest = this.latest(mirrorId), complete = this.lastComplete(mirrorId);
+    // Freshness reads the highest watermark; clearing asks whether any complete run was recorded later, so it reads the newest.
+    const newest = this.db.prepare("SELECT MAX(sequence) n FROM mirror_freshness_runs WHERE mirror_id=? AND outcome='complete'").get(mirrorId)?.n;
     return { summary: summarizeMirrorFreshness(this.policies[mirrorId], evidenceFrom(latest?.run ?? null, complete?.run ?? null), at),
-      completeSequence: complete?.sequence ?? null };
+      newestCompleteSequence: newest === null || newest === undefined ? null : Number(newest) };
   }
 
   /** Read-only: classifies every mirror from one snapshot, with the clock read inside it. Writes nothing and raises no incident. */
@@ -123,13 +127,13 @@ export class MirrorFreshnessRepository {
         const policy = this.policies[mirrorId];
         const last = this.db.prepare("SELECT checked_at FROM mirror_freshness_checks WHERE mirror_id=?").get(mirrorId);
         if (!options.force && last && at - Date.parse(String(last.checked_at)) < policy.checkEveryMinutes * 60_000) { out.skipped.push(mirrorId); continue; }
-        const { summary, completeSequence } = this.summarize(mirrorId, at);
+        const { summary, newestCompleteSequence } = this.summarize(mirrorId, at);
         out.summaries.push(summary);
         this.db.prepare("INSERT INTO mirror_freshness_checks VALUES(?,?,?) ON CONFLICT(mirror_id) DO UPDATE SET checked_at=excluded.checked_at,state=excluded.state")
           .run(mirrorId, checkedAt, summary.state);
         const rows = this.db.prepare("SELECT * FROM mirror_freshness_incidents WHERE mirror_id=? AND status='open'").all(mirrorId) as unknown as IncidentRow[];
         const open: OpenMirrorIncident[] = rows.map(row => ({ incidentId: row.incident_id, mirrorId, state: row.state as MirrorIncidentState, openedAfterRunSequence: row.opened_after_sequence }));
-        const plan = planMirrorIncidents(summary, open, completeSequence);
+        const plan = planMirrorIncidents(summary, open, newestCompleteSequence);
         const latestRunId = summary.evidence.latestRun?.runId ?? null;
         for (const row of rows) {
           if (plan.suppress.includes(row.incident_id)) {
@@ -138,7 +142,8 @@ export class MirrorFreshnessRepository {
               .run(checkedAt, row.occurrences + 1, latestRunId, JSON.stringify(payload), row.incident_id);
             out.incidents.suppressed.push(payload);
           } else if (plan.clear.includes(row.incident_id)) {
-            const clearedByRunId = summary.evidence.lastComplete!.runId;
+            const clearedByRunId = plan.clearReason === "runsUnbound" ? null
+              : this.run("SELECT sequence,body FROM mirror_freshness_runs WHERE mirror_id=? AND outcome='complete' ORDER BY sequence DESC LIMIT 1", mirrorId)!.run.runId;
             const payload = this.payload("cleared", row, summary, { lastSeenAt: row.last_seen_at, occurrences: row.occurrences, latestRunId, clearedAt: checkedAt, clearedByRunId,
               clearReason: plan.clearReason! });
             this.db.prepare("UPDATE mirror_freshness_incidents SET status='cleared',cleared_at=?,cleared_by_run_id=?,latest_run_id=?,body=? WHERE incident_id=?")
@@ -168,7 +173,7 @@ export class MirrorFreshnessRepository {
   }
 
   private payload(event: MirrorIncidentPayload["event"], row: IncidentRow, summary: MirrorFreshnessSummary,
-    change: { lastSeenAt: string; occurrences: number; latestRunId: string | null; clearedAt?: string; clearedByRunId?: string; clearReason?: MirrorIncidentClearReason }): MirrorIncidentPayload {
+    change: { lastSeenAt: string; occurrences: number; latestRunId: string | null; clearedAt?: string; clearedByRunId?: string | null; clearReason?: MirrorIncidentClearReason }): MirrorIncidentPayload {
     // Built field by field from enums, ids, times and counts, then checked by the strict schema.
     return mirrorIncidentPayloadSchema.parse({
       schemaVersion: "mirror-freshness-incident.v1", event, incidentId: row.incident_id, mirrorId: summary.mirrorId, provider: summary.provider,

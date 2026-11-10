@@ -947,12 +947,13 @@ export function createAgentServer(options: AgentServerOptions) {
           const observed = mirrors.filter(mirror => mirror.state !== "unknown").length;
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
-            dataState: bound === 0 ? "unavailable" : bound < mirrors.length ? "partial" : "ready", data,
+            dataState: bound === 0 ? "unavailable" : observed < mirrors.length ? "partial" : "ready", data,
             sourceFreshness: mirrors.flatMap(mirror => { const d13 = toD13SourceFreshness(mirror); return d13 ? [{ sourceRef: { source: "mirror:" + mirror.mirrorId,
               accountId: options.accountId, sourceId: null, canonicalId: null, url: null, identityState: "unresolved", provenanceRef: "mirror-freshness:" + mirror.mirrorId },
               observedAt: mirror.checkedAt, mirroredAt: mirror.evidence.lastComplete?.finishedAt ?? null, ...d13 }] : []; }),
             coverage: { expectedCount: mirrors.length, observedCount: observed, missingCount: mirrors.length - observed, complete: observed === mirrors.length,
-              reasonCodes: bound < mirrors.length ? ["MIRROR_RUNS_NOT_BOUND"] : [] },
+              // Every unknown mirror explains itself: unbound, no owner threshold, or invalid evidence.
+              reasonCodes: [...new Set(mirrors.filter(mirror => mirror.state === "unknown").flatMap(mirror => mirror.reasonCodes))] },
             capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "launchControl") {

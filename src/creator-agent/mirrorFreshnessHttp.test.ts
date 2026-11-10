@@ -124,6 +124,22 @@ describe("mirrorFreshness read", () => {
     finally { after.close(); }
   });
 
+  it("explains bound mirrors without a threshold in coverage and never calls that ready", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "farda-mirror-threshold-")); dirs.push(dir);
+    const path = join(dir, "state.sqlite");
+    await start({ mirrorFreshness: { boundMirrors: MIRROR_IDS } }, path);
+    const db = new DatabaseSync(path);
+    try {
+      const repo = new MirrorFreshnessRepository(db, scope, { boundMirrors: MIRROR_IDS, now: () => NOW });
+      for (const mirrorId of MIRROR_IDS) repo.recordRun({ runId: `synthetic-${mirrorId}-1`, mirrorId, startedAt: iso(6), finishedAt: iso(5), outcome: "complete",
+        coverageWatermark: iso(5), counts: { rowsRead: 3, rowsChanged: 1, rowsExpected: null }, reasonCode: null });
+    } finally { db.close(); }
+    const body = readResponseSchema(dataSchema).parse(await (await read()).json());
+    expect(body.data!.mirrors.filter(m => m.state === "unknown").map(m => m.mirrorId)).toEqual(["content", "collaborations"]);
+    expect(body.dataState).toBe("partial");
+    expect(body.coverage).toEqual({ expectedCount: 7, observedCount: 5, missingCount: 2, complete: false, reasonCodes: ["MIRROR_THRESHOLD_NOT_CONFIGURED"] });
+  });
+
   it("refuses an invalid threshold configuration at startup", () => {
     expect(() => createAgentServer({ databasePath: ":memory:", ...assetTestScope, readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN,
       mirrorFreshness: { boundMirrors: MIRROR_IDS, policies: { orders: { staleAfterMinutes: 5 } } } })).toThrow("MIRROR_CHECK_SLOWER_THAN_THRESHOLD");

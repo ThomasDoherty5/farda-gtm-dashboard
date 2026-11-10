@@ -178,14 +178,48 @@ describe("mirror freshness repository", () => {
     expect(fresh.repo.openIncidents().filter(i => i.mirrorId === "orders" || i.mirrorId === "content")).toEqual([]);
   });
 
-  it("binds run recorders explicitly: an unbound mirror is unknown and raises no incident", () => {
-    const { repo, record } = setup({ boundMirrors: ["orders"], policies: { stock: { staleAfterMinutes: 90 } } });
-    record("stock", "failed", -1);
+  it("binds run recorders explicitly: an unbound mirror is unknown, raises no incident and takes no runs", () => {
+    const { db, repo, record } = setup({ boundMirrors: ["orders"], policies: { stock: { staleAfterMinutes: 90 } } });
+    expect(() => record("stock", "failed", -1)).toThrow("MIRROR_RUNS_NOT_BOUND");
+    expect(Number(db.prepare("SELECT COUNT(*) n FROM mirror_freshness_runs").get()!.n)).toBe(0);
+    expect(record("orders", "failed", -1).outcome).toBe("failed");
     const sweep = repo.sweep({ force: true });
-    expect(sweep.incidents.opened.map(i => i.mirrorId)).toEqual(["orders"]);
+    expect(sweep.incidents.opened.map(i => [i.mirrorId, i.state])).toEqual([["orders", "error"]]);
     for (const summary of sweep.summaries.filter(s => s.mirrorId !== "orders"))
       expect(summary).toMatchObject({ state: "unknown", reasonCodes: ["MIRROR_RUNS_NOT_BOUND"], valuesAreCurrent: false, policy: { runsBound: false } });
     expect(() => setup({ boundMirrors: ["orders", "orders"] })).toThrow("INVALID_MIRROR_RUN_BINDING");
+  });
+
+  it("clears an open incident once its mirror is no longer bound (runsUnbound)", () => {
+    const { db, repo, record } = setup();
+    record("stock", "failed", -1);
+    const opened = repo.sweep({ force: true }).incidents.opened.find(i => i.mirrorId === "stock")!;
+    expect(opened.state).toBe("error");
+    const unbound = new MirrorFreshnessRepository(db, scope, { boundMirrors: MIRROR_IDS.filter(id => id !== "stock"), now: () => START + 60_000 });
+    const sweep = unbound.sweep({ force: true });
+    expect(sweep.summaries.find(s => s.mirrorId === "stock")).toMatchObject({ state: "unknown", reasonCodes: ["MIRROR_RUNS_NOT_BOUND"] });
+    expect(sweep.incidents.cleared.filter(i => i.mirrorId === "stock")).toEqual([expect.objectContaining({ incidentId: opened.incidentId, event: "cleared",
+      clearReason: "runsUnbound", clearedByRunId: null })]);
+    expect(unbound.openIncidents().filter(i => i.mirrorId === "stock")).toEqual([]);
+    // Bound mirrors keep theirs.
+    expect(unbound.openIncidents().map(i => i.mirrorId)).toContain("orders");
+    expect(unbound.sweep({ force: true }).incidents.opened.map(i => i.mirrorId)).not.toContain("stock");
+  });
+
+  it("reviewer repro: an overlapping complete run recorded after the incident clears it while freshness keeps the highest watermark", () => {
+    const { repo, record, iso, advance } = setup();
+    const a = record("orders", "complete", -10, { startedAt: iso(-15), coverageWatermark: iso(-10) });        // watermark :50, seq 1
+    record("orders", "failed", -5);                                                                          // seq 2
+    const incident = repo.sweep({ force: true }).incidents.opened.find(i => i.mirrorId === "orders")!;
+    expect(incident.state).toBe("error");
+    advance(1);
+    const b = record("orders", "complete", 0, { startedAt: iso(-25), coverageWatermark: iso(-20) });         // watermark :40, seq 3
+    const sweep = repo.sweep({ force: true });
+    expect(sweep.summaries.find(s => s.mirrorId === "orders")).toMatchObject({ state: "current", ageMinutes: 11,
+      evidence: { latestRun: { runId: b.runId }, lastComplete: { runId: a.runId } } });
+    expect(sweep.incidents.cleared.filter(i => i.mirrorId === "orders")).toEqual([expect.objectContaining({ incidentId: incident.incidentId,
+      clearReason: "healthyCompleteRun", clearedByRunId: b.runId })]);
+    expect(repo.openIncidents().filter(i => i.mirrorId === "orders")).toEqual([]);
   });
 
   it("carries no sensitive data in run records or incident payloads (AC5)", () => {

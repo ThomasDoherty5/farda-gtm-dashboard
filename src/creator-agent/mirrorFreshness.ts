@@ -277,25 +277,29 @@ export function incidentStateOf(summary: MirrorFreshnessSummary): MirrorIncident
   return summary.state as MirrorIncidentState;
 }
 
-export const MIRROR_INCIDENT_CLEAR_REASONS = ["healthyCompleteRun", "ownerThresholdPending"] as const;
+export const MIRROR_INCIDENT_CLEAR_REASONS = ["healthyCompleteRun", "ownerThresholdPending", "runsUnbound"] as const;
 export type MirrorIncidentClearReason = (typeof MIRROR_INCIDENT_CLEAR_REASONS)[number];
 export type OpenMirrorIncident = { incidentId: string; mirrorId: MirrorId; state: MirrorIncidentState; openedAfterRunSequence: number };
 export type MirrorIncidentPlan = { open: MirrorIncidentState | null; suppress: string[]; clear: string[]; clearReason: MirrorIncidentClearReason | null };
 
 /**
- * One mirror, one check. A repeat of an open (mirror, state) incident is suppressed. An incident clears only on a complete
- * run recorded after it opened, and only when that check is either healthy (`healthyCompleteRun`) or the mirror has no
- * owner threshold to judge it by (`ownerThresholdPending`). An unbound mirror neither opens nor clears anything.
+ * One mirror, one check. A repeat of an open (mirror, state) incident is suppressed. An incident clears on a complete run
+ * recorded after it opened, when that check is healthy (`healthyCompleteRun`) or the mirror has no owner threshold to judge
+ * it by (`ownerThresholdPending`). `newestCompleteRunSequence` is the highest recording sequence among complete runs, not
+ * the run with the highest watermark: an overlapping run recorded later is still a later complete run. A mirror that is no
+ * longer bound to a run recorder can never produce one, so its open incidents clear at once (`runsUnbound`).
  */
-export function planMirrorIncidents(summary: MirrorFreshnessSummary, open: readonly OpenMirrorIncident[], lastCompleteRunSequence: number | null): MirrorIncidentPlan {
+export function planMirrorIncidents(summary: MirrorFreshnessSummary, open: readonly OpenMirrorIncident[], newestCompleteRunSequence: number | null): MirrorIncidentPlan {
   const none: MirrorIncidentPlan = { open: null, suppress: [], clear: [], clearReason: null };
   const mine = open.filter(incident => incident.mirrorId === summary.mirrorId);
   const trusted = mirrorFreshnessStateOf(summary) === summary.state;
   const clearable = (clearReason: MirrorIncidentClearReason): MirrorIncidentPlan => {
-    const clear = lastCompleteRunSequence === null ? [] : mine.filter(incident => lastCompleteRunSequence > incident.openedAfterRunSequence).map(incident => incident.incidentId);
+    const clear = clearReason === "runsUnbound" ? mine.map(incident => incident.incidentId)
+      : newestCompleteRunSequence === null ? [] : mine.filter(incident => newestCompleteRunSequence > incident.openedAfterRunSequence).map(incident => incident.incidentId);
     return { ...none, clear, clearReason: clear.length ? clearReason : null };
   };
-  if (!summary.policy.runsBound || !trusted) return none;
+  if (!summary.policy.runsBound) return clearable("runsUnbound");
+  if (!trusted) return none;
   if (summary.policy.staleAfterMinutes === null) return summary.evidence.lastComplete ? clearable("ownerThresholdPending") : none;
   if (HEALTHY_MIRROR_STATES.includes(summary.state)) return clearable("healthyCompleteRun");
   const state = incidentStateOf(summary);
