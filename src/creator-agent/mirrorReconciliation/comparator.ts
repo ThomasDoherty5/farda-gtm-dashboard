@@ -33,6 +33,21 @@ function total(rows: ReconciliationRow[]): number | null {
   return sum;
 }
 
+const MIN_SECRET_LENGTH = 32;
+/**
+ * Public ids are keyed with the server secret: record keys are guessable, so a plain digest of one could be reversed by
+ * trial. Rotating the secret changes every public id; local state is keyed by group and plain fingerprint instead.
+ */
+export function reconciliationPublicIds(secret: string) {
+  if (typeof secret !== "string" || secret.length < MIN_SECRET_LENGTH) throw new MirrorReconciliationError("INVALID_RECONCILIATION_SECRET", 500);
+  const id = (prefix: string, material: unknown) =>
+    prefix + createHmac("sha256", secret).update(canonicalJson(["mirror-reconciliation", prefix, material])).digest("hex").slice(0, 40);
+  return {
+    comparison: (checkId: string, g: GroupRef) => id("mr-", { checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency }),
+    conflict: (fingerprint: string) => id("mrf-", fingerprint),
+  };
+}
+
 export type CompareOptions = {
   /** Server-held key for the public comparison and conflict ids, such as the operations secret. */
   secret: string;
@@ -56,10 +71,7 @@ function byKey(rows: ReconciliationRow[]) {
  * with null counts and totals for the unread side, never `matched`.
  */
 export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown, observedAtMs: number, options: CompareOptions): CheckResult {
-  if (typeof options.secret !== "string" || options.secret.length < 32) throw new MirrorReconciliationError("INVALID_RECONCILIATION_SECRET", 500);
-  // Record keys are guessable, so a plain digest of one could be reversed by trial; public ids are keyed.
-  const publicId = (prefix: string, material: unknown) =>
-    prefix + createHmac("sha256", options.secret).update(canonicalJson(["mirror-reconciliation", prefix, material])).digest("hex").slice(0, 40);
+  const publicIds = reconciliationPublicIds(options.secret);
   const parsed = checkInputSchema.safeParse(raw);
   if (!parsed.success) throw new MirrorReconciliationError("INVALID_CHECK_INPUT", 422);
   const input = parsed.data;
@@ -127,7 +139,7 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     const sourceAmount = amount(sourceState, g.source), mirrorAmount = amount(mirrorState, g.mirror);
     const rowsPartial = [...g.source, ...g.mirror].some(r => r.read === "partial");
     const coverage = worst(sourceState, mirrorState, rowsPartial || overflow ? "partial" : "complete");
-    const comparisonId = publicId("mr-", { checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency });
+    const comparisonId = publicIds.comparison(schedule.checkId, g);
     const sourceVersion = g.dataset ? sourceRead?.version ?? "source-unread" : ownershipVersion;
     const comparison: ReconciliationComparison = {
       id: comparisonId, label: `${g.scope} ${g.grain} ${g.period} ${g.currency}`, grain: g.grain,
@@ -143,7 +155,7 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
       const fingerprint = digest({ checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency,
         recordKey, side, category, field, sourceValue, mirrorValue });
       raised.push({ fingerprint, comparisonId, recordKey, side, conflict: {
-        id: publicId("mrf-", fingerprint), comparisonId, category, field,
+        id: publicIds.conflict(fingerprint), comparisonId, category, field,
         // Source owns records of an expected source dataset; a record the source cannot vouch for has unknown ownership.
         ownership: g.dataset && category !== "missing_source" && category !== "orphan" ? "source" : "unknown",
         sourceValue, mirrorValue, authoritativeVersion: sourceRead?.version ?? null, mirrorVersion: mirrorRead?.version ?? null,

@@ -224,4 +224,41 @@ describe("mirror reconciliation repository", () => {
     const slice = repo.latestSlice(schedule.checkId)!;
     expect(slice).toMatchObject({ outcome: "matched", coverage: "partial", openFindings: 2, unconfirmedOpenFindings: 2, conflicts: [] });
   });
+  it("keeps tracking and clearing open findings after the secret rotates", () => {
+    const { db, repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    const r1 = repo.recordCheck(input("r1", twoDifferences));
+    const idsA = r1.run.findings.map(f => f.conflict.id).sort();
+    // Restart with another secret.
+    const now = () => clock.at;
+    const rotated = new MirrorReconciliationRepository(db, scope, { secret: "synthetic-rotated-secret-fedcba9876543210", now });
+    clock.at += 60_000;
+    const before = rotated.latestSlice(schedule.checkId)!;
+    expect(before.conflicts.map(c => c.id).sort()).not.toEqual(idsA);
+    expect(before.conflicts.map(c => c.comparisonId)).toEqual([before.comparisons[0]!.id, before.comparisons[0]!.id]);
+    expect(operationsControlSourceSchema.safeParse({ scope: { ...scope }, revision: "synthetic-revision-1", observedAt: before.observedAt,
+      coverage: before.coverage, roles: [], tasks: [], takeovers: [], permissions: [], reports: [], attribution: [], handoffs: [],
+      comparisons: before.comparisons, conflicts: before.conflicts }).error?.issues).toBeUndefined();
+    const r2 = rotated.recordCheck(input("r2", twoDifferences));
+    expect(r2.run.dispositions).toMatchObject({ opened: 0, repeated: 2 });
+    const idsB = r2.run.findings.map(f => f.conflict.id).sort();
+    expect(idsB).not.toEqual(idsA);
+    expect(rotated.findings(schedule.checkId, "open").map(f => f.conflict.id).sort()).toEqual(idsB);
+    expect(new Set(rotated.findings(schedule.checkId, "open").map(f => f.comparisonId))).toEqual(new Set(r2.run.findings.map(f => f.comparisonId)));
+    clock.at += 60_000;
+    const r3 = rotated.recordCheck(input("r3", { sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 1000)] }));
+    expect(r3).toMatchObject({ run: { outcome: "matched", dispositions: { cleared: 2 } } });
+    expect(rotated.findings(schedule.checkId, "open")).toEqual([]);
+    expect(rotated.latestSlice(schedule.checkId)).toMatchObject({ coverage: "complete", openFindings: 0 });
+  });
+
+  it("clears a finding opened under an earlier secret even without a repeat in between", () => {
+    const { db, repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    repo.recordCheck(input("r1", twoDifferences));
+    const rotated = new MirrorReconciliationRepository(db, scope, { secret: "synthetic-rotated-secret-fedcba9876543210", now: () => clock.at });
+    clock.at += 60_000;
+    const r2 = rotated.recordCheck(input("r2", { sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 1000)] }));
+    expect(r2.cleared).toHaveLength(2);
+  });
 });

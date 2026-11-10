@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { canonicalJson, digest } from "../config.ts";
 import type { OperationsScope } from "../operations.ts";
-import { compareMirror, toOperationsControlSlice } from "./comparator.ts";
+import { compareMirror, reconciliationPublicIds, toOperationsControlSlice } from "./comparator.ts";
 import {
   MirrorReconciliationError, checkInputSchema, checkScheduleSchema,
   type CheckResult, type CheckSchedule, type ComparisonResult, type GroupRef, type ReconciliationConflict, type ReconciliationFinding,
@@ -59,7 +59,7 @@ const findingFrom = (r: Row): StoredFinding => ({
 export class MirrorReconciliationRepository {
   readonly db: DatabaseSync; readonly now: () => number; private readonly secret: string;
   constructor(db: DatabaseSync, scope: OperationsScope, options: MirrorReconciliationOptions) {
-    if (typeof options.secret !== "string" || options.secret.length < 32) throw new MirrorReconciliationError("INVALID_RECONCILIATION_SECRET", 500);
+    reconciliationPublicIds(options.secret);
     this.db = db; this.now = options.now ?? Date.now; this.secret = options.secret;
     const bound = db.prepare("SELECT workspace_id,account_id,environment FROM capability_scope WHERE id=1").get();
     if (!bound || scope.workspaceId !== bound.workspace_id || scope.accountId !== bound.account_id || scope.environment !== bound.environment)
@@ -75,7 +75,7 @@ export class MirrorReconciliationRepository {
         category TEXT NOT NULL,record_key TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('open','cleared')),occurrences INTEGER NOT NULL,
         first_run_id TEXT NOT NULL,last_run_id TEXT NOT NULL,cleared_by_run_id TEXT,first_seen_at TEXT NOT NULL,last_seen_at TEXT NOT NULL,
         cleared_at TEXT,basis_source_read_at TEXT,basis_mirror_read_at TEXT,conflict TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS mirror_reconciliation_findings_open ON mirror_reconciliation_findings(check_id,comparison_id,status);
+      CREATE INDEX IF NOT EXISTS mirror_reconciliation_findings_open ON mirror_reconciliation_findings(check_id,scope,grain,period,currency,status);
       CREATE TABLE IF NOT EXISTS mirror_reconciliation_run_findings(run_id TEXT NOT NULL,fingerprint TEXT NOT NULL,
         disposition TEXT NOT NULL CHECK(disposition IN ('opened','repeated','reopened','cleared','stale')),PRIMARY KEY(run_id,fingerprint));`);
   }
@@ -163,18 +163,21 @@ export class MirrorReconciliationRepository {
         }
         const basis = basisFrom(existing), older = olderThan(reads, basis);
         if (existing.status === "open") {
-          // An older run confirms the finding but does not replace the newer evidence behind it.
+          // An older run confirms the finding but does not replace the newer evidence behind it. Either way the public ids
+          // are refreshed, since a rotated secret changes them.
           const next = older ? basis : newest(reads, basis);
+          const kept = older ? JSON.stringify({ ...(JSON.parse(String(existing.conflict)) as ReconciliationConflict), id: f.conflict.id, comparisonId: f.comparisonId })
+            : conflict;
           this.db.prepare(`UPDATE mirror_reconciliation_findings SET occurrences=occurrences+1,last_run_id=?,last_seen_at=?,basis_source_read_at=?,
-              basis_mirror_read_at=?,conflict=CASE WHEN ? THEN conflict ELSE ? END WHERE fingerprint=?`)
-            .run(result.runId, observedAt, next.source, next.mirror, older ? 1 : 0, conflict, f.fingerprint);
+              basis_mirror_read_at=?,comparison_id=?,conflict=? WHERE fingerprint=?`)
+            .run(result.runId, observedAt, next.source, next.mirror, f.comparisonId, kept, f.fingerprint);
           mark(f.fingerprint, "repeated");
         } else if (older) {
           mark(f.fingerprint, "stale");
         } else {
           this.db.prepare(`UPDATE mirror_reconciliation_findings SET status='open',occurrences=occurrences+1,last_run_id=?,last_seen_at=?,
-              cleared_by_run_id=NULL,cleared_at=NULL,basis_source_read_at=?,basis_mirror_read_at=?,conflict=? WHERE fingerprint=?`)
-            .run(result.runId, observedAt, reads.source, reads.mirror, conflict, f.fingerprint);
+              cleared_by_run_id=NULL,cleared_at=NULL,basis_source_read_at=?,basis_mirror_read_at=?,comparison_id=?,conflict=? WHERE fingerprint=?`)
+            .run(result.runId, observedAt, reads.source, reads.mirror, f.comparisonId, conflict, f.fingerprint);
           raised.push(f); mark(f.fingerprint, "reopened");
         }
       }
@@ -182,8 +185,9 @@ export class MirrorReconciliationRepository {
       const seen = new Set(result.findings.map(f => f.fingerprint));
       for (const c of result.comparisons) {
         if (c.comparison.coverage !== "complete") continue;
-        const open = this.db.prepare("SELECT * FROM mirror_reconciliation_findings WHERE check_id=? AND comparison_id=? AND status='open'")
-          .all(result.checkId, c.comparison.id);
+        // Matched by group and plain fingerprint, never by the public id, which changes when the secret rotates.
+        const open = this.db.prepare(`SELECT * FROM mirror_reconciliation_findings WHERE check_id=? AND scope=? AND grain=? AND period=? AND currency=?
+            AND status='open'`).all(result.checkId, c.group.scope, c.group.grain, c.group.period, c.group.currency);
         for (const row of open) {
           const fingerprint = String(row.fingerprint);
           if (seen.has(fingerprint)) continue;
@@ -233,8 +237,11 @@ export class MirrorReconciliationRepository {
   latestSlice(checkId: string) {
     const [latest] = this.runs(checkId, 1).runs;
     if (!latest) return null;
-    const open = this.findings(checkId, "open");
-    const slice = toOperationsControlSlice({ comparisons: latest.comparisons, findings: [] }, open.map(f => f.conflict));
+    // Stored runs and conflicts may carry ids from before a secret rotation; publish them under the current secret.
+    const ids = reconciliationPublicIds(this.secret), open = this.findings(checkId, "open");
+    const comparisons = latest.comparisons.map(c => ({ ...c, comparison: { ...c.comparison, id: ids.comparison(checkId, c.group) } }));
+    const slice = toOperationsControlSlice({ comparisons, findings: [] },
+      open.map(f => ({ ...f.conflict, id: ids.conflict(f.fingerprint), comparisonId: ids.comparison(checkId, f.group) })));
     const confirmed = new Set(latest.findings.map(f => f.fingerprint));
     const unconfirmedOpenFindings = open.filter(f => !confirmed.has(f.fingerprint) || f.lastRunId !== latest.runId).length;
     const coverage: "complete" | "partial" = slice.truncated || unconfirmedOpenFindings > 0 ? "partial" : "complete";
