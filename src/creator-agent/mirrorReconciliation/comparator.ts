@@ -1,7 +1,8 @@
-import { digest } from "../config.ts";
+import { createHmac } from "node:crypto";
+import { canonicalJson, digest } from "../config.ts";
 import {
   MirrorReconciliationError, SOURCE_SLICE_LIMIT, checkInputSchema, reconciliationComparisonSchema, reconciliationConflictSchema,
-  type CheckInput, type CheckResult, type CheckSchedule, type ComparisonOutcome, type ComparisonResult, type ExpectedDataset,
+  type CheckInput, type CheckResult, type CheckSchedule, type ComparisonOutcome, type ComparisonResult, type ExpectedDataset, type GroupRef,
   type ReadCoverage, type ReconciliationComparison, type ReconciliationConflict, type ReconciliationCoverage, type ReconciliationFinding,
   type ReconciliationGrain, type ReconciliationRow,
 } from "./contract.ts";
@@ -22,14 +23,22 @@ const COVERAGE_RANK: Record<ReconciliationCoverage, number> = { complete: 0, par
 const worst = (...states: ReconciliationCoverage[]) => states.reduce((a, b) => (COVERAGE_RANK[b] > COVERAGE_RANK[a] ? b : a), "complete");
 const presence = (value: "present" | "missing" | "duplicate" | "unknown"): Value => ({ kind: "presence", value });
 
-function total(rows: ReconciliationRow[]): number {
+/** A total outside the safe-integer range is unknown, not wrapped or rounded. */
+function total(rows: ReconciliationRow[]): number | null {
   let sum = 0;
   for (const row of rows) {
     sum += row.amountMinor;
-    if (!Number.isSafeInteger(sum)) throw new MirrorReconciliationError("AMOUNT_TOTAL_UNSAFE", 422);
+    if (!Number.isSafeInteger(sum)) return null;
   }
   return sum;
 }
+
+export type CompareOptions = {
+  /** Server-held key for the public comparison and conflict ids, such as the operations secret. */
+  secret: string;
+  /** Groups with open findings. Each one in the run's periods is compared even with no rows, so its findings can clear. */
+  openGroups?: readonly GroupRef[];
+};
 
 function byKey(rows: ReconciliationRow[]) {
   const keys = new Map<string, ReconciliationRow[]>();
@@ -46,7 +55,11 @@ function byKey(rows: ReconciliationRow[]) {
  * difference needs both reads and both rows complete. A group whose reads are not complete is `incomplete` or `unknown`
  * with null counts and totals for the unread side, never `matched`.
  */
-export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown, observedAtMs: number): CheckResult {
+export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown, observedAtMs: number, options: CompareOptions): CheckResult {
+  if (typeof options.secret !== "string" || options.secret.length < 32) throw new MirrorReconciliationError("INVALID_RECONCILIATION_SECRET", 500);
+  // Record keys are guessable, so a plain digest of one could be reversed by trial; public ids are keyed.
+  const publicId = (prefix: string, material: unknown) =>
+    prefix + createHmac("sha256", options.secret).update(canonicalJson(["mirror-reconciliation", prefix, material])).digest("hex").slice(0, 40);
   const parsed = checkInputSchema.safeParse(raw);
   if (!parsed.success) throw new MirrorReconciliationError("INVALID_CHECK_INPUT", 422);
   const input = parsed.data;
@@ -83,6 +96,7 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     return g;
   };
   for (const d of schedule.expectedDatasets) for (const p of input.periods) for (const c of d.currencies) group(d.scope, d.grain, p, c);
+  for (const o of options.openGroups ?? []) if (windows.has(o.period)) group(o.scope, o.grain, o.period, o.currency);
   for (const [side, rows] of [["source", input.sourceRows], ["mirror", input.mirrorRows]] as const) {
     for (const row of rows) {
       if (!windows.has(row.period)) throw new MirrorReconciliationError("ROW_PERIOD_OUTSIDE_RUN", 422);
@@ -92,6 +106,7 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
   }
 
   const observedAt = iso(observedAtMs), evidenceRef = `mirror-reconciliation/${input.runId}`;
+  // The schedule version is the evidence for which source datasets exist.
   const ownershipVersion = `${schedule.checkId}/schedule/v${schedule.version}`;
   const comparisons: ComparisonResult[] = [], findings: ReconciliationFinding[] = [];
 
@@ -99,18 +114,26 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     const g = groups.get(key)!, window = windows.get(g.period)!;
     const sourceRead = g.dataset ? reads.get(coverageKey("source", g.scope, g.grain, g.period)) : undefined;
     const mirrorRead = reads.get(coverageKey("mirror", g.scope, g.grain, g.period));
-    const sourceState = g.dataset ? readState("source", g) : "unknown", mirrorState = readState("mirror", g);
+    const mirrorState = readState("mirror", g);
+    // No expected source dataset owns an orphan's scope and grain, so the source side is a known empty set once the mirror is fully read.
+    const sourceState = g.dataset ? readState("source", g) : mirrorState === "complete" ? "complete" : "unknown";
+    let overflow = false;
+    const amount = (state: ReconciliationCoverage, rows: ReconciliationRow[]) => {
+      if (state !== "complete" || rows.some(r => r.read !== "complete")) return null;
+      const minorUnits = total(rows);
+      if (minorUnits === null) { overflow = true; return null; }
+      return { minorUnits, currency: g.currency };
+    };
+    const sourceAmount = amount(sourceState, g.source), mirrorAmount = amount(mirrorState, g.mirror);
     const rowsPartial = [...g.source, ...g.mirror].some(r => r.read === "partial");
-    const coverage = worst(sourceState, mirrorState, rowsPartial ? "partial" : "complete");
-    const amount = (state: ReconciliationCoverage, rows: ReconciliationRow[]) =>
-      state === "complete" && rows.every(r => r.read === "complete") ? { minorUnits: total(rows), currency: g.currency } : null;
-    const comparisonId = `mr-${digest({ checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency }).slice(0, 40)}`;
-    const sourceVersion = sourceRead?.version ?? "source-unread";
+    const coverage = worst(sourceState, mirrorState, rowsPartial || overflow ? "partial" : "complete");
+    const comparisonId = publicId("mr-", { checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency });
+    const sourceVersion = g.dataset ? sourceRead?.version ?? "source-unread" : ownershipVersion;
     const comparison: ReconciliationComparison = {
       id: comparisonId, label: `${g.scope} ${g.grain} ${g.period} ${g.currency}`, grain: g.grain,
       period: { startAt: iso(window.startAt), endAt: iso(window.endAt), timezone: schedule.timezone }, currency: g.currency,
       sourceCount: sourceState === "complete" ? g.source.length : null, mirrorCount: mirrorState === "complete" ? g.mirror.length : null,
-      sourceAmount: amount(sourceState, g.source), mirrorAmount: amount(mirrorState, g.mirror),
+      sourceAmount, mirrorAmount,
       coverage, cutoff: iso(window.cutoff), sourceVersion, evidenceRef, observedAt,
     };
 
@@ -120,9 +143,9 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
       const fingerprint = digest({ checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency,
         recordKey, side, category, field, sourceValue, mirrorValue });
       raised.push({ fingerprint, comparisonId, recordKey, side, conflict: {
-        id: `mrf-${fingerprint.slice(0, 40)}`, comparisonId, category, field,
+        id: publicId("mrf-", fingerprint), comparisonId, category, field,
         // Source owns records of an expected source dataset; a record the source cannot vouch for has unknown ownership.
-        ownership: category === "missing_source" || category === "orphan" ? "unknown" : "source",
+        ownership: g.dataset && category !== "missing_source" && category !== "orphan" ? "source" : "unknown",
         sourceValue, mirrorValue, authoritativeVersion: sourceRead?.version ?? null, mirrorVersion: mirrorRead?.version ?? null,
         ownershipVersion, repairAllowed: false, state: "open", receiptRef: null, sourceVersion, evidenceRef, observedAt } });
     };
@@ -157,7 +180,8 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     if (outcome === "matched" && (comparison.sourceCount !== comparison.mirrorCount || comparison.sourceAmount?.minorUnits !== comparison.mirrorAmount?.minorUnits))
       throw new MirrorReconciliationError("COMPARATOR_INVARIANT", 500);
     comparisons.push({ comparison, group: { scope: g.scope, grain: g.grain, period: g.period, currency: g.currency, expected: g.dataset !== null },
-      outcome, findingFingerprints: unique.map(f => f.fingerprint) });
+      outcome, reads: { source: sourceRead ? iso(Date.parse(sourceRead.readAt)) : null, mirror: mirrorRead ? iso(Date.parse(mirrorRead.readAt)) : null },
+      findingFingerprints: unique.map(f => f.fingerprint) });
     findings.push(...unique);
   }
 
@@ -172,14 +196,15 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
 
 /**
  * The `comparisons` and `conflicts` arrays for an operations-control source snapshot. The snapshot holds at most 100 of
- * each, so groups with differences or gaps go first; `truncated` means the snapshot must report partial coverage.
+ * each, so groups with differences or gaps go first. `extraConflicts` are still-open conflicts from earlier runs; those
+ * whose group is in the slice are included. `truncated` means the snapshot must report partial coverage.
  */
-export function toOperationsControlSlice(result: CheckResult) {
+export function toOperationsControlSlice(result: Pick<CheckResult, "comparisons" | "findings">, extraConflicts: readonly ReconciliationConflict[] = []) {
   const rank: Record<ComparisonOutcome, number> = { differences: 0, unknown: 1, incomplete: 2, matched: 3 };
   const ordered = [...result.comparisons].sort((a, b) => rank[a.outcome] - rank[b.outcome] || a.comparison.id.localeCompare(b.comparison.id));
   const kept = ordered.slice(0, SOURCE_SLICE_LIMIT), ids = new Set(kept.map(c => c.comparison.id));
-  const eligible = result.findings.filter(f => ids.has(f.comparisonId));
-  const conflicts = eligible.slice(0, SOURCE_SLICE_LIMIT).map(f => f.conflict);
-  return { comparisons: kept.map(c => c.comparison), conflicts,
-    truncated: kept.length < ordered.length || conflicts.length < result.findings.length };
+  // This run's view of a conflict replaces an earlier one with the same id.
+  const all = [...new Map([...extraConflicts, ...result.findings.map(f => f.conflict)].map(c => [c.id, c])).values()];
+  const eligible = all.filter(c => ids.has(c.comparisonId)), conflicts = eligible.slice(0, SOURCE_SLICE_LIMIT);
+  return { comparisons: kept.map(c => c.comparison), conflicts, truncated: kept.length < ordered.length || conflicts.length < eligible.length };
 }

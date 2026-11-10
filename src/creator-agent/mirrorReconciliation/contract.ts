@@ -83,14 +83,20 @@ export type CheckInput = z.infer<typeof checkInputSchema>;
 
 export type ComparisonOutcome = "matched" | "differences" | "incomplete" | "unknown";
 export type RunOutcome = "matched" | "differences" | "incomplete";
+export type GroupRef = { scope: string; grain: ReconciliationGrain; period: string; currency: string };
 export type ComparisonResult = {
   comparison: ReconciliationComparison;
-  group: { scope: string; grain: ReconciliationGrain; period: string; currency: string; expected: boolean };
+  group: GroupRef & { expected: boolean };
   outcome: ComparisonOutcome;
+  /** When each side's read of this group finished, or null when it was not read. Orders runs whose reads arrive out of order. */
+  reads: { source: string | null; mirror: string | null };
   findingFingerprints: string[];
 };
 export type ReconciliationFinding = {
-  /** Stable across runs: identical findings share it, which is what suppression keys on. */
+  /**
+   * Stable across runs: identical findings, values included, share it, which is what suppression keys on. It is a plain
+   * digest of the record key and other guessable inputs, so it stays server side. The public conflict id is an HMAC.
+   */
   fingerprint: string;
   comparisonId: string;
   /** The record key the finding is about. It stays server side; the conflict itself carries no key. */
