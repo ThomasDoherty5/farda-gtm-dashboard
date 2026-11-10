@@ -21,6 +21,8 @@ import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
 import { readOperationsView, operationsViewFiltersSchema, OperationsCursorError } from "./operationsViewReader.ts";
 import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts";
+import { MirrorFreshnessRepository, unconfiguredMirrorFreshness, type MirrorFreshnessOptions } from "./mirrorFreshnessRepository.ts";
+import { toD13SourceFreshness } from "./mirrorFreshness.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 import { EvidenceReviewRepository, EvidenceReviewError } from "./evidenceReviewStore.ts";
@@ -159,6 +161,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
   runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
+  /** Mirror freshness thresholds (proposed defaults unless overridden). Unset means every mirror reads as unknown and the read is unavailable. */
+  mirrorFreshness?: Pick<MirrorFreshnessOptions, "policies">;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -195,6 +199,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let intake: IntakeRepository;
   let rewards: RewardRedemptionRepository;
   let schedules: ScheduleDraftRepository;
+  let mirrorFreshness: MirrorFreshnessRepository | null = null;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
@@ -250,6 +255,8 @@ export function createAgentServer(options: AgentServerOptions) {
     recruitment = createRecruitmentSourceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       source: options.recruitmentSource, secret: operationsSecret, now: options.operations?.now });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
+    if (options.mirrorFreshness) mirrorFreshness = new MirrorFreshnessRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      { policies: options.mirrorFreshness.policies, now: options.operations?.now });
     stockSupport = createStockSupportWorkflow(store.database,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
@@ -511,6 +518,7 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1), ...commercialSelection }).strict() }),
     readBase.extend({ viewKey: z.literal("nightlyReconciliation"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("mirrorFreshness"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -928,6 +936,22 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
             capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
           result.assertCurrent(); return reply(res, 200, envelope);
+        }
+        if (input.viewKey === "mirrorFreshness") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          // Read-only classification at the current clock; incidents belong to the sweep, never to a read.
+          const mirrors = mirrorFreshness ? mirrorFreshness.evaluate() : unconfiguredMirrorFreshness((options.operations?.now ?? Date.now)());
+          const data = { kind: "mirror-freshness" as const, configured: mirrorFreshness !== null, mirrors };
+          const observed = mirrors.filter(mirror => mirror.state !== "unknown").length;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: mirrorFreshness ? "ready" : "unavailable", data,
+            sourceFreshness: mirrors.flatMap(mirror => { const d13 = toD13SourceFreshness(mirror); return d13 ? [{ sourceRef: { source: "mirror:" + mirror.mirrorId,
+              accountId: options.accountId, sourceId: null, canonicalId: null, url: null, identityState: "unresolved", provenanceRef: "mirror-freshness:" + mirror.mirrorId },
+              observedAt: mirror.checkedAt, mirroredAt: mirror.evidence.lastComplete?.finishedAt ?? null, ...d13 }] : []; }),
+            coverage: { expectedCount: mirrors.length, observedCount: observed, missingCount: mirrors.length - observed, complete: observed === mirrors.length,
+              reasonCodes: mirrorFreshness ? [] : ["MIRROR_FRESHNESS_NOT_CONFIGURED"] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });

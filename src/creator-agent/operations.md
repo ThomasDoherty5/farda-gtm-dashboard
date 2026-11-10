@@ -75,6 +75,16 @@ The public display projection uses domain-separated, scope-bound HMAC aliases fo
 
 Existing settings routes render these typed reads through the normal adapter. Saved run details are read-only; they do not imply that a broader workflow or provider executor exists. Session loss clears protected data. These views have no source effect and grant no activation, scheduling or execution authority.
 
+## Mirror freshness
+
+`mirrorFreshness.ts` classifies the seven mirrors (`orders`, `shipments`, `stock`, `support`, `finance`, and the `content` and `collaborations` Notion registries). It is pure and client-safe, so the server read, the dashboard badge (`mirrorFreshnessBadge`) and the source-health detail (`mirrorFreshnessDetail`) all derive a state from `classifyMirrorFreshness`. A summary is re-derived at its own `checkedAt`; a state that disagrees with its evidence reads as `unknown`.
+
+- **Basis.** Freshness is the age of the latest complete run's coverage watermark: the source as-of time through which that run proved every change was mirrored. Partial, failed and revoked runs never advance it. A run record has no newest-row field, and the strict schema rejects one.
+- **States.** D-13's `current`, `noChange`, `partial`, `error` and `neverSynced`, plus `stale`, `accessRevoked` and `unknown`. A complete run that found nothing new is `noChange`, which is current. Unknown is never healthy or zero. The D-13 projection maps `stale` and `accessRevoked` to `error` with a reason code, and `unknown` to no entry.
+- **Thresholds.** These are **proposed defaults, not owner-approved**: Sheets-backed mirrors go stale after 1 hour, QuickBooks (`finance`) after 26 hours, and the check runs every 15 minutes. The Notion registries have no proposed threshold, so they stay `unknown` after a complete run until an owner sets one. Override them per mirror with `mirrorFreshness.policies` on the server.
+- **Incidents.** `MirrorFreshnessRepository.sweep()` records checks in `mirror_freshness_*` tables. It suppresses a repeat of an open incident for the same mirror and state. It clears an incident only when a check is healthy and rests on a complete run recorded after the incident opened. Payloads carry IDs, counts, times and reason codes only. Delivering them, and the sync jobs that record runs, are not wired here.
+- **Read.** `mirrorFreshness` on `/v1/read` (filters `{}`) classifies without writing. If the server has no `mirrorFreshness` option, every mirror is `unknown` and `dataState` is `unavailable`.
+
 ## Read-only provider health
 
 `providerHealth.ts` composes bounded, server-owned probes with the shared durable job repository. Health observations never grant permission receipts. The configured account/action/route, capability revision, current lease, job policy and activation are checked around asynchronous source reads. Source success/event times and coverage stay distinct from probe and mirror-write time. Failure preserves the last native success; unknown quota/deadline values retain explicit states. Required unknown capacity/deadline values hold dependent execution.
