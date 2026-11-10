@@ -95,14 +95,28 @@ export const REASON_TEXT: Record<string, string> = {
   ESTIMATED_COST: "Includes estimated cost",
   COST_COHORT_MISMATCH: "A cost row belongs to another cohort",
   OBLIGATION_AMOUNT_CONFLICT: "One obligation is reported with two amounts",
-  CURRENCY_MISMATCH: "Costs are in more than one currency",
+  CURRENCY_MISMATCH: "Costs are in a currency other than the cohort's",
   REPORTING_WINDOW_MISMATCH: "Costs cover a different window",
   INPUT_UNAVAILABLE: "An input is unavailable",
   UNIT_ECONOMICS_NOT_REPORTED: "Unit-economics inputs are not reported",
   LANDED_COST_COMPLETENESS_UNKNOWN: "Landed-cost completeness not reported",
   OBLIGATION_COMPONENT_CONFLICT: "One obligation is reported under two cost components",
   COHORT_CURRENCY_MISMATCH: "The cohort currency differs from the P&L currency",
+  EVIDENCE_CONFLICT: "One evidence record is used for two different costs",
+  CASH_ALLOCATION_CONFLICT: "One cash settlement is used for two obligations",
+  MULTIPLE_SETTLEMENTS_UNRECONCILED: "One obligation has two unreconciled settlements",
+  CASH_IDENTITY_UNRESOLVED: "A paid cost has no cash settlement reference",
+  ESTIMATED_CASH_UNVERIFIED: "An estimated cost claims a cash settlement",
+  INVALID_ECONOMIC_IDENTITY: "A cost reference has invisible characters or surrounding spaces",
 };
+
+/**
+ * Cohort, obligation, evidence and cash IDs are opaque and case-sensitive: they match only when identical, with no trimming,
+ * case folding or Unicode normalization. An ID with leading or trailing whitespace, a control or format character (zero-width
+ * space, joiner, byte-order mark, soft hyphen) or a blank-looking space other than U+0020 is refused, never silently matched.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u115F\u1160\u1680\u2000-\u200A\u202F\u205F\u2800\u3000\u3164\uFFA0]/u;
+export const isOpaqueId = (id: string) => id.length > 0 && id === id.trim() && !INVISIBLE.test(id);
 const reasonText = (code: string) => REASON_TEXT[code] ?? (code.startsWith("COMPONENT_") ? componentReason(code) : `Unresolved cost rows (${code})`);
 function componentReason(code: string) {
   const [, kind, component] = /^COMPONENT_(UNKNOWN|UNDECLARED|CONFLICT)_(\w+)$/.exec(code) ?? [];
@@ -115,6 +129,10 @@ const na = (...reasons: string[]): Figure => ({ state: "notApplicable", value: n
 const knownCount = (v: ProvenanceValue<number>) => (v.state === "known" && v.value !== null ? v.value : null);
 const conditions = (reasons: string[], value: number): Figure => ({ state: reasons.length ? "provisional" : "known", value, reasons });
 
+const bucketOf = (r: CostObservation) => ({ key: r.component, label: COMPONENT_LABEL[r.component], basis: r.basis, minorUnits: r.minorUnits, alsoInCash: r.cashId !== null,
+  cohortId: r.cohortId, obligationId: r.obligationId, evidenceId: r.evidenceId, cashId: r.cashId, currency: r.currency, period: r.period });
+const scopeOf = (ue: UnitEconomicsInput) => ({ cohortId: ue.cohort.id, currency: ue.cohort.currency, period: ue.cohort.period, coverage: "complete" as const });
+
 /**
  * Problems with the whole input that make every cost figure N/A: a cohort currency other than the P&L's, one obligation under two
  * components (it would be counted in both), or a component both declared and reported. Checked across all rows, not per group,
@@ -122,7 +140,10 @@ const conditions = (reasons: string[], value: number): Figure => ({ state: reaso
  */
 export function inputProblems(ue: UnitEconomicsInput): string[] {
   const problems: string[] = [];
-  if (ue.cohort.currency !== PNL_CURRENCY) problems.push("COHORT_CURRENCY_MISMATCH");
+  // A cohort in another currency can't be combined with the P&L at all; its rows aren't examined further.
+  if (ue.cohort.currency !== PNL_CURRENCY) return ["COHORT_CURRENCY_MISMATCH"];
+  const ids = [ue.cohort.id, ...ue.costs.flatMap((r) => [r.cohortId, r.obligationId, r.evidenceId, ...(r.cashId === null ? [] : [r.cashId])])];
+  if (ids.some((id) => !isOpaqueId(id))) problems.push("INVALID_ECONOMIC_IDENTITY");
   const owner = new Map<string, CostComponent>();
   for (const row of ue.costs) {
     const seen = owner.get(row.obligationId);
@@ -130,6 +151,8 @@ export function inputProblems(ue: UnitEconomicsInput): string[] {
     owner.set(row.obligationId, row.component);
   }
   for (const d of ue.declared) if (ue.costs.some((r) => r.component === d.component)) problems.push(`COMPONENT_CONFLICT_${d.component}`);
+  // One pass over every row, across both groups, so evidence or cash shared between a contribution and an acquisition cost surfaces.
+  if (ue.costs.length) problems.push(...allocateCosts(ue.costs.map(bucketOf), scopeOf(ue)).diagnostics);
   return [...new Set(problems)];
 }
 
@@ -148,10 +171,7 @@ export function componentTotal(ue: UnitEconomicsInput | undefined, components: r
   }
   if (missing.length) return na(...missing);
   if (!rows.length) return { state: "known", value: 0, reasons: [] };
-  const allocation = allocateCosts(
-    rows.map((r) => ({ key: r.component, label: COMPONENT_LABEL[r.component], basis: r.basis, minorUnits: r.minorUnits, alsoInCash: r.cashId !== null, cohortId: r.cohortId, obligationId: r.obligationId, evidenceId: r.evidenceId, cashId: r.cashId, currency: r.currency, period: r.period })),
-    { cohortId: ue.cohort.id, currency: ue.cohort.currency, period: ue.cohort.period, coverage: "complete" },
-  );
+  const allocation = allocateCosts(rows.map(bucketOf), scopeOf(ue));
   if (allocation.state === "unresolved" || allocation.totalMinor === null) return na(...allocation.diagnostics);
   return conditions(allocation.state === "provisional" ? ["ESTIMATED_COST"] : [], allocation.totalMinor);
 }

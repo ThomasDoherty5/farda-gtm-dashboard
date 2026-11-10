@@ -333,6 +333,15 @@ describe("finance analytics", () => {
     expect(screen.getByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: N\/A · No valid orders in the cohort\./);
   });
 
+  it("draws no breakdown bars for zero orders, never the default $5,680 contribution", async () => {
+    open("/analytics/finance?scenario=zeroorders");
+    const panel = within(await screen.findByTestId("breakdown"));
+    expect(panel.getByTestId("breakdown-empty")).toHaveTextContent("No breakdown: the source reports no receipts to split for this period.");
+    expect(panel.queryByRole("list", { name: "Order contribution breakdown" })).not.toBeInTheDocument();
+    expect(panel.queryByText(/5680|5,680/)).not.toBeInTheDocument();
+    expect(financeDashboardDemo("zeroorders").costBreakdown).toEqual([]);
+  });
+
   it("derives the default contribution from the cost rows, matching the dashboard", async () => {
     open("/analytics/finance");
     expect(await screen.findByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: \$14\.20\/order\. Contribution after/);

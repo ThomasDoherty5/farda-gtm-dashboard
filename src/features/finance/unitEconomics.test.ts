@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { financeDashboardDemo, ledgerDemo } from "@/fixtures/finance";
 import { caseAEvents, financeMetricDictionary, subscriptionCases, unitEconomicsCases } from "@/fixtures/financeUnitEconomics";
 import { known, unknown } from "@/fixtures/values";
-import { ACQUISITION_COMPONENTS, CONTRIBUTION_COMPONENTS, PER_ORDER_TIE_TOLERANCE_MINOR, cacPaybackOf, componentTotal, contributionOf, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat, type UnitEconomicsInput } from "./unitEconomics";
+import { ACQUISITION_COMPONENTS, CONTRIBUTION_COMPONENTS, PER_ORDER_TIE_TOLERANCE_MINOR, cacPaybackOf, isOpaqueId, componentTotal, contributionOf, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat, type UnitEconomicsInput } from "./unitEconomics";
 
 const texts = (pnl: { revenue: number; cogs: number }, input: UnitEconomicsInput) => {
   const { acquisition, cac, paybackOrders } = cacPaybackOf(pnl, input);
@@ -82,6 +82,29 @@ describe("whole-input checks", () => {
   it("refuses a component that is both declared and reported", () => {
     const input = { ...caseA.input, declared: [...caseA.input.declared, { component: "paidMedia" as const, state: "knownZero" as const, reasonCode: "NONE" }] };
     expect(texts(caseA.pnl, input).acquisitionCost).toBe("N/A · Paid media is both declared and reported");
+  });
+
+  it("refuses evidence shared across groups: the COGS evidence ID reused on a sample row with another obligation", () => {
+    const cogs = caseA.input.costs.find((c) => c.component === "landedCogs")!;
+    const input = { ...caseA.input, costs: [...caseA.input.costs, { ...cogs, component: "sampleLanded" as const, obligationId: "TEST-SAMPLE-2/sampleLanded" }] };
+    expect(texts(caseA.pnl, input).contributionPerOrder).toBe("N/A · One evidence record is used for two different costs");
+    expect(texts(caseA.pnl, input).paybackOrders).toBe("N/A · One evidence record is used for two different costs");
+  });
+
+  it("refuses cash shared across groups: a sample shipping row carrying the customer shipping row's cash ID", () => {
+    const shipping = caseA.input.costs.find((c) => c.component === "shipping")!;
+    const costs = caseA.input.costs.map((c) => (c.component === "sampleShipping" ? { ...c, cashId: shipping.cashId } : c));
+    expect(texts(caseA.pnl, { ...caseA.input, costs }).acquisitionCost).toBe("N/A · One cash settlement is used for two obligations");
+    expect(texts(caseA.pnl, { ...caseA.input, costs }).contributionPerOrder).toBe("N/A · One cash settlement is used for two obligations");
+  });
+
+  it("matches IDs exactly: refuses zero-width and padded IDs, and never folds case", () => {
+    const commission = (obligationId: string) => ({ ...caseA.input, costs: caseA.input.costs.map((c) => (c.component === "commission" && c.basis === "paid" ? { ...c, obligationId } : c)) });
+    for (const id of ["TEST-COMM-1\u200B", " TEST-COMM-1", "TEST-COMM-1 ", "TEST-\u2060COMM-1", "\uFEFFTEST-COMM-1", "TEST-COMM-1\u00A0"])
+      expect(texts(caseA.pnl, commission(id)).acquisitionCost).toBe("N/A · A cost reference has invisible characters or surrounding spaces");
+    expect(isOpaqueId("TEST-COMM-1")).toBe(true);
+    // Opaque and case-sensitive: a lower-case reference is a different obligation, so the source must send the same ID for one cost.
+    expect(componentTotal(commission("test-comm-1"), ["commission"]).value).toBe(2790);
   });
 
   it("refuses a cohort whose currency differs from the P&L's", () => {

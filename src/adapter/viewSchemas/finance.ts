@@ -90,6 +90,13 @@ export const payableDetailSchema = z.object({
   approvalRef: z.string(),
 });
 
+/**
+ * Cost references are opaque and case-sensitive: matched only when identical, never trimmed, case-folded or normalized. Leading or
+ * trailing whitespace, control or format characters (zero-width space, joiner, BOM, soft hyphen) and blank-looking spaces other than
+ * U+0020 are refused so two references can't look equal while differing.
+ */
+const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u115F\u1160\u1680\u2000-\u200A\u202F\u205F\u2800\u3000\u3164\uFFA0]/u;
+const opaqueId = z.string().min(1).refine((id) => id === id.trim() && !INVISIBLE.test(id), "Opaque IDs can't carry invisible characters or surrounding whitespace.");
 const reportingWindow = z.object({ start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), timezone: z.string().min(1) });
 const costComponent = z.enum(["landedCogs", "shipping", "providerFees", "fulfillment", "paidMedia", "sampleLanded", "sampleShipping", "historicalContentFee", "commission"]);
 /** Complete coverage needs equal known counts; partial and unknown coverage need a reason. Unknown is never read as zero. */
@@ -106,15 +113,15 @@ const definitionPolicy = z.object({ version: z.string().min(1), state: z.enum(["
 const unitEconomics = z.object({
   definition: definitionPolicy,
   // The P&L is reported in USD minor units, so a cohort in any other currency can't be combined with it.
-  cohort: z.object({ id: z.string().min(1), label: z.string(), currency: z.literal("USD"), period: reportingWindow }),
+  cohort: z.object({ id: opaqueId, label: z.string(), currency: z.literal("USD"), period: reportingWindow }),
   validOrders: provenanceValueSchema(count),
   newCustomers: provenanceValueSchema(count),
   landedCost: z.object({ complete: z.boolean(), missingSkus: z.array(z.string()) }).refine((l) => !l.complete || l.missingSkus.length === 0, "Complete landed cost can't list missing SKUs."),
   creatorCosts: coverage,
   attribution: coverage,
   costs: z.array(z.object({
-    component: costComponent, basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: count.nullable(), cohortId: z.string(), obligationId: z.string(), evidenceId: z.string(),
-    cashId: z.string().nullable(), currency: z.string(), period: reportingWindow,
+    component: costComponent, basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: count.nullable(), cohortId: opaqueId, obligationId: opaqueId, evidenceId: opaqueId,
+    cashId: opaqueId.nullable(), currency: z.string(), period: reportingWindow,
   })),
   declared: z.array(z.object({ component: costComponent, state: z.enum(["knownZero", "notApplicable", "unknown"]), reasonCode: z.string().min(1) })),
 }).superRefine((ue, ctx) => {
@@ -124,6 +131,17 @@ const unitEconomics = z.object({
     const seen = owner.get(row.obligationId);
     if (seen && seen !== row.component) ctx.addIssue({ code: "custom", path: ["costs"], message: "An obligation is reported under two cost components." });
     owner.set(row.obligationId, row.component);
+  }
+  // Each evidence record and each cash settlement belongs to exactly one obligation, so neither can carry a second cost in either group.
+  for (const key of ["evidenceId", "cashId"] as const) {
+    const obligationOf = new Map<string, string>();
+    for (const row of ue.costs) {
+      const id = row[key];
+      if (id === null) continue;
+      const seen = obligationOf.get(id);
+      if (seen !== undefined && seen !== row.obligationId) ctx.addIssue({ code: "custom", path: ["costs"], message: `A ${key === "evidenceId" ? "evidence ID" : "cash ID"} maps to two obligations.` });
+      obligationOf.set(id, row.obligationId);
+    }
   }
   // A declaration stands in for missing rows; a component can't be both declared (unknown, known zero or not applicable) and reported.
   const declared = new Set<string>();

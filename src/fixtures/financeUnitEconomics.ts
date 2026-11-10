@@ -144,14 +144,14 @@ export const unitEconomicsCases: UnitEconomicsCase[] = [
   {
     id: "pilot-row-in-cohort", label: "Cohort isolation: a pilot row in this cohort", pnl: caseAPnl,
     input: { ...caseA, costs: [...caseACosts, row("commission", "TEST-PILOT-COMM-1", 900, "accrued", "TEST-PILOT-COMM-1", "pilot-cohort-b")] },
-    expected: { grossMargin: "64.7%", contributionPerOrder: "$14.55", acquisitionCost: "N/A · A cost row belongs to another cohort", cac: "N/A · A cost row belongs to another cohort", paybackOrders: "N/A · A cost row belongs to another cohort" },
-    handCalculation: "The 900 pilot commission is not added (7,324 + 900 = 8,224 would mix cohorts); the result is N/A until the row is removed",
+    expected: { grossMargin: "64.7%", contributionPerOrder: "N/A · A cost row belongs to another cohort", acquisitionCost: "N/A · A cost row belongs to another cohort", cac: "N/A · A cost row belongs to another cohort", paybackOrders: "N/A · A cost row belongs to another cohort" },
+    handCalculation: "The 900 pilot commission is not added (7,324 + 900 = 8,224 would mix cohorts); every cost figure is N/A until the row is removed, because the input as a whole is not one cohort",
   },
   {
     id: "settlement-amount-conflict", label: "A settlement that disagrees with its accrual", pnl: caseAPnl,
     input: { ...caseA, costs: [...caseACosts.filter((c) => c.component !== "commission"), row("commission", "TEST-COMM-1", 1395, "accrued", "TEST-COMM-1"), row("commission", "TEST-COMM-1", 1300, "paid", "TEST-COMM-1")] },
-    expected: { grossMargin: "64.7%", contributionPerOrder: "$14.55", acquisitionCost: "N/A · One obligation is reported with two amounts", cac: "N/A · One obligation is reported with two amounts", paybackOrders: "N/A · One obligation is reported with two amounts" },
-    handCalculation: "Accrued 1,395 and settled 1,300 for one obligation: neither 1,395, 1,300 nor 2,695 is chosen; the difference needs reconciliation first",
+    expected: { grossMargin: "64.7%", contributionPerOrder: "N/A · One obligation is reported with two amounts", acquisitionCost: "N/A · One obligation is reported with two amounts", cac: "N/A · One obligation is reported with two amounts", paybackOrders: "N/A · One obligation is reported with two amounts" },
+    handCalculation: "Accrued 1,395 and settled 1,300 for one obligation: neither 1,395, 1,300 nor 2,695 is chosen; the difference needs reconciliation first, and every cost figure waits for it",
   },
   {
     id: "obligation-under-two-components", label: "One obligation under two components", pnl: caseAPnl,

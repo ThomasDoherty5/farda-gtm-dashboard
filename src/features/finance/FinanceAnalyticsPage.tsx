@@ -127,7 +127,9 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
       </div>
       <HalfColumns>
         <Panel title={`Where ${whole(p.revenue)} goes`} subtitle="Last 30 days · before marketing and fixed expense" testId="breakdown">
-          <BarRows label="Order contribution breakdown" max={600000} gap={16} trackTop={0} widths={[126, 350, 80]} rows={data.costBreakdown.map((c) => ({ label: c.label, value: c.minor, display: whole(c.minor).replace(",", "") }))} />
+          {data.costBreakdown.length === 0
+            ? <p className={styles.footnote} data-testid="breakdown-empty">No breakdown: the source reports no receipts to split for this period.</p>
+            : <BarRows label="Order contribution breakdown" max={600000} gap={16} trackTop={0} widths={[126, 350, 80]} rows={data.costBreakdown.map((c) => ({ label: c.label, value: c.minor, display: whole(c.minor).replace(",", "") }))} />}
           <p className={styles.footnote} data-testid="contribution-per-order">{perOrder.state === "notApplicable" ? `Pre-marketing contribution: ${figureText(perOrder, ueFormat.money)}.` : `Pre-marketing contribution: ${ueFormat.money(perOrder.value!)}/order${perOrder.state === "provisional" ? ` · Provisional · ${explain(perOrder)}` : ""}.`} Contribution after attributed creator cost awaits allocation.</p>
           {peak > 600000 && <p className="visually-hidden">A value exceeds the bar scale.</p>}
         </Panel>

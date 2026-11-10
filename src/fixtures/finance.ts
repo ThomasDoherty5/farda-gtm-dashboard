@@ -248,7 +248,8 @@ export const financeDashboardDemo = (scenario?: string): FinanceDashboard => ({
   samplesPlanned: 46,
   closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: 2, cpaSignOff: "Pending" },
   cashHistory: [{ month: "Jul", minor: 6360000 }, { month: "Aug", minor: 5780000 }, { month: "Sep", minor: 5200000 }, { month: "Oct", minor: 4620000 }],
-  costBreakdown: [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
+  // With no orders there is nothing to break down; an empty breakdown is drawn as such, never as the default $5,680 contribution.
+  costBreakdown: scenario === "zeroorders" ? [] : [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
   payouts: [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
   unitEconomics: unitEconomicsDemo(scenario),
   subscriptions: scenario === "subscriptionunread"
