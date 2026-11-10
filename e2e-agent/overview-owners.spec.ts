@@ -42,6 +42,9 @@ test("overview and actual creator, Operations, Finance and monitoring owners rec
     const answer=responseFor(page,"overviewSummary");await page.goto(route);
     const d=(await (await answer).json()).data as NativeOverviewSummary;
     expect(Object.values(d.domains!).map(owner=>owner.state)).toEqual(["ready","ready","ready","ready","ready"]);
+    const historyLength=await page.evaluate(()=>history.length), originalUrl=page.url();
+    await page.getByRole("navigation",{name:"Primary",exact:true}).getByRole("link",{name:"Overview",exact:true}).click();
+    expect(page.url()).toBe(originalUrl);expect(await page.evaluate(()=>history.length)).toBe(historyLength);
     await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");await expect(page.getByTestId("metric-Net receipts")).toHaveText("$12,596.00");
     await expect(page.getByTestId("metric-Views")).toHaveText("500");await expect(page.getByTestId("metric-Engagement rate")).toHaveText("3.0%");
     await expect(page.getByTestId("overview-shipping-count")).toHaveText("1");await expect(page.getByTestId("overview-finance-cash")).toHaveText("$1,200.00");
@@ -54,6 +57,9 @@ test("overview and actual creator, Operations, Finance and monitoring owners rec
     await screenReaderCheckpoint(page,"overview-portfolio-focus-return",trigger,["Inspect portfolio review","button"]);
     const creatorAnswer=responseFor(page,"attribution");await page.getByRole("link",{name:"Review creator attribution and cost definitions"}).click();
     const creators=(await (await creatorAnswer).json()).data;
+    const performanceUrl=page.url(), performanceHistory=await page.evaluate(()=>history.length);
+    await page.getByRole("navigation",{name:"Overview sections"}).getByRole("link",{name:"Performance",exact:true}).click();
+    expect(page.url()).toBe(performanceUrl);expect(await page.evaluate(()=>history.length)).toBe(performanceHistory);
     expect(creators.period).toEqual(d.period);expect(creators.cohortRef).toBe(d.cohortRef);
     const factValue=(v:{state:string;value:unknown;provisional:boolean;reasonCodes:string[]})=>({state:v.state,value:v.value,provisional:v.provisional,reasonCodes:v.reasonCodes});
     expect(factValue(creators.attributedOrders)).toEqual(factValue(d.domains!.creators.data!.attributedOrders));

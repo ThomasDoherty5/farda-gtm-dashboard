@@ -2,8 +2,9 @@ import { useState } from "react";
 import type { NativeAttribution as Attribution, NativeMetricDictionary } from "@/creator-agent/analytics/views";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
 import { Fact, NativeAnalyticsEvidence, factText, nativeCount, nativeMoney, nativeMultiple, nativePercent } from "./NativeAnalyticsEvidence";
-import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, SectionHeading, Table } from "./parts";
+import { BarList, Card, DetailRow, KpiCard, KpiGrid, SectionHeading, Table } from "./parts";
 import styles from "./Analytics.module.css";
 
 const money = (value: number) => nativeMoney({ minorUnits: value, currency: "USD" });
@@ -52,11 +53,48 @@ export function NativeAttribution({ data, refresh, refreshing, definitions }: { 
       </Card>
     </div>
     <div className={styles.split} style={{ gridTemplateColumns: "636fr 636fr" }}>
-      <Card><SectionHeading title={`${factText(unattributed, nativeCount)} orders need attribution review`} note="One winning method per order: code → UTM → platform." /><BarList label="Orders by attribution method" cols="176px minmax(0, 1fr) 124px" gap={12} rows={data.attribution.map(row => ({ key: row.method, label: methods[row.method], value: `${factText(row.orders, nativeCount)} · ${factText(measure(`shareAttribution.${row.method}`), nativePercent)}`, share: Math.min(1, Math.max(0, measure(`shareAttribution.${row.method}`)?.value ?? 0) / 100), ...(row.method === "unattributed" ? { tone: "warning" as const } : {}) }))} /><Button variant="secondary" onClick={() => setReview(true)}>Review unattributed</Button></Card>
+      <Card><SectionHeading title={`${factText(unattributed, nativeCount)} source-reported unattributed orders`} note="One winning method per order: code → UTM → platform." /><BarList label="Orders by attribution method" cols="176px minmax(0, 1fr) 124px" gap={12} rows={data.attribution.map(row => ({ key: row.method, label: methods[row.method], value: `${factText(row.orders, nativeCount)} · ${factText(measure(`shareAttribution.${row.method}`), nativePercent)}`, share: Math.min(1, Math.max(0, measure(`shareAttribution.${row.method}`)?.value ?? 0) / 100), ...(row.method === "unattributed" ? { tone: "warning" as const } : {}) }))} /><Button variant="secondary" onClick={() => setReview(true)}>Review unattributed</Button></Card>
       <Card><SectionHeading title="When a number needs context" note="Definitions remain available alongside the current source evidence." /><DetailRow label="Zero denominator" value="N/A" /><DetailRow label="No source data" value="Unknown" /><DetailRow label="Missing landed cost" value="Cost incomplete" /><DetailRow label="Unqualified or estimated cost" value="Provisional / Unknown ratio" /><DetailRow label="Forecast" value="Pending rebaseline" /><hr className={styles.divider} /><p className={styles.small}>Anonymous aggregates supply CAC. Late refunds revise the original cohort using a bound source revision; no customer identities enter this dashboard.</p></Card>
     </div>
-    <HandoffDialog open={review} onClose={() => setReview(false)} title="Unattributed orders" rows={[{ label: "Orders", value: factText(unattributed, nativeCount) }, { label: "Precedence", value: "Code, then UTM, then platform" }]}><p>Reviewing never assigns a creator. Matching and corrections remain with the canonical order source.</p></HandoffDialog>
+    <Dialog open={review} focusHeading onClose={() => setReview(false)} title="Unattributed orders">
+      <DetailRow label="Source-reported unattributed" value={factText(unattributed, nativeCount)} />
+      <NativeUnattributedReview data={data} />
+      <Button variant="secondary" onClick={() => setReview(false)}>Close order review</Button>
+    </Dialog>
   </>;
+}
+
+function NativeUnattributedReview({ data }: { data: Attribution }) {
+  const detail = data.unattributedReview;
+  const [page, setPage] = useState(0);
+  if (!detail) return <p>Exact order review evidence is unavailable. Missing rows do not mean zero unattributed orders.</p>;
+  const pageSize = 10, last = Math.max(0, Math.ceil(detail.rows.length / pageSize) - 1), current = Math.min(page, last);
+  const rows = detail.rows.slice(current * pageSize, (current + 1) * pageSize);
+  const names = { unattributed: "Unattributed", unknownCodeOwner: "Code owner unknown", notEvaluated: "Not evaluated" };
+  const reasons = { SOURCE_REPORTED_UNATTRIBUTED: "Source reported no winning attribution", CODE_OWNER_UNKNOWN: "Source has a code but its owner is unresolved", ATTRIBUTION_NOT_EVALUATED: "Source has not evaluated attribution" };
+  const sourceReasons = { noMatchingSignal: "No matching signal", conflictingSignals: "Conflicting signals", unrecognizedCode: "Unrecognized code", missingTracking: "Missing tracking", notEvaluated: "Not evaluated", sourceUnresolved: "Unresolved by source" };
+  return <section aria-label="Source order review" style={{ width: "100%", minWidth: 0, overflowWrap: "anywhere" }}>
+    <p>{detail.period ? `${detail.period.startAt} to ${detail.period.endAt} (end exclusive) · ${detail.period.timezone}.` : "Reporting period unavailable."}</p>
+    <p>Cohort {detail.cohortRef ?? "N/A"}. Precedence: code, then UTM, then platform. Reviewing never assigns a creator or changes source attribution.</p>
+    <p>Review evidence {detail.state}. {detail.reasonCodes.join(" · ")}</p>
+    <p>Total needing review: <Fact fact={detail.total} format={nativeCount} />. Unresolved code owners and orders not yet evaluated are listed separately from source-reported unattributed orders.</p>
+    {detail.rows.length ? <>
+      <p role="status">Rows {current * pageSize + 1}–{Math.min((current + 1) * pageSize, detail.rows.length)} of {detail.rows.length} supplied. {detail.truncated ? `Source detail is capped at ${detail.limit}; further orders remain with the source owner.` : "All supplied detail is available below."}</p>
+      <Table caption="Unmatched source orders" columns={[{ label: "Order", width: 200 }, { label: "Classification", width: 180 }, { label: "Reason", width: 250 }, { label: "Placed / channel", width: 230 }, { label: "Provenance", width: 300 }]}
+        rows={rows.map(row => ({ key: row.orderRef, cells: [row.orderRef, names[row.classification], reasons[row.reason], `${row.placedAt} · ${row.channel}`,
+          <details key="proof"><summary>Source provenance</summary><dl className={styles.defs}>
+            <div><dt>Canonical order</dt><dd>{row.canonicalOrderRef ?? "Identity unavailable"}</dd></div>
+            <div><dt>Source assignment / code owner</dt><dd>{row.sourceAttribution ?? "Not evaluated"} · {row.codeOwner ?? "Not applicable"}</dd></div>
+            <div><dt>Source-specific reason</dt><dd>{row.sourceReason ? sourceReasons[row.sourceReason] : "No source-specific reason supplied"}</dd></div>
+            <div><dt>Reason evidence / observed</dt><dd>{row.evidenceRefs.length ? row.evidenceRefs.join(" · ") : "No reason evidence supplied"} · {row.reasonObservedAt ?? "N/A"}</dd></div>
+            <div><dt>Feed / proof</dt><dd>{row.feedRef} · {row.proofRef}</dd></div>
+            <div><dt>Source / definition version</dt><dd>{row.sourceVersion} · {row.definitionVersion}</dd></div>
+            <div><dt>Source as of / observed</dt><dd>{row.sourceAsOf ?? "N/A"} · {row.observedAt}</dd></div>
+            <div><dt>Qualification</dt><dd>{row.provisional ? "Provisional source evidence" : "Current source evidence"}</dd></div>
+          </dl></details>] }))} />
+      {last > 0 && <div className={styles.btnRow}><Button variant="secondary" disabledReason={current === 0 ? "First supplied review page" : undefined} onClick={() => setPage(current - 1)}>Previous review rows</Button><Button variant="secondary" disabledReason={current === last ? "Last supplied review page" : undefined} onClick={() => setPage(current + 1)}>Next review rows</Button></div>}
+    </> : <p>{detail.total.state === "known" && detail.total.value === 0 ? "No orders need review in this complete source selection." : "Exact review rows are unavailable. No clean attribution result is inferred."}</p>}
+  </section>;
 }
 
 export function NativeEconomicEvidence({ evidence }: { evidence: Attribution["economicEvidence"] }) {

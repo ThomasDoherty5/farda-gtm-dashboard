@@ -155,7 +155,13 @@ export async function composeOverviewOwners(base: NativeAnalyticsReadResult, rea
       const d = nativeContentSchema.parse(read.data);
       if (d.synthetic !== overview.provenance.synthetic) return unavailable("REPORTING_SCOPE_MISMATCH");
       if (d.selection?.campaign !== campaign || !d.selection.period || !contextMatches(d.selection.period, period)) return unavailable("REPORTING_SCOPE_MISMATCH");
-      const data = overviewDomainsSchema.shape.activity.shape.data.unwrap().parse(d);
+      // The full monitor response was strictly validated above. Select only the
+      // summary fields; its post rows and access grant are not overview fields.
+      const data = overviewDomainsSchema.shape.activity.shape.data.unwrap().parse({
+        kind: d.kind, sourceState: d.sourceState, sourceAsOf: d.sourceAsOf, observedAt: d.observedAt, sourceVersion: d.sourceVersion,
+        membershipComplete: d.membershipComplete, total: d.total, views: d.views, rate: d.rate, orders: d.orders, net: d.net,
+        metricBasis: d.metricBasis, selection: d.selection, liveCount: d.liveCount, networkCoverage: d.networkCoverage, window: d.window,
+      });
       const state = read.stale ? "stale" : d.sourceState === "current" && d.membershipComplete ? "ready" : "partial";
       return { state, reason: state === "stale" ? "SOURCE_STALE" : state === "partial" ? "COVERAGE_PARTIAL" : null,
         version: d.sourceVersion, observedAt: d.observedAt, validUntil: firstDeadline(d.readAccess?.validUntil, read.freshUntil), synthetic: d.synthetic, data };

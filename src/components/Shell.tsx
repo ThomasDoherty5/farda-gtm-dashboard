@@ -11,6 +11,7 @@ import { Badge } from "./Badge";
 import { Button, LinkButton } from "./Button";
 import { ConnectionStatus } from "./ConnectionStatus";
 import { Dialog } from "./Dialog";
+import { currentViewNavigation } from "./currentViewNavigation";
 import styles from "./Shell.module.css";
 
 /** Navigation items kept in the header at tablet width (Figma 12:710); the rest move into "More". */
@@ -69,7 +70,8 @@ export function Shell() { return <OperationsCohortProvider><ShellBody /></Operat
 function ShellBody() {
   const { cohort } = useOperationsCohort();
   const { adapter, scope, principal } = useScope();
-  const { pathname, search } = useLocation();
+  const { pathname, search, hash } = useLocation();
+  const currentHref = pathname + search + hash;
   const [menuOpen, setMenuOpen] = useState(false);
   const [periodOpen, setPeriodOpen] = useState(false);
   const workspaceTrigger = useRef<HTMLButtonElement | null>(null);
@@ -98,7 +100,7 @@ function ShellBody() {
                 const onPage = inSection && pathname === item.to.split("?")[0];
                 return (
                   <li key={item.label} className={index >= TABLET_ITEMS ? styles.overflowItem : undefined}>
-                    <Link to={item.to} className={styles.navItem} style={{ minWidth: item.width }} aria-current={onPage ? "page" : inSection ? "true" : undefined}>{item.label}</Link>
+                    <Link to={onPage ? currentHref : item.to} onClick={onPage ? currentViewNavigation : undefined} className={styles.navItem} style={{ minWidth: item.width }} aria-current={onPage ? "page" : inSection ? "true" : undefined}>{item.label}</Link>
                   </li>
                 );
               })}
@@ -134,7 +136,8 @@ function ShellBody() {
           <ul>
             {primaryNav.map((item) => {
               const inSection = (item.sections as readonly string[]).includes(section);
-              return <li key={item.label}><LinkButton to={item.to} variant={inSection ? "primary" : "secondary"} aria-current={inSection ? "true" : undefined} onClick={() => setMenuOpen(false)}>{item.label}</LinkButton></li>;
+              const onPage = inSection && pathname === item.to.split("?")[0];
+              return <li key={item.label}><LinkButton to={onPage ? currentHref : item.to} variant={inSection ? "primary" : "secondary"} aria-current={onPage ? "page" : inSection ? "true" : undefined} onClick={event => { if (onPage) currentViewNavigation(event); setMenuOpen(false); }}>{item.label}</LinkButton></li>;
             })}
           </ul>
         </nav>
@@ -151,7 +154,11 @@ function ShellBody() {
           })}
           {demo || cohort ? <><LinkButton to={operationsHref("/analytics/fulfillment?view=health", operationsSearch)} onClick={() => setMenuOpen(false)}>Issues and fulfillment health</LinkButton><LinkButton to={operationsHref("/operations?view=shipping", operationsSearch)} onClick={() => setMenuOpen(false)}>Review shipping</LinkButton></> : <><Button disabledReason="Current source reporting context is unavailable.">Issues and fulfillment health</Button><Button disabledReason="Current source reporting context is unavailable.">Review shipping</Button></>}
         </nav>}
-        {workspaceLinks.map((link) => <LinkButton key={link.label} to={link.to} onClick={() => setMenuOpen(false)}>{link.label}</LinkButton>)}
+        {workspaceLinks.map(link => {
+          const [path, query] = link.to.split("?");
+          const current = pathname === path && [...new URLSearchParams(query)].every(([key, value]) => new URLSearchParams(search).get(key) === value);
+          return <LinkButton key={link.label} to={current ? currentHref : link.to} aria-current={current ? "page" : undefined} onClick={event => { if (current) currentViewNavigation(event); setMenuOpen(false); }}>{link.label}</LinkButton>;
+        })}
         <Button variant="secondary" onClick={() => setMenuOpen(false)}>Close menu</Button>
       </Dialog>
       {!demo && <OperationsPeriodControl trigger={false} open={periodOpen} onOpenChange={open => { setPeriodOpen(open); if (!open) queueMicrotask(() => workspaceTrigger.current?.focus()); }} scope={cohort} onApply={(startAt,endAt) => {

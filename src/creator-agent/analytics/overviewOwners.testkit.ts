@@ -67,7 +67,8 @@ export async function overviewOwnersFixture(options: { now?: () => number; scope
     const key = "fictional-overview-intake";
     const result = await intake.ingest({ input, envelope: { jobId: "J01", jobVersion: "creator-intake.v1", mode: "observe", actor: { id: "fictional-reviewer", role: "reviewer" }, accountRef: { workspaceId: scope.workspaceId, accountId: scope.accountId },
       policyVersion: "commission-only-v1", inputHash: digest(input), idempotencyKey: key, correlationId: "fictional-overview", requestedAt: observedAt, deadline: null, checkpoint: null } }, key);
-    const creator = result.creatorRef.canonicalId ?? result.creatorRef.sourceId!;
+    const creator = result.creatorRef?.canonicalId ?? result.creatorRef?.sourceId;
+    if (!creator) throw new Error("Fictional overview intake did not produce a creator identity");
     const member = monitor.snapshot.members[0]!;
     member.creatorId = creator; member.revision = intake.creator(creator)!.revision; member.cohort = cohortRef; post.creatorId = creator;
     member.notionReceipt = result.handoffs.find(h => h.target === "notion-creator-crm")!.receiptRef!;

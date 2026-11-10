@@ -74,12 +74,23 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
       for (const feed of input.snapshot.feeds) {
         if (owner.coverage === "complete" && feed.coverage !== "complete" || owner.sourceAsOf !== null && (feed.lastSuccessAt === null || Date.parse(owner.sourceAsOf) > Date.parse(feed.lastSuccessAt))) return fail("ANALYTICS_SOURCE_INVALID");
         if (feed.orders.some(row => Date.parse(row.placedAt) < Date.parse(snapshot.period!.startAt) || Date.parse(row.placedAt) >= Date.parse(snapshot.period!.endAt))) return fail("ANALYTICS_SOURCE_INVALID");
+        for (const row of feed.orders) if (row.attributionEvidence) {
+          if (row.attributionEvidence.sourceVersion !== owner.sourceVersion) return fail("ANALYTICS_BINDING_MISMATCH", 403);
+          if (Date.parse(row.attributionEvidence.observedAt) > Date.parse(owner.observedAt)) return fail("ANALYTICS_SOURCE_INVALID");
+        }
       }
     }
     if ("ads" in snapshot.facts && snapshot.facts.ads) {
       const input = snapshot.facts.ads, owner = snapshot.owners.find(value => value.proofRef === input.proofRef);
       if (!snapshot.window || !owner || owner.owner !== "adReporting" || digest(input.snapshot.scope) !== digest(scope) || digest(input.snapshot.window) !== digest(snapshot.window)) return fail("ANALYTICS_BINDING_MISMATCH", 403);
-      for (const feed of input.snapshot.feeds) if (owner.coverage === "complete" && feed.coverage !== "complete" || owner.sourceAsOf !== null && (feed.lastSuccessAt === null || Date.parse(owner.sourceAsOf) > Date.parse(feed.lastSuccessAt))) return fail("ANALYTICS_SOURCE_INVALID");
+      for (const feed of input.snapshot.feeds) {
+        if (owner.coverage === "complete" && feed.coverage !== "complete" || owner.sourceAsOf !== null && (feed.lastSuccessAt === null || Date.parse(owner.sourceAsOf) > Date.parse(feed.lastSuccessAt))) return fail("ANALYTICS_SOURCE_INVALID");
+        for (const asset of feed.assets) if (asset.rightsGrant) {
+          const grant = asset.rightsGrant;
+          if (grant.accountRef !== owner.accountRef || grant.sourceVersion !== owner.sourceVersion) return fail("ANALYTICS_BINDING_MISMATCH", 403);
+          if (Date.parse(grant.observedAt) > Date.parse(owner.observedAt)) return fail("ANALYTICS_SOURCE_INVALID");
+        }
+      }
     }
     if (snapshot.viewKey === "campaignFunnel") {
       const f = snapshot.facts, request = binding.request;
@@ -135,7 +146,35 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     const assertCurrent = () => { fence(snapshot, binding, signal); if (now() >= publicationDeadline) return fail("ANALYTICS_PUBLICATION_EXPIRED", 409); };
     assertCurrent();
     const projectedAt = now();
-    publicationDeadline = Math.min(Date.parse(snapshot.validUntil), Date.parse(snapshot.observedAt) + ANALYTICS_ACCESS_MAX_AGE_MS, ...snapshot.owners.map(owner => Date.parse(owner.validUntil)), ...snapshot.owners.flatMap(owner => owner.sourceAsOf !== null && Date.parse(owner.sourceAsOf) + owner.maxAgeMs > projectedAt ? [Date.parse(owner.sourceAsOf) + owner.maxAgeMs] : []));
+    const detailDeadlines: number[] = [];
+    if ("ads" in snapshot.facts && snapshot.facts.ads) {
+      const input = snapshot.facts.ads, owner = snapshot.owners.find(value => value.proofRef === input.proofRef);
+      if (owner) for (const feed of input.snapshot.feeds) for (const asset of feed.assets) if (asset.rightsGrant) {
+        const deadline = Date.parse(asset.rightsGrant.observedAt) + owner.maxAgeMs;
+        if (deadline > projectedAt) detailDeadlines.push(deadline);
+      }
+    }
+    if ("orders" in snapshot.facts && snapshot.facts.orders) {
+      const input = snapshot.facts.orders, owner = snapshot.owners.find(value => value.proofRef === input.proofRef);
+      if (owner) for (const feed of input.snapshot.feeds) for (const row of feed.orders) if (row.attributionEvidence) {
+        const deadline = Date.parse(row.attributionEvidence.observedAt) + Math.min(owner.maxAgeMs, 15 * 60_000);
+        if (deadline > projectedAt) detailDeadlines.push(deadline);
+      }
+    }
+    publicationDeadline = Math.min(Date.parse(snapshot.validUntil), Date.parse(snapshot.observedAt) + ANALYTICS_ACCESS_MAX_AGE_MS, ...snapshot.owners.map(owner => Date.parse(owner.validUntil)), ...snapshot.owners.flatMap(owner => owner.sourceAsOf !== null && Date.parse(owner.sourceAsOf) + owner.maxAgeMs > projectedAt ? [Date.parse(owner.sourceAsOf) + owner.maxAgeMs] : []), ...detailDeadlines);
+    if ("ads" in snapshot.facts && snapshot.facts.ads && snapshot.window) {
+      const timezone = snapshot.window.timezone, today = localDay(projectedAt, timezone);
+      // expiresOn is inclusive in the source reporting timezone. Search only
+      // inside this already-bounded read lease, so DST never assumes a 24h day.
+      if (snapshot.facts.ads.snapshot.feeds.some(feed => feed.assets.some(asset => asset.expiresOn === today)) && localDay(publicationDeadline, timezone) > today) {
+        let before = projectedAt, after = publicationDeadline;
+        while (after - before > 1) {
+          const middle = Math.floor((before + after) / 2);
+          if (localDay(middle, timezone) > today) after = middle; else before = middle;
+        }
+        publicationDeadline = after;
+      }
+    }
     const data = projectNativeAnalytics(snapshot, alias, projectedAt);
     data.provenance.validUntil = new Date(publicationDeadline).toISOString();
     let nextCursor: string | null = null;
