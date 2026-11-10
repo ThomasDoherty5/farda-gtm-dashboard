@@ -37,7 +37,17 @@ export function financeRecord(viewKey: FinanceViewKey): Record<string, unknown> 
       cash: known(10000), cashAsOf: observedAt, historicalRaised: 0, burn: unknown("BURN_NOT_OBSERVED"), burnWindowMonths: 3, burnHistoryMonths: 1,
       inventoryValue: 1000, accountsPayable: 3000, salesTaxPayable: 0, forecastRevenue: 0, contributionPerOrder: 8500, samplesPlanned: 0,
       closeSummary: { period: "2026-10", label: "Synthetic October", unmatchedPayouts: 1, cpaSignOff: "Pending" }, cashHistory: [{ month: "Oct", minor: 10000 }],
-      costBreakdown: [{ label: "Synthetic cost", minor: 1000 }], payouts: [{ channel: "Synthetic", matched: 0, needsReview: 1 }] };
+      costBreakdown: [{ label: "Synthetic cost", minor: 1000 }], payouts: [{ channel: "Synthetic", matched: 0, needsReview: 1 }],
+      // Only landed COGS is observed; every other component, both coverages and the subscription source are unread, so they stay unknown.
+      unitEconomics: { definition: { version: "finance-unit-economics@1", state: "notConfigured", reference: null },
+        cohort: { id: "synthetic-cohort", label: "Synthetic October cohort", currency: "USD", period: { start: "2026-10-01", end: "2026-10-31", timezone: "UTC" } },
+        validOrders: known(1), newCustomers: unknown("CUSTOMERS_NOT_OBSERVED"), landedCost: { complete: false, missingSkus: [] },
+        creatorCosts: { state: "unknown", expected: null, observed: null, reasonCodes: ["CREATOR_COSTS_NOT_OBSERVED"] },
+        attribution: { state: "unknown", expected: null, observed: null, reasonCodes: ["ATTRIBUTION_NOT_OBSERVED"] },
+        costs: [{ component: "landedCogs", basis: "accrued", minorUnits: 1000, cohortId: "synthetic-cohort", obligationId: "synthetic-cogs", evidenceId: "synthetic-cogs-evidence", cashId: null, currency: "USD", period: { start: "2026-10-01", end: "2026-10-31", timezone: "UTC" } }],
+        declared: (["shipping", "providerFees", "fulfillment", "paidMedia", "sampleLanded", "sampleShipping", "historicalContentFee", "commission"] as const).map(component => ({ component, state: "unknown", reasonCode: "COST_NOT_OBSERVED" })) },
+      subscriptions: { access: "unknown", reasonCode: "SUBSCRIPTION_SOURCE_NOT_READ", subscriptionProducts: null, definition: { version: "recurring-revenue@0", state: "notConfigured", reference: null }, monthlyRecurring: unknown("SUBSCRIPTION_SOURCE_NOT_READ") },
+      forecastPlan: { version: "synthetic-forecast-v1", basis: "illustrative", assumptions: [] } };
     case "periodClose": return { ...common, period: "2026-10", label: "Synthetic October", checks: [], closeOwner: "Synthetic owner", cpaReview: "Pending", status: "open", exceptions: [], reports: [], exportFailed: false };
     case "closePackage": return { ...common, period: "2026-10", label: "Synthetic October", scenario: "source-read", status: "open", blockers: [],
       cpa: { state: "notRequested", signedAt: null }, exportState: "none", commissionCohort: { label: "Synthetic cohort", orders: 1, note: "Synthetic" }, landedCost: { complete: true, missingSkus: [] }, differences: [],

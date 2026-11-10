@@ -9,6 +9,10 @@
  *   while a known zero burn (`known(0)`) stays valid.
  * - A paid receipt is immutable and the provider owns payout, so `commissionLedger.currency` is the literal "USD" as in
  *   the fixture type, and `rates[].proposed` is the literal "Draft".
+ * - `financeDashboard.unitEconomics` carries one cohort's cost rows, one per observation of an obligation, so an accrual and its
+ *   cash settlement share an obligation and are counted once; a component with no row is declared (known zero, not applicable or
+ *   unknown). Coverage needs a reason unless complete, and a definition is "adopted" only with its reference.
+ *   `subscriptions.access: "unknown"` is an unread source and is never the verified "no subscription product".
  * - Objects are not `.strict()`: these are read models of ledger figures, not credential-adjacent. The `datasetKey`
  *   literal refuses a payload from another dataset.
  * - The helpers below are repeated in the sibling files on purpose, so each file stands alone.
@@ -85,6 +89,43 @@ export const payableDetailSchema = z.object({
   approvalRef: z.string(),
 });
 
+const reportingWindow = z.object({ start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), end: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), timezone: z.string().min(1) });
+const costComponent = z.enum(["landedCogs", "shipping", "providerFees", "fulfillment", "paidMedia", "sampleLanded", "sampleShipping", "historicalContentFee", "commission"]);
+/** Complete coverage needs equal known counts; partial and unknown coverage need a reason. Unknown is never read as zero. */
+const coverage = z.object({ state: z.enum(["complete", "partial", "unknown"]), expected: count.nullable(), observed: count.nullable(), reasonCodes: z.array(z.string()) }).superRefine((c, ctx) => {
+  if (c.expected !== null && c.observed !== null && c.observed > c.expected) ctx.addIssue({ code: "custom", message: "Observed exceeds expected." });
+  if (c.state === "complete" && (c.expected === null || c.observed !== c.expected)) ctx.addIssue({ code: "custom", message: "Complete coverage needs equal known counts." });
+  if (c.state !== "complete" && c.reasonCodes.length === 0) ctx.addIssue({ code: "custom", message: "Incomplete coverage needs a reason." });
+});
+/** A definition is only "adopted" with the owner's reference; otherwise it is proposed or not configured. */
+const definitionPolicy = z.object({ version: z.string().min(1), state: z.enum(["proposed", "notConfigured", "adopted"]), reference: z.string().min(1).nullable() })
+  .refine((d) => d.state !== "adopted" || d.reference !== null, "An adopted definition needs its reference.");
+
+/** Unit-economics inputs for one cohort. Each cost row is one observation of one obligation; a component without rows is declared. */
+const unitEconomics = z.object({
+  definition: definitionPolicy,
+  cohort: z.object({ id: z.string().min(1), label: z.string(), currency: z.string().length(3), period: reportingWindow }),
+  validOrders: provenanceValueSchema(count),
+  newCustomers: provenanceValueSchema(count),
+  landedCost: z.object({ complete: z.boolean(), missingSkus: z.array(z.string()) }).refine((l) => !l.complete || l.missingSkus.length === 0, "Complete landed cost can't list missing SKUs."),
+  creatorCosts: coverage,
+  attribution: coverage,
+  costs: z.array(z.object({
+    component: costComponent, basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: count.nullable(), cohortId: z.string(), obligationId: z.string(), evidenceId: z.string(),
+    cashId: z.string().nullable(), currency: z.string(), period: reportingWindow,
+  })),
+  declared: z.array(z.object({ component: costComponent, state: z.enum(["knownZero", "notApplicable", "unknown"]), reasonCode: z.string().min(1) })),
+});
+
+/** Unread access is unknown with a reason; verified access states how many subscription products exist. No product means no recurring revenue. */
+const subscriptions = z.object({
+  access: z.enum(["unknown", "verified"]), reasonCode: z.string().nullable(), subscriptionProducts: count.nullable(), definition: definitionPolicy, monthlyRecurring: provenanceValueSchema(count),
+}).superRefine((s, ctx) => {
+  if (s.access === "unknown" && (s.subscriptionProducts !== null || s.reasonCode === null)) ctx.addIssue({ code: "custom", message: "Unknown access needs a reason and no product count." });
+  if (s.access === "verified" && s.subscriptionProducts === null) ctx.addIssue({ code: "custom", message: "Verified access needs a product count." });
+  if (s.subscriptionProducts === 0 && s.monthlyRecurring.state === "known" && s.monthlyRecurring.value !== 0) ctx.addIssue({ code: "custom", message: "Recurring revenue needs a subscription product." });
+});
+
 export const financeDashboardSchema = z.object({
   datasetKey,
   version: z.string(),
@@ -106,6 +147,9 @@ export const financeDashboardSchema = z.object({
   cashHistory: z.array(z.object({ month: z.string(), minor: signedMinor })),
   costBreakdown: z.array(z.object({ label: z.string(), minor: count })),
   payouts: z.array(z.object({ channel: z.string(), matched: count, needsReview: count })),
+  unitEconomics,
+  subscriptions,
+  forecastPlan: z.object({ version: z.string().min(1), basis: z.enum(["illustrative", "rebaselined"]), assumptions: z.array(z.string()) }),
 });
 
 const periodStatus = z.enum(["open", "reconciling", "blocked", "awaitingCpa", "readyToExport", "exporting", "failed", "closed", "reopened"]);
