@@ -147,6 +147,8 @@ export type PhaseReadiness = { origin: "synthetic" | "source" | null; invitation
 
 export type OnboardingRecord = {
   onboardingId: string; revision: number; creatorId: string; identityRevision: number;
+  /** Starts at 1 and rises with each `reviseTerms`. Link mappings are keyed by it, so returning to an earlier offer version maps afresh. */
+  termsRevision: number;
   merchantRef: Ref; creatorRef: Ref; providerProgram: OnboardingInput["providerProgram"]; storefrontRoute: StorefrontRoute;
   offerId: string; offerVersion: string; approvedTerms: ApprovedTerms; acquisition: AcquisitionRequest;
   state: OnboardingState; stateReasons: string[]; preflight: PreflightRecord;
@@ -191,7 +193,9 @@ export type SupersedeReason = "termsChanged" | "closed" | "evidenceChanged";
 export type StoredIntent = {
   intentRef: string; intentVersion: string; kind: IntentKind; actionKind: string; onboardingId: string; creatorId: string;
   offerId: string; offerVersion: string; manifestHash: string; termsHash: string; state: IntentState; holdReasons: string[];
-  approvalRef: string | null; manifestRef: string | null; runRef: string | null; runVersion: string | null; receiptRefs: string[];
+  approvalRef: string | null; manifestRef: string | null; runRef: string | null; runVersion: string | null;
+  /** The first dispatched run's deadline, after which it must not apply. Null when unknown. */
+  runDeadline: string | null; receiptRefs: string[];
   providerReceipt: Ref | null; supersededBy: SupersedeReason | null; supersededFrom: IntentState | null;
   sends: false; createdAt: string; updatedAt: string;
 };
@@ -204,11 +208,13 @@ const outcomeBase = { intentRef: reference, approvalRef: reference.nullable(), m
 export const sendOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("approvalRecorded"), ...outcomeBase, approvalRef: reference, manifestRef: reference }).strict(),
   z.object({ kind: z.literal("approvalHeld"), ...outcomeBase, reasonCodes: z.array(reasonCode).min(1).max(20) }).strict(),
-  z.object({ kind: z.literal("dispatchPending"), ...outcomeBase, approvalRef: reference, manifestRef: reference, runRef: reference, runVersion: reference }).strict(),
+  z.object({ kind: z.literal("dispatchPending"), ...outcomeBase, approvalRef: reference, manifestRef: reference, runRef: reference, runVersion: reference,
+    runDeadline: instant.nullable().optional() }).strict(),
   z.object({ kind: z.literal("sent"), ...outcomeBase, approvalRef: reference, manifestRef: reference, runRef: reference, runVersion: reference,
     receiptRefs: z.array(reference).min(1).max(20), providerReceipt: refSchema, expiresAt: instant.nullable() }).strict(),
   z.object({ kind: z.literal("notSent"), ...outcomeBase, runRef: reference.nullable(), receiptRefs: z.array(reference).max(20) }).strict(),
-  z.object({ kind: z.enum(["uncertain", "permissionDenied", "loginRequired", "uiDrift"]), ...outcomeBase, runRef: reference.nullable(), runVersion: reference.nullable() }).strict(),
+  z.object({ kind: z.enum(["uncertain", "permissionDenied", "loginRequired", "uiDrift"]), ...outcomeBase, runRef: reference.nullable(), runVersion: reference.nullable(),
+    runDeadline: instant.nullable().optional() }).strict(),
 ]);
 export type SendOutcome = z.infer<typeof sendOutcomeSchema>;
 

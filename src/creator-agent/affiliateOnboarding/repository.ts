@@ -29,7 +29,10 @@ export class OnboardingError extends Error {
 export type ConflictKind = "termsChangedWhileLive" | "closedWhileLive" | "evidenceChangedWhileLive" | "withdrawnWhileUncertain" | "lateOutcome";
 export type Conflict = { conflictRef: string; kind: ConflictKind; onboardingId: string; intentRef: string; intentState: IntentState;
   outcome: unknown; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
-export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent; record: OnboardingRecord } | { state: "conflict"; intent: StoredIntent; conflict: Conflict };
+export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent; record: OnboardingRecord } | { state: "conflict"; intent: StoredIntent; conflict: Conflict }
+  | { state: "held"; intent: StoredIntent; reasonCode: "RUN_DEADLINE_NOT_PASSED" | "RUN_DEADLINE_UNKNOWN"; retryAfter: string | null };
+/** How long after a run's deadline an unacknowledged send may still land, as in the mirror resync service. */
+export const DEFAULT_SETTLE_MARGIN_MS = 10_000;
 export type OnboardingOutput = {
   onboardingId: string; origin: "synthetic" | "source" | null; providerRelationshipRef: Ref | null; linkCodeRefs: Ref[];
   attributionTestEvidence: { ref: Ref; observedAt: string; sourceUpdatedAt: null; method: string; value: unknown; unknownReason: null }[];
@@ -67,9 +70,11 @@ const closeSchema = z.object({ reason: z.enum(["merchant-withdrew", "creator-sup
  */
 export class AffiliateOnboardingRepository {
   private readonly db: DatabaseSync; private readonly scope: OperationsScope;
-  private readonly authority: OnboardingAuthority; private readonly now: () => number;
-  constructor(db: DatabaseSync, scope: OperationsScope, authority: OnboardingAuthority, now: () => number = Date.now) {
+  private readonly authority: OnboardingAuthority; private readonly now: () => number; private readonly settleMarginMs: number;
+  constructor(db: DatabaseSync, scope: OperationsScope, authority: OnboardingAuthority, now: () => number = Date.now, options: { settleMarginMs?: number } = {}) {
     this.db = db; this.scope = scope; this.authority = authority; this.now = now;
+    this.settleMarginMs = options.settleMarginMs ?? DEFAULT_SETTLE_MARGIN_MS;
+    if (!Number.isSafeInteger(this.settleMarginMs) || this.settleMarginMs < 0) throw new OnboardingError("INVALID_SETTLE_MARGIN", 500);
     const agent = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_scope'").get()
       ? db.prepare("SELECT workspace_id,account_id FROM agent_scope WHERE id=1").get() : undefined;
     if (!agent || agent.workspace_id !== scope.workspaceId || agent.account_id !== scope.accountId) throw new OnboardingError("DATABASE_SCOPE_MISMATCH", 403);
@@ -86,11 +91,11 @@ export class AffiliateOnboardingRepository {
         body TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS affiliate_onboarding_intent_state ON affiliate_onboarding_intents(onboarding_id,kind,state);
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_relationships(provider TEXT NOT NULL,provider_account TEXT NOT NULL,relationship_id TEXT NOT NULL,
-        offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,onboarding_id TEXT NOT NULL,body TEXT NOT NULL,
-        PRIMARY KEY(provider,provider_account,relationship_id,offer_version),UNIQUE(onboarding_id,offer_version));
+        onboarding_id TEXT NOT NULL,terms_revision INTEGER NOT NULL,offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,body TEXT NOT NULL,
+        PRIMARY KEY(provider,provider_account,relationship_id,onboarding_id,terms_revision),UNIQUE(onboarding_id,terms_revision));
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_link_codes(provider TEXT NOT NULL,provider_account TEXT NOT NULL,kind TEXT NOT NULL,source_id TEXT NOT NULL,
-        offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,relationship_id TEXT NOT NULL,onboarding_id TEXT NOT NULL,
-        PRIMARY KEY(provider,provider_account,kind,source_id,offer_version));
+        onboarding_id TEXT NOT NULL,terms_revision INTEGER NOT NULL,offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,relationship_id TEXT NOT NULL,
+        PRIMARY KEY(provider,provider_account,kind,source_id,onboarding_id,terms_revision));
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_matrices(matrix_ref TEXT PRIMARY KEY,onboarding_id TEXT NOT NULL,offer_version TEXT NOT NULL,
         body TEXT NOT NULL,recorded_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_observations(observation_key TEXT PRIMARY KEY,onboarding_id TEXT NOT NULL,kind TEXT NOT NULL,
@@ -208,7 +213,7 @@ export class AffiliateOnboardingRepository {
       if (existing) return { record: JSON.parse(String(existing.body)) as OnboardingRecord, created: false };
       const createdAt = new Date(at).toISOString();
       const onboardingId = "affiliate-onboarding-" + digest([this.scope, merchantKey, creatorId, programKey]).slice(0, 32);
-      const base: OnboardingRecord = { onboardingId, revision: 1, creatorId, identityRevision: identity.revision, merchantRef: input.merchantRef, creatorRef: input.creatorRef,
+      const base: OnboardingRecord = { onboardingId, revision: 1, termsRevision: 1, creatorId, identityRevision: identity.revision, merchantRef: input.merchantRef, creatorRef: input.creatorRef,
         providerProgram: input.providerProgram, storefrontRoute: input.storefrontRoute, offerId: input.offerId, offerVersion: input.approvedTerms.offerVersion,
         approvedTerms: input.approvedTerms, acquisition: input.acquisition, state: "preflightBlocked", stateReasons: [], preflight: null as unknown as PreflightRecord,
         invitation: { receipt: null, sentAt: null, expiresAt: null, expiredAt: null },
@@ -248,7 +253,7 @@ export class AffiliateOnboardingRepository {
       offerVersion: record.offerVersion, manifestHash: offer.manifestHash, termsHash, sends: false as const };
     const intent: StoredIntent = { ...body, intentRef: "affiliate-intent-" + digest([this.scope, body, attempt]).slice(0, 32),
       intentVersion: "ao1-" + digest([this.scope, body, attempt]), state: "proposed", holdReasons: [], approvalRef: null, manifestRef: null, runRef: null,
-      runVersion: null, receiptRefs: [], providerReceipt: null, supersededBy: null, supersededFrom: null, createdAt, updatedAt: createdAt };
+      runVersion: null, runDeadline: null, receiptRefs: [], providerReceipt: null, supersededBy: null, supersededFrom: null, createdAt, updatedAt: createdAt };
     this.db.prepare("INSERT INTO affiliate_onboarding_intents VALUES(?,?,?,?,?,?,?)").run(intent.intentRef, intent.onboardingId, kind, intent.state, JSON.stringify(intent), createdAt, createdAt);
     return intent;
   }
@@ -368,6 +373,8 @@ export class AffiliateOnboardingRepository {
       if ((["approvalRef", "manifestRef", "runRef"] as const).some(f => value(f) !== null && intent[f] !== null && intent[f] !== value(f))) throw new OnboardingError("OUTCOME_BINDING_MISMATCH");
       const next: StoredIntent = { ...intent, state: NEXT[outcome.kind], approvalRef: value("approvalRef") ?? intent.approvalRef,
         manifestRef: value("manifestRef") ?? intent.manifestRef, runRef: value("runRef") ?? intent.runRef, runVersion: intent.runVersion ?? value("runVersion"),
+        // The first run's deadline stays the binding for any later source absence.
+        runDeadline: intent.runDeadline ?? ("runDeadline" in outcome ? outcome.runDeadline ?? null : null),
         holdReasons: outcome.kind === "approvalHeld" ? outcome.reasonCodes : HOLD_CODE[outcome.kind] ? [HOLD_CODE[outcome.kind]!] : [],
         receiptRefs: "receiptRefs" in outcome ? [...new Set([...intent.receiptRefs, ...outcome.receiptRefs])] : intent.receiptRefs,
         providerReceipt: outcome.kind === "sent" ? outcome.providerReceipt : intent.providerReceipt, updatedAt: recordedAt };
@@ -382,6 +389,8 @@ export class AffiliateOnboardingRepository {
    * Source reconciliation for an intent held after an unknown result. `found` records the native receipt. `absent`, a
    * terminal source answer, keeps the approval for a J04 fresh attempt only after an unknown send. After a denied
    * permission, login/MFA or UI drift, or without an approval, the intent is not sent and a new intent and approval are required.
+   * An absence counts only once a dispatched run can no longer land: before its deadline plus the settle margin, or
+   * when that deadline is unknown, the intent stays held. J04's own dispatch guard is the other backstop.
    */
   reconcile(raw: unknown, idempotencyKey: string): OutcomeReceipt {
     const answer = reconciliationSchema.parse(raw);
@@ -396,6 +405,11 @@ export class AffiliateOnboardingRepository {
         return { state: "conflict", intent, conflict };
       }
       if (intent.state !== "reconciliationRequired") throw new OnboardingError("INTENT_NOT_UNCERTAIN");
+      if (answer.result === "absent" && intent.runRef) {
+        if (!intent.runDeadline) return { state: "held", intent, reasonCode: "RUN_DEADLINE_UNKNOWN", retryAfter: null };
+        const settled = Date.parse(intent.runDeadline) + this.settleMarginMs;
+        if (at < settled) return { state: "held", intent, reasonCode: "RUN_DEADLINE_NOT_PASSED", retryAfter: new Date(settled).toISOString() };
+      }
       const next: StoredIntent = answer.result === "found"
         ? { ...intent, state: "sent", holdReasons: [], providerReceipt: answer.providerReceipt, receiptRefs: [...new Set([...intent.receiptRefs, ...answer.receiptRefs])], updatedAt: recordedAt }
         : intent.approvalRef && intent.holdReasons.length === 1 && intent.holdReasons[0] === RESUMABLE_HOLD
@@ -462,7 +476,7 @@ export class AffiliateOnboardingRepository {
         // The relationship and link or code mapped under the old terms must be re-observed under the new version.
         // Earlier mappings stay in the revision history and the version-keyed crosswalk tables.
         linkCode: { state: "notIssued", relationshipRef: null, linkCodeRefs: [] }, checkoutTest: { state: "notRun", matrixRef: null, offerVersion: null },
-        activation: { state: "notReady", receipt: null, offerVersion: null } });
+        activation: { state: "notReady", receipt: null, offerVersion: null }, termsRevision: record.termsRevision + 1 });
     });
   }
 
@@ -510,11 +524,12 @@ export class AffiliateOnboardingRepository {
           .get(record.providerProgram.provider, account, r.kind, r.ref.sourceId, onboardingId);
         if (mapped) throw new OnboardingError("LINK_CODE_CROSS_CREATOR");
       }
-      // One mapping per offer version. A re-map after a terms change adds rows for the new version; the old ones stay.
-      this.db.prepare("INSERT INTO affiliate_onboarding_relationships VALUES(?,?,?,?,?,?,?)")
-        .run(record.providerProgram.provider, account, relationshipId, record.offerVersion, record.creatorId, onboardingId, JSON.stringify(evidence));
-      for (const r of value.linkCodeRefs) this.db.prepare("INSERT INTO affiliate_onboarding_link_codes VALUES(?,?,?,?,?,?,?,?)")
-        .run(record.providerProgram.provider, account, r.kind, r.ref.sourceId, record.offerVersion, record.creatorId, relationshipId, onboardingId);
+      // One mapping per terms revision. A re-map after a terms change, including a return to an earlier offer version,
+      // adds rows for the new revision; earlier ones stay as history.
+      this.db.prepare("INSERT INTO affiliate_onboarding_relationships VALUES(?,?,?,?,?,?,?,?)")
+        .run(record.providerProgram.provider, account, relationshipId, onboardingId, record.termsRevision, record.offerVersion, record.creatorId, JSON.stringify(evidence));
+      for (const r of value.linkCodeRefs) this.db.prepare("INSERT INTO affiliate_onboarding_link_codes VALUES(?,?,?,?,?,?,?,?,?)")
+        .run(record.providerProgram.provider, account, r.kind, r.ref.sourceId, onboardingId, record.termsRevision, record.offerVersion, record.creatorId, relationshipId);
       const withdrawn = this.withdrawActivation(record, at);
       return { record: this.change(withdrawn, at, { linkCode: { state: "mapped", relationshipRef: value.relationshipRef, linkCodeRefs: value.linkCodeRefs },
         checkoutTest: { state: "notRun", matrixRef: null, offerVersion: null } }), created: true };

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { AgentStore } from "../store.ts";
 import { previewActionFor, reconciliationFor } from "./actionAdapter.ts";
 import { INVITATION_ACTION_KIND } from "./contract.ts";
-import { onboardingFixture, onboardingScope, providerRef } from "./fixtures.testkit.ts";
-import { AffiliateOnboardingRepository } from "./repository.ts";
+import { accountFixture, onboardingFixture, onboardingScope, providerRef } from "./fixtures.testkit.ts";
+import { AffiliateOnboardingRepository, DEFAULT_SETTLE_MARGIN_MS } from "./repository.ts";
 
 const code = (code: string) => expect.objectContaining({ code });
 
@@ -164,7 +164,8 @@ describe("J10-10 unknown results are reconciled, never replayed", () => {
       const intent = f.repo.proposeInvitation(record.onboardingId, "invite");
       f.repo.reserve(intent.intentRef, "reserve", { requestId: "request" });
       f.repo.recordOutcome({ kind: "approvalRecorded", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1" }, "approved");
-      f.repo.recordOutcome({ kind: "dispatchPending", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1", runVersion: "v1" }, "dispatched");
+      f.repo.recordOutcome({ kind: "dispatchPending", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1", runVersion: "v1",
+        runDeadline: new Date(f.now() + 60_000).toISOString() }, "dispatched");
       f.repo.recordOutcome({ kind, intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1", runVersion: "v1" }, "unknown");
       const held = f.repo.intent(intent.intentRef)!;
       expect(held).toMatchObject({ state: "reconciliationRequired", approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1" });
@@ -178,7 +179,15 @@ describe("J10-10 unknown results are reconciled, never replayed", () => {
       expect(f.repo.pendingReconciliation().map(i => i.intentRef)).toEqual([intent.intentRef]);
       expect(reconciliationFor(f.repo, intent.intentRef, { requestId: "lookup", idempotencyKey: "lookup-1" })).toMatchObject({ kind: "action",
         action: { operation: "reconcileRun", actionKind: "lookup", runRef: "run-1" } });
-      const absent = f.repo.reconcile({ result: "absent", intentRef: intent.intentRef, sourceRef: providerRef("synthetic-no-invite"), terminal: true }, "absent");
+      // The first run could still land until its deadline plus the settle margin, so an earlier absence is held.
+      const absentInput = { result: "absent", intentRef: intent.intentRef, sourceRef: providerRef("synthetic-no-invite"), terminal: true };
+      const early = f.repo.reconcile(absentInput, "absent-early");
+      expect(early).toMatchObject({ state: "held", reasonCode: "RUN_DEADLINE_NOT_PASSED", retryAfter: new Date(f.now() + 60_000 + DEFAULT_SETTLE_MARGIN_MS).toISOString() });
+      expect(f.repo.intent(intent.intentRef)!.state).toBe("reconciliationRequired");
+      f.advance(60_000 + DEFAULT_SETTLE_MARGIN_MS - 1);
+      expect(f.repo.reconcile(absentInput, "absent-margin").state).toBe("held");
+      f.advance(1);
+      const absent = f.repo.reconcile(absentInput, "absent");
       if (kind === "uncertain") {
         // Only an unknown send resumes under its approval, through a J04 fresh attempt; no new invitation is created.
         expect(absent.state === "recorded" && absent.intent).toMatchObject({ state: "awaitingApproval", approvalRef: "approval-1" });
@@ -388,5 +397,66 @@ describe("review follow-ups", () => {
     const sourced = new AffiliateOnboardingRepository(f.store.database, onboardingScope, { ...f.authority, allowSyntheticAccounts: undefined }, f.now)
       .refreshPreflight(record.onboardingId, "refresh-source");
     expect(sourced).toMatchObject({ state: "readyToInvite", preflight: { origin: "source" } });
+  });
+});
+
+describe("P3 follow-ups", () => {
+  it("an absence for a dispatched run with an unknown deadline holds for an operator", () => {
+    const f = onboardingFixture();
+    const record = f.opened();
+    const intent = f.repo.proposeInvitation(record.onboardingId, "invite");
+    f.repo.reserve(intent.intentRef, "reserve", { requestId: "request" });
+    f.repo.recordOutcome({ kind: "approvalRecorded", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1" }, "approved");
+    f.repo.recordOutcome({ kind: "dispatchPending", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1", runVersion: "v1" }, "dispatched");
+    f.repo.recordOutcome({ kind: "uncertain", intentRef: intent.intentRef, approvalRef: "approval-1", manifestRef: "manifest-1", runRef: "run-1", runVersion: "v1" }, "unknown");
+    f.advance(30 * 86_400_000);
+    const held = f.repo.reconcile({ result: "absent", intentRef: intent.intentRef, sourceRef: providerRef("synthetic-no-invite"), terminal: true }, "absent");
+    expect(held).toMatchObject({ state: "held", reasonCode: "RUN_DEADLINE_UNKNOWN", retryAfter: null });
+    expect(f.repo.intent(intent.intentRef)).toMatchObject({ state: "reconciliationRequired", approvalRef: "approval-1" });
+    expect(f.repo.pendingReconciliation().map(i => i.intentRef)).toEqual([intent.intentRef]);
+    // The first run's deadline stays the binding: a later answer cannot move it.
+    expect(f.repo.reconcile({ result: "found", intentRef: intent.intentRef, providerReceipt: providerRef("native-invite"), receiptRefs: ["r"], expiresAt: null }, "found").state).toBe("recorded");
+  });
+
+  it("returning to an earlier offer version re-maps under a new terms revision without a storage conflict", () => {
+    const f = onboardingFixture();
+    const record = f.linked();
+    const cycle = (version: string, n: number) => {
+      f.setOffer(f.offer.current!.terms, version);
+      f.repo.syncTerms(record.onboardingId, `cycle-sync-${n}`);
+      f.repo.reviseTerms(record.onboardingId, { ...f.input().approvedTerms, offerVersion: version }, `cycle-revise-${n}`);
+      f.sendIntent(f.repo.proposeInvitation(record.onboardingId, `cycle-invite-${n}`));
+      f.repo.observe(record.onboardingId, { type: "acceptance", evidence: f.evidence(`accept-${n}`, { offerId: record.offerId, offerVersion: version }) }, `cycle-accept-${n}`);
+      return f.repo.mapRelationship(record.onboardingId, f.relationship(version), `cycle-map-${n}`);
+    };
+    expect(cycle("synthetic-offer-v2", 2).created).toBe(true);
+    const back = cycle("synthetic-offer-v1", 3);
+    expect(back).toMatchObject({ created: true, record: { offerVersion: "synthetic-offer-v1", termsRevision: 3, linkCode: { state: "mapped" } } });
+    expect(f.repo.mapRelationship(record.onboardingId, f.relationship("synthetic-offer-v1"), "cycle-map-3-again").created).toBe(false);
+    expect(f.store.database.prepare("SELECT terms_revision,offer_version FROM affiliate_onboarding_relationships ORDER BY terms_revision").all()
+      .map(r => [r.terms_revision, r.offer_version])).toEqual([[1, "synthetic-offer-v1"], [2, "synthetic-offer-v2"], [3, "synthetic-offer-v1"]]);
+    expect(() => f.repo.mapRelationship(record.onboardingId, f.relationship("synthetic-offer-v1", "another-relationship"), "cycle-map-other"))
+      .toThrow(code("RELATIONSHIP_ALREADY_MAPPED"));
+  });
+
+  it("refuses a relationship or a link or code already mapped to another creator", () => {
+    const f = onboardingFixture();
+    f.linked();
+    // A second synthetic creator, with its own identity, account record and approved offer.
+    const other = "synthetic-creator-b";
+    const creatorRef = { provider: "farda-creator", accountId: onboardingScope.accountId, sourceId: other, url: null };
+    f.state.identity = { creatorId: other, revision: 1, suppressions: [] };
+    f.state.account = accountFixture(f.now(), { creatorRef });
+    f.setOffer({ ...f.offer.current!.terms, creatorId: other }, "synthetic-offer-v1");
+    const b = f.repo.open(f.input({ creatorRef }), "open-b").record;
+    expect(b.state).toBe("readyToInvite");
+    f.sendIntent(f.repo.proposeInvitation(b.onboardingId, "invite-b"));
+    f.repo.observe(b.onboardingId, { type: "acceptance", evidence: f.evidence("accept-b", { offerId: b.offerId, offerVersion: b.offerVersion }) }, "accept-b");
+    expect(() => f.repo.mapRelationship(b.onboardingId, f.relationship(b.offerVersion), "map-b-relationship")).toThrow(code("RELATIONSHIP_CROSS_CREATOR"));
+    expect(() => f.repo.mapRelationship(b.onboardingId, f.relationship(b.offerVersion, "relationship-b", "link-b", "SYNTHETICCODE"), "map-b-code"))
+      .toThrow(code("LINK_CODE_CROSS_CREATOR"));
+    expect(() => f.repo.mapRelationship(b.onboardingId, f.relationship(b.offerVersion, "relationship-b", "synthetic-link", "CODEB"), "map-b-link"))
+      .toThrow(code("LINK_CODE_CROSS_CREATOR"));
+    expect(f.repo.mapRelationship(b.onboardingId, f.relationship(b.offerVersion, "relationship-b", "link-b", "CODEB"), "map-b").created).toBe(true);
   });
 });

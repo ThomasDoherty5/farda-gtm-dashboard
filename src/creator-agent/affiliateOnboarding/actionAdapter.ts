@@ -67,10 +67,11 @@ const codes = (values: string[], fallback: string) => {
  * sent only with the provider's own native receipt; without one the outcome is uncertain and goes to reconciliation.
  */
 export function outcomeFromActionResponse(repo: Reader, intentRef: string, response: ActionResponse, providerReceipt: Ref | null,
-  expiresAt: string | null = null): SendOutcome {
+  options: { expiresAt?: string | null; runDeadline?: string | null } = {}): SendOutcome {
   const intent = current(repo, intentRef), { approvalRef, manifestRef, runRef } = response;
+  const expiresAt = options.expiresAt ?? null, runDeadline = options.runDeadline ?? null;
   const runVersion = runRef && runRef === intent.runRef && intent.runVersion ? intent.runVersion : runRef ? response.payloadVersion : null;
-  const uncertain = { kind: "uncertain" as const, intentRef, approvalRef, manifestRef, runRef, runVersion };
+  const uncertain = { kind: "uncertain" as const, intentRef, approvalRef, manifestRef, runRef, runVersion, runDeadline };
   if (response.executionCertainty === "uncertain" || ["outcomeUncertain", "reconciling", "partiallySucceeded"].includes(response.state)) return uncertain;
   if (!runRef) {
     if (["failed", "canceled"].includes(response.state)) return { kind: "notSent", intentRef, approvalRef, manifestRef, runRef: null, receiptRefs: response.receiptRefs };
@@ -81,5 +82,5 @@ export function outcomeFromActionResponse(repo: Reader, intentRef: string, respo
   if (response.state === "succeeded" && response.executionCertainty === "applied" && response.receiptRefs.length)
     return providerReceipt ? { kind: "sent", intentRef, approvalRef, manifestRef, runRef, runVersion, receiptRefs: response.receiptRefs, providerReceipt, expiresAt } : uncertain;
   if (["failed", "canceled"].includes(response.state)) return { kind: "notSent", intentRef, approvalRef, manifestRef, runRef, receiptRefs: response.receiptRefs };
-  return { kind: "dispatchPending", intentRef, approvalRef, manifestRef, runRef, runVersion };
+  return { kind: "dispatchPending", intentRef, approvalRef, manifestRef, runRef, runVersion, runDeadline };
 }
