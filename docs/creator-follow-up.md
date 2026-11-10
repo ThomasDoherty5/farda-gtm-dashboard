@@ -33,10 +33,24 @@ Each intent gets exactly one send path when it is created, and the other builder
 | `postGraceOnly` reminder (`post-grace`) | `workflowReminder` | `collaborationProposalFor`: the workflow's `reminder` proposal |
 | Human review (`past-grace`, `rights-expiry-warning`) | `workflowHandoff` | `collaborationProposalFor`: `human-handoff` |
 
-Both builders accept only an intent that is still `proposed`. Each path also records its handoff, so the intent leaves `proposed` and can't be proposed again:
+`previewActionFor` accepts only a `proposed` intent, and the J04 path records what happens next through `recordSendOutcome`.
 
-- The J04 path records through `recordSendOutcome`.
-- The workflow path records through `recordWorkflowHandoff`, using the stable `workflowRequestKeyFor` key. A recorded proposal moves the intent to `handedOff`, and the workflow's stale-version refusal moves it to `notSent`. An uncertain answer waits for the workflow's own `proposalRequestKey` lookup.
+### Wiring the workflow submission
+
+Whoever wires the collaboration workflow submission must reserve the intent first. Without a reservation, nothing records the handoff between submission and the answer.
+
+1. Call `reserveWorkflowHandoff(intentRef, key)`. In its own locked transaction it moves the intent from `proposed` to `handingOff` and returns the request key from `workflowRequestKeyFor`. A second reservation is refused with `INTENT_ALREADY_RESERVED`.
+2. Build the payload with `collaborationProposalFor`. It accepts only a reserved (`handingOff`) intent.
+3. Submit the payload to `proposeCollaborationReview` with that request key as the idempotency key.
+4. Record the answer with `recordWorkflowHandoff`. An answer for an unreserved intent is refused with `INTENT_NOT_RESERVED`.
+   - A recorded proposal moves the intent to `handedOff`.
+   - The workflow's stale-version refusal moves it to `notSent`.
+   - An uncertain answer moves it to `uncertain`.
+5. Later, record what the workflow's detail read shows with `recordWorkflowOutcome`.
+   - `approved` moves the intent to `workflowApproved`. Approved is not sent, so it stays live.
+   - `rejected` moves it to `notSent`, and `sent` moves it to `sent`. Both are terminal and no longer live.
+
+A reservation that is never answered, or an uncertain answer, is listed by `pendingReconciliation`. `reconciliationFor` holds it for an operator (`WORKFLOW_PROPOSAL_LOOKUP_REQUIRED`) and returns the request key for the workflow's `proposalRequestKey` lookup.
 
 ## Reminders
 
@@ -59,19 +73,24 @@ The due-date version is a hash of the due day, grace and timezone. A new source 
 
 An intent is withdrawn (`superseded`) in these cases:
 
-- Closure withdraws every intent that hasn't been sent or become uncertain.
+- Closure withdraws every intent that isn't settled. That includes uncertain ones.
 - A changed due date withdraws intents from older versions.
 - Outreach suppression withdraws creator messages.
 - Unknown outreach eligibility doesn't withdraw anything, so a failed lookup doesn't use up the reminder's slot. Instead it opens one blocking `outreachUnverifiedWhileLive` conflict for each creator message that is live in J04 or the workflow.
 - A later step withdraws only proposals that were never handed to J04.
 
-An intent counts as live in J04 when it is awaiting approval or dispatched. It is also live when it is held with an approval reference, because a J04 hold isn't terminal and can resume. A `handedOff` intent counts as live in the workflow.
+An intent counts as live in J04 when it is awaiting approval or dispatched. It is also live when it is held with an approval reference, because a J04 hold isn't terminal and can resume. An intent counts as live in the workflow when it is reserved (`handingOff`), `handedOff` or `workflowApproved`.
 
-Withdrawing a live intent doesn't cancel it there. It opens a blocking `withdrawnWhileInJ04` or `withdrawnWhileInWorkflow` conflict. An operator must cancel the approval, proposal or run with its owner, then resolve the conflict.
+Withdrawing a live intent doesn't cancel it there. It opens a blocking conflict:
+
+- `withdrawnWhileInJ04` or `withdrawnWhileInWorkflow` for an intent live in J04 or the workflow;
+- `withdrawnWhileUncertain` for an intent whose send or handoff outcome isn't known, on either path.
+
+An operator must cancel the approval, proposal or run with its owner, or reconcile the outcome, then resolve the conflict. A withdrawn uncertain or reserved intent stays in `pendingReconciliation` while its conflict is open.
 
 Whoever registers `creatorFollowUpReminder` with J04 must have the registration's current-draft check (`currentDraft` / `assertCurrentDraft`) read this repository and refuse an intent that is no longer in the state it was approved in, including any withdrawn intent. Otherwise J04 could still approve or dispatch a withdrawn reminder.
 
-Any outcome that later arrives for a withdrawn intent is stored as a `lateOutcome` conflict, and the intent stays superseded. This includes a real `sent` receipt, which stays in the audit log. Every conflict except a late `notSent` blocks new creator reminders for the collaboration until it is resolved.
+Any outcome that later arrives for a withdrawn intent is stored as a `lateOutcome` conflict, and the intent stays superseded. This includes a real `sent` receipt or a `recorded` workflow answer, which stays in the audit log and never moves the intent to `sent` or `handedOff`. Every conflict except a late `notSent` blocks new creator reminders for the collaboration until it is resolved.
 
 ## Content review
 
