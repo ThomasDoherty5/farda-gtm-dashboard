@@ -51,7 +51,7 @@ A finding is raised only when the reads prove it. A partial source read cannot s
 
 Keys are matched within a group. A key labelled with the wrong currency or period on one side lands in two groups and shows as two findings, one missing on each side, not as a single key-level conflict.
 
-Conflicts carry no record key, and their ids cannot be used to recover one. A record key is guessable, so a plain digest of it and the other public inputs could be reversed by trial. The public comparison and conflict ids are therefore an HMAC under a server-held secret, the operations secret. The plain fingerprint used for suppression stays in the server database and in server-side results; it is never put in a conflict. Conflict values are presence, count or money, using the closed shapes in `safeValue`. Ownership is `source` for expected datasets, and `unknown` for `missing_source`, `orphan` and anything in an orphan group. `repairAllowed` is always `false`, because repair is owned elsewhere. The existing repair hold in `operationsControls.ts` therefore stays in force.
+Conflicts carry no record key, and their ids cannot be used to recover one. A record key is guessable, so a plain digest of it and the other public inputs could be reversed by trial. The public comparison and conflict ids are therefore an HMAC under a server-held secret, the operations secret. The plain fingerprint used for suppression stays in the server database and in server-side results; it is never put in a conflict. Rotating the secret changes every public id but not local tracking: open findings are looked up and cleared by their stored group (scope, grain, period and currency) and plain fingerprint. A repeat refreshes a finding's stored ids, and `latestSlice` publishes every comparison and conflict under the current secret. Conflict values are presence, count or money, using the closed shapes in `safeValue`. Ownership is `source` for expected datasets, and `unknown` for `missing_source`, `orphan` and anything in an orphan group. `repairAllowed` is always `false`, because repair is owned elsewhere. The existing repair hold in `operationsControls.ts` therefore stays in force.
 
 ## Partial reads are never clean
 
@@ -80,7 +80,7 @@ Rechecks are idempotent:
 - **Identical finding.** A finding's fingerprint covers the check, group, key, side, category, field and values. It excludes versions and times. Because values are included, a changed value is a different finding: the old one clears and the new one opens. A new run that sees an open finding counts it as `repeated`, and it is not raised again. Only `opened` and `reopened` findings are returned in `raised`, so alerts carry only those.
 - **Clearing.** An open finding is `cleared` only when a later run compares its group with complete coverage and no longer sees it. An incomplete or unknown recheck leaves it open. A cleared finding that returns is `reopened`.
 - **Read order.** Each finding keeps the newest `readAt`, per side, of the reads behind its current state. Runs can be recorded out of order, so a run whose reads of the group are older cannot clear or reopen it. That is recorded as `stale`.
-- **Periods outside the run.** A finding whose period is not in a later run stays open. It never disappears silently.
+- **Periods outside the run.** A finding whose period is not in a later run stays open. It never disappears silently. Once its period has left the lookback window, it keeps the snapshot `partial` until a check that includes that period runs; a manual recheck of that period clears it.
 
 `runs` returns the audit trail with its total. `runFindings` returns each run's dispositions. `findings` returns first and last run, occurrences, clearing and the read basis.
 
@@ -97,7 +97,7 @@ So a matched latest run cannot hide an open finding. Open findings that the late
 The server is not wired; the backend owner makes that change. A source reader for the `nightlyReconciliation` view would work like this:
 
 1. Build `MirrorReconciliationRepository` on the same `db` and `scope` that `createOperationsControls` receives, with `secret: operationsSecret` and the same `now`, as the other modules in `server.ts` do.
-2. Save the schedule record. On each scheduled run, read the source and mirror datasets for `duePeriods(schedule, now)`, and call `recordCheck` with their rows and coverage declarations.
+2. Save the schedule record. On each scheduled run, read the source and mirror datasets for `duePeriods(schedule, now)`, and call `recordCheck` with their rows and coverage declarations. Emit a mirror read declaration for every scope seen in the mirror and for every group with an open finding (`findings(checkId, "open")`), not only the expected datasets. Without one, an orphan group stays `unknown` and its findings cannot clear.
 3. In the injected `OperationsControlSource.read`, take `repo.latestSlice(checkId)`. Put its `comparisons` and `conflicts` into the snapshot, and use its `coverage` as the snapshot coverage. The schema allows 100 of each, and groups with differences come first.
 
 `operationsControlSourceSchema` already accepts the output unchanged. The browser aliasing in `operationsControls.ts` applies as it does today.
