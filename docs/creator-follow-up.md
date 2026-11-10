@@ -23,13 +23,35 @@ So the module has a required `reminderPolicy` setting with no default:
 | `preDue` | Reminders at `due-minus-2` and `within-grace` | Human review only |
 | `postGraceOnly` | No reminder | One `post-grace` creator reminder, matching the workflow's rule, plus human review |
 
+## Send paths
+
+Each intent gets exactly one send path when it is created, and the other builder refuses it.
+
+| Intent | Send path | Builder |
+| -- | -- | -- |
+| `preDue` reminder (`due-minus-2`, `within-grace`) | `j04Preview` | `previewActionFor`: J04 exact-action approval |
+| `postGraceOnly` reminder (`post-grace`) | `workflowReminder` | `collaborationProposalFor`: the workflow's `reminder` proposal |
+| Human review (`past-grace`, `rights-expiry-warning`) | `workflowHandoff` | `collaborationProposalFor`: `human-handoff` |
+
+Both builders accept only an intent that is still `proposed`. Each path also records its handoff, so the intent leaves `proposed` and can't be proposed again:
+
+- The J04 path records through `recordSendOutcome`.
+- The workflow path records through `recordWorkflowHandoff`, using the stable `workflowRequestKeyFor` key. A recorded proposal moves the intent to `handedOff`, and the workflow's stale-version refusal moves it to `notSent`. An uncertain answer waits for the workflow's own `proposalRequestKey` lookup.
+
 ## Reminders
 
 `decideReminder` is pure. It counts the current day in the configured timezone and compares it with the due day.
 
 A missing due date, grace period, obligation or source timezone goes to human review. So does a source timezone that differs from the configured one. A missing source timezone is never filled in from configuration. Voluntary posting has no reminder.
 
-A creator reminder also needs clear outreach eligibility and no earlier creator message that is dispatched, unreconciled or in an open conflict. The human-review escalation past grace is still proposed when a reminder is held.
+A creator reminder also needs clear outreach eligibility. It is also held while an earlier creator message is any of these:
+
+- awaiting approval
+- in a live J04 hold
+- dispatched
+- handed to the workflow
+- unreconciled
+- in an open conflict The human-review escalation past grace is still proposed when a reminder is held.
 
 The due-date version is a hash of the due day, grace and timezone. A new source revision with the same date is the same version, and a changed date is a new one. A unique index allows at most one intent per collaboration, step and due-date version.
 
@@ -40,9 +62,14 @@ An intent is withdrawn (`superseded`) in these cases:
 - Closure withdraws every intent that hasn't been sent or become uncertain.
 - A changed due date withdraws intents from older versions.
 - Outreach suppression withdraws creator messages.
+- Unknown outreach eligibility doesn't withdraw anything, so a failed lookup doesn't use up the reminder's slot. Instead it opens one blocking `outreachUnverifiedWhileLive` conflict for each creator message that is live in J04 or the workflow.
 - A later step withdraws only proposals that were never handed to J04.
 
-Withdrawing an intent that J04 is already approving or running doesn't cancel it there. That case opens a blocking `withdrawnWhileInJ04` conflict, and an operator must cancel the approval or run in J04 and then resolve the conflict.
+An intent counts as live in J04 when it is awaiting approval or dispatched. It is also live when it is held with an approval reference, because a J04 hold isn't terminal and can resume. A `handedOff` intent counts as live in the workflow.
+
+Withdrawing a live intent doesn't cancel it there. It opens a blocking `withdrawnWhileInJ04` or `withdrawnWhileInWorkflow` conflict. An operator must cancel the approval, proposal or run with its owner, then resolve the conflict.
+
+Whoever registers `creatorFollowUpReminder` with J04 must have the registration's current-draft check (`currentDraft` / `assertCurrentDraft`) read this repository and refuse an intent that is no longer in the state it was approved in, including any withdrawn intent. Otherwise J04 could still approve or dispatch a withdrawn reminder.
 
 Any outcome that later arrives for a withdrawn intent is stored as a `lateOutcome` conflict, and the intent stays superseded. This includes a real `sent` receipt, which stays in the audit log. Every conflict except a late `notSent` blocks new creator reminders for the collaboration until it is resolved.
 
@@ -54,7 +81,7 @@ A review decision names the exact content version. A decision on any version exc
 
 `evaluatePaidReuse` delegates eligibility to the asset store's `evaluateAssetUse`. Missing (`J09_RIGHTS_UNAVAILABLE`), expired, revoked, pending, stale or unknown rights therefore block paid reuse in the same way.
 
-The status is the first non-granted one along the chain, checking the asset first and then each ancestor. The expiry warning uses the earliest end date anywhere in the chain. The repository records at most one warning per asset version, rights version and end date, and dates it in the configured timezone.
+The status is the first definite unavailability (revoked, expired or missing) along the chain, checking the asset first and then each ancestor. If no link is definitely unavailable, it is the first other non-granted status, such as unknown or pending. The expiry warning uses the earliest end date anywhere in the chain. The repository records at most one warning per asset version, rights version and end date, and dates it in the configured timezone.
 
 ## Fees and closure
 
@@ -81,11 +108,11 @@ The repository shares the scoped agent SQLite connection, which is bound through
 
 `actionAdapter.ts` produces envelopes in the shapes of the actions service's `foundationActionSchema` and of the collaboration workflow's `workflowIntentSchema`.
 
-- **Creator reminders.** Each becomes a `previewAction` that J04 binds to the exact intent version. Any send happens only through J04 approval and the existing runner.
+- **`preDue` reminders.** Each becomes a `previewAction` that J04 binds to the exact intent version. The send then happens only through J04 approval and the existing runner.
 - **Approved is not sent.** Approved, queued or running is never recorded as sent. Only a succeeded run with a receipt is recorded as sent.
 - **Held approvals.** A blocked answer, or a denial that applied nothing, becomes `approvalHeld`, separate from a recorded approval.
 - **Uncertain sends.** These are never replayed. A dispatched run is reconciled with `reconcileRun` `lookup`, and an uncertain approval request with `reconcileApproval`. With neither a run nor an approval reference, the intent is held for an operator.
 - **Run binding.** The first signed run version stays the binding. Leaving the uncertain state needs a terminal receipt for the same run and version.
-- **Workflow intents.** Human review items become `human-handoff`, the `postGraceOnly` reminder becomes `reminder`, and closures become `close` with the mapping above.
+- **Workflow intents.** Human review items become `human-handoff`, the `postGraceOnly` reminder becomes `reminder`, and closures become `close` with the mapping above. Each is built only on its own send path, and only while `proposed`.
 
 The action kind `creatorFollowUpReminder` is not registered. Registration, the real posting clock and message sending are left to their owners.
