@@ -24,6 +24,8 @@ export interface OnboardingAuthority {
   identity(creatorId: string): CanonicalIdentity | null;
   account(input: Pick<OnboardingInput, "merchantRef" | "creatorRef" | "providerProgram">): unknown;
   capability(action: OnboardingAction, providerAccountRef: string): unknown;
+  /** Test-only. Without it, an account record with `origin: "synthetic"` is refused and never reads as ready. */
+  allowSyntheticAccounts?: boolean;
 }
 
 export const PHASE_ACTIONS: Record<"invitation" | "activation", OnboardingAction[]> = {
@@ -153,7 +155,7 @@ export function runPreflight(input: PreflightInput, authority: OnboardingAuthori
     // A source or fixture record from another merchant, creator or provider is a cross-account payload.
     if (!sameRef(account.merchantRef, input.merchantRef) || !sameRef(account.creatorRef, input.creatorRef) || account.provider !== input.providerProgram.provider)
       blockers.push(block("ACCOUNT_SCOPE_MISMATCH", "operator"));
-    if (account.origin === "synthetic" && scope.environment !== "sandbox") blockers.push(block("SYNTHETIC_ACCOUNT_OUTSIDE_SANDBOX", "operator"));
+    if (account.origin === "synthetic" && authority.allowSyntheticAccounts !== true) blockers.push(block("SYNTHETIC_ACCOUNT_NOT_ALLOWED", "operator"));
     if (Date.parse(account.observedAt) > now || Date.parse(account.validUntil) <= now) blockers.push(block("PROVIDER_ACCOUNT_STALE", "provider"));
     bound(account.validUntil);
     const source = (sourceId: string | null) => sourceId ? { provider: account!.provider, accountId: account!.providerAccountRef, sourceId, url: null } : null;

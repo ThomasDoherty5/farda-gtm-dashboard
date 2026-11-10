@@ -70,6 +70,8 @@ export function onboardingFixture() {
     identity: id => state.identity && state.identity.creatorId === id ? structuredClone(state.identity) : null,
     account: () => structuredClone(state.account),
     capability: action => state.capability.has(action) ? state.capability.get(action) : readiness(),
+    // Test-only: these synthetic account records may stand in for the unbound provider account.
+    allowSyntheticAccounts: true,
   };
   const repo = new AffiliateOnboardingRepository(store.database, onboardingScope, authority, () => now);
 

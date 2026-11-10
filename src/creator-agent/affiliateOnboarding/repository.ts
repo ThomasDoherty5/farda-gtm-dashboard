@@ -9,11 +9,11 @@ import { evaluateAttributionMatrix, type MatrixResult } from "./attributionMatri
 import {
   ACTIVATION_ACTION_KIND, INVITATION_ACTION_KIND, approvedTermsSchema, onboardingInputSchema, payoutSetupObservationSchema,
   reconciliationSchema, refSchema, relationshipObservationSchema, sendOutcomeSchema, sourceEventSchema,
-  type Blocker, type IntentKind, type IntentState, type OnboardingRecord,
+  type Blocker, type IntentKind, type IntentState, type OnboardingRecord, type SupersedeReason,
   type PreflightRecord, type Ref, type SendOutcome, type StoredIntent,
 } from "./contract.ts";
 import { readSafely, runPreflight, screenAcquisition, type OnboardingAuthority } from "./preflight.ts";
-import { activationBlockers, applySourceEvent, isOpen, phaseReadiness } from "./stateMachine.ts";
+import { activationBlockers, activationGate, applySourceEvent, isOpen, phaseReadiness } from "./stateMachine.ts";
 
 export class OnboardingError extends Error {
   readonly code: string; readonly status: number; readonly reasonCodes: string[];
@@ -22,15 +22,16 @@ export class OnboardingError extends Error {
 /**
  * Something an operator must settle with the approval owner. A withdrawal never cancels anything in J04.
  * - `termsChangedWhileLive` / `closedWhileLive`: an intent J04 was holding was withdrawn here.
+ * - `evidenceChangedWhileLive`: an activation J04 was holding was withdrawn because its link mapping or matrix changed.
  * - `withdrawnWhileUncertain`: an intent whose outcome was not yet known was withdrawn.
  * - `lateOutcome`: an outcome arrived for a withdrawn intent; it is kept, never applied.
  */
-export type ConflictKind = "termsChangedWhileLive" | "closedWhileLive" | "withdrawnWhileUncertain" | "lateOutcome";
+export type ConflictKind = "termsChangedWhileLive" | "closedWhileLive" | "evidenceChangedWhileLive" | "withdrawnWhileUncertain" | "lateOutcome";
 export type Conflict = { conflictRef: string; kind: ConflictKind; onboardingId: string; intentRef: string; intentState: IntentState;
   outcome: unknown; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
 export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent; record: OnboardingRecord } | { state: "conflict"; intent: StoredIntent; conflict: Conflict };
 export type OnboardingOutput = {
-  onboardingId: string; providerRelationshipRef: Ref | null; linkCodeRefs: Ref[];
+  onboardingId: string; origin: "synthetic" | "source" | null; providerRelationshipRef: Ref | null; linkCodeRefs: Ref[];
   attributionTestEvidence: { ref: Ref; observedAt: string; sourceUpdatedAt: null; method: string; value: unknown; unknownReason: null }[];
   phaseReadiness: ReturnType<typeof phaseReadiness>; payoutSetupState: string; blockers: Blocker[]; providerReceipt: Ref | null;
 };
@@ -53,6 +54,9 @@ const ALLOWED_FROM: Record<SendOutcome["kind"], IntentState[]> = {
 };
 const HOLD_CODE: Partial<Record<SendOutcome["kind"], string>> = { uncertain: "SEND_OUTCOME_UNKNOWN", permissionDenied: "PROVIDER_PERMISSION_DENIED",
   loginRequired: "PROVIDER_LOGIN_OR_MFA_REQUIRED", uiDrift: "PROVIDER_UI_DRIFT" };
+const LIVE_CONFLICT: Record<SupersedeReason, ConflictKind> = { termsChanged: "termsChangedWhileLive", closed: "closedWhileLive", evidenceChanged: "evidenceChangedWhileLive" };
+/** Only an unknown send may resume under its approval after the source confirms absence. A denial, login/MFA or UI drift needs a new approval. */
+const RESUMABLE_HOLD = "SEND_OUTCOME_UNKNOWN";
 const ACTION_KIND: Record<IntentKind, string> = { invitation: INVITATION_ACTION_KIND, activation: ACTIVATION_ACTION_KIND };
 const closeSchema = z.object({ reason: z.enum(["merchant-withdrew", "creator-suppressed", "relationship-ended", "operator-closed"]), sourceRef: refSchema }).strict();
 
@@ -82,9 +86,11 @@ export class AffiliateOnboardingRepository {
         body TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS affiliate_onboarding_intent_state ON affiliate_onboarding_intents(onboarding_id,kind,state);
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_relationships(provider TEXT NOT NULL,provider_account TEXT NOT NULL,relationship_id TEXT NOT NULL,
-        creator_id TEXT NOT NULL,onboarding_id TEXT NOT NULL UNIQUE,body TEXT NOT NULL,PRIMARY KEY(provider,provider_account,relationship_id));
+        offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,onboarding_id TEXT NOT NULL,body TEXT NOT NULL,
+        PRIMARY KEY(provider,provider_account,relationship_id,offer_version),UNIQUE(onboarding_id,offer_version));
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_link_codes(provider TEXT NOT NULL,provider_account TEXT NOT NULL,kind TEXT NOT NULL,source_id TEXT NOT NULL,
-        creator_id TEXT NOT NULL,relationship_id TEXT NOT NULL,onboarding_id TEXT NOT NULL,PRIMARY KEY(provider,provider_account,kind,source_id));
+        offer_version TEXT NOT NULL,creator_id TEXT NOT NULL,relationship_id TEXT NOT NULL,onboarding_id TEXT NOT NULL,
+        PRIMARY KEY(provider,provider_account,kind,source_id,offer_version));
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_matrices(matrix_ref TEXT PRIMARY KEY,onboarding_id TEXT NOT NULL,offer_version TEXT NOT NULL,
         body TEXT NOT NULL,recorded_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS affiliate_onboarding_observations(observation_key TEXT PRIMARY KEY,onboarding_id TEXT NOT NULL,kind TEXT NOT NULL,
@@ -150,16 +156,22 @@ export class AffiliateOnboardingRepository {
     return full;
   }
   /** Withdraws every unsettled intent. One that J04 holds, or whose outcome is unknown, opens a blocking conflict. */
-  private supersede(onboardingId: string, reason: "termsChanged" | "closed", at: number, kinds: IntentKind[] = ["invitation", "activation"]) {
+  private supersede(onboardingId: string, reason: SupersedeReason, at: number, kinds: IntentKind[] = ["invitation", "activation"]): number {
     const rows = this.db.prepare(`SELECT body FROM affiliate_onboarding_intents WHERE onboarding_id=? AND state IN (${WITHDRAWABLE.map(() => "?").join(",")})`)
       .all(onboardingId, ...WITHDRAWABLE).map(row => JSON.parse(String(row.body)) as StoredIntent).filter(i => kinds.includes(i.kind));
     const updatedAt = new Date(at).toISOString();
     for (const intent of rows) {
       this.writeIntent({ ...intent, state: "superseded", supersededBy: reason, supersededFrom: intent.state, updatedAt });
       const live = liveElsewhere(intent);
-      if (live) this.recordConflict({ kind: live === "uncertain" ? "withdrawnWhileUncertain" : reason === "closed" ? "closedWhileLive" : "termsChangedWhileLive",
+      if (live) this.recordConflict({ kind: live === "uncertain" ? "withdrawnWhileUncertain" : LIVE_CONFLICT[reason],
         onboardingId, intentRef: intent.intentRef, intentState: intent.state, outcome: null, blocking: true, recordedAt: updatedAt });
     }
+    return rows.length;
+  }
+  /** A re-recorded link mapping or matrix withdraws any unsettled activation and returns a proposed activation to not ready. */
+  private withdrawActivation(record: OnboardingRecord, at: number): OnboardingRecord {
+    this.supersede(record.onboardingId, "evidenceChanged", at, ["activation"]);
+    return record.activation.state === "proposed" ? { ...record, activation: { state: "notReady", receipt: null, offerVersion: null } } : record;
   }
   private currentOffer(offerId: string) { return readSafely(() => this.authority.offer(offerId)); }
   private preflight(record: OnboardingRecord, at: number, phase: "invitation" | "activation", terms = record.approvedTerms): PreflightRecord {
@@ -310,6 +322,11 @@ export class AffiliateOnboardingRepository {
     if (!offer || offer.version !== intent.offerVersion || offer.manifestHash !== intent.manifestHash) throw new OnboardingError("TERMS_CHANGED");
     const record = this.recordOf(intent.onboardingId);
     if (!record || !isOpen(record)) throw new OnboardingError("ONBOARDING_NOT_OPEN");
+    // An activation must still have current acceptance, its mapped link or code and a passing matrix for this version.
+    if (intent.kind === "activation") {
+      const blockers = activationGate(record, offer.version);
+      if (blockers.length) throw new OnboardingError("ACTIVATION_NOT_READY", 409, blockers);
+    }
   }
 
   private applyIntentEffect(intent: StoredIntent, record: OnboardingRecord, at: number): OnboardingRecord {
@@ -336,6 +353,8 @@ export class AffiliateOnboardingRepository {
     return this.once("recordOutcome", idempotencyKey, outcome, (at): OutcomeReceipt => {
       const intent = this.intentOf(outcome.intentRef);
       if (!intent) throw new OnboardingError("RECORD_NOT_FOUND", 404);
+      // A native receipt from another provider account is refused, even as a late outcome.
+      if (outcome.kind === "sent") this.assertSourceRef(this.required(intent.onboardingId), outcome.providerReceipt);
       const recordedAt = new Date(at).toISOString();
       if (intent.state === "superseded") {
         const conflict = this.recordConflict({ kind: "lateOutcome", onboardingId: intent.onboardingId, intentRef: intent.intentRef, intentState: intent.state,
@@ -361,13 +380,15 @@ export class AffiliateOnboardingRepository {
 
   /**
    * Source reconciliation for an intent held after an unknown result. `found` records the native receipt. `absent`, a
-   * terminal source answer, keeps any approval for a J04 fresh attempt, or releases an unapproved intent as not sent.
+   * terminal source answer, keeps the approval for a J04 fresh attempt only after an unknown send. After a denied
+   * permission, login/MFA or UI drift, or without an approval, the intent is not sent and a new intent and approval are required.
    */
   reconcile(raw: unknown, idempotencyKey: string): OutcomeReceipt {
     const answer = reconciliationSchema.parse(raw);
     return this.once("reconcile", idempotencyKey, answer, (at): OutcomeReceipt => {
       const intent = this.intentOf(answer.intentRef);
       if (!intent) throw new OnboardingError("RECORD_NOT_FOUND", 404);
+      this.assertSourceRef(this.required(intent.onboardingId), answer.result === "found" ? answer.providerReceipt : answer.sourceRef);
       const recordedAt = new Date(at).toISOString();
       if (intent.state === "superseded") {
         const conflict = this.recordConflict({ kind: "lateOutcome", onboardingId: intent.onboardingId, intentRef: intent.intentRef, intentState: intent.state,
@@ -377,7 +398,9 @@ export class AffiliateOnboardingRepository {
       if (intent.state !== "reconciliationRequired") throw new OnboardingError("INTENT_NOT_UNCERTAIN");
       const next: StoredIntent = answer.result === "found"
         ? { ...intent, state: "sent", holdReasons: [], providerReceipt: answer.providerReceipt, receiptRefs: [...new Set([...intent.receiptRefs, ...answer.receiptRefs])], updatedAt: recordedAt }
-        : { ...intent, state: intent.approvalRef ? "awaitingApproval" : "notSent", holdReasons: [], updatedAt: recordedAt };
+        : intent.approvalRef && intent.holdReasons.length === 1 && intent.holdReasons[0] === RESUMABLE_HOLD
+          ? { ...intent, state: "awaitingApproval", holdReasons: [], updatedAt: recordedAt }
+          : { ...intent, state: "notSent", updatedAt: recordedAt };
       this.writeIntent(next);
       let record = this.required(intent.onboardingId);
       if (answer.result === "found" && intent.kind === "invitation") record = { ...record, invitation: { ...record.invitation, expiresAt: answer.expiresAt } };
@@ -436,6 +459,9 @@ export class AffiliateOnboardingRepository {
         state: preflight.state === "ready" ? "readyToInvite" : "preflightBlocked", stateReasons: preflight.blockers.map(b => b.code),
         invitation: { receipt: null, sentAt: null, expiresAt: null, expiredAt: null },
         acceptance: { state: "unknown", offerVersion: null, evidenceRef: null, observedAt: null },
+        // The relationship and link or code mapped under the old terms must be re-observed under the new version.
+        // Earlier mappings stay in the revision history and the version-keyed crosswalk tables.
+        linkCode: { state: "notIssued", relationshipRef: null, linkCodeRefs: [] }, checkoutTest: { state: "notRun", matrixRef: null, offerVersion: null },
         activation: { state: "notReady", receipt: null, offerVersion: null } });
     });
   }
@@ -470,9 +496,9 @@ export class AffiliateOnboardingRepository {
       const keys = value.linkCodeRefs.map(r => `${r.kind}:${r.ref.sourceId}`);
       if (new Set(keys).size !== keys.length) throw new OnboardingError("LINK_CODE_DUPLICATED", 422);
       const relationshipId = value.relationshipRef.sourceId;
-      const owner = this.db.prepare("SELECT onboarding_id FROM affiliate_onboarding_relationships WHERE provider=? AND provider_account=? AND relationship_id=?")
-        .get(record.providerProgram.provider, account, relationshipId);
-      if (owner && owner.onboarding_id !== onboardingId) throw new OnboardingError("RELATIONSHIP_CROSS_CREATOR");
+      const owner = this.db.prepare("SELECT 1 FROM affiliate_onboarding_relationships WHERE provider=? AND provider_account=? AND relationship_id=? AND onboarding_id!=? LIMIT 1")
+        .get(record.providerProgram.provider, account, relationshipId, onboardingId);
+      if (owner) throw new OnboardingError("RELATIONSHIP_CROSS_CREATOR");
       if (record.linkCode.state === "mapped") {
         if (record.linkCode.relationshipRef?.sourceId !== relationshipId) throw new OnboardingError("RELATIONSHIP_ALREADY_MAPPED");
         const known = record.linkCode.linkCodeRefs.map(r => `${r.kind}:${r.ref.sourceId}`);
@@ -480,15 +506,18 @@ export class AffiliateOnboardingRepository {
         throw new OnboardingError("LINK_CODE_CHANGED_REQUIRES_REVIEW");
       }
       for (const r of value.linkCodeRefs) {
-        const mapped = this.db.prepare("SELECT onboarding_id FROM affiliate_onboarding_link_codes WHERE provider=? AND provider_account=? AND kind=? AND source_id=?")
-          .get(record.providerProgram.provider, account, r.kind, r.ref.sourceId);
-        if (mapped && mapped.onboarding_id !== onboardingId) throw new OnboardingError("LINK_CODE_CROSS_CREATOR");
+        const mapped = this.db.prepare("SELECT 1 FROM affiliate_onboarding_link_codes WHERE provider=? AND provider_account=? AND kind=? AND source_id=? AND onboarding_id!=? LIMIT 1")
+          .get(record.providerProgram.provider, account, r.kind, r.ref.sourceId, onboardingId);
+        if (mapped) throw new OnboardingError("LINK_CODE_CROSS_CREATOR");
       }
-      this.db.prepare("INSERT INTO affiliate_onboarding_relationships VALUES(?,?,?,?,?,?)")
-        .run(record.providerProgram.provider, account, relationshipId, record.creatorId, onboardingId, JSON.stringify(evidence));
-      for (const r of value.linkCodeRefs) this.db.prepare("INSERT INTO affiliate_onboarding_link_codes VALUES(?,?,?,?,?,?,?)")
-        .run(record.providerProgram.provider, account, r.kind, r.ref.sourceId, record.creatorId, relationshipId, onboardingId);
-      return { record: this.change(record, at, { linkCode: { state: "mapped", relationshipRef: value.relationshipRef, linkCodeRefs: value.linkCodeRefs } }), created: true };
+      // One mapping per offer version. A re-map after a terms change adds rows for the new version; the old ones stay.
+      this.db.prepare("INSERT INTO affiliate_onboarding_relationships VALUES(?,?,?,?,?,?,?)")
+        .run(record.providerProgram.provider, account, relationshipId, record.offerVersion, record.creatorId, onboardingId, JSON.stringify(evidence));
+      for (const r of value.linkCodeRefs) this.db.prepare("INSERT INTO affiliate_onboarding_link_codes VALUES(?,?,?,?,?,?,?,?)")
+        .run(record.providerProgram.provider, account, r.kind, r.ref.sourceId, record.offerVersion, record.creatorId, relationshipId, onboardingId);
+      const withdrawn = this.withdrawActivation(record, at);
+      return { record: this.change(withdrawn, at, { linkCode: { state: "mapped", relationshipRef: value.relationshipRef, linkCodeRefs: value.linkCodeRefs },
+        checkoutTest: { state: "notRun", matrixRef: null, offerVersion: null } }), created: true };
     });
   }
 
@@ -501,7 +530,7 @@ export class AffiliateOnboardingRepository {
       const matrix = evaluateAttributionMatrix(rawOrders, { relationshipSourceId: record.linkCode.relationshipRef.sourceId, linkCodeRefs: record.linkCode.linkCodeRefs,
         storefrontRoute: record.storefrontRoute, precedence: record.preflight.attributionPrecedence, definitions: record.preflight.definitions });
       this.db.prepare("INSERT OR IGNORE INTO affiliate_onboarding_matrices VALUES(?,?,?,?,?)").run(matrix.matrixRef, onboardingId, record.offerVersion, JSON.stringify(matrix), new Date(at).toISOString());
-      return { matrix, record: this.change(record, at, { checkoutTest: { state: matrix.overall, matrixRef: matrix.matrixRef, offerVersion: record.offerVersion } }) };
+      return { matrix, record: this.change(this.withdrawActivation(record, at), at, { checkoutTest: { state: matrix.overall, matrixRef: matrix.matrixRef, offerVersion: record.offerVersion } }) };
     });
   }
 
@@ -572,7 +601,7 @@ export class AffiliateOnboardingRepository {
     if (record.payoutSetup.state === "unknown") blockers.push({ code: "PAYOUT_SETUP_UNKNOWN", owner: "provider", sourceRef: record.payoutSetup.sourceRef });
     for (const c of this.conflicts(onboardingId)) if (c.blocking && !c.resolvedAt) blockers.push({ code: "CONFLICT_" + c.kind.replace(/[A-Z]/g, x => "_" + x).toUpperCase(), owner: "operator", sourceRef: null });
     const latestSent = this.intents(onboardingId).filter(i => i.state === "sent").at(-1);
-    return { onboardingId, providerRelationshipRef: record.linkCode.relationshipRef, linkCodeRefs: record.linkCode.linkCodeRefs.map(r => r.ref),
+    return { onboardingId, origin: record.preflight.origin, providerRelationshipRef: record.linkCode.relationshipRef, linkCodeRefs: record.linkCode.linkCodeRefs.map(r => r.ref),
       attributionTestEvidence: (matrix?.attributionTests ?? []).map(test => ({ ref: { provider: record.providerProgram.provider, accountId: account, sourceId: test.sourceRef, url: null },
         observedAt: record.updatedAt, sourceUpdatedAt: null, method: "sandbox-checkout-matrix", value: test, unknownReason: null })),
       phaseReadiness: phaseReadiness(record, currentVersion), payoutSetupState: record.payoutSetup.state,

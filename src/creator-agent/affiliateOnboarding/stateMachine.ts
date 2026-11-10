@@ -67,6 +67,9 @@ export function activationBlockers(record: OnboardingRecord, currentOfferVersion
   if (record.activation.state !== "notReady") out.push("ACTIVATION_ALREADY_PROPOSED");
   return [...new Set(out)];
 }
+/** What must still hold for an activation already proposed or live in J04: everything except the proposal itself. */
+export const activationGate = (record: OnboardingRecord, currentOfferVersion: string | null) =>
+  activationBlockers(record, currentOfferVersion).filter(code => code !== "ACTIVATION_ALREADY_PROPOSED");
 
 const INVITATION: Record<OnboardingState, string> = { preflightBlocked: "blocked", readyToInvite: "ready", invitationPending: "pending",
   invitationUnknown: "reconciliationRequired", invited: "sent", invitationExpired: "expired", declined: "sent", feeRequested: "sent",
@@ -81,5 +84,5 @@ export function phaseReadiness(record: OnboardingRecord, currentOfferVersion: st
   const checkoutTest = record.checkoutTest.state === "passed" && record.checkoutTest.offerVersion !== record.offerVersion ? "staleVersion" : record.checkoutTest.state;
   const activation = record.activation.state === "active" ? "active" : record.activation.state === "proposed" ? "pending"
     : activationBlockers(record, currentOfferVersion).length ? "notReady" : "ready";
-  return { invitation: INVITATION[record.state], acceptance, linkCode, checkoutTest, payoutSetup: record.payoutSetup.state, activation };
+  return { origin: record.preflight.origin, invitation: INVITATION[record.state], acceptance, linkCode, checkoutTest, payoutSetup: record.payoutSetup.state, activation };
 }

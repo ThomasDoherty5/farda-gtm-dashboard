@@ -12,7 +12,7 @@ describe("onboarding state machine", () => {
     const result = applySourceEvent(invited, { type: "acceptance", evidence: f.evidence("accept", { offerId: invited.offerId, offerVersion: invited.offerVersion }) }, invited.offerVersion, at);
     expect(result.ok).toBe(true);
     const accepted = result.ok ? result.record : invited;
-    expect(phaseReadiness(accepted, accepted.offerVersion)).toEqual({ invitation: "sent", acceptance: "accepted", linkCode: "pending",
+    expect(phaseReadiness(accepted, accepted.offerVersion)).toEqual({ origin: "synthetic", invitation: "sent", acceptance: "accepted", linkCode: "pending",
       checkoutTest: "notRun", payoutSetup: "notStarted", activation: "notReady" });
     expect(activationBlockers(accepted, accepted.offerVersion)).toEqual(["LINK_OR_CODE_NOT_MAPPED", "ATTRIBUTION_MATRIX_NOT_PASSED"]);
   });

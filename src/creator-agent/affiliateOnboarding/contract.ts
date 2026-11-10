@@ -142,7 +142,8 @@ export const ONBOARDING_STATES = ["preflightBlocked", "readyToInvite", "invitati
 export type OnboardingState = (typeof ONBOARDING_STATES)[number];
 export const PAYOUT_SETUP_STATES = ["notStarted", "waitingForCreator", "complete", "unknown"] as const;
 export type PayoutSetupState = (typeof PAYOUT_SETUP_STATES)[number];
-export type PhaseReadiness = { invitation: string; acceptance: string; linkCode: string; checkoutTest: string; payoutSetup: string; activation: string };
+/** `origin` labels the account record behind the preflight: `synthetic` is test evidence, never a live route. */
+export type PhaseReadiness = { origin: "synthetic" | "source" | null; invitation: string; acceptance: string; linkCode: string; checkoutTest: string; payoutSetup: string; activation: string };
 
 export type OnboardingRecord = {
   onboardingId: string; revision: number; creatorId: string; identityRevision: number;
@@ -185,11 +186,13 @@ export const INTENT_STATES = ["proposed", "previewing", "awaitingApproval", "app
   "reconciliationRequired", "superseded"] as const;
 export type IntentState = (typeof INTENT_STATES)[number];
 export type IntentKind = "invitation" | "activation";
+/** `evidenceChanged`: the link mapping or attribution matrix an activation relied on was re-recorded. */
+export type SupersedeReason = "termsChanged" | "closed" | "evidenceChanged";
 export type StoredIntent = {
   intentRef: string; intentVersion: string; kind: IntentKind; actionKind: string; onboardingId: string; creatorId: string;
   offerId: string; offerVersion: string; manifestHash: string; termsHash: string; state: IntentState; holdReasons: string[];
   approvalRef: string | null; manifestRef: string | null; runRef: string | null; runVersion: string | null; receiptRefs: string[];
-  providerReceipt: Ref | null; supersededBy: "termsChanged" | "closed" | null; supersededFrom: IntentState | null;
+  providerReceipt: Ref | null; supersededBy: SupersedeReason | null; supersededFrom: IntentState | null;
   sends: false; createdAt: string; updatedAt: string;
 };
 
