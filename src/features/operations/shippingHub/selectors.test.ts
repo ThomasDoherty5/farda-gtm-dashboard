@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { shippingHubDemo, SHIPPING_DEMO_NOW } from "@/fixtures/shippingHub";
 import { hubShipmentSchema, shippingHubSchema } from "@/adapter/viewSchemas/shippingHub";
-import { duplicateTrackingIds, filterShipments, hubCounts, reviewBlockers, reviewSelection, selectShipment } from "./selectors";
+import { duplicateTrackingIds, filterShipments, hubCounts, reviewBlockers, reviewSelection, selectShipment, shippingReportingPeriod } from "./selectors";
 import { HUB_DEFAULT_FILTERS } from "./types";
 
 describe("shared shipping model", () => {
@@ -78,5 +78,19 @@ describe("shared shipping model", () => {
     expect(creators[0]!.origin.kind).toBe("allocation");
     expect(filterShipments(d.shipments, { ...HUB_DEFAULT_FILTERS, query: "demo-c020" }, d.observedAt)[0]!.id).toBe("DEMO-SHIP-C020");
     expect(filterShipments(d.shipments, HUB_DEFAULT_FILTERS, d.observedAt).slice(0, 2).map(s => s.id)).toEqual(["DEMO-SHIP-1041", "DEMO-SHIP-C018"]);
+  });
+});
+
+describe("shipping report deep links", () => {
+  it("preserves the exact start-inclusive/end-exclusive request cohort with recipient and purpose", () => {
+    const rows=shippingHubDemo().shipments.slice(0,3).map((row,i)=>({...row,requestedAt:["2026-11-01T00:00:00Z","2026-11-02T00:00:00Z","2026-11-03T00:00:00Z"][i]!}));
+    const f={...HUB_DEFAULT_FILTERS,start:"2026-11-01T00:00:00Z",end:"2026-11-03T00:00:00Z",timezone:"UTC"};
+    expect(new Set(filterShipments(rows,f,SHIPPING_DEMO_NOW).map(r=>r.id))).toEqual(new Set(rows.slice(0,2).map(r=>r.id)));
+    const creator={...rows[0]!,recipient:{type:"creator" as const,ref:"fictional-creator",display:"Fictional creator",collaborationRef:"fictional-collaboration"},purpose:"sample" as const};
+    expect(filterShipments([creator,...rows.slice(1)],{...f,recipient:"creator",purpose:"sample"},SHIPPING_DEMO_NOW)).toEqual([creator]);
+  });
+  it.each([{start:"bad"},{start:"2026-11-01T00:00:00Z"},{start:"2026-11-03T00:00:00Z",end:"2026-11-01T00:00:00Z",timezone:"UTC"},{start:"2026-11-01T00:00:00Z",end:"2026-11-03T00:00:00Z",timezone:"invalid-zone"}])("never silently widens a malformed period %j", patch => {
+    const f={...HUB_DEFAULT_FILTERS,...patch};expect(shippingReportingPeriod(f).state).toBe("invalid");
+    expect(filterShipments(shippingHubDemo().shipments,f,SHIPPING_DEMO_NOW)).toEqual([]);
   });
 });

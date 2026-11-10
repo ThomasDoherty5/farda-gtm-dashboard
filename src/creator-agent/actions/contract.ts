@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readinessGatePresentationSchema, readinessPresentationSchema } from "./readinessPresentation.ts";
 import { trustedHumanSchema, type ApprovalPrincipal, type ApprovalSources } from "../approvals/contract.ts";
 
 export const reference = z.string().trim().min(1).max(240).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(v => !/^https?:/i.test(v));
@@ -55,10 +56,16 @@ export type ReadinessPayload = z.infer<typeof readinessPayloadSchema>;
 export const readinessSnapshotSchema = z.object({ scope: scopeSchema, targetRef: reference, version: reference, observedAt: instant,
   validUntil: instant, writable: z.literal(true), launchDate: date.nullable(), launchDateApproved: z.boolean(),
   phase: z.enum(["review", "effective-l-minus-4"]), phaseVersion: reference, phaseAllowed: z.boolean(),
-  gates: z.array(z.object({ id: reference, required: z.boolean(), state: z.enum(["pass", "fail", "unknown"]), evidenceRef: reference.nullable() }).strict()).min(1).max(100),
+  gates: z.array(z.object({ id: reference, required: z.boolean(), state: z.enum(["pass", "fail", "unknown"]), evidenceRef: reference.nullable(), presentation: readinessGatePresentationSchema.optional() }).strict()).min(1).max(100),
+  presentation: readinessPresentationSchema.optional(),
   evidenceRefs: z.array(reference).min(1).max(100), policyVersion: reference }).strict().superRefine((s, ctx) => {
     if (new Set(s.gates.map(g => g.id)).size !== s.gates.length) ctx.addIssue({ code: "custom", message: "Duplicate gate." });
     if (s.launchDateApproved && !s.launchDate) ctx.addIssue({ code: "custom", message: "Approved date is missing." });
+    const p = s.presentation;
+    if (p && (p.recordRef !== s.targetRef || p.recordVersion !== s.version || p.sampleAcceptance &&
+      (Date.parse(p.sampleAcceptance.observedAt) > Date.parse(s.observedAt) || p.sampleAcceptance.state === "verified" &&
+        (!p.sampleAcceptance.evidenceRef || !s.evidenceRefs.includes(p.sampleAcceptance.evidenceRef)))))
+      ctx.addIssue({ code: "custom", message: "Presentation and sample acceptance must bind the current source record and evidence." });
   });
 export type ReadinessSnapshot = z.infer<typeof readinessSnapshotSchema>;
 export const readinessIntentSchema = z.object({ scope: scopeSchema, requestKey: reference, principalRef: reference, targetRef: reference,

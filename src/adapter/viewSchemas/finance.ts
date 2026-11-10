@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import { moneySchema, provenanceValueSchema } from "../contract.ts";
+import { financeSummaryContextSchema } from "../../creator-agent/finance/headlines.ts";
 
 const count = z.number().int().nonnegative();
 const signedMinor = z.number().int();
@@ -87,6 +88,7 @@ export const payableDetailSchema = z.object({
 
 export const financeDashboardSchema = z.object({
   datasetKey,
+  summaryContext: financeSummaryContextSchema.nullable().optional(),
   version: z.string(),
   period: z.object({ label: z.string(), days: z.literal(30) }),
   pnl: z.object({ revenue: signedMinor, cogs: signedMinor, opex: signedMinor, ytd: provenanceValueSchema(signedMinor) }),

@@ -17,9 +17,9 @@ export function effectiveEvents(events:FunnelEvent[]) {
   const corrected=new Set(events.map(e=>e.correctsEventId).filter(Boolean));
   return events.filter(e=>!corrected.has(e.eventId));
 }
-function selectMeasurement(history:Measurement[]) {
+export function selectMeasurement(history:Measurement[]) {
   const latest=history.at(-1);if(!latest)return {measurement:null,conflict:false};
-  const fact=(m:Measurement)=>JSON.stringify([m.definition,m.window,m.semantics,m.context,m.views,m.likes,m.comments,m.shares,m.saves,m.reach]);
+  const fact=(m:Measurement)=>JSON.stringify([m.definition,m.window,m.reportingPeriod,m.semantics,m.context,m.views,m.likes,m.comments,m.shares,m.saves,m.reach]);
   const conflict=history.some(m=>Date.parse(m.at)===Date.parse(latest.at) && fact(m)!==fact(latest));
   return {measurement:conflict ? null : latest,conflict};
 }

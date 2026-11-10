@@ -12,7 +12,7 @@ import {boundedSourceRead} from "./actions/readBoundary.ts";
 import {type OperationsControlAuthority,type OperationsControlProof,OperationsAuthorityError,type OperationsServiceReference,operationsTargetMaterialHash} from "./operationsControlAuthority.ts";
 import {operationsCanonicalIntentSchema,operationsIntentDigest,type OperationsCanonicalIntent,type OperationsControlBridge} from "./operationsControlBridge.ts";
 import type {ApprovalPrincipal} from "./approvals/contract.ts";
-import { controlPolicy, controlReceiptSchema, nativeOperationsControlSchema, operationsControlAction, operationsControlFilters, operationsControlSourceSchema,operationsHealthAction,operationsHealthResultSchema,
+import { controlPolicy, operationsControlFreshnessMs, controlReceiptSchema, nativeOperationsControlSchema, operationsControlAction, operationsControlFilters, operationsControlSourceSchema,operationsHealthAction,operationsHealthResultSchema,
   operationsCanonicalAction,operationsServiceEvidenceSchema,type OperationsServiceEvidence,type NativeOperationsControl, type OperationsControlSnapshot, type OperationsReviewPayload } from "./operationsControlsSchema.ts";
 
 const sourceRef=z.string().min(1).max(500),sourceInstant=z.string().datetime({offset:true});
@@ -56,7 +56,7 @@ export function createOperationsControls(input:Input){
   const alias=(raw:string)=>"reference-"+createHmac("sha256",input.secret).update(JSON.stringify(["controls-display",scope,raw])).digest("hex").slice(0,16);
   const seal=(kind:z.infer<typeof targetSchema>["kind"],id:string)=>sealOperationsToken(scope,input.secret,"operations-control-target",{kind,id});
   function open(ref:string){try{return targetSchema.parse(openOperationsToken(scope,input.secret,"operations-control-target",ref));}catch{return fail("INVALID_CONTROL_REFERENCE",400);}}
-  const fresh=(at:string)=>Number.isFinite(Date.parse(at))&&Date.parse(at)<=now()&&now()-Date.parse(at)<=15*60_000;
+  const fresh=(at:string)=>Number.isFinite(Date.parse(at))&&Date.parse(at)<=now()&&now()-Date.parse(at)<=operationsControlFreshnessMs;
   function auth(actor:string,role:Role){if(actor!=="agent-"+role)fail("SOURCE_SCOPE_DENIED",403);}
   function callerFence(caller?:OperationsControlCaller){return ()=>{if(caller?.signal?.aborted)fail("REQUEST_CANCELLED",499);if(!caller)return;
     try{assertSynchronousVoid(caller.assertCurrent);}catch(error){throw new OperationsControlError("OPERATIONS_CALLER_DENIED",error instanceof OperationsControlError&&[401,403].includes(error.status)?error.status:403);}};}

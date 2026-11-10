@@ -9,7 +9,7 @@ import { boundedSourceRead } from "../actions/readBoundary.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
 import { monitorFilters,monitorReadBindingSchema,monitorSourceResultSchema,nativeContentSchema,nativeWatchlistSchema,nativeRunSchema,nativePostSchema,
   type MonitorSnapshot,type MonitorSourceReader,type MonitorViewKey,type NativeWatchlist } from "./contract.ts";
-import { effectiveEvents,projectPosts,monitorTotals,type Alias } from "./posts.ts";
+import { effectiveEvents,projectPosts,monitorTotals,selectMeasurement,type Alias } from "./posts.ts";
 export { monitorFilters,monitorViewKeys,type MonitorSourceReader,type MonitorViewKey } from "./contract.ts";
 
 export class MonitorError extends Error {
@@ -179,7 +179,7 @@ export function createMonitorReader(options:Options){
       if(cursor && (cursor.basis!==basis || cursor.expires<=now))throw new MonitorError("MONITOR_SNAPSHOT_CHANGED",409);
       const watches=watchRows(members,s,!expired,alias,now);
       const latestRun=(s?.runs??[]).slice().sort((a,b)=>Date.parse(b.observedAt)-Date.parse(a.observedAt)||a.id.localeCompare(b.id))[0];
-      const meta={observedAt:asOf,readAccess:packet?{validUntil:new Date(Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)).toISOString()}:null,sourceState,sourceAsOf:cursor?cursor.sourceAsOf:s?.observedAt??null,sourceVersion:s?alias("source",s.version):null,
+      const meta={observedAt:asOf,synthetic:s?.evidenceStage?s.evidenceStage==="synthetic":null,readAccess:packet?{validUntil:new Date(Math.min(Date.parse(packet.authority.validUntil),Date.parse(packet.authority.observedAt)+15*60_000)).toISOString()}:null,sourceState,sourceAsOf:cursor?cursor.sourceAsOf:s?.observedAt??null,sourceVersion:s?alias("source",s.version):null,
         latestRunRef:latestRun?alias("run",latestRun.id):null,membershipComplete:members.complete};
       const offset=cursor?.offset??0;
       let total=0,returned=0;
@@ -212,7 +212,9 @@ export function createMonitorReader(options:Options){
           const id=monitorFilters.postPerformance.parse(filters).postId,item=posts.find(p=>p.post.id===id);
           data=item?nativePostSchema.parse({...meta,kind:"saved-monitor-post",...item}):null;total=returned=data?1:0;
         } else {
-          const f=monitorFilters.contentMonitor.parse(filters),from=Date.parse(asOf)-(f.window==="last-7"?7:30)*86400000;
+          const f=monitorFilters.contentMonitor.parse(filters),from=f.reportingPeriod?Date.parse(f.reportingPeriod.startAt):Date.parse(asOf)-(f.window==="last-7"?7:30)*86400000;
+          const until=f.reportingPeriod?Date.parse(f.reportingPeriod.endAt):Date.parse(asOf)+1;
+          if(f.reportingPeriod && until>Date.parse(asOf))throw new MonitorError("INVALID_MONITOR_PERIOD",400);
           // A post has a creator/account/network, not a profile ID. Search a handle
           // only when that exact tuple resolves to one permitted active profile.
           // Count all matching rows before eligibility filtering to avoid guessing
@@ -228,11 +230,26 @@ export function createMonitorReader(options:Options){
             const row=candidates?.length===1?candidates[0]:undefined;
             return Boolean(!p.conflict&&handleQuery&&row?.state==="active"&&row.handle?.toLowerCase().replace(/^@/,"").includes(handleQuery));
           };
-          const chosen=posts.map(({post})=>({...post,measurement:post.measurement && Date.parse(post.measurement.at)>=from?post.measurement:null}))
+          const chosen=posts.map(({post,history})=>{
+            const matchesPeriod=(period:typeof f.reportingPeriod)=>!f.reportingPeriod || !!period &&
+              Date.parse(period.startAt)===from&&Date.parse(period.endAt)===until&&period.timezone===f.reportingPeriod.timezone&&period.basis===f.reportingPeriod.basis;
+            // Observation time is not the measurement window. A source may report a
+            // completed interval after its end; lifetime counters never prove it.
+            const selected=selectMeasurement(history.filter(m=>f.reportingPeriod?matchesPeriod(m.reportingPeriod):Date.parse(m.at)>=from&&Date.parse(m.at)<until));
+            return {...post,conflict:post.conflict||selected.conflict,measurement:post.conflict?null:selected.measurement,
+              attribution:matchesPeriod(post.attribution?.reportingPeriod)?post.attribution:null};
+          })
             .filter(p=>(f.source==="all"||p.enrollmentSource===f.source)&&(f.network==="all"||p.network===f.network)&&
+              (!f.campaign||p.campaign===f.campaign)&&
               (!query || [p.id,p.creator,p.network,p.campaign].some(value=>value.toLowerCase().includes(query)) || matchesHandle(p)))
             .sort((a,b)=>(b.publishedAt?Date.parse(b.publishedAt):0)-(a.publishedAt?Date.parse(a.publishedAt):0)||a.id.localeCompare(b.id));
           data=nativeContentSchema.parse({...meta,kind:"saved-content-monitor",posts:slice(chosen),total:chosen.length,window:f.window,
+            selection:{campaign:f.campaign??null,period:f.reportingPeriod??null},
+            liveCount:sourceState==="current"&&members.complete?chosen.filter(p=>p.visibility==="public"&&p.access==="authorized"&&!p.conflict).length:null,
+            networkCoverage:(["instagram","tiktok"] as const).filter(network=>f.network==="all"||f.network===network).map(network=>{
+              const rows=chosen.filter(p=>p.network===network);return {network,posts:rows.length,measurable:rows.filter(p=>p.measurement?.views!==null&&p.measurement!==null&&!p.conflict).length,
+                live:rows.filter(p=>p.visibility==="public"&&p.access==="authorized"&&!p.conflict).length,complete:sourceState==="current"&&members.complete};
+            }),
             ...monitorTotals(chosen,sourceState==="current" && members.complete,events,asOf,alias,publications)});
         }
       }
@@ -242,9 +259,13 @@ export function createMonitorReader(options:Options){
       assertCurrent();
       if(data===null && (sourceState!=="current" || !members.complete))throw new MonitorError("MONITOR_SOURCE_COVERAGE_UNVERIFIED",503);
       db.exec("COMMIT");
-      return {data,total,returned,partial,stale:expired,nextCursor,hasMore:more,assertCurrent,capabilities:[{actionKind:"retryMonitorProfile",state:"held" as const,
+      return {data,total,returned,partial,stale:expired,
+        // A composite current response must expire when this source becomes stale,
+        // even if its separate permission grant lasts longer.
+        freshUntil:sourceExpires!==null&&!expired?new Date(sourceExpires).toISOString():null,
+        nextCursor,hasMore:more,assertCurrent,capabilities:[{actionKind:"retryMonitorProfile",state:"held" as const,
         reasonCodes:["J08_RETRY_AUTHORITY_UNVERIFIED"]}]};
     } catch(error){db.exec("ROLLBACK");throw error;}
   }
-  return {read};
+  return {read, publicCampaignRef:(campaign:string)=>alias("campaign",campaign)};
 }

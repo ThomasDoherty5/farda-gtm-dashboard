@@ -20,11 +20,12 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     return result;
   };
   const stale = (owner: AnalyticsOwnerProof) => owner.sourceAsOf === null || at - Date.parse(owner.sourceAsOf) >= owner.maxAgeMs;
+  const syncIncomplete = (owner: AnalyticsOwnerProof) => !!owner.sync && ["partial", "error", "neverSynced", "unknown"].includes(owner.sync.state);
   function unknown<T>(reason: AnalyticsReason = "SOURCE_MISSING", owner?: AnalyticsOwnerProof): AnalyticsFact<T> {
     return { state: reason === "NOT_APPLICABLE" ? "notApplicable" : "unknown", value: null, reasonCodes: [reason], evidenceRefs: [], sourceAsOf: owner?.sourceAsOf ?? null, observedAt, provisional: false };
   }
   function known<T>(value: T, owner: AnalyticsOwnerProof, refs: string[] = [owner.proofRef]): AnalyticsFact<T> {
-    const reasons: AnalyticsReason[] = [...(owner.coverage === "complete" ? [] : ["COVERAGE_PARTIAL" as const]), ...(stale(owner) ? ["SOURCE_STALE" as const] : [])];
+    const reasons: AnalyticsReason[] = [...(owner.coverage === "complete" && !syncIncomplete(owner) ? [] : [owner.sync?.state === "error" ? "SOURCE_ERROR" as const : "COVERAGE_PARTIAL" as const]), ...(stale(owner) ? ["SOURCE_STALE" as const] : [])];
     if ((value === 0 || value !== null && typeof value === "object" && "minorUnits" in value && value.minorUnits === 0) && reasons.length) return unknown(reasons[0], owner);
     return { state: "known", value, reasonCodes: reasons, evidenceRefs: refs.map(ref => alias("evidence", ref)), sourceAsOf: owner.sourceAsOf, observedAt, provisional: reasons.length > 0 };
   }
@@ -56,11 +57,11 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     return { metricId, formulaVersion: "headline-metrics.v1" as const, unit, numerator, denominator, result };
   }
   const owners = snapshot.owners;
-  const coverage = owners.every(owner => owner.coverage === "complete") ? "complete" as const : owners.every(owner => owner.coverage === "missing") ? "missing" as const : "partial" as const;
+  const coverage = owners.every(owner => owner.coverage === "complete" && !syncIncomplete(owner)) ? "complete" as const : owners.every(owner => owner.coverage === "missing") ? "missing" as const : "partial" as const;
   const current = owners.every(owner => !stale(owner));
   const lease = Math.min(Date.parse(snapshot.validUntil), Date.parse(snapshot.observedAt) + 15 * 60_000, ...owners.map(owner => Date.parse(owner.validUntil)));
   const header = { datasetKey: "analytics-native" as const, viewKey: snapshot.viewKey, provenance: { evidenceStage: snapshot.evidenceStage, synthetic: snapshot.synthetic, sourceVersion: alias("version", snapshot.sourceVersion), observedAt: snapshot.observedAt, validUntil: new Date(lease).toISOString() }, period: snapshot.period, cohortRef: snapshot.cohortRef ? alias("cohort", snapshot.cohortRef) : null,
-    sources: owners.map(owner => ({ proofRef: alias("evidence", owner.proofRef), owner: owner.owner, accountRef: alias("account", owner.accountRef), sourceVersion: alias("version", owner.sourceVersion), definitionVersion: alias("definition", owner.definitionVersion), cohortRef: owner.cohortRef ? alias("cohort", owner.cohortRef) : null, period: owner.period, observedAt: owner.observedAt, sourceAsOf: owner.sourceAsOf, validUntil: owner.validUntil, coverage: owner.coverage, maxAgeMs: owner.maxAgeMs })),
+    sources: owners.map(owner => ({ proofRef: alias("evidence", owner.proofRef), owner: owner.owner, accountRef: alias("account", owner.accountRef), sourceVersion: alias("version", owner.sourceVersion), definitionVersion: alias("definition", owner.definitionVersion), cohortRef: owner.cohortRef ? alias("cohort", owner.cohortRef) : null, period: owner.period, observedAt: owner.observedAt, sourceAsOf: owner.sourceAsOf, validUntil: owner.validUntil, coverage: owner.coverage, maxAgeMs: owner.maxAgeMs, sync: owner.sync ?? null })),
     coverage: { state: coverage, reasonCodes: coverage === "complete" ? [] : ["COVERAGE_PARTIAL" as const] }, freshness: { state: current ? "current" as const : owners.every(owner => owner.sourceAsOf === null) ? "unknown" as const : "stale" as const, sourceAsOf: owners.every(owner => owner.sourceAsOf !== null) ? owners.map(owner => owner.sourceAsOf!).sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null },
   };
   function economics(input: Extract<NativeAnalyticsSnapshot, { viewKey: "attribution" }>["facts"]["economics"]) {
@@ -139,7 +140,7 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
       measures.push(measure(`platformRoas.${platform}`, "multiple", attributionWindow ? total("platformPurchaseValueMinor") : unknown<number>("ATTRIBUTION_WINDOW_UNKNOWN"), total("spendMinor")));
       return { platform, attributionWindow };
     });
-    return { ...header, ...common, platformReports, retainedUnits: !c.owner || c.conflict || c.rows.some(row => row.unitsRetained === null) ? unknown<number>() : sum(c.channels.map(channel => channel.orders.value === null ? unknown<number>() : known(channel.rows.reduce((n, row) => n + row.unitsRetained!, 0), c.owner!)), c.owner), weeks,
+    return { ...header, ...common, attributedOrders: c.creatorOrders, attributedNetSales: c.creatorNet, platformReports, retainedUnits: !c.owner || c.conflict || c.rows.some(row => row.unitsRetained === null) ? unknown<number>() : sum(c.channels.map(channel => channel.orders.value === null ? unknown<number>() : known(channel.rows.reduce((n, row) => n + row.unitsRetained!, 0), c.owner!)), c.owner), weeks,
       attribution, economicEvidence: e.evidence,
       creators: s.facts.creators.map(row => ({ creatorRef: alias("creator", row.creatorRef), roi: fact(row.roi, "economicCosts") })) };
   }
@@ -210,7 +211,23 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     };
     if (maturePosted.value !== null && !maturePosted.provisional && totals.posted.value !== null && !totals.posted.provisional && maturePosted.value > totals.posted.value) return fail();
     const matureDelivered = difference(totals.delivered, notYetMature), matureNoPost = difference(matureDelivered, maturePosted);
+    let reservations = null;
+    if (f.reservations) {
+      const r = f.reservations, owner = proof(r.proofRef, "sampleCapacity");
+      if (r.campaignRef !== f.campaignRef || r.cohortRef !== f.cohortRef || r.cohortRef !== snapshot.cohortRef || owner.cohortRef !== r.cohortRef ||
+        digest(r.period) !== digest(snapshot.period) || digest(owner.period) !== digest(r.period) ||
+        r.rows.some(row => Date.parse(row.observedAt) > Date.parse(owner.observedAt) || row.cost.value !== null && row.cost.proofRef !== r.proofRef)) return fail();
+      const units = r.rows.filter(row => row.state === "active").reduce((sum, row) => sum + row.units, 0);
+      if (!Number.isSafeInteger(units) || r.coverage === "complete" && reserved.state === "known" && !reserved.provisional && units !== reserved.value) return fail();
+      const provisional = stale(owner) || owner.coverage !== "complete" || syncIncomplete(owner) || r.coverage !== "complete";
+      reservations = { coverage: r.coverage, total: r.total, provisional, rows: r.rows.map(row => ({ ...row,
+        reservationRef: alias("reservation", row.reservationRef), itemRef: alias("item", row.itemRef), cost: fact(row.cost, "sampleCapacity"),
+        approval: { state: provisional ? "unknown" as const : row.approval.state, evidenceRef: row.approval.evidenceRef ? alias("evidence", row.approval.evidenceRef) : null, version: row.approval.version ? alias("version", row.approval.version) : null },
+        sourceVersion: alias("version", row.sourceVersion), evidenceRef: alias("evidence", row.evidenceRef),
+      })) };
+    }
     body = { ...header, campaignRef: alias("campaign", f.campaignRef), cohortRef: alias("cohort", f.cohortRef), selection: f.selection, maturity: f.maturity, progression: f.progression, aggregation: f.aggregation, channels, totals, reserved, giftCap, notYetMature, matureDelivered, maturePosted, matureNoPost,
+      reservations,
       measures: [measure("replyConversion", "percent", totals.replied, totals.contacted, 100), measure("maturePostingRate", "percent", maturePosted, matureDelivered, 100)],
       historicalBasis: f.historicalBasis ? { period: f.historicalBasis.period, cohortRef: alias("cohort", f.historicalBasis.cohortRef), definitionVersion: alias("definition", f.historicalBasis.definitionVersion) } : null };
   } else if (snapshot.viewKey === "launchReconciliation") {

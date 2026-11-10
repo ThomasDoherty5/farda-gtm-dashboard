@@ -12,7 +12,9 @@ import type { OperationsScope } from "../operations.ts";
 
 export { NativeAnalyticsError } from "./nativeSource.ts";
 export type NativeAnalyticsReaderOptions = { scope: OperationsScope; referenceKey: string; source?: NativeAnalyticsSource; now?: () => number; timeoutMs?: number };
-export type NativeAnalyticsReadResult = { data: NativeAnalyticsView; version: string; dataState: "ready" | "partial" | "stale"; coverage: { expectedCount: number; observedCount: number; missingCount: number; complete: boolean; reasonCodes: string[] }; page: { nextCursor: string | null; hasMore: boolean }; assertCurrent(): void };
+export type NativeAnalyticsReadResult = { data: NativeAnalyticsView; version: string; dataState: "ready" | "partial" | "stale"; coverage: { expectedCount: number; observedCount: number; missingCount: number; complete: boolean; reasonCodes: string[] }; page: { nextCursor: string | null; hasMore: boolean }; assertCurrent(): void;
+  /** Internal composition address. Never included in the adapter response. */
+  sourceContext: { cohortRef: string | null; portfolio?: { reviewKey: string; reviewHash: string; validUntil: string; sourceCurrent: boolean } } };
 const fail = (code: string, status = 503): never => { throw new NativeAnalyticsError(code, status); };
 const freeze = <T>(value: T): T => { if (value && typeof value === "object") { Object.freeze(value); for (const child of Object.values(value)) freeze(child); } return value; };
 const denial = (error: unknown): 401 | 403 | null => error && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403) ? error.status : null;
@@ -62,6 +64,7 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     visit(snapshot.facts);
     if (snapshot.viewKey === "overviewSummary") {
       const facts = snapshot.facts;
+      if (facts.portfolio && snapshot.owners.find(owner => owner.proofRef === facts.portfolio!.proofRef)?.owner !== "creatorPortfolio") return fail("ANALYTICS_SOURCE_INVALID");
       if (facts.postsTotal.value !== null && facts.postsTotal.value < facts.posts.length || new Set(facts.posts.map(post => post.postRef)).size !== facts.posts.length || new Set(facts.activity.map(row => row.activityRef)).size !== facts.activity.length) return fail("ANALYTICS_SOURCE_INVALID");
     }
     if (snapshot.viewKey === "attribution" && new Set(snapshot.facts.creators.map(row => row.creatorRef)).size !== snapshot.facts.creators.length) return fail("ANALYTICS_SOURCE_INVALID");
@@ -166,9 +169,14 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     tally(data);
     if (resolvedFacts < factCount && data.coverage.state === "complete") data.coverage = { state: "partial", reasonCodes: ["INPUT_UNKNOWN"] };
     const stale = data.freshness.state !== "current", complete = !stale && data.coverage.state === "complete";
-    const observedSources = data.sources.filter(owner => owner.coverage === "complete" && owner.sourceAsOf !== null && now() - Date.parse(owner.sourceAsOf) < owner.maxAgeMs).length;
+    const observedSources = data.sources.filter(owner => owner.coverage === "complete" && (!owner.sync || ["changed", "unchanged"].includes(owner.sync.state)) && owner.sourceAsOf !== null && now() - Date.parse(owner.sourceAsOf) < owner.maxAgeMs).length;
     const expectedCount = data.sources.length + factCount, observedCount = observedSources + resolvedFacts;
-    const result: NativeAnalyticsReadResult = { data, version: `analytics-v1-${digest([binding, snapshot])}`, dataState: stale ? "stale" : complete ? "ready" : "partial", coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete, reasonCodes: [...data.coverage.reasonCodes, ...(stale ? ["SOURCE_STALE"] : [])] }, page: { nextCursor, hasMore: nextCursor !== null }, assertCurrent };
+    const result: NativeAnalyticsReadResult = { data, version: `analytics-v1-${digest([binding, snapshot])}`, dataState: stale ? "stale" : complete ? "ready" : "partial", coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete, reasonCodes: [...data.coverage.reasonCodes, ...(stale ? ["SOURCE_STALE"] : [])] }, page: { nextCursor, hasMore: nextCursor !== null }, assertCurrent, sourceContext: { cohortRef: snapshot.cohortRef } };
+    if (snapshot.viewKey === "overviewSummary" && snapshot.facts.portfolio) {
+      const p = snapshot.facts.portfolio, owner = snapshot.owners.find(row => row.proofRef === p.proofRef)!;
+      result.sourceContext.portfolio = { reviewKey: p.reviewKey, reviewHash: p.reviewHash, validUntil: owner.validUntil,
+        sourceCurrent: owner.coverage === "complete" && owner.sourceAsOf !== null && now() - Date.parse(owner.sourceAsOf) < owner.maxAgeMs && (!owner.sync || ["changed", "unchanged"].includes(owner.sync.state)) };
+    }
     assertCurrent();
     return result;
   }

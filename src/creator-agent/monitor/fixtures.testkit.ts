@@ -11,7 +11,7 @@ export function monitorFixture(now=monitorTime):MonitorSnapshot{
     semantics:"cumulative" as const,context:"organic" as const,views:0,likes:0,comments:0,shares:0,saves:null,reach:null};
   const member={creatorId:"canonical-a",revision:1,network:"instagram" as const,account:"publishing-a",profileId:"profile-a",notionReceipt:"notion-a",
     sheetsReceipt:"sheets-a",cohort:"launch-a",verification:{identityReceipt:"identity-a",suppressionReceipt:"suppression-a",sheetsCanonicalReceipt:"notion-a"}};
-  return monitorSnapshotSchema.parse({scope:monitorScope,version:"source-version-1",observedAt:at(0),validUntil:at(3600_000),coverage:"complete",members:[member],
+  return monitorSnapshotSchema.parse({scope:monitorScope,version:"source-version-1",observedAt:at(0),validUntil:at(3600_000),evidenceStage:"synthetic",coverage:"complete",members:[member],
     posts:[{network:"instagram",account:"publishing-a",postId:"EXAMPLE_A",creatorId:"canonical-a",campaign:"campaign-a",campaignReceipt:"campaign-a-proof",collaborationId:"collaboration-a",
       creativeId:"creative-a",deliverableId:"deliverable-a",enrollmentSource:"social-cat",publishedAt:at(-86400_000),publicationReceipt:"native-publication-a",
       originalUrl:"https://www.instagram.com/reel/EXAMPLE_A/",visibility:"public",visibilityReceipt:"visibility-a",visibilityAt:at(-60_000),access:"authorized",checkpointHours:24,

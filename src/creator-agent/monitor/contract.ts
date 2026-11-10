@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { analyticsPeriodSchemaNative } from "../analytics/contract.ts";
 
 const ref = z.string().trim().min(1).max(240);
 const text = z.string().trim().min(1).max(1000);
@@ -11,7 +12,7 @@ const visibilityHistory=z.object({state:publicationState,at:instant,receipt:ref}
 const acquisition=z.enum(["social-cat","tiktok-affiliate","other","unknown"]);
 const context = z.enum(["organic","paid","mixed","unknown"]);
 const money = z.object({minorUnits:z.number().int().safe(),currency:z.string().regex(/^[A-Z]{3}$/)}).strict();
-const observation = z.object({at:instant,receipt:ref,definition:text,window:text,
+const observation = z.object({at:instant,receipt:ref,definition:text,window:text,reportingPeriod:analyticsPeriodSchemaNative.optional(),
   semantics:z.enum(["cumulative","interval","unknown"]),context,views:count.nullable(),likes:count.nullable(),comments:count.nullable(),shares:count.nullable(),
   saves:count.nullable(),reach:count.nullable()}).strict();
 const access = z.enum(["authorized","denied","loginRequired","throttled","unavailable","unknown"]);
@@ -52,7 +53,7 @@ const run=z.object({id:ref,observedAt:instant,receipt:ref,snapshotSize:count,com
       !checked.has(JSON.stringify([event.creatorId,event.network,event.account,event.profileId])))
       ctx.addIssue({code:"custom",message:"An observation must belong to a checked profile in this run."});
   });
-const attribution=z.object({level:z.enum(["post","creator","campaign","unknown"]),receipt:ref,window:text,version:ref,complete:z.boolean(),
+const attribution=z.object({level:z.enum(["post","creator","campaign","unknown"]),receipt:ref,window:text,version:ref,complete:z.boolean(),reportingPeriod:analyticsPeriodSchemaNative.optional(),
   orders:count.nullable(),net:money.nullable(),gmv:money.nullable(),gmvDefinition:text.nullable()}).strict();
 const post=id.extend({creatorId:ref,campaign:ref,campaignReceipt:ref,collaborationId:ref.nullable(),creativeId:ref.nullable(),deliverableId:ref.nullable(),
   enrollmentSource:acquisition,publishedAt:instant.nullable(),publicationReceipt:ref,originalUrl:z.string().url().max(1000).nullable(),
@@ -74,7 +75,7 @@ export function originalPostUrl(network:"instagram"|"tiktok",postId:string,input
   return id===postId ? u.origin+u.pathname : null;
 }
 /** Only a trusted server-side J08/Sheets reader supplies this packet; there is no browser write or ingestion endpoint. */
-export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,observedAt:instant,validUntil:instant,
+export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,observedAt:instant,validUntil:instant,evidenceStage:z.enum(["synthetic","source"]).optional(),
   coverage:z.enum(["complete","partial"]),reviewEvidence:z.array(reviewEvidence).max(2000).optional(),members:z.array(member).max(2000),posts:z.array(post).max(2000),runs:z.array(run).max(100)}).strict().superRefine((s,ctx)=>{
     const unique=(rows:string[])=>new Set(rows).size===rows.length;
     const reviewKey=(r:{creatorId:string;revision:number;network:string;account:string;profileId:string})=>JSON.stringify([r.creatorId,r.revision,r.network,r.account,r.profileId]);
@@ -95,7 +96,8 @@ export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,obser
     if(Date.parse(s.validUntil)<=Date.parse(s.observedAt) || s.runs.some(r=>Date.parse(r.observedAt)>Date.parse(s.observedAt)) ||
       s.posts.some(p=>p.publishedAt && Date.parse(p.publishedAt)>Date.parse(s.observedAt) || p.visibilityAt && Date.parse(p.visibilityAt)>Date.parse(s.observedAt) ||
         p.publicationHistory?.some(h=>Date.parse(h.at)>Date.parse(s.observedAt)||p.publishedAt && Date.parse(h.at)<Date.parse(p.publishedAt)) ||
-        p.measurements.some(m=>Date.parse(m.at)>Date.parse(s.observedAt))))ctx.addIssue({code:"custom",message:"Source times must fit the observation window."});
+        p.measurements.some(m=>Date.parse(m.at)>Date.parse(s.observedAt)||m.reportingPeriod&&Date.parse(m.reportingPeriod.endAt)>Date.parse(m.at)) ||
+        p.attribution?.reportingPeriod&&Date.parse(p.attribution.reportingPeriod.endAt)>Date.parse(s.observedAt)))ctx.addIssue({code:"custom",message:"Source times must fit the observation window."});
     if(!unique(s.posts.map(p=>JSON.stringify([p.network,p.account,p.postId]))) || !unique(s.runs.map(r=>r.id)))
       ctx.addIssue({code:"custom",message:"Publication and run identities must be unique."});
   });
@@ -113,12 +115,13 @@ export type MonitorViewKey=typeof monitorViewKeys[number];
 const sourceFilter=z.enum(["all","social-cat","tiktok-affiliate"]);
 export const monitorFilters={
   contentMonitor:z.object({source:sourceFilter.default("all"),network:z.enum(["all","instagram","tiktok"]).default("all"),
-    window:z.enum(["last-30","last-7"]).default("last-30"),q:z.string().max(80).default("")}).strict(),
+    window:z.enum(["last-30","last-7"]).default("last-30"),q:z.string().max(80).default(""),
+    campaign: z.string().regex(/^campaign-[a-f0-9]{24}$/).optional(), reportingPeriod: analyticsPeriodSchemaNative.optional() }).strict(),
   watchlist:z.object({source:sourceFilter.default("all"),state:z.enum(["all","active","identity-review","excluded"]).default("all"),
     cohort:z.enum(["all","launch-a"]).default("all")}).strict(),hourlyRun:z.object({runId:ref}).strict(),postPerformance:z.object({postId:ref}).strict(),
 };
 
-const meta=z.object({observedAt:instant,readAccess:z.object({validUntil:instant}).strict().nullable().optional(),sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
+const meta=z.object({observedAt:instant,synthetic:z.boolean().nullable().optional(),readAccess:z.object({validUntil:instant}).strict().nullable().optional(),sourceState:z.enum(["current","partial","expired","unconfigured","unavailable"]),sourceAsOf:instant.nullable(),
   sourceVersion:ref.nullable(),latestRunRef:ref.nullable(),membershipComplete:z.boolean()}).strict();
 const outputObservation=observation;
 const outputPost=z.object({id:ref,creator:ref,network,enrollmentSource:acquisition,originalUrl:z.string().url().nullable(),
@@ -138,6 +141,9 @@ const outputCheck=z.object({profile:ref,network,state:checkState,access,at:insta
   checkpoint:ref.nullable(),owner:ref.nullable(),reason:text.nullable()}).strict();
 export const nativeContentSchema=meta.extend({kind:z.literal("saved-content-monitor"),posts:z.array(outputPost),total:count,
   views:count.nullable(),rate:z.number().finite().nonnegative().nullable(),orders:count.nullable(),net:money.nullable(),window:ref,
+  selection:z.object({campaign:ref.nullable(),period:analyticsPeriodSchemaNative.nullable()}).strict().optional(),
+  liveCount:count.nullable().optional(),
+  networkCoverage:z.array(z.object({network,posts:count,measurable:count,live:count,complete:z.boolean()}).strict()).max(2).optional(),
   metricBasis:z.object({definition:text,window:text,semantics:z.enum(["cumulative","interval"]),context:z.enum(["organic","paid","mixed"])}).strict().nullable()});
 export const nativeWatchlistSchema=meta.extend({kind:z.literal("saved-monitor-watchlist"),profiles:z.array(outputMember),total:count,
   active:count,pending:count,pendingReviewTotal:count.optional(),excluded:count,unverified:count});

@@ -5,6 +5,7 @@ import type { OperationsScope } from "../operations.ts";
 import { nativeFinanceViewSchemas } from "../../adapter/viewSchemas/finance.ts";
 import { financeDetailViews, financeFilters, financeSnapshotSchema, type FinanceSnapshot, type FinanceViewKey } from "./contract.ts";
 import { FinanceError, financeMaxObservationAgeMs, financeSourceTimeoutMs, type FinanceSourceReader, type FinancePrincipal, type FinanceReadBinding } from "./source.ts";
+import { financeSummaryContextSchema } from "./headlines.ts";
 
 export { FinanceError } from "./source.ts";
 /** Freeze parsed input retained by the final fence; source code cannot mutate a published basis. */
@@ -29,6 +30,8 @@ const identity: Partial<Record<FinanceViewKey, string>> = { settlementDetail: "s
 
 export type FinanceReadResult = {
   data: unknown; version: string; dataState: "ready" | "empty" | "partial" | "stale";
+  /** Internal freshness transition for composed reads; stale evidence retains its independent access grant. */
+  freshUntil: string | null;
   coverage: { expectedCount: number | null; observedCount: number | null; missingCount: number | null; complete: boolean; reasonCodes: string[] };
   sourceFreshness: { sourceRef: { source: string; accountId: string; sourceId: null; canonicalId: null; url: null; identityState: "unresolved"; provenanceRef: string };
     lastSourceSuccessAt: string; observedAt: string; mirroredAt: null; staleReasonCode: string | null; freshnessState?: "current" | "partial" }[];
@@ -134,6 +137,14 @@ export function createFinanceReader(options: Options) {
     const { expectedCount, observedCount } = s.coverage;
     const reasonCodes = [...new Set([...(stale ? ["FINANCE_SOURCE_STALE"] : []), ...s.coverage.reasonCodes])];
     const data = s.record === null ? null : nativeFinanceViewSchemas[viewKey]!.parse(projectedRecord);
+    if (viewKey === "financeDashboard" && data) {
+      const context = financeSummaryContextSchema.nullable().optional().parse((data as { summaryContext?: unknown }).summaryContext);
+      if (context && Date.parse(context.cashAsOf) > Date.parse(s.observedAt)) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_CASH_TIME_INVALID"]);
+      if (f.startAt && (!context || Date.parse(context.period.startAt) !== Date.parse(f.startAt) || Date.parse(context.period.endAt) !== Date.parse(f.endAt!) || context.period.timezone !== f.timezone))
+        throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_REPORTING_PERIOD_MISMATCH"]);
+      if (context) (data as { summaryContext: typeof context }).summaryContext = { ...context,
+        policy: { ...context.policy, version: alias("policy-version", context.policy.version), evidenceRef: alias("policy-evidence", context.policy.evidenceRef) } };
+    }
     if (data && (data as { provenance: { observedAt: string } }).provenance.observedAt !== s.observedAt) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_PROVENANCE_MISMATCH"]);
     const finalFence = () => {
       assertCurrent();
@@ -142,6 +153,7 @@ export function createFinanceReader(options: Options) {
     const result: FinanceReadResult = {
       data, version: "fin1-" + digest([binding, alias("permission", s.permissionVersion), viewKey, f, alias("source", s.version), s.observedAt, s.coverage, data]),
       dataState: stale ? "stale" : partial ? "partial" : data === null ? "empty" : "ready",
+      freshUntil: stale ? null : new Date(deadline).toISOString(),
       coverage: { expectedCount, observedCount, missingCount: expectedCount !== null && observedCount !== null ? expectedCount - observedCount : null,
         complete: !partial && !stale, reasonCodes },
       sourceFreshness: [{ sourceRef: { source: "finance-source", accountId: scope.accountId, sourceId: null, canonicalId: null, url: null,

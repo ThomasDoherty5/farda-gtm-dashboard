@@ -52,6 +52,7 @@ export type OperationsOverviewRead = Omit<import("@/fixtures/operations").Operat
   datasetKey: "operations-demo" | "operations-native";
   stock: OperationsStock[];
   queue: { rows: NativeQueueRow[]; total: number };
+  summaryBasis?: import("@/adapter/viewSchemas/nativeOperations").OperationsSummaryBasis | null;
   reportingScope?: import("@/adapter/viewSchemas/nativeOperations").OperationsReportingScope | null;
 };
 export function stockAvailable(stock: OperationsStock): number | null {

@@ -9,6 +9,7 @@ const n = z.number().int().nonnegative().safe();
 const version = z.string().regex(/^oc1-[a-f0-9]{64}$/);
 const opaque = z.string().min(1).max(4100);
 export const controlPolicy = "operations-controls.v1";
+export const operationsControlFreshnessMs = 15 * 60_000;
 export const controlSections = ["connections","team","runs","reports","capabilities","reconciliation"] as const;
 export const controlPlatforms = ["instagram","tiktok","social-cat","shopify","email","other"] as const;
 export const operationsControlFilters = z.object({ section:z.enum(controlSections), targetRef:opaque.optional(),

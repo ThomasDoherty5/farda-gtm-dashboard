@@ -214,6 +214,10 @@ export function createActionDomainServices(options: Options) {
     db.prepare("INSERT OR IGNORE INTO action_readiness_view_refs VALUES(?,?,?,?)").run(version, actor.principalRef, publicTarget, JSON.stringify(s));
     return nativeReadinessViewSchema.parse({ kind: "native-launch-readiness", targetRef: publicTarget, version, actorRef: alias("principal", actor.principalRef), requestRecovery: null, observedAt: s.observedAt, validUntil: s.validUntil,
       launchDate: s.launchDate, launchDateApproved: s.launchDateApproved, phase: s.phase, phaseAllowed: s.phaseAllowed, policyVersion: alias("readiness-policy", s.policyVersion),
+      ...(s.presentation ? { presentation: { ...s.presentation, recordRef: publicTarget, recordVersion: version,
+        sampleAcceptance: s.presentation.sampleAcceptance ? { ...s.presentation.sampleAcceptance,
+          version: alias("sample-acceptance", s.presentation.sampleAcceptance.version),
+          evidenceRef: s.presentation.sampleAcceptance.evidenceRef ? alias("evidence", s.presentation.sampleAcceptance.evidenceRef) : null } : null } } : {}),
       gates: s.gates.map(g => ({ ...g, id: alias("gate", g.id), evidenceRef: g.evidenceRef ? alias("evidence", g.evidenceRef) : null })),
       evidenceRefs: s.evidenceRefs.map(ref => alias("evidence", ref)), confersRelease: false });
   }

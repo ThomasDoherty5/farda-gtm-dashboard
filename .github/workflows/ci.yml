@@ -97,6 +97,9 @@ jobs:
             test-results/agent/**/analytics-native-*.png
             test-results/agent/**/shipping-native-*.png
             test-results/agent/**/native-sourcing-plan-*.png
+            test-results/agent/**/overview-owners-*.png
+            test-results/agent/**/overview-launch-*.png
+            test-results/agent/**/attachments/overview-owner-reconciliation-*.json
             test-results/agent/**/error-context.md
             test-results/agent/**/test-failed-*.png
           if-no-files-found: ignore

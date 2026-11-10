@@ -2,6 +2,9 @@ import { FinanceReadGrant, type FinanceReadQuery } from "./FinanceReadGrant";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
+import { useScope } from "@/adapter/scope";
+import { useReportingPeriod } from "@/features/analytics/reportingPeriod";
+import { financeHeadlines, type FinanceSummaryContext } from "@/creator-agent/finance/headlines";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
@@ -13,7 +16,7 @@ import { Divider, FactList, FlatTable, HalfColumns, Meter, Notice, Page, PageHea
 import { ViewError } from "@/components/ViewError";
 import { SourceDialog } from "@/features/approvals/shared";
 import { figure } from "@/features/operations/format";
-import { runwayOf, type FinanceDashboard } from "@/fixtures/finance";
+import { runwayOf, type FinanceDashboard as DemoFinanceDashboard } from "@/fixtures/finance";
 import { usd } from "@/fixtures/values";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
@@ -22,6 +25,7 @@ const whole = (minor: number) => formatMoney(usd(minor));
 const exact = (minor: number) => formatMoneyExact(usd(minor));
 const signed = (minor: number) => `${minor < 0 ? "−" : ""}${whole(Math.abs(minor))}`;
 const compact = (minor: number) => `$${(minor / 100000).toFixed(1)}k`;
+type FinanceDashboard = Omit<DemoFinanceDashboard, "datasetKey"> & { datasetKey: "finance-demo" | "finance-native"; summaryContext?: FinanceSummaryContext | null };
 
 /**
  * Finance dashboard (Figma source 7:510, owner THO-303). Read-only management figures from QuickBooks. Net income, gross profit,
@@ -30,8 +34,10 @@ const compact = (minor: number) => `$${(minor / 100000).toFixed(1)}k`;
  */
 export function FinanceDashboardPage() {
   const [search] = useSearchParams();
+  const { adapter } = useScope(), period = useReportingPeriod();
   const scenario = search.get("scenario") ?? undefined;
-  const query = useView<{ scenario?: string }, FinanceDashboard>("financeDashboard", scenario ? { scenario } : {});
+  const filters = adapter.kind !== "demo" && period ? { startAt: period.startAt, endAt: period.endAt, timezone: period.timezone } : scenario ? { scenario } : {};
+  const query = useView<typeof filters, FinanceDashboard>("financeDashboard", filters);
   return <FinanceReadGrant query={query} title="Finance" titleId="finance-title"><FinanceDashboardContent query={query} /></FinanceReadGrant>;
 }
 
@@ -42,7 +48,7 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
   return (
     <Page aria-labelledby="finance-title" data-figma-source="7:510">
       <PageHeader id="finance-title" title="Finance" subtitle="Know your cash, understand your margin, close with confidence.">
-        <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 176 }} onClick={() => setDialog("period")}>Last 30 days</Button>
+        <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 176 }} onClick={() => setDialog("period")}>{data?.datasetKey === "finance-native" ? "Reporting period" : "Last 30 days"}</Button>
         <Button aria-haspopup="dialog" style={{ minWidth: 210 }} onClick={() => setDialog({ source: "Open QuickBooks" })}>Open QuickBooks</Button>
       </PageHeader>
       <FinanceNav current="overview" />
@@ -51,8 +57,8 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
       {query.isError && <ViewError error={query.error} subject="Finance" hasPriorData={Boolean(res)} onRetry={() => void query.refetch()} />}
       {res && !data && <EmptyState state="Empty" title="No finance data yet"><p>QuickBooks responded, but no management report exists for this period.</p></EmptyState>}
       {res && data && <Body data={data} stale={res.dataState === "stale"} setDialog={setDialog} />}
-      <Dialog open={dialog === "period"} title="The 30-day window" onClose={() => setDialog(null)}>
-        <p>The figures cover the 30 days ending Oct 29, 2026. Calendar-month and year-to-date figures await their source reports, so there is no other period to choose in the demo.</p>
+      <Dialog open={dialog === "period"} title={data?.datasetKey === "finance-native" ? "Reporting period" : "The 30-day window"} onClose={() => setDialog(null)}>
+        {data?.datasetKey === "finance-native" ? <p>{data.summaryContext ? `${data.summaryContext.period.startAt} to ${data.summaryContext.period.endAt} (exclusive) · ${data.summaryContext.period.timezone} · ${data.summaryContext.accountingBasis} basis. Accounting policy ${data.summaryContext.policy.state}.` : "The accounting owner has not supplied a qualified reporting period or adopted definition. Overview comparisons stay unavailable."}</p> : <p>The figures cover the 30 days ending Oct 29, 2026. Calendar-month and year-to-date figures await their source reports, so there is no other period to choose in the demo.</p>}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
       <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
@@ -66,45 +72,49 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
 
 function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boolean; setDialog: (d: null | "period" | "definitions" | { source: string }) => void }) {
   const p = data.pnl;
+  const native = data.datasetKey === "finance-native", headline = native ? financeHeadlines(data) : null;
   const gross = p.revenue - p.cogs;
   const net = gross - p.opex;
-  const runway = runwayOf(data);
-  const margin = p.revenue > 0 ? (100 * gross) / p.revenue : null; // N/A over zero receipts, never NaN
+  const runway = headline ? { months: headline.runwayMonths, reason: headline.runwayReason } : runwayOf(data as DemoFinanceDashboard);
+  const margin = headline ? headline.grossMargin : p.revenue > 0 ? (100 * gross) / p.revenue : null;
   const rows: [string, number][] = [["Net revenue", p.revenue], ["Cost of goods sold", -p.cogs], ["Gross profit", gross], ["Operating expenses", -p.opex], ["Net income", net]];
-  const actualVsForecast = data.forecastRevenue > 0 ? (100 * p.revenue) / data.forecastRevenue : null;
+  const actualRevenue = headline ? headline.actualRevenue : p.revenue;
+  const forecastRevenue = headline ? headline.forecastRevenue : data.forecastRevenue;
+  const actualVsForecast = actualRevenue !== null && forecastRevenue !== null && forecastRevenue > 0 && (!native || data.summaryContext?.forecastState === "approved") ? (100 * actualRevenue) / forecastRevenue : null;
+  const periodLabel = native && data.summaryContext ? `${data.summaryContext.period.startAt} to ${data.summaryContext.period.endAt} · ${data.summaryContext.accountingBasis}` : data.period.label;
   const close = data.closeSummary;
   return (
     <>
       <Notice tone={stale ? "warning" : "violet"} label={stale ? "Behind" : "Source"} title="QuickBooks is the official ledger · Management P&L" role={stale ? "status" : undefined} testId="source-freshness">
-        {`${data.period.label} · Illustrative management figures. Calendar-month and YTD figures await source reports.${stale ? " The mirror is behind its source." : ""}`}
+        {`${periodLabel} · ${native ? `Source-owned management figures. Definition ${data.summaryContext?.policy.state ?? "unavailable"}.` : "Illustrative management figures. Calendar-month and YTD figures await source reports."}${stale ? " The mirror is behind its source." : ""}`}
       </Notice>
       <KpiRow>
-        <Kpi label="Cash balance" context={`${whole(data.historicalRaised)} raised · as of ${data.cashAsOf}`} testId="metric-Cash balance">{figure(data.cash, (m) => whole(m))}</Kpi>
+        <Kpi label="Cash balance" context={native ? `Current cash · as of ${data.summaryContext?.cashAsOf ?? "Unknown"}` : `${whole(data.historicalRaised)} raised · as of ${data.cashAsOf}`} testId="metric-Cash balance">{headline ? headline.cash === null ? "N/A" : whole(headline.cash) : figure(data.cash, (m) => whole(m))}</Kpi>
         <Kpi label="Monthly burn" context={data.burn.state === "known" ? "Average net cash out · last 3 months" : `Needs ${data.burnWindowMonths} months of history`} testId="metric-Monthly burn">{figure(data.burn, (m) => whole(m))}</Kpi>
         <Kpi label="Runway" context={runway.reason ?? "Current cash / average burn"} testId="metric-Runway">{runway.months === null ? "N/A" : `${runway.months.toFixed(1)} months`}</Kpi>
         <Kpi label="Pre-marketing contribution" context="Per order · creator allocation pending" testId="metric-Pre-marketing contribution">{exact(data.contributionPerOrder)}</Kpi>
       </KpiRow>
       <HalfColumns>
-        <Panel title="Profit & loss" subtitle={`${data.period.label} · 30-day management P&L`} testId="pnl">
+        <Panel title="Profit & loss" subtitle={`${periodLabel} · ${native ? "management P&L" : "30-day management P&L"}`} testId="pnl">
           <FlatTable
             caption="Profit and loss"
             testId="pnl-table"
-            columns={[{ label: "Account", width: 326 }, { label: "30 days", width: 131 }, { label: "YTD", width: 131 }]}
+            columns={[{ label: "Account", width: 326 }, { label: native ? "Report period" : "30 days", width: 131 }, { label: "YTD", width: 131 }]}
             rows={rows.map(([account, minor]) => ({ key: account, cells: [account, signed(minor), figure(p.ytd, whole).replace("N/A", "Awaiting data")] }))}
           />
         </Panel>
         <Panel title="Cash & obligations" subtitle="Do not confuse cash with revenue" testId="cash">
           <dl className={styles.ledgerRows} aria-label="Cash and obligations">
-            <div><dt>Cash</dt><dd>{figure(data.cash, whole)}</dd></div>
-            <div><dt>Inventory · demo lot valuation</dt><dd>{whole(data.inventoryValue)}</dd></div>
+            <div><dt>Cash</dt><dd>{headline ? headline.cash === null ? "N/A" : whole(headline.cash) : figure(data.cash, whole)}</dd></div>
+            <div><dt>{native ? "Inventory · source valuation" : "Inventory · demo lot valuation"}</dt><dd>{whole(data.inventoryValue)}</dd></div>
             <div><dt>Accounts payable</dt><dd>{whole(data.accountsPayable)}</dd></div>
             <div><dt>Sales tax payable</dt><dd>{whole(data.salesTaxPayable)}</dd></div>
           </dl>
           <Divider />
           <p className={styles.sub}>Forecast vs. actual</p>
-          <p className={styles.warnText}>Forecast is illustrative until rebaselined.</p>
-          <FactList wide label="Forecast vs actual" rows={[["Revenue actual / forecast", `${compact(p.revenue)} / ${compact(data.forecastRevenue)}`]]} />
-          {actualVsForecast === null ? <p className={styles.warnText}>No forecast to compare with.</p> : <Meter percent={actualVsForecast} label={`Revenue actual is ${actualVsForecast.toFixed(0)}% of the illustrative forecast`} />}
+          <p className={styles.warnText}>{native ? `Forecast ${data.summaryContext?.forecastState ?? "unavailable"}; separate from actual accounting results.` : "Forecast is illustrative until rebaselined."}</p>
+          <FactList wide label="Forecast vs actual" rows={[["Revenue actual / forecast", `${actualRevenue === null ? "N/A" : compact(actualRevenue)} / ${forecastRevenue === null ? "N/A" : compact(forecastRevenue)}`]]} />
+          {actualVsForecast === null ? <p className={styles.warnText}>{native ? "No approved forecast comparison is available." : "No forecast to compare with."}</p> : <Meter percent={actualVsForecast} label={`Revenue actual is ${actualVsForecast.toFixed(0)}% of the ${native ? "approved" : "illustrative"} forecast`} />}
         </Panel>
       </HalfColumns>
       <HalfColumns>

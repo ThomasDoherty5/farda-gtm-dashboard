@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { digest } from "../config.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
-import type { DispatchSourceFacts, OperationsReportingScope, NativeFulfillmentEvent, NativeOperationsLink, NativeOperationsShipment } from "../../adapter/viewSchemas/nativeOperations.ts";
+import type { OperationsSummaryBasis, DispatchSourceFacts, OperationsReportingScope, NativeFulfillmentEvent, NativeOperationsLink, NativeOperationsShipment } from "../../adapter/viewSchemas/nativeOperations.ts";
 import type { OperationsScope } from "../operations.ts";
 import { nativeOpsReadViewSchemas } from "../../adapter/viewSchemas/ops.ts";
 import { operationsDetailViews, operationsReadFilters, operationsSnapshotSchema, type OperationsReadViewKey, type OperationsSnapshot } from "./contract.ts";
@@ -110,6 +110,30 @@ export function createOperationsReadReader(options: Options) {
     const context=data as {reportingScope:OperationsReportingScope|null;provenance:{observedAt:string};synthetic:boolean;nativeEvents:NativeFulfillmentEvent[];sourceLinks:NativeOperationsLink[]};
     for(const key of ["home","startAt","endAt","timezone"] as const)if(f[key]!==undefined && (context.reportingScope?.[key]??(key==="home"?"all":undefined))!==f[key])
       throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_REPORTING_SCOPE_MISMATCH"]);
+    if (viewKey === "operationsOverview") {
+      type Value = { state: string; value: unknown; reasonCode: string | null };
+      const record = data as { summaryBasis: OperationsSummaryBasis | null; all: {timeToShipDays:Value}; byHome: Record<string,{timeToShipDays:Value}>; health:{shippingCostPerOrder:Value} };
+      const basis = record.summaryBasis;
+      const unknown = (value: Value) => value.state === "known" ? { ...value, state: "unknown", value: null, reasonCode: "OPERATIONS_DENOMINATOR_UNVERIFIED" } : value;
+      if (!basis) {
+        record.all.timeToShipDays = unknown(record.all.timeToShipDays);
+        for (const summary of Object.values(record.byHome)) summary.timeToShipDays = unknown(summary.timeToShipDays);
+        record.health.shippingCostPerOrder = unknown(record.health.shippingCostPerOrder);
+      } else {
+        if (!context.reportingScope || digest(basis.scope) !== digest(context.reportingScope))
+          throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_DENOMINATOR_SCOPE_MISMATCH"]);
+        const metric = basis.scope.home === "all" ? record.all.timeToShipDays : record.byHome[basis.scope.home]!.timeToShipDays;
+        const scale = 10 ** basis.latency.precision;
+        const days = basis.latency.denominator ? Math.round(basis.latency.totalDays / basis.latency.denominator * scale) / scale : null;
+        const minor = basis.shippingCost.denominator ? Math.round(basis.shippingCost.totalMinorUnits / basis.shippingCost.denominator) : null;
+        const money = record.health.shippingCostPerOrder.value as {minorUnits:number;currency:string} | null;
+        if (metric.state === "known" && (days === null || !Number.isFinite(days) || metric.value !== days) ||
+          record.health.shippingCostPerOrder.state === "known" && (minor === null || money?.minorUnits !== minor || money.currency !== basis.shippingCost.currency))
+          throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_DENOMINATOR_MISMATCH"]);
+        record.summaryBasis = {...basis, latency:{...basis.latency,evidenceRef:alias("evidence",basis.latency.evidenceRef),version:alias("version",basis.latency.version)},
+          shippingCost:{...basis.shippingCost,evidenceRef:alias("evidence",basis.shippingCost.evidenceRef),version:alias("version",basis.shippingCost.version)}};
+      }
+    }
     if(context.nativeEvents.some(event=>Date.parse(event.observedAt)>Date.parse(context.provenance.observedAt)))throw new OperationsReadError("SOURCE_RESPONSE_INVALID",502,["OPERATIONS_EVENT_TIME_INVALID"]);
     data.sourceLinks=context.sourceLinks.map(link=>{
       if(context.synthetic || link.state!=="verified" || !link.url || !link.observedAt || !link.validUntil || Date.parse(link.observedAt)>now() || Date.parse(link.validUntil)<=now())return {...link,state:link.state==="verified"?"expired":link.state,url:null};

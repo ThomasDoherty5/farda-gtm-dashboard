@@ -11,6 +11,7 @@ export const nativeCount = (value: number) => formatCount(value);
 export const nativeMoney = (value: { minorUnits: number; currency: string }) => formatMoneyExact(value);
 export const nativePercent = (value: number) => `${value.toFixed(1)}%`;
 export const nativeMultiple = (value: number) => `${value.toFixed(2)}×`;
+const syncLabels = { changed: "Changed · complete check", unchanged: "No change · complete check", neverSynced: "Never synced", partial: "Partial check", error: "Source error", unknown: "Check outcome unknown" };
 export function factText<T>(fact: AnalyticsFact<T> | null | undefined, format: (value: T) => string): string {
   return fact?.state === "known" && fact.value !== null ? format(fact.value) : fact?.state === "notApplicable" ? "N/A" : "Unknown";
 }
@@ -32,9 +33,12 @@ export function NativeAnalyticsEvidence({ data, refresh, refreshing }: { data: N
     <Dialog open={open} focusHeading title="Reporting source evidence" onClose={() => setOpen(false)}>
       <p style={{ overflowWrap: "anywhere" }}>{nativePeriod(data)}. Cohort: {data.cohortRef ?? "Unknown"}.</p>
       <p>Observed {data.provenance.observedAt}; access expires {data.provenance.validUntil}. {data.provenance.synthetic ? "Fictional fixtures do not validate a live reporting connection." : "Access and dataset freshness are verified separately."}</p>
-      <DataTable caption="Reporting source coverage" minWidth={760} columns={[{ label: "Owner" }, { label: "Coverage" }, { label: "Source time" }, { label: "Observed" }, { label: "Definition" }]} rows={data.sources.map(source => [source.owner, source.coverage, source.sourceAsOf ?? "Unknown", source.observedAt, <span key="definition" style={{ overflowWrap: "anywhere" }}>{source.definitionVersion}</span>])} />
+      <DataTable caption="Reporting source coverage" minWidth={760} columns={[{ label: "Owner" }, { label: "Coverage / check" }, { label: "Successful coverage watermark" }, { label: "Observed / attempted" }, { label: "Definition" }]} rows={data.sources.map(source => [source.owner,
+        <span key="coverage">{source.coverage}<br />{syncLabels[source.sync?.state ?? "unknown"]}<br />{source.sync?.expectedCount !== null && source.sync?.expectedCount !== undefined ? `${source.sync.observedCount ?? "Unknown"} / ${source.sync.expectedCount} source records` : "Population count unknown"}</span>,
+        source.sourceAsOf ?? "Never synced or watermark unavailable", <span key="time">{source.observedAt}<br />Attempt: {source.sync?.attemptedAt ?? "Unknown"}</span>, <span key="definition" style={{ overflowWrap: "anywhere" }}>{source.definitionVersion}</span>])} />
       {data.sources.length === 0 && <p>No qualified reporting owner rows.</p>}
       <p>{data.coverage.reasonCodes.join(" · ") || "No coverage limitation reported."}</p>
+      <p>A recent row is not a successful full-source check. No-change means the bounded source was checked successfully; it does not mean zero activity. Failed checks retain their previous successful watermark.</p>
       <Button variant="secondary" onClick={() => setOpen(false)}>Close source evidence</Button>
     </Dialog>
   </>;

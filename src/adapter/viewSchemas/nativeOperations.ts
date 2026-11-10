@@ -5,6 +5,12 @@ const home=z.enum(["H1","H2","H3"]),count=z.number().int().nonnegative().safe();
 export const operationsTimezoneSchema=z.string().min(1).max(100).refine(value=>{try{new Intl.DateTimeFormat("en",{timeZone:value});return true;}catch{return false;}},"Use a recognized timezone.");
 export const operationsReportingScopeSchema=z.object({home:z.union([home,z.literal("all")]),startAt:instant,endAt:instant,
   timezone:operationsTimezoneSchema,basis:z.enum(["requestedAt","eventAt"])}).strict().refine(value=>Date.parse(value.startAt)<Date.parse(value.endAt),"A reporting window must be ordered.");
+const metricDefinition={definition:z.string().trim().min(1).max(240),denominator:count,evidenceRef:ref,version:ref};
+export const operationsSummaryBasisSchema=z.object({scope:operationsReportingScopeSchema,
+  latency:z.object({...metricDefinition,totalDays:z.number().finite().nonnegative().max(Number.MAX_SAFE_INTEGER),precision:count.max(6)}).strict(),
+  shippingCost:z.object({...metricDefinition,totalMinorUnits:count,currency:z.literal("USD")}).strict(),
+}).strict();
+export type OperationsSummaryBasis=z.infer<typeof operationsSummaryBasisSchema>;
 export const dispatchSourceFactsSchema=z.object({
   requestedAt:instant,orderRef:ref.nullable(),sampleRef:ref.nullable(),shipmentRef:ref.nullable(),detailRef:ref.nullable(),
   orderUnfulfilled:z.boolean().nullable(),sampleApproved:z.boolean().nullable(),labelCreated:z.boolean().nullable(),canceled:z.boolean().nullable(),
@@ -20,7 +26,7 @@ export const nativeFulfillmentEventSchema=z.object({
 });
 export const nativeOperationsLinkSchema=z.object({kind:z.enum(["order","shipment","return","sample","approval","support"]),targetRef:ref,
   state:z.enum(["verified","missing","expired","denied"]),url:z.string().url().nullable(),observedAt:instant.nullable(),validUntil:instant.nullable()}).strict();
-export const nativeOperationsExtensions={reportingScope:operationsReportingScopeSchema.nullable().default(null),
+export const nativeOperationsExtensions={reportingScope:operationsReportingScopeSchema.nullable().default(null),summaryBasis:operationsSummaryBasisSchema.nullable().default(null),
   nativeEvents:z.array(nativeFulfillmentEventSchema).max(100).default([]),sourceLinks:z.array(nativeOperationsLinkSchema).max(30).default([])};
 export const nativeStockSummarySchema=z.object({home,onHand:count.nullable(),reserved:count.nullable(),capacity:count.nullable(),threshold:count.nullable()}).strict();
 export const nativeQueueSourceSchema=dispatchSourceFactsSchema.nullable().default(null);

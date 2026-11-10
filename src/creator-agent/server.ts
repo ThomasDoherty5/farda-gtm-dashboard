@@ -106,6 +106,7 @@ import { createNativeSourcingReader, NativeSourcingError } from "./sourcing/nati
 import { SOURCING_PLAN_VIEW, sourcingPlanFilters } from "./sourcing/contract.ts";
 import type { NativeSourcingSource } from "./sourcing/nativeSource.ts";
 import { nativeAnalyticsFilters, analyticsPeriodSchemaNative, nativeAnalyticsViewKeys } from "./analytics/contract.ts";
+import { composeOverviewOwners } from "./analytics/overviewOwners.ts";
 import { createNativeAnalyticsReader, NativeAnalyticsError } from "./analytics/nativeReader.ts";
 import type { NativeAnalyticsSource } from "./analytics/nativeSource.ts";
 
@@ -988,13 +989,17 @@ export function createAgentServer(options: AgentServerOptions) {
         }
         if ((nativeAnalyticsViewKeys as readonly string[]).includes(input.viewKey)) {
           const cancel = new AbortController(); res.once("close", () => { if (!res.writableEnded) cancel.abort(); });
-          const result = await analytics.read({ viewKey: input.viewKey, filters: input.filters, period: input.period, sort: input.sort, page: input.page },
+          const base = await analytics.read({ viewKey: input.viewKey, filters: input.filters, period: input.period, sort: input.sort, page: input.page },
             { principalRef: `agent-${auth.role}`, role: auth.role }, cancel.signal);
+          const assertAnalyticsCaller = () => { const latest = authorize(req); if (!latest || latest.role !== auth.role)
+            throw new NativeAnalyticsError("ANALYTICS_SOURCE_DENIED", latest ? 403 : 401); };
+          const result = await composeOverviewOwners(base, { analytics, finance, operations: operationsReads, monitor, portfolio },
+            { principalRef: `agent-${auth.role}`, role: auth.role }, { assertCurrent: assertAnalyticsCaller, signal: cancel.signal });
           const envelope = { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: result.version,
             dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
             capabilities: [], page: result.page, refresh: { nextPollAfterMs: null } };
-          result.assertCurrent(); return reply(res, 200, envelope);
+          assertAnalyticsCaller(); result.assertCurrent(); return reply(res, 200, envelope);
         }
         if (input.viewKey === "lifecycleOverview" || input.viewKey === "emailFlow" || input.viewKey === "consentEligibility" || input.viewKey === "activationRetention") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
