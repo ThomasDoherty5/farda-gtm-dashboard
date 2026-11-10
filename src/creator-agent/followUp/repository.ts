@@ -4,7 +4,7 @@ import { digest } from "../config.ts";
 import { reference } from "../actions/contract.ts";
 import type { OperationsScope } from "../operations.ts";
 import { closureEvidenceSchema, FOLLOW_UP_POLICY_VERSION, followUpConfigSchema, outreachStateSchema, postingClockEventSchema, rightsGateInputSchema,
-  sendOutcomeSchema, workflowHandoffSchema, type ClosureReason, type SendPath, type WorkflowHandoff, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type SendOutcome,
+  sendOutcomeSchema, workflowHandoffSchema, type ClosureReason, type SendPath, type WorkflowHandoff, type WorkflowOutcome, workflowOutcomeSchema, workflowRequestKeyOf, type FollowUpConfig, type FollowUpIntent, type FollowUpStep, type IntentState, type SendOutcome,
   type StoredIntent, type SupersededBy } from "./contract.ts";
 import { decideClosure, decideReminder, dedupeKeyOf, localDay, type ReminderDecision, type ReminderInput } from "./policy.ts";
 import { applyReviewEvent, initialReviewState, type ReviewEvent, type ReviewState } from "./reviewMachine.ts";
@@ -22,12 +22,13 @@ export type RightsReceipt = { gate: RightsGateResult; proposal: Proposal | null 
  * Something an operator must settle with the approval owner.
  * - `withdrawnWhileInJ04` / `withdrawnWhileInWorkflow`: this module withdrew an intent that J04, or the collaboration
  *   workflow, was already holding. The approval, proposal or run still needs cancelling by its owner.
+ * - `withdrawnWhileUncertain`: this module withdrew an intent whose send or handoff outcome was not yet known.
  * - `outreachUnverifiedWhileLive`: outreach eligibility became unknown while a creator message was live there.
  * - `lateOutcome`: an outcome arrived for a withdrawn intent; it is kept, never applied.
  */
-export type ConflictKind = "withdrawnWhileInJ04" | "withdrawnWhileInWorkflow" | "outreachUnverifiedWhileLive" | "lateOutcome";
+export type ConflictKind = "withdrawnWhileInJ04" | "withdrawnWhileInWorkflow" | "withdrawnWhileUncertain" | "outreachUnverifiedWhileLive" | "lateOutcome";
 export type OutcomeConflict = { conflictRef: string; kind: ConflictKind; intentRef: string; collaborationId: string;
-  outcome: SendOutcome | WorkflowHandoff | null; intentState: IntentState; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
+  outcome: SendOutcome | WorkflowHandoff | WorkflowOutcome | null; intentState: IntentState; blocking: boolean; recordedAt: string; resolvedAt: string | null; resolvedBy: string | null };
 export type OutcomeReceipt = { state: "recorded"; intent: StoredIntent } | { state: "conflict"; intent: StoredIntent; conflict: OutcomeConflict };
 
 const planInputSchema = z.object({ event: postingClockEventSchema.nullable(), collaborationId: reference, outreach: outreachStateSchema, postedVerified: z.boolean() }).strict()
@@ -37,15 +38,18 @@ const reviewEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("decided"), contentVersion: reference, outcome: z.enum(["approved", "revisionRequested", "rejected"]), reviewerRef: reference }).strict(),
 ]);
 /** Not yet sent or uncertain: these can still be withdrawn locally. Withdrawing does not cancel anything held elsewhere. */
-const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handedOff"];
+const WITHDRAWABLE: IntentState[] = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved", "uncertain"];
 /**
  * Where an intent may still be approved or run after it is withdrawn here. A J04 hold is not terminal and can
  * resume, so a held approval with a reference is live; a hold that never reached J04 is not.
  */
-export function liveElsewhere(intent: StoredIntent): "j04" | "workflow" | null {
+export function liveElsewhere(intent: StoredIntent): "j04" | "workflow" | "uncertain" | null {
+  if (intent.state === "uncertain") return "uncertain";
   if (intent.state === "awaitingApproval" || intent.state === "dispatched" || intent.state === "approvalHeld" && intent.approvalRef !== null) return "j04";
-  return intent.state === "handedOff" ? "workflow" : null;
+  // A reserved handoff counts from before its submission, so a withdrawal during submission is never silent.
+  return intent.state === "handingOff" || intent.state === "handedOff" || intent.state === "workflowApproved" ? "workflow" : null;
 }
+const WITHDRAWN_CONFLICT = { j04: "withdrawnWhileInJ04", workflow: "withdrawnWhileInWorkflow", uncertain: "withdrawnWhileUncertain" } as const;
 const SEND_PATH: Record<FollowUpStep, SendPath> = { "due-minus-2": "j04Preview", "within-grace": "j04Preview", "post-grace": "workflowReminder",
   "past-grace": "workflowHandoff", "rights-expiry-warning": "workflowHandoff" };
 const NEXT_STATE: Record<SendOutcome["kind"], IntentState> = { approvalRecorded: "awaitingApproval", approvalHeld: "approvalHeld",
@@ -168,7 +172,7 @@ export class FollowUpRepository {
       const updatedAt = new Date(at).toISOString();
       this.writeIntent({ ...intent, state: "superseded", supersededBy: reason, supersededFrom: intent.state, updatedAt });
       const live = liveElsewhere(intent);
-      if (live) this.recordConflict({ kind: live === "j04" ? "withdrawnWhileInJ04" : "withdrawnWhileInWorkflow", intentRef: intent.intentRef, collaborationId,
+      if (live) this.recordConflict({ kind: WITHDRAWN_CONFLICT[live], intentRef: intent.intentRef, collaborationId,
         outcome: null, intentState: intent.state, blocking: true, recordedAt: updatedAt });
     }
   }
@@ -183,10 +187,11 @@ export class FollowUpRepository {
       if (input.outreach === "unknown") for (const intent of this.liveCreatorMessages(id))
         this.recordConflict({ kind: "outreachUnverifiedWhileLive", intentRef: intent.intentRef, collaborationId: id, outcome: null, intentState: intent.state,
           blocking: true, recordedAt: new Date(at).toISOString() });
-      const decide = (priorSend = this.priorHold(id)) => decideReminder({ event: input.event, outreach: input.outreach, postedVerified: input.postedVerified,
+      const decide = (priorSend = this.priorHold(id), outreach = input.outreach) => decideReminder({ event: input.event, outreach, postedVerified: input.postedVerified,
         closure: this.closureOf(id)?.reason ?? null, priorSend }, this.config, at);
-      const first = decide();
-      if (first.kind !== "wait" && first.kind !== "remind" && first.kind !== "escalate") return { decision: first, proposals: [] };
+      // The current due-date version, found without the holds, so a held decision still withdraws older versions.
+      const first = decide("none", "clear");
+      if (first.kind !== "wait" && first.kind !== "remind" && first.kind !== "escalate") return { decision: decide(), proposals: [] };
       const reminder = (i: StoredIntent) => i.step !== "rights-expiry-warning";
       // A changed due date withdraws everything from older versions, then the decision is retaken: a withdrawn
       // message that J04 was already handling holds new creator reminders until an operator settles it.
@@ -244,8 +249,26 @@ export class FollowUpRepository {
   }
 
   /**
-   * Records the collaboration workflow's answer for a workflow-path intent. A recorded proposal moves the intent out
-   * of `proposed`, so it cannot be handed off twice. An uncertain answer waits for the workflow's own key lookup.
+   * Reserves a workflow-path intent before its proposal is submitted, in its own locked transaction. The intent moves
+   * to `handingOff`, which counts as live, so a closure during submission opens a conflict, and a second reservation
+   * is refused. A reservation that is never answered is reconciled with the returned key and held for an operator.
+   */
+  reserveWorkflowHandoff(intentRef: string, idempotencyKey: string): { intent: StoredIntent; requestKey: string } {
+    reference.parse(intentRef);
+    return this.once("reserveWorkflowHandoff", idempotencyKey, intentRef, at => {
+      const intent = this.intentRow("intent_ref=?", intentRef);
+      if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
+      if (intent.sendPath === "j04Preview") throw new FollowUpError("INTENT_NOT_ON_WORKFLOW_PATH");
+      if (intent.state !== "proposed") throw new FollowUpError(intent.state === "handingOff" ? "INTENT_ALREADY_RESERVED" : "INTENT_NOT_PROPOSED");
+      const next: StoredIntent = { ...intent, state: "handingOff", updatedAt: new Date(at).toISOString() };
+      this.writeIntent(next);
+      return { intent: next, requestKey: workflowRequestKeyOf(intentRef) };
+    });
+  }
+
+  /**
+   * Records the collaboration workflow's answer for a reserved intent. A recorded proposal moves it to `handedOff`;
+   * an uncertain answer waits for the workflow's own key lookup. Answers for a withdrawn intent become conflicts.
    */
   recordWorkflowHandoff(raw: unknown, idempotencyKey: string): OutcomeReceipt {
     const handoff = workflowHandoffSchema.parse(raw);
@@ -259,10 +282,34 @@ export class FollowUpRepository {
           outcome: handoff, intentState: intent.state, blocking: handoff.result !== "notApplied", recordedAt });
         return { state: "conflict", intent, conflict };
       }
-      if (intent.state !== "proposed" && intent.state !== "uncertain") throw new FollowUpError("OUTCOME_OUT_OF_ORDER");
+      if (intent.state === "proposed") throw new FollowUpError("INTENT_NOT_RESERVED");
+      if (intent.state !== "handingOff" && intent.state !== "uncertain") throw new FollowUpError("OUTCOME_OUT_OF_ORDER");
       if (intent.workflowProposalRef && handoff.result === "recorded" && handoff.proposalRef !== intent.workflowProposalRef) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
       const state: IntentState = handoff.result === "recorded" ? "handedOff" : handoff.result === "notApplied" ? "notSent" : "uncertain";
       const next: StoredIntent = { ...intent, state, workflowProposalRef: handoff.result === "recorded" ? handoff.proposalRef : intent.workflowProposalRef, updatedAt: recordedAt };
+      this.writeIntent(next);
+      return { state: "recorded", intent: next };
+    });
+  }
+
+  /** Settles a handed-off intent from the workflow's detail read. Approved stays live; rejected and sent are terminal. */
+  recordWorkflowOutcome(raw: unknown, idempotencyKey: string): OutcomeReceipt {
+    const outcome = workflowOutcomeSchema.parse(raw);
+    return this.once("recordWorkflowOutcome", idempotencyKey, outcome, (at): OutcomeReceipt => {
+      const intent = this.intentRow("intent_ref=?", outcome.intentRef);
+      if (!intent) throw new FollowUpError("RECORD_NOT_FOUND", 404);
+      if (intent.sendPath === "j04Preview") throw new FollowUpError("INTENT_NOT_ON_WORKFLOW_PATH");
+      const recordedAt = new Date(at).toISOString();
+      if (intent.state === "superseded") {
+        const conflict = this.recordConflict({ kind: "lateOutcome", intentRef: intent.intentRef, collaborationId: intent.collaborationId,
+          outcome, intentState: intent.state, blocking: outcome.result !== "rejected", recordedAt });
+        return { state: "conflict", intent, conflict };
+      }
+      if (intent.state !== "handedOff" && intent.state !== "workflowApproved") throw new FollowUpError("OUTCOME_OUT_OF_ORDER");
+      if (outcome.proposalRef !== intent.workflowProposalRef) throw new FollowUpError("OUTCOME_BINDING_MISMATCH");
+      const state: IntentState = outcome.result === "approved" ? "workflowApproved" : outcome.result === "rejected" ? "notSent" : "sent";
+      const next: StoredIntent = { ...intent, state, updatedAt: recordedAt,
+        receiptRefs: outcome.result === "sent" ? [...new Set([...intent.receiptRefs, outcome.receiptRef])] : intent.receiptRefs };
       this.writeIntent(next);
       return { state: "recorded", intent: next };
     });
@@ -336,10 +383,15 @@ export class FollowUpRepository {
     return this.db.prepare("SELECT body FROM creator_follow_up_outcome_conflicts WHERE collaboration_id=? ORDER BY recorded_at,conflict_ref").all(collaborationId)
       .map(row => JSON.parse(String(row.body)) as OutcomeConflict);
   }
-  /** Uncertain creator messages, oldest first. Each needs a reconciliation lookup before anything else happens. */
+  /**
+   * Intents whose outcome is unknown, oldest first: uncertain, reserved but unanswered, or withdrawn from either state
+   * while its conflict is open. Each needs a reconciliation lookup before anything else happens.
+   */
   pendingReconciliation(limit = 50): StoredIntent[] {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new FollowUpError("INVALID_LIST_LIMIT", 422);
-    return this.db.prepare("SELECT body FROM creator_follow_up_intents WHERE state='uncertain' ORDER BY updated_at,intent_ref LIMIT ?").all(limit)
-      .map(row => JSON.parse(String(row.body)) as StoredIntent);
+    return this.db.prepare(`SELECT i.body FROM creator_follow_up_intents i WHERE i.state IN ('uncertain','handingOff')
+        OR i.state='superseded' AND json_extract(i.body,'$.supersededFrom') IN ('uncertain','handingOff')
+          AND EXISTS(SELECT 1 FROM creator_follow_up_outcome_conflicts c WHERE c.intent_ref=i.intent_ref AND c.resolved=0)
+      ORDER BY i.updated_at,i.intent_ref LIMIT ?`).all(limit).map(row => JSON.parse(String(row.body)) as StoredIntent);
   }
 }

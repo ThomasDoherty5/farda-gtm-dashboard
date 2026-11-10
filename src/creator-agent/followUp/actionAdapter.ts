@@ -3,7 +3,7 @@ import { foundationActionSchema, type FoundationAction } from "../actions/wire.t
 import { workflowIntentSchema, type WorkflowIntent } from "../collaborationWorkflowSchema.ts";
 import type { OperationsScope } from "../operations.ts";
 import type { ClosureRecord } from "./repository.ts";
-import type { SendOutcome, StoredIntent } from "./contract.ts";
+import { workflowRequestKeyOf, type SendOutcome, type StoredIntent } from "./contract.ts";
 
 /**
  * Translates follow-up intents into envelopes the existing actions service accepts. It produces requests only:
@@ -30,15 +30,21 @@ export function previewActionFor(intent: StoredIntent, context: Context): Founda
     payload: { entityRef: intent.collaborationId, entityVersion: intent.intentVersion, selectionRefs: [intent.intentRef] } });
 }
 
-export type Reconciliation = { kind: "action"; action: FoundationAction } | { kind: "hold"; reasonCode: string };
+export type Reconciliation = { kind: "action"; action: FoundationAction } | { kind: "hold"; reasonCode: string; requestKey?: string };
+const unknownOutcome = (intent: StoredIntent, from: StoredIntent["state"][]) =>
+  from.includes(intent.state) || intent.state === "superseded" && intent.supersededFrom !== null && from.includes(intent.supersededFrom);
 /**
  * The only follow-up for an uncertain send: the actions service's own reconciliation. A dispatched run is looked
  * up, never re-attempted; an uncertain approval request is reconciled; anything else waits for a person.
  */
 export function reconciliationFor(intent: StoredIntent, context: Context & { idempotencyKey: string }): Reconciliation {
-  if (intent.state !== "uncertain") throw new FollowUpAdapterError("INTENT_NOT_UNCERTAIN");
-  // A workflow handoff reconciles through the workflow's own detail read with `proposalRequestKey`.
-  if (intent.sendPath !== "j04Preview") return { kind: "hold", reasonCode: "WORKFLOW_PROPOSAL_LOOKUP_REQUIRED" };
+  // A workflow handoff, uncertain or reserved but unanswered, reconciles through the workflow's own detail read
+  // with `proposalRequestKey`, and holds for an operator until then. Withdrawn ones still need the lookup.
+  if (intent.sendPath !== "j04Preview") {
+    if (!unknownOutcome(intent, ["uncertain", "handingOff"])) throw new FollowUpAdapterError("INTENT_NOT_UNCERTAIN");
+    return { kind: "hold", reasonCode: "WORKFLOW_PROPOSAL_LOOKUP_REQUIRED", requestKey: workflowRequestKeyOf(intent.intentRef) };
+  }
+  if (!unknownOutcome(intent, ["uncertain"])) throw new FollowUpAdapterError("INTENT_NOT_UNCERTAIN");
   const base = { schemaVersion: SCHEMA_VERSION, requestId: context.requestId, requestedScope: requestedScope(context.scope), idempotencyKey: context.idempotencyKey, entityRefs: [] };
   if (intent.runRef && intent.runVersion && intent.approvalRef && intent.manifestRef)
     return { kind: "action", action: foundationActionSchema.parse({ ...base, operation: "reconcileRun", actionKind: "lookup", runRef: intent.runRef,
@@ -50,7 +56,7 @@ export function reconciliationFor(intent: StoredIntent, context: Context & { ide
 
 /** Same as above for an uncertain approval request, when the caller holds the signed approval version. */
 export function approvalReconciliationFor(intent: StoredIntent, context: Context & { idempotencyKey: string; approvalVersion: string }): FoundationAction {
-  if (intent.sendPath !== "j04Preview" || intent.state !== "uncertain" || intent.runRef || !intent.approvalRef || !intent.manifestRef)
+  if (intent.sendPath !== "j04Preview" || !unknownOutcome(intent, ["uncertain"]) || intent.runRef || !intent.approvalRef || !intent.manifestRef)
     throw new FollowUpAdapterError("INTENT_NOT_APPROVAL_UNCERTAIN");
   return foundationActionSchema.parse({ schemaVersion: SCHEMA_VERSION, requestId: context.requestId, requestedScope: requestedScope(context.scope),
     idempotencyKey: context.idempotencyKey, entityRefs: [], operation: "requestApproval", actionKind: "reconcileApproval",
@@ -102,11 +108,11 @@ const OUTCOME: Record<ClosureRecord["reason"], WorkflowIntent["outcome"]> = {
   "rights-unavailable": "canceled", cancelled: "canceled",
 };
 /** The stable request key for an intent's workflow proposal, also used for its `proposalRequestKey` lookup. */
-export const workflowRequestKeyFor = (intent: StoredIntent) => "follow-up-workflow:" + intent.intentRef;
+export const workflowRequestKeyFor = (intent: StoredIntent) => workflowRequestKeyOf(intent.intentRef);
 
 /**
- * Workflow proposal payloads. An intent qualifies only on its own workflow send path and only while `proposed`;
- * once handed off, `recordWorkflowHandoff` moves it on so it cannot be proposed twice.
+ * Workflow proposal payloads. An intent qualifies only on its own workflow send path and only after
+ * `reserveWorkflowHandoff` has moved it to `handingOff` in a locked transaction. Submit with the reservation's key.
  */
 export function collaborationProposalFor(item: { kind: "handoff"; intent: StoredIntent } | { kind: "closure"; closure: ClosureRecord }, collaborationRef: string): WorkflowIntent {
   if (item.kind === "closure") {
@@ -115,7 +121,7 @@ export function collaborationProposalFor(item: { kind: "handoff"; intent: Stored
   }
   const intent = item.intent;
   if (intent.sendPath === "j04Preview") throw new FollowUpAdapterError("INTENT_NOT_ON_WORKFLOW_PATH");
-  if (intent.state !== "proposed") throw new FollowUpAdapterError("INTENT_NOT_PROPOSED");
+  if (intent.state !== "handingOff") throw new FollowUpAdapterError("INTENT_NOT_RESERVED");
   return intent.sendPath === "workflowReminder"
     ? workflowIntentSchema.parse({ collaborationRef, kind: "reminder", reason: `Follow-up post-grace reminder: ${intent.reasonCodes.join(", ")}` })
     : workflowIntentSchema.parse({ collaborationRef, kind: "human-handoff", reason: `Follow-up ${intent.step}: ${intent.reasonCodes.join(", ")}` });

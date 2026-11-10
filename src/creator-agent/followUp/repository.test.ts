@@ -155,6 +155,8 @@ describe("follow-up repository", () => {
     const { repo } = setup(laNoon("2026-11-15"), postGraceConfig);
     const [escalation, reminder] = repo.planReminder(plan(), "plan-1").proposals.map(p => p.intent);
     expect([escalation!.sendPath, reminder!.sendPath]).toEqual(["workflowHandoff", "workflowReminder"]);
+    expect(() => repo.recordWorkflowHandoff({ intentRef: reminder!.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-0")).toThrow("INTENT_NOT_RESERVED");
+    repo.reserveWorkflowHandoff(reminder!.intentRef, "reserve-1");
     repo.recordWorkflowHandoff({ intentRef: reminder!.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1");
     expect(() => repo.recordWorkflowHandoff({ intentRef: reminder!.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-2")).toThrow("OUTCOME_OUT_OF_ORDER");
     repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
@@ -164,6 +166,57 @@ describe("follow-up repository", () => {
     const preDue = setup();
     const j04 = preDue.repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
     expect(() => preDue.repo.recordWorkflowHandoff({ intentRef: j04.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1")).toThrow("INTENT_NOT_ON_WORKFLOW_PATH");
+  });
+  it("reserves a workflow handoff once, and a closure during submission opens a workflow conflict", () => {
+    const { repo } = setup(laNoon("2026-11-15"), postGraceConfig);
+    const reminder = repo.planReminder(plan(), "plan-1").proposals[1]!.intent;
+    expect(repo.reserveWorkflowHandoff(reminder.intentRef, "reserve-1")).toMatchObject({ intent: { state: "handingOff" }, requestKey: "follow-up-workflow:" + reminder.intentRef });
+    expect(() => repo.reserveWorkflowHandoff(reminder.intentRef, "reserve-2")).toThrow("INTENT_ALREADY_RESERVED");
+    repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
+    expect(repo.intent(reminder.intentRef)).toMatchObject({ state: "superseded", supersededFrom: "handingOff" });
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "withdrawnWhileInWorkflow", intentState: "handingOff", blocking: true }]);
+    expect(repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1"))
+      .toMatchObject({ state: "conflict", intent: { state: "superseded" }, conflict: { kind: "lateOutcome", blocking: true } });
+  });
+  it("withdraws an uncertain workflow handoff on closure with a conflict, and a later recorded answer stays a conflict", () => {
+    const { repo } = setup(laNoon("2026-11-15"), postGraceConfig);
+    const reminder = repo.planReminder(plan(), "plan-1").proposals[1]!.intent;
+    repo.reserveWorkflowHandoff(reminder.intentRef, "reserve-1");
+    repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "uncertain" }, "handoff-1");
+    repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
+    expect(repo.intent(reminder.intentRef)).toMatchObject({ state: "superseded", supersededFrom: "uncertain" });
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "withdrawnWhileUncertain", blocking: true }]);
+    expect(repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-2"))
+      .toMatchObject({ state: "conflict", conflict: { kind: "lateOutcome", blocking: true } });
+    expect(repo.intent(reminder.intentRef)?.state).toBe("superseded");
+    expect(repo.pendingReconciliation().map(i => i.intentRef)).toEqual([reminder.intentRef]);
+  });
+  it.each(["closure", "dueDateChanged", "outreachSuppressed"] as const)("withdraws an uncertain J04 send on %s with a conflict, and a later sent receipt stays a conflict", (cause) => {
+    const { repo, clock } = setup();
+    const intent = repo.planReminder(plan(), "plan-1").proposals[0]!.intent;
+    repo.recordSendOutcome({ kind: "uncertain", intentRef: intent.intentRef, ...run }, "outcome-1");
+    clock.at = laNoon("2026-11-11");
+    if (cause === "closure") repo.close(collaborationId, { reason: "declined", sourceRef: "synthetic-decline" }, "close-1");
+    else repo.planReminder(cause === "dueDateChanged" ? plan(clockEvent({ dueDate: "2026-11-13" })) : plan(clockEvent(), "suppressed"), "plan-2");
+    expect(repo.intent(intent.intentRef)).toMatchObject({ state: "superseded", supersededBy: cause === "closure" ? "closure" : cause, supersededFrom: "uncertain" });
+    expect(repo.conflicts(collaborationId)).toMatchObject([{ kind: "withdrawnWhileUncertain", blocking: true }]);
+    expect(repo.recordSendOutcome({ kind: "sent", intentRef: intent.intentRef, ...run, receiptRefs: ["synthetic-receipt"] }, "outcome-2"))
+      .toMatchObject({ state: "conflict", intent: { state: "superseded" }, conflict: { kind: "lateOutcome", blocking: true } });
+    expect(repo.intent(intent.intentRef)?.receiptRefs).toEqual([]);
+  });
+  it.each([
+    ["rejected", "notSent", 0], ["sent", "sent", 0], ["approved", "workflowApproved", 1],
+  ] as const)("settles a handed-off workflow reminder as %s, which is live afterwards only when approved", (result, state, conflicts) => {
+    const { repo } = setup(laNoon("2026-11-15"), postGraceConfig);
+    const reminder = repo.planReminder(plan(), "plan-1").proposals[1]!.intent;
+    repo.reserveWorkflowHandoff(reminder.intentRef, "reserve-1");
+    repo.recordWorkflowHandoff({ intentRef: reminder.intentRef, result: "recorded", proposalRef: "proposal-synthetic" }, "handoff-1");
+    expect(() => repo.recordWorkflowOutcome({ intentRef: reminder.intentRef, proposalRef: "proposal-other", result: "rejected" }, "outcome-0")).toThrow("OUTCOME_BINDING_MISMATCH");
+    const outcome = result === "sent" ? { intentRef: reminder.intentRef, proposalRef: "proposal-synthetic", result, receiptRef: "synthetic-workflow-receipt" }
+      : { intentRef: reminder.intentRef, proposalRef: "proposal-synthetic", result };
+    expect(repo.recordWorkflowOutcome(outcome, "outcome-1").intent.state).toBe(state);
+    repo.close(collaborationId, { reason: "cancelled", sourceRef: "synthetic-cancel" }, "close-1");
+    expect(repo.conflicts(collaborationId).filter(c => c.intentRef === reminder.intentRef)).toHaveLength(conflicts);
   });
   it("records nothing for a missing date and sends it to human review", () => {
     const { db, repo } = setup();

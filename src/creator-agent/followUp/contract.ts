@@ -111,7 +111,8 @@ export type FollowUpChannel = "creator-message" | "human-review";
  */
 export type SendPath = "j04Preview" | "workflowReminder" | "workflowHandoff";
 
-export const INTENT_STATES = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handedOff", "uncertain", "sent", "notSent", "superseded"] as const;
+export const INTENT_STATES = ["proposed", "awaitingApproval", "approvalHeld", "dispatched", "handingOff", "handedOff", "workflowApproved",
+  "uncertain", "sent", "notSent", "superseded"] as const;
 export type IntentState = typeof INTENT_STATES[number];
 export type SupersededBy = "closure" | "dueDateChanged" | "stepAdvanced" | "outreachSuppressed";
 
@@ -176,3 +177,15 @@ export const workflowHandoffSchema = z.discriminatedUnion("result", [
   z.object({ intentRef: reference, result: z.literal("uncertain") }).strict(),
 ]);
 export type WorkflowHandoff = z.infer<typeof workflowHandoffSchema>;
+/** The stable request key for an intent's workflow proposal, also used for its `proposalRequestKey` lookup. */
+export const workflowRequestKeyOf = (intentRef: string) => "follow-up-workflow:" + intentRef;
+/**
+ * What the collaboration workflow's detail read later shows for a recorded proposal. Approved is not sent and stays
+ * live; rejected and sent are terminal.
+ */
+export const workflowOutcomeSchema = z.discriminatedUnion("result", [
+  z.object({ intentRef: reference, proposalRef: reference, result: z.literal("approved") }).strict(),
+  z.object({ intentRef: reference, proposalRef: reference, result: z.literal("rejected") }).strict(),
+  z.object({ intentRef: reference, proposalRef: reference, result: z.literal("sent"), receiptRef: reference }).strict(),
+]);
+export type WorkflowOutcome = z.infer<typeof workflowOutcomeSchema>;
