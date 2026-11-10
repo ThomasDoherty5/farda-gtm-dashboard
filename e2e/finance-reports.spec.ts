@@ -96,6 +96,11 @@ test("unit economics explain CAC payback, and the definitions dialog states them
   const trigger = page.getByRole("button", { name: "View metric definitions" });
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "Metric definitions" });
+  // The dialog opens at its title, so the "proposed, not adopted" warning is on screen without scrolling.
+  const heading = dialog.getByRole("heading", { name: "Metric definitions" });
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport();
+  await expect(dialog.getByText(/^Proposed · finance-unit-economics@1 · not adopted\./)).toBeInViewport();
   await expect(dialog).toContainText("Proposed · finance-unit-economics@1 · not adopted");
   await expect(dialog).toContainText("N/A · pilot cohort only; see the commission ledger");
   const results = await new AxeBuilder({ page: page as never }).include("dialog[open]").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();

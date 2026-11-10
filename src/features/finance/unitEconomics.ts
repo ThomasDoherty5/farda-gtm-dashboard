@@ -117,7 +117,8 @@ export const REASON_TEXT: Record<string, string> = {
  */
 const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\u00A0\u115F\u1160\u1680\u2000-\u200A\u202F\u205F\u2800\u3000\u3164\uFFA0]/u;
 export const isOpaqueId = (id: string) => id.length > 0 && id === id.trim() && !INVISIBLE.test(id);
-const reasonText = (code: string) => REASON_TEXT[code] ?? (code.startsWith("COMPONENT_") ? componentReason(code) : `Unresolved cost rows (${code})`);
+/** Plain words only; a reason code is never shown to people. */
+const reasonText = (code: string) => REASON_TEXT[code] ?? (code.startsWith("COMPONENT_") ? componentReason(code) : "The cost rows could not be reconciled");
 function componentReason(code: string) {
   const [, kind, component] = /^COMPONENT_(UNKNOWN|UNDECLARED|CONFLICT)_(\w+)$/.exec(code) ?? [];
   const label = COMPONENT_LABEL[component as CostComponent] ?? component;
@@ -243,7 +244,7 @@ export type RecurringRevenue =
 export function recurringRevenueOf(s: SubscriptionSource | undefined): RecurringRevenue {
   if (!s) return { kind: "unavailable", reason: "Subscription source not reported. Unknown, not zero." };
   if (s.access !== "verified" || s.subscriptionProducts === null)
-    return { kind: "unavailable", reason: `Subscription source not read${s.reasonCode ? ` (${s.reasonCode})` : ""}. Unknown, not zero.` };
+    return { kind: "unavailable", reason: "Subscription source not read. Unknown, not zero." };
   if (s.subscriptionProducts === 0) return { kind: "none", reason: "Verified: the source has no subscription product." };
   if (s.definition.state !== "adopted" || !s.definition.reference)
     return { kind: "notDefined", reason: `${s.subscriptionProducts} subscription product${s.subscriptionProducts === 1 ? "" : "s"} verified. No recurring-revenue definition is adopted, so MRR and ARR are N/A.` };
@@ -252,9 +253,9 @@ export function recurringRevenueOf(s: SubscriptionSource | undefined): Recurring
   return { kind: "known", mrr, arr: mrr * 12, reason: `Recurring subscription revenue only, per ${s.definition.reference}.` };
 }
 
-/** "6 of 8 creators", or "creators unknown". Unknown coverage is never shown as 0 of n. */
+/** "6 of 8 creators allocated", or "Unknown". Unknown coverage is never shown as 0 of n. */
 export const coverageText = (c: Coverage, noun: string) =>
-  c.state === "unknown" || c.expected === null || c.observed === null ? `${noun} unknown` : `${c.observed} of ${c.expected} ${noun}`;
+  c.state === "unknown" || c.expected === null || c.observed === null ? "Unknown" : `${c.observed} of ${c.expected} ${noun}`;
 
 export const definitionText = (d: DefinitionPolicy) =>
   d.state === "adopted" && d.reference ? `Adopted · ${d.reference}` : d.state === "proposed" ? `Proposed · ${d.version} · not adopted` : "Not configured";

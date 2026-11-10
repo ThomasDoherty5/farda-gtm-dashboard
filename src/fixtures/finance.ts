@@ -219,12 +219,14 @@ function unitEconomicsDemo(scenario?: string): UnitEconomicsInput {
     validOrders: known(zero ? 0 : 400),
     newCustomers: known(zero ? 0 : 280),
     landedCost: scenario === "landedincomplete" ? { complete: false, missingSkus: ["TEST-SKU-02"] } : { complete: true, missingSkus: [] },
-    creatorCosts: { state: "partial", expected: 8, observed: 6, reasonCodes: ["CREATOR_COSTS_UNALLOCATED"] },
-    attribution: { state: "partial", expected: 400, observed: 352, reasonCodes: ["ORDERS_UNATTRIBUTED"] },
-    costs: [...contribution, cost("paidMedia", "paid", 500000, "TEST-CASH-media"), cost("sampleLanded", "accrued", 84000), cost("sampleShipping", "paid", 26000, "TEST-CASH-sample-shipping"), cost("historicalContentFee", "accrued", 90000)],
+    // With no orders there is nothing to attribute and no creator activity to allocate: both are a counted zero, not the default 6 of 8.
+    creatorCosts: zero ? { state: "complete", expected: 0, observed: 0, reasonCodes: [] } : { state: "partial", expected: 8, observed: 6, reasonCodes: ["CREATOR_COSTS_UNALLOCATED"] },
+    attribution: zero ? { state: "complete", expected: 0, observed: 0, reasonCodes: [] } : { state: "partial", expected: 400, observed: 352, reasonCodes: ["ORDERS_UNATTRIBUTED"] },
+    // Media was still bought; no samples went out and no historical fee fell in the window.
+    costs: [...contribution, cost("paidMedia", "paid", 500000, "TEST-CASH-media"), ...(zero ? [] : [cost("sampleLanded", "accrued", 84000), cost("sampleShipping", "paid", 26000, "TEST-CASH-sample-shipping"), cost("historicalContentFee", "accrued", 90000)])],
     declared: [
       { component: "commission", state: "notApplicable", reasonCode: "PILOT_COHORT_ONLY" },
-      ...(zero ? (["landedCogs", "shipping", "providerFees", "fulfillment"] as const).map((component) => ({ component, state: "knownZero" as const, reasonCode: "NO_ORDERS" })) : []),
+      ...(zero ? (["landedCogs", "shipping", "providerFees", "fulfillment", "sampleLanded", "sampleShipping", "historicalContentFee"] as const).map((component) => ({ component, state: "knownZero" as const, reasonCode: "NO_ORDERS" })) : []),
     ],
   };
 }
@@ -246,11 +248,12 @@ export const financeDashboardDemo = (scenario?: string): FinanceDashboard => ({
   forecastRevenue: 1400000,
   contributionPerOrder: 1420,
   samplesPlanned: 46,
-  closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: 2, cpaSignOff: "Pending" },
+  closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: scenario === "zeroorders" ? 0 : 2, cpaSignOff: "Pending" },
   cashHistory: [{ month: "Jul", minor: 6360000 }, { month: "Aug", minor: 5780000 }, { month: "Sep", minor: 5200000 }, { month: "Oct", minor: 4620000 }],
   // With no orders there is nothing to break down; an empty breakdown is drawn as such, never as the default $5,680 contribution.
   costBreakdown: scenario === "zeroorders" ? [] : [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
-  payouts: [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
+  // No orders means no payouts in the window: the channels are listed with counted zeros, not the default 18 and 6.
+  payouts: scenario === "zeroorders" ? [{ channel: "Shopify", matched: 0, needsReview: 0 }, { channel: "TikTok Shop", matched: 0, needsReview: 0 }] : [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
   unitEconomics: unitEconomicsDemo(scenario),
   subscriptions: scenario === "subscriptionunread"
     ? { access: "unknown", reasonCode: "SUBSCRIPTION_SOURCE_NOT_READ", subscriptionProducts: null, definition: { version: "recurring-revenue@0", state: "notConfigured", reference: null }, monthlyRecurring: unknown("SUBSCRIPTION_SOURCE_NOT_READ") }

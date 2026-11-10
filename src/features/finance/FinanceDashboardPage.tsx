@@ -18,7 +18,7 @@ import { financeMetricDictionary } from "@/fixtures/financeUnitEconomics";
 import { usd } from "@/fixtures/values";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
-import { ACQUISITION_COMPONENTS, COMPONENT_LABEL, CONTRIBUTION_COMPONENTS, REASON_TEXT, cacPaybackOf, componentTotal, inputProblems, type CostComponent, type UnitEconomicsInput, contributionOf, coverageText, definitionText, explain, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat } from "./unitEconomics";
+import { ACQUISITION_COMPONENTS, COMPONENT_LABEL, CONTRIBUTION_COMPONENTS, REASON_TEXT, cacPaybackOf, componentTotal, inputProblems, type CostComponent, type Figure, type UnitEconomicsInput, contributionOf, coverageText, definitionText, explain, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat } from "./unitEconomics";
 
 const whole = (minor: number) => formatMoney(usd(minor));
 const signed = (minor: number) => `${minor < 0 ? "−" : ""}${whole(Math.abs(minor))}`;
@@ -58,7 +58,7 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
         <p>The figures cover the 30 days ending Oct 29, 2026. Calendar-month and year-to-date figures await their source reports, so there is no other period to choose in the demo.</p>
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
-      <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
+      <Dialog open={dialog === "definitions"} focusHeading title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
         <p>Gross margin is gross profit over net revenue. Pre-marketing contribution per order excludes acquisition and fixed spend. Burn is the average net cash out over the last three months, using the proposed cash-flow definition. Runway is verified current cash divided by that burn, and reads N/A when there is too little history or no net spend.</p>
         {data && <UnitEconomicsDefinitions data={data} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
@@ -90,7 +90,7 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
         <Kpi label="Cash balance" context={`${whole(data.historicalRaised)} raised · as of ${data.cashAsOf}`} testId="metric-Cash balance">{figure(data.cash, (m) => whole(m))}</Kpi>
         <Kpi label="Monthly burn" context={data.burn.state === "known" ? "Average net cash out · last 3 months" : `Needs ${data.burnWindowMonths} months of history`} testId="metric-Monthly burn">{figure(data.burn, (m) => whole(m))}</Kpi>
         <Kpi label="Runway" context={runway.reason ?? "Current cash / average burn"} testId="metric-Runway">{runway.months === null ? "N/A" : `${runway.months.toFixed(1)} months`}</Kpi>
-        <Kpi label="Pre-marketing contribution" context={perOrder.state === "notApplicable" ? explain(perOrder) : `Per order · ${perOrder.state === "provisional" ? `Provisional · ${explain(perOrder)}` : "proposed definition"}`} testId="metric-Pre-marketing contribution">{perOrder.value === null ? "N/A" : ueFormat.money(perOrder.value)}</Kpi>
+        <Kpi label="Pre-marketing contribution" context={perOrder.state === "notApplicable" ? explain(perOrder) : perOrder.state === "provisional" ? <>Per order · Provisional<span className="visually-hidden">{` · ${explain(perOrder)}`}</span></> : ue?.creatorCosts.state === "complete" ? "Per order · before creator costs" : "Per order · creator allocation pending"} testId="metric-Pre-marketing contribution">{perOrder.value === null ? "N/A" : ueFormat.money(perOrder.value)}</Kpi>
       </KpiRow>
       <HalfColumns>
         <Panel title="Profit & loss" subtitle={`${data.period.label} · 30-day management P&L`} testId="pnl">
@@ -117,7 +117,7 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
       </HalfColumns>
       <HalfColumns>
         <Panel title="Unit economics" subtitle="Pre-marketing contribution excludes acquisition and fixed spend." testId="unit-economics">
-          <FactList wide label="Unit economics" rows={[["Gross margin", figureText(margin, ueFormat.percent)], ["Pre-marketing contribution / order", figureText(perOrder, ueFormat.money)], ["CAC payback", figureText(paybackOrders, ueFormat.orders)], ["Creator costs · attribution", ue ? `${coverageText(ue.creatorCosts, "creators")} · ${coverageText(ue.attribution, "orders")}` : "Not reported"], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
+          <FactList wide label="Unit economics" rows={[["Gross margin", <Fact f={margin} format={ueFormat.percent} />], ["Pre-marketing contribution / order", <Fact f={perOrder} format={ueFormat.money} />], ["CAC payback", <Fact f={paybackOrders} format={ueFormat.orders} />], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
           <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 240, alignSelf: "flex-start" }} onClick={() => setDialog("definitions")}>View metric definitions</Button>
         </Panel>
         <Panel title="Month-end & compliance" subtitle="Review unresolved items before closing" testId="close-summary">
@@ -149,14 +149,33 @@ const SUBSCRIPTION_HEADING: Record<ReturnType<typeof recurringRevenueOf>["kind"]
   known: (t) => `MRR ${t.mrr} · ARR ${t.arr}`,
 };
 
-/** The proposed dictionary, this cohort's cost components and the forecast's own version, for the definitions dialog. */
+/**
+ * One panel line: the value and its state on one line. A provisional figure's reasons stay in the line for screen readers and are
+ * listed for everyone under "Why provisional" in the definitions dialog. An N/A keeps its reason visible, since it has no value.
+ */
+function Fact({ f, format }: { f: Figure; format: (v: number) => string }) {
+  if (f.state === "notApplicable" || f.value === null) return <>{figureText(f, format)}</>;
+  if (f.state === "known") return <>{format(f.value)}</>;
+  return <>{`${format(f.value)} · Provisional`}<span className="visually-hidden">{` · ${explain(f)}`}</span></>;
+}
+
+/** The proposed dictionary, why each figure is provisional, this cohort's cost components and the forecast's own version. */
 function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
   const ue = data.unitEconomics;
   const plan = data.forecastPlan;
+  const { cac, paybackOrders } = cacPaybackOf(data.pnl, ue, data.contributionPerOrder);
+  const why: [string, string][] = [
+    ["Gross margin", figureText(grossMarginOf(data.pnl, ue), ueFormat.percent)],
+    ["Pre-marketing contribution / order", figureText(contributionOf(data.pnl, ue, data.contributionPerOrder).perOrder, ueFormat.money)],
+    ["CAC", figureText(cac, ueFormat.money)],
+    ["CAC payback", figureText(paybackOrders, ueFormat.orders)],
+    ["Creator-cost coverage", ue ? coverageText(ue.creatorCosts, "creators allocated") : "Not reported"],
+    ["Attribution coverage", ue ? coverageText(ue.attribution, "orders attributed") : "Not reported"],
+  ];
   // Per-component rows use the same whole-input checks as the group totals, so they always sum to them or are refused together.
   const component = (u: UnitEconomicsInput, c: CostComponent) => {
     const declared = u.costs.some((r) => r.component === c) ? null : u.declared.find((d) => d.component === c);
-    if (declared?.state === "notApplicable" && inputProblems(u).length === 0) return `N/A · ${declared.reasonCode === "PILOT_COHORT_ONLY" ? "pilot cohort only; see the commission ledger" : declared.reasonCode}`;
+    if (declared?.state === "notApplicable" && inputProblems(u).length === 0) return `N/A · ${declared.reasonCode === "PILOT_COHORT_ONLY" ? "pilot cohort only; see the commission ledger" : "not applicable to this cohort"}`;
     return figureText(componentTotal(u, [c]), ueFormat.money);
   };
   const group = (u: UnitEconomicsInput, name: string, members: readonly CostComponent[]): [string, string][] =>
@@ -164,6 +183,8 @@ function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
   return (
     <>
       <p className={styles.warnText}>{`${ue ? definitionText(ue.definition) : "Not configured"}. ${financeMetricDictionary.policy}`}</p>
+      <p className={styles.sub}>Why provisional</p>
+      <FactList label="Why provisional" rows={why} />
       <FactList label="Unit-economics definitions" rows={financeMetricDictionary.entries.map((e) => [e.label, `${e.numerator}${e.denominator === "None" ? "" : ` ÷ ${e.denominator}`}. ${e.costBuckets === "None" || e.costBuckets.startsWith("As ") ? "" : `${e.costBuckets} `}${e.whenUnavailable}`])} />
       {ue
         ? <FactList label="Cohort cost components" rows={[["Cohort", `${ue.cohort.label} · the affiliate pilot is excluded and keeps its own ledger`], ...group(ue, "contribution", CONTRIBUTION_COMPONENTS), ...group(ue, "acquisition", ACQUISITION_COMPONENTS)]} />
