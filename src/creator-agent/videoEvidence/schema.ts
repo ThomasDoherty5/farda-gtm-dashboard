@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { commentsSchema, reviewSchema } from "../evidence.ts";
 import { opaqueRef, sourceRefSchema, sourceUrlSchema } from "../intake/contract.ts";
-import { inferenceRefusals } from "./inferenceScreen.ts";
 
 /**
  * J20 typed evidence schemas. Normalized Farda fields, not provider API fields. J20 collects and versions evidence;
@@ -291,16 +290,11 @@ export const postReviewSchema = z.object({
 });
 export type PostReview = z.infer<typeof postReviewSchema>;
 
-/** Every Farda-authored free-text field that the inference screen checks at intake and again on each stored version. */
-export function screenedTextOf(part: { sampling?: { secondary_labels: string[] }; context?: { secondary_labels: string[] }; features?: Feature[];
-  production_choices?: { observation: string }[]; claims?: Claim[]; viewing?: { interruption_reason: string | null } | null }): string[] {
-  return [
-    ...(part.context?.secondary_labels ?? []), ...(part.sampling?.secondary_labels ?? []),
-    ...(part.features ?? []).flatMap((f) => [f.exact_observation, f.interpretation?.text].filter((t): t is string => Boolean(t))),
-    ...(part.production_choices ?? []).map((p) => p.observation), ...(part.claims ?? []).map((c) => c.summary),
-    ...(part.viewing?.interruption_reason ? [part.viewing.interruption_reason] : []),
-  ];
-}
+/** A Farda-authored free-text field withheld by the inference screen, with its refusal codes. The text itself is not kept. */
+export const quarantineSchema = z.array(z.object({ field: z.string().min(1).max(120), reason_codes: z.array(reason).min(1).max(10),
+  /** A human reviewer's acknowledgment; the withheld text is never restored. */
+  reviewed: z.object({ reviewer: ref, decided_at: instant }).strict().nullable() }).strict()).max(100);
+export type Quarantine = z.infer<typeof quarantineSchema>;
 
 const failure = <S extends "loginRequired" | "mfaRequired" | "permissionDenied" | "unavailable">(state: S) =>
   z.object({ state: z.literal(state), source_ref: ref, observed_at: instant, reason_code: reason }).strict();
@@ -368,13 +362,13 @@ export const videoEvidenceRecordSchema = z.object({
   comments: commentEvidenceSchema,
   shoppable_context: shoppableContextSchema,
   limitations: z.array(reason).max(30),
+  /** Fields dropped at intake by the inference screen. Stored versions are never re-screened on read. */
+  quarantined: quarantineSchema,
   next_action: nextActionSchema,
   prior_version: z.number().int().positive().nullable(),
 }).strict().superRefine((r, ctx) => {
   if (r.deep_review.credit && (!r.deep_review.eligible || r.like_gate.state !== "pass")) fail(ctx, ["deep_review"], "Deep-review credit requires a passed native-like gate.");
   if (r.deep_review.metadata_only && r.deep_review.credit) fail(ctx, ["deep_review"], "Metadata-only posts receive no deep-review credit.");
-  const refused = inferenceRefusals(screenedTextOf(r));
-  if (refused.length) fail(ctx, [], `Free text names a prohibited inference: ${refused.join(", ")}.`);
 });
 export type VideoEvidenceRecord = z.infer<typeof videoEvidenceRecordSchema>;
 

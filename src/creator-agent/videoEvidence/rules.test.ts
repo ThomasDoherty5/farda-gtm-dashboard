@@ -194,8 +194,17 @@ describe("Inference screen", () => {
     expect(inferenceRefusals(["Styling suggests an older, wealthy audience."])).toEqual(["DEMOGRAPHIC_INFERENCE_REFUSED", "PURCHASING_POWER_INFERENCE_REFUSED"]);
     expect(inferenceRefusals(["new moms over 40"])).toEqual(["DEMOGRAPHIC_INFERENCE_REFUSED"]);
   });
-  it("passes ordinary observations of action, framing and production", () => {
-    expect(inferenceRefusals(["Unzips a fictional case and places it in the tote.", "Top-down framing of the bag.", "Reviewer reads this as an on-brief travel use.",
-      "Narration mentions a fictional comfort benefit.", "Enriches the shot with warm lighting.", "travel", "desk reset"])).toEqual([]);
+  it("matches demographic phrasing in context, so ordinary product language passes", () => {
+    expect(inferenceRefusals([
+      "Packs the case into a race day bag.", "Rich leather texture on the strap.", "Unisex tote in a neutral colour.", "Sets the case beside a teens' size backpack.",
+      "Creator says the case helped during her pregnancy.", "Gender-neutral packaging.", "Enriches the shot with warm lighting.", "Sex and the City themed desk props.",
+      "Unzips a fictional case and places it in the tote.", "Top-down framing of the bag.", "Reviewer reads this as an on-brief travel use.",
+      "Morning routine for a busy workday.", "Shows the price tag for 40 seconds.", "Holds the case over 30 cm above the desk.", "travel", "desk reset",
+    ])).toEqual([]);
+  });
+  it("still refuses inference phrased about a person or audience", () => {
+    for (const text of ["She seems depressed in this clip.", "Viewers are mostly female.", "Audience skews older.", "Creator is probably in her 30s.",
+      "Followers can afford premium cases.", "Affluent household setting.", "Creator has a chronic condition."])
+      expect(inferenceRefusals([text]), text).not.toEqual([]);
   });
 });

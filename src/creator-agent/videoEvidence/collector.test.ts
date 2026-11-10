@@ -10,7 +10,7 @@ import { syntheticBinding } from "../testFixtures.ts";
 import { decideClaim, recordKeyOf, type CollectStep } from "./collector.ts";
 import { toPostEvidence } from "./rules.ts";
 import { feature, likes, metadata, postRef, review, syntheticInput, syntheticService, viewings, SYNTHETIC_J20_SCOPE } from "./fixtures.testkit.ts";
-import { VideoEvidenceCollector } from "./collector.ts";
+import { VideoEvidenceCollector, reviewQuarantine } from "./collector.ts";
 import { videoEvidenceRecordSchema, type PostReview, type SampledFramePolicy } from "./schema.ts";
 import { VideoEvidenceLedger } from "./ledger.ts";
 import { AgentStore } from "../store.ts";
@@ -417,49 +417,80 @@ describe("Sampled-frame owner decision: no default, no packet credit until set",
   });
 });
 
-describe("Free-text inference screen at intake", () => {
+describe("Inference screen: quarantine Farda inference, keep observed and quoted content", () => {
   const PREGNANT = "Creator looks pregnant, about 35 years old, likely high income.";
   const AUDIENCE = "Styling suggests an older, wealthy audience.";
   const LABEL = "new moms over 40";
-  const nothingStored = (s: ReturnType<typeof syntheticService>) => {
-    expect(s.store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_records").get()?.n).toBe(0);
-    expect(s.store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_stages").get()?.n).toBe(s.reader.calls.includes("review:SYNTH1") ? 1 : 0);
-  };
-  it("refuses an interpretation that infers pregnancy, age and income, and never forwards it to J02", async () => {
+  const keyOf = () => recordKeyOf(syntheticInput(1), postRef(1));
+  it("quarantines an inferring interpretation, keeps the review, and sends the record to human review", async () => {
     const s = syntheticService();
     const rev = review();
     rev.features[1] = { ...rev.features[1]!, interpretation: { text: PREGNANT, reviewer: "synthetic-reviewer" } };
     s.reader.observe(1, {}, rev);
-    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED", status: 422 });
-    nothingStored(s);
+    const step = completed(await s.collector.collect(syntheticInput(1, { reviewRequirements: { audienceProofRequired: false, packetRequired: false } }), { cursor: null, maxRecords: 10 }));
+    const record = s.ledger.latest(keyOf())!;
+    expect(record.features[1]).toMatchObject({ exact_observation: "Unzips a fictional case and places it in the tote.", interpretation: null });
+    expect(record.quarantined).toEqual([{ field: "features[1].interpretation", reason_codes: ["DEMOGRAPHIC_INFERENCE_REFUSED", "DIAGNOSIS_INFERENCE_REFUSED", "PURCHASING_POWER_INFERENCE_REFUSED"], reviewed: null }]);
+    expect(record.limitations).toContain("INFERENCE_TEXT_QUARANTINED");
+    expect(record.next_action).toBe("needs_claim_review");
+    expect(step.output.nextAction).toBe("needsClaimReview");
+    expect(JSON.stringify(record)).not.toContain("pregnant");
+    expect(toPostEvidence(record)!.review.inferences).toEqual([]);
+    expect(() => reviewQuarantine(s.ledger, { recordKey: keyOf(), expectedVersion: 1, field: "features[1].interpretation", actor: { id: "synthetic-agent", role: "agent" }, requestKey: "synthetic-q" })).toThrow("HUMAN_REVIEWER_REQUIRED");
+    reviewQuarantine(s.ledger, { recordKey: keyOf(), expectedVersion: 1, field: "features[1].interpretation", actor: { id: "synthetic-reviewer", role: "reviewer" }, requestKey: "synthetic-q" });
+    const reviewed = s.ledger.latest(keyOf())!;
+    expect(reviewed).toMatchObject({ keys: { evidence_version: 2 }, next_action: "review_complete" });
+    expect(reviewed.features[1]!.interpretation).toBeNull();
+    expect(reviewed.quarantined[0]!.reviewed).toEqual({ reviewer: "synthetic-reviewer", decided_at: "2026-11-08T13:00:00.000Z" });
   });
-  it("refuses a production-choice observation that infers an older, wealthy audience", async () => {
+  it("quarantines an inferring production-choice note and a context label without refusing the post", async () => {
     const s = syntheticService();
-    s.reader.observe(1, {}, review(viewings.complete, { production_choices: [{ key: "styling", video_timestamp: 0, observation: AUDIENCE, evidence_ref: "synthetic:production:styling" }] }));
-    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED" });
-    nothingStored(s);
+    s.reader.observe(1, { context: { primary_bucket: "grwm", secondary_labels: [LABEL, "morning routine"], excluded_topics: [], educator_or_credentialed: null, selection_reason: "ordinary_recent" } },
+      review(viewings.complete, { production_choices: [{ key: "styling", video_timestamp: 0, observation: AUDIENCE, evidence_ref: "synthetic:production:styling" },
+        { key: "framing", video_timestamp: 0, observation: "Top-down framing of the bag.", evidence_ref: "synthetic:production:framing" }] }));
+    completed(await s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 }));
+    expect(s.reader.calls).toEqual(["read:SYNTH1", "review:SYNTH1"]);
+    const record = s.ledger.latest(keyOf())!;
+    expect(record.sampling.secondary_labels).toEqual(["morning routine"]);
+    expect(record.production_choices.map((p) => p.observation)).toEqual(["Top-down framing of the bag."]);
+    expect(record.quarantined.map((q) => [q.field, q.reason_codes])).toEqual([
+      ["context.secondary_labels[0]", ["DEMOGRAPHIC_INFERENCE_REFUSED"]], ["production_choices[0].observation", ["DEMOGRAPHIC_INFERENCE_REFUSED", "PURCHASING_POWER_INFERENCE_REFUSED"]]]);
+    // Labels and production notes are withheld but do not need a person; only an interpretation does.
+    expect(record.next_action).toBe("review_complete");
+    expect(s.store.database.prepare("SELECT body FROM video_evidence_stages").all().map((r) => String(r.body)).join("")).not.toContain("moms");
   });
-  it("refuses a context label naming a life-stage and age group before playback", async () => {
+  it("keeps a pending medical claim about pregnancy and routes it to claim review", async () => {
     const s = syntheticService();
-    s.reader.observe(1, { context: { primary_bucket: "grwm", secondary_labels: [LABEL], excluded_topics: [], educator_or_credentialed: null, selection_reason: "ordinary_recent" } });
-    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED" });
-    expect(s.reader.calls).toEqual(["read:SYNTH1"]);
-    nothingStored(s);
+    s.reader.observe(1, {}, review(viewings.complete, { claims: [{ claim_id: "synthetic-claim", topic: "medical", video_timestamp: 9, channel: "narrated", method: "heard",
+      summary: "Creator says the case helped during her pregnancy.", human_review: { status: "pending", reviewer: null, decided_at: null } }] }));
+    const step = completed(await s.collector.collect(syntheticInput(1, { reviewRequirements: { audienceProofRequired: false, packetRequired: false } }), { cursor: null, maxRecords: 10 }));
+    expect(step.output.nextAction).toBe("needsClaimReview");
+    expect(step.output.claimsReview).toMatchObject([{ claim: { summary: "Creator says the case helped during her pregnancy.", human_review: { status: "pending" } } }]);
+    expect(s.ledger.latest(keyOf())!.quarantined).toEqual([]);
   });
-  it("screens claim summaries and exact observations too, and a stored version can never carry the text", async () => {
-    for (const rev of [
-      review(viewings.complete, { claims: [{ claim_id: "synthetic-claim", topic: "medical", video_timestamp: 9, channel: "narrated", method: "heard", summary: "Implies the creator has a health condition.", human_review: { status: "pending", reviewer: null, decided_at: null } }] }),
-      review(viewings.complete, { features: [feature("hook", 0, "shown", "Opens on an affluent kitchen, so viewers can afford it.")] }),
-    ]) {
-      const s = syntheticService();
-      s.reader.observe(1, {}, rev);
-      await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: expect.stringMatching(/INFERENCE_REFUSED$/) });
-    }
+  it("keeps an observed action in ordinary product language and credits it as a shown action", async () => {
+    const s = syntheticService();
+    s.reader.observe(1, {}, review(viewings.complete, { features: [feature("handling_operation_use", 6, "shown", "Packs the case into a race day bag.")] }));
+    completed(await s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 }));
+    const record = s.ledger.latest(keyOf())!;
+    expect(record.quarantined).toEqual([]);
+    expect(toPostEvidence(record)!.review.observedActions).toEqual([{ atSec: 6, action: "Packs the case into a race day bag.", meaningfulUse: true }]);
+  });
+  it("withholds an inferring interruption reason but keeps the interruption", async () => {
+    const s = syntheticService();
+    s.reader.observe(1, {}, review({ ...viewings.interrupted, interruption_reason: "Stopped: creator seems ill" }, { features: [] }));
+    completed(await s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 }));
+    const record = s.ledger.latest(keyOf())!;
+    expect(record.viewing).toMatchObject({ status: "partial_playback", interruption_reason: "Interruption reason withheld by the inference screen." });
+    expect(record.quarantined.map((q) => q.field)).toEqual(["viewing.interruption_reason"]);
+  });
+  it("stored history stays readable if the screen rules later change", async () => {
     const s = syntheticService();
     s.reader.observe(1);
     completed(await s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 }));
-    const record = s.ledger.latest(recordKeyOf(syntheticInput(1), postRef(1)))!;
-    const tainted = { ...record, features: record.features.map((f) => f.interpretation ? { ...f, interpretation: { ...f.interpretation, text: AUDIENCE } } : f) };
-    expect(videoEvidenceRecordSchema.safeParse(tainted).success).toBe(false);
+    const record = s.ledger.latest(keyOf())!;
+    const older = { ...record, features: record.features.map((f) => f.interpretation ? { ...f, interpretation: { ...f.interpretation, text: AUDIENCE } } : f) };
+    expect(videoEvidenceRecordSchema.safeParse(older).success).toBe(true);
+    expect(toPostEvidence(older)!.review.inferences).toEqual([]);
   });
 });

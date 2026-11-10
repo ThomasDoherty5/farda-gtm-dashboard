@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { digest } from "../config.ts";
 import { nativePostIdentity } from "../evidence.ts";
 import type { SourceRef } from "../intake/contract.ts";
@@ -6,10 +7,10 @@ import {
   audienceProofState, classifyContext, deriveViewing, evidenceRefOf, isFullReview, likeGateOf, narratedWithinCoverage, packetCoverage,
   recordNextAction, sampledFrameCredit, shownWithinCoverage,
 } from "./rules.ts";
-import { inferenceRefusals } from "./inferenceScreen.ts";
+import { quarantineMetadata, quarantineReview, unscreenedFields } from "./inferenceScreen.ts";
 import {
   COLLECTOR_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, actorSchema, j20InputSchema, j20OutputSchema, postMetadataSchema, reviewReadSchema, sampledFramePolicySchema,
-  screenedTextOf, sourceReadSchema, type SampledFramePolicy, type VideoEvidenceConfig,
+  quarantineSchema, sourceReadSchema, type Quarantine, type SampledFramePolicy, type VideoEvidenceConfig,
   type AccessFailure, type CommentEvidence, type J20Input, type J20Output, type NextAction, type Platform, type PostMetadata,
   type PostReview, type VideoEvidenceRecord,
 } from "./schema.ts";
@@ -72,7 +73,7 @@ function assertIdentity(input: J20Input, postRef: SourceRef, metadata: PostMetad
 
 /** Builds one immutable record version from observed metadata and, for a gated post, its review. Nothing is inferred. */
 export function buildRecord(input: J20Input, postRef: SourceRef, metadata: PostMetadata, review: PostReview | null,
-  prior: VideoEvidenceRecord | null, reviewJobId: string, sampledFramePolicy: SampledFramePolicy | null): VideoEvidenceRecord {
+  prior: VideoEvidenceRecord | null, reviewJobId: string, sampledFramePolicy: SampledFramePolicy | null, quarantined: Quarantine = []): VideoEvidenceRecord {
   const like = likeGateOf(metadata.likes);
   const context = classifyContext(metadata.context, metadata.relevant);
   const eligible = like.state === "pass" && context.relevant;
@@ -118,8 +119,11 @@ export function buildRecord(input: J20Input, postRef: SourceRef, metadata: PostM
     viewing, features, production_choices: eligible && review ? review.production_choices : [],
     metrics: [metadata.likes, ...metadata.metrics], audience: eligible && review ? review.audience : [],
     claims: eligible && review ? review.claims : [], comments: eligible && review ? review.comments : NOT_COLLECTED,
-    shoppable_context: metadata.shoppable_context, limitations: [...limitations].sort(), prior_version: prior?.keys.evidence_version ?? null,
+    shoppable_context: metadata.shoppable_context, limitations: [...limitations, ...(quarantined.length ? ["INFERENCE_TEXT_QUARANTINED"] : [])].sort(),
+    quarantined, prior_version: prior?.keys.evidence_version ?? null,
   };
+  // Append-time check: a newly built version must hold only screened Farda inference. Stored history is never re-screened.
+  if (unscreenedFields(draft).length) throw new VideoEvidenceError("INFERENCE_TEXT_UNSCREENED", 500);
   return { ...draft, next_action: recordNextAction(draft) };
 }
 
@@ -131,7 +135,7 @@ function lossRecord(prior: VideoEvidenceRecord, state: "removed" | "changed", ob
       source_content_fingerprint: state === "changed" ? fingerprint : prior.source.source_content_fingerprint },
     deep_review: { ...prior.deep_review, credit: false, exclusion_reasons: [...new Set([...prior.deep_review.exclusion_reasons, state === "removed" ? "POST_REMOVED" : "POST_CHANGED"])] },
     viewing: null, features: [], production_choices: [], claims: [], audience: [], comments: NOT_COLLECTED,
-    limitations: [state === "removed" ? "POST_REMOVED_PRIOR_VERSIONS_PRESERVED" : "POST_CHANGED_NEEDS_NEW_REVIEW"], prior_version: prior.keys.evidence_version };
+    limitations: [state === "removed" ? "POST_REMOVED_PRIOR_VERSIONS_PRESERVED" : "POST_CHANGED_NEEDS_NEW_REVIEW"], quarantined: [], prior_version: prior.keys.evidence_version };
   return { ...draft, next_action: recordNextAction(draft) };
 }
 
@@ -191,6 +195,8 @@ function summarize(input: J20Input, records: VideoEvidenceRecord[], missing: str
   });
 }
 
+const stagedSchema = z.object({ metadata: postMetadataSchema, quarantined: quarantineSchema }).strict();
+
 /** J20 collector: validates identity and the strict native-like gate, reviews only gated posts, and appends immutable versions. */
 export class VideoEvidenceCollector {
   private readonly ledger: VideoEvidenceLedger;
@@ -204,11 +210,6 @@ export class VideoEvidenceCollector {
     this.sampledFramePolicy = policy ? policy.data : null;
   }
 
-  /** Refuses demographic, health or purchasing-power inference in free text before anything is staged or stored. */
-  private screen(texts: string[]) {
-    const refused = inferenceRefusals(texts);
-    if (refused.length) throw new VideoEvidenceError(refused[0]!, 422);
-  }
 
   private read<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } }, raw: unknown): T {
     const parsed = schema.safeParse(raw);
@@ -255,9 +256,9 @@ export class VideoEvidenceCollector {
         const first = this.read(sourceReadSchema, await call(() => this.reader.readPost({ platform, postRef, creatorRef: input.creatorRef, permissionRefs })));
         if (first.state === "removed" || first.state === "changed") { loss(first); continue; }
         if (first.state !== "observed") return blocked(first);
-        const metadata = first.observation;
-        assertIdentity(input, postRef, metadata);
-        this.screen(screenedTextOf({ context: metadata.context }));
+        assertIdentity(input, postRef, first.observation);
+        // Screened Farda inference is quarantined field by field before anything is staged or stored; the post is kept.
+        const { metadata, quarantined } = quarantineMetadata(first.observation);
         const prior = this.ledger.latest(recordKey);
         const gated = likeGateOf(metadata.likes).state === "pass" && classifyContext(metadata.context, metadata.relevant).relevant;
         // A changed gated post is marked now, because its new review is a separate step. A metadata-only post records the change on its new version.
@@ -266,23 +267,22 @@ export class VideoEvidenceCollector {
             build: (latest) => lossRecord(latest!, "changed", metadata.retrieved_at, metadata.permission_ref, runKey, metadata.source_content_fingerprint) }));
         if (gated) {
           // Only a post strictly above the native-like gate and in an approved lifestyle context is opened for playback.
-          position.stage = digest([runKey, recordKey, metadata]).slice(0, 40);
-          this.ledger.stage(position.stage, recordKey, metadata);
+          position.stage = digest([runKey, recordKey, metadata, quarantined]).slice(0, 40);
+          this.ledger.stage(position.stage, recordKey, { metadata, quarantined });
           continue;
         }
-        receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, null, latest, runKey, this.sampledFramePolicy) }));
+        receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, null, latest, runKey, this.sampledFramePolicy, quarantined) }));
         next();
         continue;
       }
       const staged = this.ledger.staged(position.stage);
       if (staged === null) throw new VideoEvidenceError("CHECKPOINT_STAGE_MISSING", 409);
-      const metadata = this.read(postMetadataSchema, staged);
+      const { metadata, quarantined: metadataQuarantine } = this.read(stagedSchema, staged);
       const second = this.read(reviewReadSchema, await call(() => this.reader.reviewPost({ platform, postRef, brief: input.briefRef, permissionRefs, metadata })));
       if (second.state === "removed" || second.state === "changed") { loss(second); continue; }
       if (second.state !== "observed") return blocked(second);
-      const review = second.review;
-      this.screen(screenedTextOf(review));
-      receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, review, latest, runKey, this.sampledFramePolicy) }));
+      const { review, quarantined } = quarantineReview(second.review);
+      receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, review, latest, runKey, this.sampledFramePolicy, [...metadataQuarantine, ...quarantined]) }));
       next();
     }
     const records: VideoEvidenceRecord[] = [], missing: string[] = [];
@@ -309,6 +309,21 @@ export function decideClaim(ledger: VideoEvidenceLedger, request: { recordKey: s
       if (!prior.claims.some((c) => c.claim_id === request.claimId && c.human_review.status === "pending")) throw new VideoEvidenceError("CLAIM_NOT_PENDING");
       const claims = prior.claims.map((c) => c.claim_id === request.claimId ? { ...c, human_review: { status: request.decision, reviewer, decided_at: recordedAt } } : c);
       const draft = { ...prior, keys: { ...prior.keys, evidence_version: prior.keys.evidence_version + 1 }, claims, prior_version: prior.keys.evidence_version };
+      return { ...draft, next_action: recordNextAction(draft) };
+    } });
+}
+
+/** A reviewer or owner acknowledges a quarantined interpretation. The withheld text is never restored; a new version records the decision. */
+export function reviewQuarantine(ledger: VideoEvidenceLedger, request: { recordKey: string; expectedVersion: number; field: string; actor: unknown; requestKey: string }): LedgerReceipt {
+  const actor = actorSchema.safeParse(request.actor);
+  if (!actor.success || actor.data.role === "agent") throw new VideoEvidenceError("HUMAN_REVIEWER_REQUIRED", 403);
+  const reviewer = actor.data.id;
+  return ledger.append({ requestKey: `j20-quarantine-${digest([request.requestKey]).slice(0, 40)}`, requestHash: digest([request.recordKey, request.expectedVersion, request.field, reviewer]),
+    recordKey: request.recordKey, build: (prior, recordedAt) => {
+      if (!prior || prior.keys.evidence_version !== request.expectedVersion) throw new VideoEvidenceError("STALE_VERSION");
+      if (!prior.quarantined.some((q) => q.field === request.field && !q.reviewed)) throw new VideoEvidenceError("QUARANTINE_NOT_PENDING");
+      const quarantined = prior.quarantined.map((q) => q.field === request.field ? { ...q, reviewed: { reviewer, decided_at: recordedAt } } : q);
+      const draft = { ...prior, keys: { ...prior.keys, evidence_version: prior.keys.evidence_version + 1 }, quarantined, prior_version: prior.keys.evidence_version };
       return { ...draft, next_action: recordNextAction(draft) };
     } });
 }

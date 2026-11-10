@@ -1,6 +1,6 @@
 import { deriveCommentStats, deriveMetadataBaseline, evidencePacketSchema, postEvidenceSchema, type EvidenceReview, type PostEvidence, type RecentPostMetadata } from "../evidence.ts";
 import { assessCreator, likeGate as j02LikeGate } from "../policy.ts";
-import { inferenceRefusals } from "./inferenceScreen.ts";
+import { inferenceRefusals, quarantinedInterpretation } from "./inferenceScreen.ts";
 import {
   type AudienceEvidence, type ContextInput, type Feature, type LikeGate, type MetricObservation, type SampledFramePolicy,
   type NextAction, type ObservedInterval, type VideoEvidenceRecord, type Viewing, type ViewingInput, type ViewingStatus,
@@ -142,7 +142,7 @@ export function audienceProofState(evidence: AudienceEvidence): { accepted: bool
 /* ---------- Per-record next action ---------- */
 
 const CLAIM_TOPICS_FOR_HUMAN = new Set(["compatibility", "medical", "outcome"]);
-export function recordNextAction(record: Pick<VideoEvidenceRecord, "source" | "like_gate" | "deep_review" | "viewing" | "claims" | "limitations" | "review_policy">): NextAction {
+export function recordNextAction(record: Pick<VideoEvidenceRecord, "source" | "like_gate" | "deep_review" | "viewing" | "claims" | "limitations" | "review_policy" | "quarantined">): NextAction {
   if (record.source.access_state === "removed") return "source_unavailable";
   if (record.source.access_state === "changed") return "needs_playback";
   if (record.like_gate.state === "pending") return "needs_metric_proof";
@@ -152,6 +152,8 @@ export function recordNextAction(record: Pick<VideoEvidenceRecord, "source" | "l
   if (!reviewed || record.limitations.includes("SHOWN_FEATURE_OUTSIDE_OBSERVED_RANGE")) return "needs_playback";
   // Uncertain compatibility/medical/outcome claims take the human exception path; the agent never resolves them.
   if (record.claims.some((c) => c.human_review.status === "pending" && (CLAIM_TOPICS_FOR_HUMAN.has(c.topic) || c.channel !== "shown"))) return "needs_claim_review";
+  // A reviewer interpretation withheld by the inference screen also takes the human exception path.
+  if (quarantinedInterpretation(record.quarantined)) return "needs_claim_review";
   return "review_complete";
 }
 
@@ -164,7 +166,7 @@ function reviewOf(record: VideoEvidenceRecord, evidenceRef: string): EvidenceRev
     [{ atSec: c.video_timestamp, text: c.summary, method: c.method }]);
   const actions = record.features.filter((f) => f.feature_key === "handling_operation_use" && f.status === "observed" && f.channel === "shown" && shownWithinCoverage(v, f.video_timestamp!))
     .map((f) => ({ atSec: f.video_timestamp!, action: f.exact_observation!, meaningfulUse: f.brief_match === "matched" }));
-  // Interpretations are screened at intake and on every stored version; screen again so nothing unscreened reaches J02.
+  // Interpretations are screened at intake; screen again here so nothing unscreened is ever forwarded to J02.
   const inferences = record.features.flatMap((f) => f.interpretation && !inferenceRefusals([f.interpretation.text]).length ? [f.interpretation.text] : []);
   const base = { reviewerRef: v?.reviewer, reviewedAt: v?.reviewed_at, inferences };
   if (!v || v.status === "not_opened" || !record.deep_review.eligible) {
