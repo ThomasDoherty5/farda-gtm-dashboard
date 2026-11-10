@@ -58,6 +58,27 @@ describe("finance reader", () => {
     expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["FINANCE_RECORD_INVALID"] });
   });
 
+  it("accepts a dashboard record without the optional unit-economics, subscription and forecast add-ons", async () => {
+    const frozen = { ...financeSnapshot("financeDashboard").record as Record<string, unknown> };
+    for (const key of ["unitEconomics", "subscriptions", "forecastPlan"]) delete frozen[key];
+    const result = await reader(async () => financeSnapshot("financeDashboard", { record: frozen })).read("financeDashboard", {}, "reader");
+    const data = result.data as Record<string, unknown> & { pnl: { revenue: number; cogs: number } };
+    expect(result.dataState).toBe("ready");
+    expect(data.pnl).toMatchObject({ revenue: 10000, cogs: 1000 });
+    expect(data).not.toHaveProperty("unitEconomics");
+    expect(data).not.toHaveProperty("subscriptions");
+    expect(data).not.toHaveProperty("forecastPlan");
+  });
+
+  it("refuses a dashboard record whose cost obligation sits under two components", async () => {
+    const record = financeSnapshot("financeDashboard").record as Record<string, unknown> & { unitEconomics: { costs: Record<string, unknown>[]; declared: { component: string }[] } };
+    const [cogs] = record.unitEconomics.costs;
+    const unitEconomics = { ...record.unitEconomics, costs: [cogs, { ...cogs, component: "sampleLanded", evidenceId: "synthetic-sample-evidence" }],
+      declared: record.unitEconomics.declared.filter(d => d.component !== "sampleLanded") };
+    const error = await failure(reader(async () => financeSnapshot("financeDashboard", { record: { ...record, unitEconomics } })).read("financeDashboard", {}, "reader"));
+    expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["FINANCE_RECORD_INVALID"] });
+  });
+
   it("denies every intent to a reader and holds them for a reviewer; nothing is executable", async () => {
     for (const viewKey of ["settlementDetail", "payableDetail", "periodClose", "closePackage"] as const) {
       const source: FinanceSourceReader["read"] = async () => financeSnapshot(viewKey);

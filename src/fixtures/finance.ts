@@ -191,12 +191,12 @@ export type FinanceDashboard = {
   cashHistory: { month: string; minor: number }[];
   costBreakdown: { label: string; minor: number }[];
   payouts: { channel: string; matched: number; needsReview: number }[];
-  /** Unit-economics inputs for the original dashboard cohort only. The commission pilot keeps its own ledger and cost basis and is never mixed in. */
-  unitEconomics: UnitEconomicsInput;
+  /** Optional add-on: absent means N/A (UNIT_ECONOMICS_NOT_REPORTED). Unit-economics inputs for the original dashboard cohort only. The commission pilot keeps its own ledger and cost basis and is never mixed in. */
+  unitEconomics?: UnitEconomicsInput;
   /** Subscription source access. Unread access is unknown, which is not the verified "no subscription revenue". */
-  subscriptions: SubscriptionSource;
+  subscriptions?: SubscriptionSource;
   /** The forecast's own version and assumptions, kept apart from the actuals' source version. */
-  forecastPlan: { version: string; basis: "illustrative" | "rebaselined"; assumptions: string[] };
+  forecastPlan?: { version: string; basis: "illustrative" | "rebaselined"; assumptions: string[] };
 };
 
 const DASHBOARD_COHORT = "dashboard-original";

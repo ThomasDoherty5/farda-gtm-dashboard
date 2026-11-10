@@ -15,6 +15,7 @@ import { figure } from "@/features/operations/format";
 import { runwayOf, type FinanceDashboard } from "@/fixtures/finance";
 import { usd } from "@/fixtures/values";
 import styles from "./Finance.module.css";
+import { contributionOf, explain, figureText, grossMarginOf, ueFormat } from "./unitEconomics";
 
 const whole = (minor: number) => formatMoney(usd(minor));
 const k = (minor: number) => `$${(minor / 100000).toFixed(1)}k`;
@@ -63,6 +64,9 @@ function FinanceAnalyticsContent({ query }: { query: FinanceReadQuery<FinanceDas
 function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
   const p = data.pnl;
   const gross = p.revenue - p.cogs;
+  // The same derivations as the dashboard, so both pages show the same figure, provisional label or N/A reason.
+  const margin = grossMarginOf(p, data.unitEconomics);
+  const { perOrder } = contributionOf(p, data.unitEconomics, data.contributionPerOrder);
   const runway = runwayOf(data);
   const burn = data.burn.state === "known" && data.burn.value !== null && data.burnHistoryMonths >= data.burnWindowMonths ? data.burn.value : null;
   const current = data.cashHistory[data.cashHistory.length - 1]!;
@@ -81,7 +85,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
       <div className={styles.analytics}>
         <div className={styles.kpiStack}>
           <Kpi label="Cash available" context={`${whole(data.historicalRaised)} total capital raised`} testId="metric-Cash available">{figure(data.cash, whole)}</Kpi>
-          <Kpi label="Gross margin" context={`${whole(gross)} gross profit / ${whole(p.revenue)} receipts`} testId="metric-Gross margin">{p.revenue > 0 ? `${((100 * gross) / p.revenue).toFixed(1)}%` : "N/A"}</Kpi>
+          <Kpi label="Gross margin" context={margin.state === "notApplicable" ? explain(margin) : `${margin.state === "provisional" ? `Provisional · ${explain(margin)} · ` : ""}${whole(gross)} gross profit / ${whole(p.revenue)} receipts`} testId="metric-Gross margin">{margin.value === null ? "N/A" : ueFormat.percent(margin.value)}</Kpi>
           <Kpi label="Runway" context={runway.reason ?? `At ${whole(burn!)} average monthly burn`} testId="metric-Runway">{runway.months === null ? "N/A" : `${runway.months.toFixed(1)} months`}</Kpi>
         </div>
         <Panel
@@ -124,7 +128,7 @@ function Body({ data, stale }: { data: FinanceDashboard; stale: boolean }) {
       <HalfColumns>
         <Panel title={`Where ${whole(p.revenue)} goes`} subtitle="Last 30 days · before marketing and fixed expense" testId="breakdown">
           <BarRows label="Order contribution breakdown" max={600000} gap={16} trackTop={0} widths={[126, 350, 80]} rows={data.costBreakdown.map((c) => ({ label: c.label, value: c.minor, display: whole(c.minor).replace(",", "") }))} />
-          <p className={styles.footnote}>Pre-marketing contribution: {formatMoney({ minorUnits: data.contributionPerOrder, currency: "USD" })}/order. Contribution after attributed creator cost awaits allocation.</p>
+          <p className={styles.footnote} data-testid="contribution-per-order">{perOrder.state === "notApplicable" ? `Pre-marketing contribution: ${figureText(perOrder, ueFormat.money)}.` : `Pre-marketing contribution: ${ueFormat.money(perOrder.value!)}/order${perOrder.state === "provisional" ? ` · Provisional · ${explain(perOrder)}` : ""}.`} Contribution after attributed creator cost awaits allocation.</p>
           {peak > 600000 && <p className="visually-hidden">A value exceeds the bar scale.</p>}
         </Panel>
         <Panel title="Payout reconciliation" subtitle="Match source payout → ledger → bank" testId="payouts">

@@ -18,7 +18,7 @@ import { financeMetricDictionary } from "@/fixtures/financeUnitEconomics";
 import { usd } from "@/fixtures/values";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
-import { ACQUISITION_COMPONENTS, COMPONENT_LABEL, CONTRIBUTION_COMPONENTS, cacPaybackOf, componentTotal, contributionOf, coverageText, definitionText, explain, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat } from "./unitEconomics";
+import { ACQUISITION_COMPONENTS, COMPONENT_LABEL, CONTRIBUTION_COMPONENTS, REASON_TEXT, cacPaybackOf, componentTotal, inputProblems, type CostComponent, type UnitEconomicsInput, contributionOf, coverageText, definitionText, explain, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat } from "./unitEconomics";
 
 const whole = (minor: number) => formatMoney(usd(minor));
 const signed = (minor: number) => `${minor < 0 ? "−" : ""}${whole(Math.abs(minor))}`;
@@ -59,7 +59,7 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
       <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
-        <p>Gross margin is gross profit over net revenue. Pre-marketing contribution per order excludes acquisition and fixed spend. Burn is the average net cash out over the last three months, using the approved cash-flow definition. Runway is verified current cash divided by that burn, and reads N/A when there is too little history or no net spend.</p>
+        <p>Gross margin is gross profit over net revenue. Pre-marketing contribution per order excludes acquisition and fixed spend. Burn is the average net cash out over the last three months, using the proposed cash-flow definition. Runway is verified current cash divided by that burn, and reads N/A when there is too little history or no net spend.</p>
         {data && <UnitEconomicsDefinitions data={data} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
@@ -117,7 +117,7 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
       </HalfColumns>
       <HalfColumns>
         <Panel title="Unit economics" subtitle="Pre-marketing contribution excludes acquisition and fixed spend." testId="unit-economics">
-          <FactList wide label="Unit economics" rows={[["Gross margin", figureText(margin, ueFormat.percent)], ["Pre-marketing contribution / order", figureText(perOrder, ueFormat.money)], ["CAC payback", figureText(paybackOrders, ueFormat.orders)], ["Creator costs · attribution", `${coverageText(ue.creatorCosts, "creators")} · ${coverageText(ue.attribution, "orders")}`], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
+          <FactList wide label="Unit economics" rows={[["Gross margin", figureText(margin, ueFormat.percent)], ["Pre-marketing contribution / order", figureText(perOrder, ueFormat.money)], ["CAC payback", figureText(paybackOrders, ueFormat.orders)], ["Creator costs · attribution", ue ? `${coverageText(ue.creatorCosts, "creators")} · ${coverageText(ue.attribution, "orders")}` : "Not reported"], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
           <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 240, alignSelf: "flex-start" }} onClick={() => setDialog("definitions")}>View metric definitions</Button>
         </Panel>
         <Panel title="Month-end & compliance" subtitle="Review unresolved items before closing" testId="close-summary">
@@ -152,17 +152,23 @@ const SUBSCRIPTION_HEADING: Record<ReturnType<typeof recurringRevenueOf>["kind"]
 /** The proposed dictionary, this cohort's cost components and the forecast's own version, for the definitions dialog. */
 function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
   const ue = data.unitEconomics;
-  const component = (c: (typeof CONTRIBUTION_COMPONENTS)[number] | (typeof ACQUISITION_COMPONENTS)[number]) => {
-    const declared = ue.costs.some((r) => r.component === c) ? null : ue.declared.find((d) => d.component === c);
-    if (declared?.state === "notApplicable") return `N/A · ${declared.reasonCode === "PILOT_COHORT_ONLY" ? "pilot cohort only; see the commission ledger" : declared.reasonCode}`;
-    return figureText(componentTotal(ue, [c]), ueFormat.money);
+  const plan = data.forecastPlan;
+  // Per-component rows use the same whole-input checks as the group totals, so they always sum to them or are refused together.
+  const component = (u: UnitEconomicsInput, c: CostComponent) => {
+    const declared = u.costs.some((r) => r.component === c) ? null : u.declared.find((d) => d.component === c);
+    if (declared?.state === "notApplicable" && inputProblems(u).length === 0) return `N/A · ${declared.reasonCode === "PILOT_COHORT_ONLY" ? "pilot cohort only; see the commission ledger" : declared.reasonCode}`;
+    return figureText(componentTotal(u, [c]), ueFormat.money);
   };
+  const group = (u: UnitEconomicsInput, name: string, members: readonly CostComponent[]): [string, string][] =>
+    [...members.map((c): [string, string] => [`${COMPONENT_LABEL[c]} · ${name}`, component(u, c)]), [`Total ${name} costs`, figureText(componentTotal(u, members), ueFormat.money)]];
   return (
     <>
-      <p className={styles.warnText}>{`${definitionText(ue.definition)}. ${financeMetricDictionary.policy}`}</p>
+      <p className={styles.warnText}>{`${ue ? definitionText(ue.definition) : "Not configured"}. ${financeMetricDictionary.policy}`}</p>
       <FactList label="Unit-economics definitions" rows={financeMetricDictionary.entries.map((e) => [e.label, `${e.numerator}${e.denominator === "None" ? "" : ` ÷ ${e.denominator}`}. ${e.costBuckets === "None" || e.costBuckets.startsWith("As ") ? "" : `${e.costBuckets} `}${e.whenUnavailable}`])} />
-      <FactList label="Cohort cost components" rows={[["Cohort", `${ue.cohort.label} · the affiliate pilot is excluded and keeps its own ledger`], ...[...CONTRIBUTION_COMPONENTS, ...ACQUISITION_COMPONENTS].map((c): [string, string] => [`${COMPONENT_LABEL[c]} · ${(CONTRIBUTION_COMPONENTS as readonly string[]).includes(c) ? "contribution" : "acquisition"}`, component(c)])]} />
-      <FactList label="Actuals and forecast" rows={[["Actuals", `Source version ${data.version} · management P&L`], ["Forecast", `${data.forecastPlan.version} · ${data.forecastPlan.basis}`], ["Forecast assumptions", data.forecastPlan.assumptions.length ? data.forecastPlan.assumptions.join(" · ") : "None stated"]]} />
+      {ue
+        ? <FactList label="Cohort cost components" rows={[["Cohort", `${ue.cohort.label} · the affiliate pilot is excluded and keeps its own ledger`], ...group(ue, "contribution", CONTRIBUTION_COMPONENTS), ...group(ue, "acquisition", ACQUISITION_COMPONENTS)]} />
+        : <p>{`N/A · ${REASON_TEXT.UNIT_ECONOMICS_NOT_REPORTED}. No cost component is inferred.`}</p>}
+      <FactList label="Actuals and forecast" rows={[["Actuals", `Source version ${data.version} · management P&L`], ...(plan ? [["Forecast", `${plan.version} · ${plan.basis}`], ["Forecast assumptions", plan.assumptions.length ? plan.assumptions.join(" · ") : "None stated"]] as [string, string][] : [["Forecast", "No forecast plan reported"]] as [string, string][])]} />
     </>
   );
 }

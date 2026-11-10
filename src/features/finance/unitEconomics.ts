@@ -19,6 +19,8 @@ import type { ProvenanceValue } from "@/adapter/contract";
 import { allocateCosts, type CostBasis, type ReportingWindow } from "@/features/analytics/economicCosts";
 
 export const UNIT_ECONOMICS_VERSION = "finance-unit-economics@1";
+/** The management P&L is reported in USD minor units; a cohort in another currency can't be combined with it. */
+export const PNL_CURRENCY = "USD";
 
 export const CONTRIBUTION_COMPONENTS = ["landedCogs", "shipping", "providerFees", "fulfillment"] as const;
 export const ACQUISITION_COMPONENTS = ["paidMedia", "sampleLanded", "sampleShipping", "historicalContentFee", "commission"] as const;
@@ -96,12 +98,16 @@ export const REASON_TEXT: Record<string, string> = {
   CURRENCY_MISMATCH: "Costs are in more than one currency",
   REPORTING_WINDOW_MISMATCH: "Costs cover a different window",
   INPUT_UNAVAILABLE: "An input is unavailable",
+  UNIT_ECONOMICS_NOT_REPORTED: "Unit-economics inputs are not reported",
+  LANDED_COST_COMPLETENESS_UNKNOWN: "Landed-cost completeness not reported",
+  OBLIGATION_COMPONENT_CONFLICT: "One obligation is reported under two cost components",
+  COHORT_CURRENCY_MISMATCH: "The cohort currency differs from the P&L currency",
 };
 const reasonText = (code: string) => REASON_TEXT[code] ?? (code.startsWith("COMPONENT_") ? componentReason(code) : `Unresolved cost rows (${code})`);
 function componentReason(code: string) {
-  const [, kind, component] = /^COMPONENT_(UNKNOWN|UNDECLARED)_(\w+)$/.exec(code) ?? [];
+  const [, kind, component] = /^COMPONENT_(UNKNOWN|UNDECLARED|CONFLICT)_(\w+)$/.exec(code) ?? [];
   const label = COMPONENT_LABEL[component as CostComponent] ?? component;
-  return kind === "UNKNOWN" ? `${label} unknown` : `${label} not reported`;
+  return kind === "UNKNOWN" ? `${label} unknown` : kind === "CONFLICT" ? `${label} is both declared and reported` : `${label} not reported`;
 }
 export const explain = (f: Figure) => f.reasons.map(reasonText).join(" · ");
 
@@ -109,8 +115,29 @@ const na = (...reasons: string[]): Figure => ({ state: "notApplicable", value: n
 const knownCount = (v: ProvenanceValue<number>) => (v.state === "known" && v.value !== null ? v.value : null);
 const conditions = (reasons: string[], value: number): Figure => ({ state: reasons.length ? "provisional" : "known", value, reasons });
 
-/** Total of one disjoint group of components, each obligation once. N/A when any component is unknown, undeclared or conflicting. */
-export function componentTotal(ue: UnitEconomicsInput, components: readonly CostComponent[]): Figure {
+/**
+ * Problems with the whole input that make every cost figure N/A: a cohort currency other than the P&L's, one obligation under two
+ * components (it would be counted in both), or a component both declared and reported. Checked across all rows, not per group,
+ * so per-component totals always sum to their group's total.
+ */
+export function inputProblems(ue: UnitEconomicsInput): string[] {
+  const problems: string[] = [];
+  if (ue.cohort.currency !== PNL_CURRENCY) problems.push("COHORT_CURRENCY_MISMATCH");
+  const owner = new Map<string, CostComponent>();
+  for (const row of ue.costs) {
+    const seen = owner.get(row.obligationId);
+    if (seen && seen !== row.component) { problems.push("OBLIGATION_COMPONENT_CONFLICT"); break; }
+    owner.set(row.obligationId, row.component);
+  }
+  for (const d of ue.declared) if (ue.costs.some((r) => r.component === d.component)) problems.push(`COMPONENT_CONFLICT_${d.component}`);
+  return [...new Set(problems)];
+}
+
+/** Total of one disjoint group of components, each obligation once. N/A when inputs are missing, unknown, undeclared or conflicting. */
+export function componentTotal(ue: UnitEconomicsInput | undefined, components: readonly CostComponent[]): Figure {
+  if (!ue) return na("UNIT_ECONOMICS_NOT_REPORTED");
+  const problems = inputProblems(ue);
+  if (problems.length) return na(...problems);
   const rows = ue.costs.filter((c) => components.includes(c.component));
   const missing: string[] = [];
   for (const component of components) {
@@ -129,16 +156,23 @@ export function componentTotal(ue: UnitEconomicsInput, components: readonly Cost
   return conditions(allocation.state === "provisional" ? ["ESTIMATED_COST"] : [], allocation.totalMinor);
 }
 
-/** Gross profit over net revenue, from the P&L. Provisional while any landed cost is missing. */
-export function grossMarginOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput): Figure {
+/** Gross profit over net revenue, from the P&L. Provisional while any landed cost is missing, or while completeness isn't reported. */
+export function grossMarginOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput | undefined): Figure {
   if (pnl.revenue <= 0) return na("NO_NET_REVENUE");
-  return conditions(ue.landedCost.complete ? [] : ["LANDED_COST_INCOMPLETE"], (100 * (pnl.revenue - pnl.cogs)) / pnl.revenue);
+  const reasons = !ue ? ["LANDED_COST_COMPLETENESS_UNKNOWN"] : ue.landedCost.complete ? [] : ["LANDED_COST_INCOMPLETE"];
+  return conditions(reasons, (100 * (pnl.revenue - pnl.cogs)) / pnl.revenue);
 }
 
+/**
+ * Tolerance for the source's own per-order figure. The source states whole minor units after its own rounding (half-up, half-even
+ * or truncation), so the exact derived value may differ from it by under one minor unit; a difference above one is a real mismatch.
+ */
+export const PER_ORDER_TIE_TOLERANCE_MINOR = 1;
+
 /** Pre-marketing contribution: net revenue less landed COGS, shipping, provider fees and fulfillment. No acquisition cost. */
-export function contributionOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput, sourcePerOrder?: number): { total: Figure; perOrder: Figure } {
+export function contributionOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput | undefined, sourcePerOrder?: number): { total: Figure; perOrder: Figure } {
   const costs = componentTotal(ue, CONTRIBUTION_COMPONENTS);
-  if (costs.state === "notApplicable" || costs.value === null) return { total: costs, perOrder: costs };
+  if (!ue || costs.state === "notApplicable" || costs.value === null) return { total: costs, perOrder: costs };
   const cogs = componentTotal(ue, ["landedCogs"]);
   if (cogs.value !== pnl.cogs) return { total: na("LANDED_COGS_DOES_NOT_TIE"), perOrder: na("LANDED_COGS_DOES_NOT_TIE") };
   const reasons = [...(ue.landedCost.complete ? [] : ["LANDED_COST_INCOMPLETE"]), ...costs.reasons];
@@ -147,13 +181,14 @@ export function contributionOf(pnl: { revenue: number; cogs: number }, ue: UnitE
   if (orders === null) return { total, perOrder: na("ORDERS_UNKNOWN") };
   if (orders === 0) return { total, perOrder: na("NO_VALID_ORDERS") };
   const perOrder = total.value! / orders;
-  if (sourcePerOrder !== undefined && Math.round(perOrder) !== sourcePerOrder) return { total, perOrder: na("SOURCE_PER_ORDER_DOES_NOT_TIE") };
+  if (sourcePerOrder !== undefined && Math.abs(perOrder - sourcePerOrder) > PER_ORDER_TIE_TOLERANCE_MINOR) return { total, perOrder: na("SOURCE_PER_ORDER_DOES_NOT_TIE") };
   return { total, perOrder: conditions(reasons, perOrder) };
 }
 
 /** Acquisition cost and CAC over new customers, and CAC payback: how many orders of pre-marketing contribution repay one CAC. */
-export function cacPaybackOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput, sourcePerOrder?: number): { acquisition: Figure; cac: Figure; paybackOrders: Figure } {
+export function cacPaybackOf(pnl: { revenue: number; cogs: number }, ue: UnitEconomicsInput | undefined, sourcePerOrder?: number): { acquisition: Figure; cac: Figure; paybackOrders: Figure } {
   const rows = componentTotal(ue, ACQUISITION_COMPONENTS);
+  if (!ue) return { acquisition: rows, cac: rows, paybackOrders: rows };
   const creator = ue.creatorCosts.state === "partial" ? ["CREATOR_COSTS_PARTIAL"] : [];
   const attribution = ue.attribution.state === "partial" ? ["ATTRIBUTION_PARTIAL"] : ue.attribution.state === "unknown" ? ["ATTRIBUTION_UNKNOWN"] : [];
   // Creator costs with unknown coverage could be any size, so the total is not shown; partial coverage is a floor, so it is provisional.
@@ -185,7 +220,8 @@ export type RecurringRevenue =
  * definition. Unread access is "unavailable", which is not the verified "none". Order revenue is never an input, so one-time
  * orders can't be annualized.
  */
-export function recurringRevenueOf(s: SubscriptionSource): RecurringRevenue {
+export function recurringRevenueOf(s: SubscriptionSource | undefined): RecurringRevenue {
+  if (!s) return { kind: "unavailable", reason: "Subscription source not reported. Unknown, not zero." };
   if (s.access !== "verified" || s.subscriptionProducts === null)
     return { kind: "unavailable", reason: `Subscription source not read${s.reasonCode ? ` (${s.reasonCode})` : ""}. Unknown, not zero.` };
   if (s.subscriptionProducts === 0) return { kind: "none", reason: "Verified: the source has no subscription product." };

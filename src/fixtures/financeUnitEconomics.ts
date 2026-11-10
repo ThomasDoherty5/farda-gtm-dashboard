@@ -153,6 +153,12 @@ export const unitEconomicsCases: UnitEconomicsCase[] = [
     expected: { grossMargin: "64.7%", contributionPerOrder: "$14.55", acquisitionCost: "N/A · One obligation is reported with two amounts", cac: "N/A · One obligation is reported with two amounts", paybackOrders: "N/A · One obligation is reported with two amounts" },
     handCalculation: "Accrued 1,395 and settled 1,300 for one obligation: neither 1,395, 1,300 nor 2,695 is chosen; the difference needs reconciliation first",
   },
+  {
+    id: "obligation-under-two-components", label: "One obligation under two components", pnl: caseAPnl,
+    input: { ...caseA, costs: [...caseACosts, { ...row("sampleLanded", "TEST-SALE-1", 1137, "accrued"), obligationId: "TEST-SALE-1/landedCogs" }] },
+    expected: { grossMargin: "64.7%", contributionPerOrder: "N/A · One obligation is reported under two cost components", acquisitionCost: "N/A · One obligation is reported under two cost components", cac: "N/A · One obligation is reported under two cost components", paybackOrders: "N/A · One obligation is reported under two cost components" },
+    handCalculation: "Sale 1's 1,137 landed cost appears as COGS and as a sample. Counting it in both would add 1,137 twice (COGS 3,286 and acquisition 8,461), so every cost figure is N/A until the source assigns it once",
+  },
 ];
 
 const policy = { version: "recurring-revenue@0", state: "notConfigured" as const, reference: null };

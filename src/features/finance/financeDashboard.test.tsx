@@ -171,6 +171,30 @@ describe("dashboard unit economics", () => {
     expect(fact("CAC payback", "Unit-economics definitions")).toHaveTextContent(/^CAC ÷ Pre-marketing contribution per order\./);
   });
 
+  it("lists per-component costs that sum to each group total in the definitions dialog", async () => {
+    const { user } = open("/finance");
+    await user.click(await screen.findByRole("button", { name: "View metric definitions" }));
+    expect(fact("Total contribution costs", "Cohort cost components")).toHaveTextContent("$6,916.00");
+    expect(fact("Total acquisition costs", "Cohort cost components")).toHaveTextContent("$7,000.00");
+  });
+
+  it("accepts a live record without the optional add-ons: the P&L shows and unit economics read not reported", async () => {
+    const frozen = { ...financeRecord("financeDashboard") };
+    for (const key of ["unitEconomics", "subscriptions", "forecastPlan"]) delete frozen[key];
+    const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+      if (request.kind !== "read" || request.envelope.viewKey !== "financeDashboard") throw new Error("Unexpected finance operation");
+      return respondWith(request.envelope, { ...frozen, readAccess: { validUntil: "2999-01-01T00:00:00.000Z" } }, { dataVersion: "synthetic-live-frozen" });
+    } } });
+    const { user } = open("/finance", adapter);
+    expect(await screen.findByTestId("pnl-table")).toBeInTheDocument();
+    expect(fact("Gross margin")).toHaveTextContent("90.0% · Provisional · Landed-cost completeness not reported");
+    expect(fact("CAC payback")).toHaveTextContent("N/A · Unit-economics inputs are not reported");
+    expect(fact("Creator costs · attribution")).toHaveTextContent("Not reported");
+    expect(screen.getByTestId("subscription-state")).toHaveTextContent("Subscription revenue unknown");
+    await user.click(screen.getByRole("button", { name: "View metric definitions" }));
+    expect(fact("Forecast", "Actuals and forecast")).toHaveTextContent("No forecast plan reported");
+  });
+
   it("applies the same unknown semantics to a live source record", async () => {
     const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
       if (request.kind !== "read" || request.envelope.viewKey !== "financeDashboard") throw new Error("Unexpected finance operation");
@@ -293,6 +317,37 @@ describe("finance analytics", () => {
     expect(await screen.findByTestId("metric-Payouts matched")).toHaveTextContent("92% matched");
     expect(screen.getByText("2 differences to resolve")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Review month-end close" })).toHaveAttribute("href", "/finance/close/2026-10");
+  });
+
+  it("labels margin and contribution provisional while a landed cost is missing, like the dashboard", async () => {
+    open("/analytics/finance?scenario=landedincomplete");
+    expect(await screen.findByTestId("metric-Gross margin")).toHaveTextContent("65.0%");
+    expect(metric("Gross margin").nextElementSibling).toHaveTextContent("Provisional · Landed cost incomplete · $8,186 gross profit / $12,596 receipts");
+    expect(screen.getByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: \$14\.20\/order · Provisional · Landed cost incomplete\./);
+  });
+
+  it("gives margin and contribution an explained N/A for zero orders, like the dashboard", async () => {
+    open("/analytics/finance?scenario=zeroorders");
+    expect(await screen.findByTestId("metric-Gross margin")).toHaveTextContent("N/A");
+    expect(metric("Gross margin").nextElementSibling).toHaveTextContent("No net revenue in the period");
+    expect(screen.getByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: N\/A · No valid orders in the cohort\./);
+  });
+
+  it("derives the default contribution from the cost rows, matching the dashboard", async () => {
+    open("/analytics/finance");
+    expect(await screen.findByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: \$14\.20\/order\. Contribution after/);
+    expect(metric("Gross margin").nextElementSibling).toHaveTextContent(/^\$8,186 gross profit \/ \$12,596 receipts$/);
+  });
+
+  it("applies the same unknown semantics to a live source record", async () => {
+    const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+      if (request.kind !== "read" || request.envelope.viewKey !== "financeDashboard") throw new Error("Unexpected finance operation");
+      return respondWith(request.envelope, { ...financeRecord("financeDashboard"), readAccess: { validUntil: "2999-01-01T00:00:00.000Z" } }, { dataVersion: "synthetic-live" });
+    } } });
+    open("/analytics/finance", adapter);
+    expect(await screen.findByTestId("metric-Gross margin")).toHaveTextContent("90.0%");
+    expect(metric("Gross margin").nextElementSibling).toHaveTextContent(/^Provisional · Landed cost incomplete/);
+    expect(screen.getByTestId("contribution-per-order")).toHaveTextContent(/^Pre-marketing contribution: N\/A · Customer shipping unknown/);
   });
 
   it("never falls back to demo data on a live route", async () => {

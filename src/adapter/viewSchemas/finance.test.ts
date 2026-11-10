@@ -91,7 +91,15 @@ describe("finance view schemas: every demo response parses", () => {
     expect(parsed.group.state).toBe("paid");
   });
 
-  it("keeps the dashboard's unknowns and known zero distinct", async () => {
+  it("accepts a dashboard without the optional unit-economics, subscription and forecast add-ons", () => {
+    const frozen: Record<string, unknown> = { ...financeDashboardDemo() };
+    for (const key of ["unitEconomics", "subscriptions", "forecastPlan"]) delete frozen[key];
+    const parsed = financeDashboardSchema.parse(frozen);
+    expect(parsed.pnl.revenue).toBe(1259600);
+    expect(parsed).not.toHaveProperty("unitEconomics");
+  });
+
+    it("keeps the dashboard's unknowns and known zero distinct", async () => {
     const adapter = createDemoAdapter();
     const base = financeDashboardSchema.parse((await adapter.readView(request("financeDashboard"))).data);
     expect(base.pnl.ytd).toMatchObject({ state: "unknown", value: null, reasonCode: "YTD_REPORT_NOT_RECEIVED" });
@@ -164,7 +172,11 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["fractional payable", (d) => (d.accountsPayable = 480000.25)],
       ["negative cost line", (d) => (d.costBreakdown[0].minor = -1)],
       ["revenue as a string", (d) => (d.pnl.revenue = "1259600")],
-      ["unit economics missing", (d) => delete d.unitEconomics],
+      ["cohort currency other than the P&L's", (d) => (d.unitEconomics.cohort.currency = "EUR")],
+      ["one obligation under two components", (d) => (d.unitEconomics.costs[1].obligationId = d.unitEconomics.costs[0].obligationId)],
+      ["a component declared unknown and also reported", (d) => d.unitEconomics.declared.push({ component: "paidMedia", state: "unknown", reasonCode: "NOT_READ" })],
+      ["a component declared known zero and also reported", (d) => d.unitEconomics.declared.push({ component: "landedCogs", state: "knownZero", reasonCode: "NONE" })],
+      ["a component declared twice", (d) => d.unitEconomics.declared.push({ ...d.unitEconomics.declared[0] })],
       ["adopted definition without a reference", (d) => (d.unitEconomics.definition.state = "adopted")],
       ["complete creator coverage with unequal counts", (d) => (d.unitEconomics.creatorCosts.state = "complete")],
       ["partial attribution without a reason", (d) => (d.unitEconomics.attribution.reasonCodes = [])],

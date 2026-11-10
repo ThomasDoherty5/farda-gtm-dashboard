@@ -9,9 +9,10 @@
  *   while a known zero burn (`known(0)`) stays valid.
  * - A paid receipt is immutable and the provider owns payout, so `commissionLedger.currency` is the literal "USD" as in
  *   the fixture type, and `rates[].proposed` is the literal "Draft".
- * - `financeDashboard.unitEconomics` carries one cohort's cost rows, one per observation of an obligation, so an accrual and its
+ * - `financeDashboard.unitEconomics`, `subscriptions` and `forecastPlan` are optional add-ons. `unitEconomics` carries one cohort's cost rows, one per observation of an obligation, so an accrual and its
  *   cash settlement share an obligation and are counted once; a component with no row is declared (known zero, not applicable or
- *   unknown). Coverage needs a reason unless complete, and a definition is "adopted" only with its reference.
+ *   unknown) and is never also reported; one obligation maps to one component. Coverage needs a reason unless complete, and a
+ *   definition is "adopted" only with its reference.
  *   `subscriptions.access: "unknown"` is an unread source and is never the verified "no subscription product".
  * - Objects are not `.strict()`: these are read models of ledger figures, not credential-adjacent. The `datasetKey`
  *   literal refuses a payload from another dataset.
@@ -104,7 +105,8 @@ const definitionPolicy = z.object({ version: z.string().min(1), state: z.enum(["
 /** Unit-economics inputs for one cohort. Each cost row is one observation of one obligation; a component without rows is declared. */
 const unitEconomics = z.object({
   definition: definitionPolicy,
-  cohort: z.object({ id: z.string().min(1), label: z.string(), currency: z.string().length(3), period: reportingWindow }),
+  // The P&L is reported in USD minor units, so a cohort in any other currency can't be combined with it.
+  cohort: z.object({ id: z.string().min(1), label: z.string(), currency: z.literal("USD"), period: reportingWindow }),
   validOrders: provenanceValueSchema(count),
   newCustomers: provenanceValueSchema(count),
   landedCost: z.object({ complete: z.boolean(), missingSkus: z.array(z.string()) }).refine((l) => !l.complete || l.missingSkus.length === 0, "Complete landed cost can't list missing SKUs."),
@@ -115,6 +117,21 @@ const unitEconomics = z.object({
     cashId: z.string().nullable(), currency: z.string(), period: reportingWindow,
   })),
   declared: z.array(z.object({ component: costComponent, state: z.enum(["knownZero", "notApplicable", "unknown"]), reasonCode: z.string().min(1) })),
+}).superRefine((ue, ctx) => {
+  // One obligation belongs to one component, or it would be counted in two places.
+  const owner = new Map<string, string>();
+  for (const row of ue.costs) {
+    const seen = owner.get(row.obligationId);
+    if (seen && seen !== row.component) ctx.addIssue({ code: "custom", path: ["costs"], message: "An obligation is reported under two cost components." });
+    owner.set(row.obligationId, row.component);
+  }
+  // A declaration stands in for missing rows; a component can't be both declared (unknown, known zero or not applicable) and reported.
+  const declared = new Set<string>();
+  for (const d of ue.declared) {
+    if (declared.has(d.component)) ctx.addIssue({ code: "custom", path: ["declared"], message: "A component is declared twice." });
+    declared.add(d.component);
+    if (ue.costs.some((r) => r.component === d.component)) ctx.addIssue({ code: "custom", path: ["declared"], message: "A component is both declared and reported." });
+  }
 });
 
 /** Unread access is unknown with a reason; verified access states how many subscription products exist. No product means no recurring revenue. */
@@ -147,9 +164,11 @@ export const financeDashboardSchema = z.object({
   cashHistory: z.array(z.object({ month: z.string(), minor: signedMinor })),
   costBreakdown: z.array(z.object({ label: z.string(), minor: count })),
   payouts: z.array(z.object({ channel: z.string(), matched: count, needsReview: count })),
-  unitEconomics,
-  subscriptions,
-  forecastPlan: z.object({ version: z.string().min(1), basis: z.enum(["illustrative", "rebaselined"]), assumptions: z.array(z.string()) }),
+  // Optional add-ons: a source that meets the frozen register (P&L, cash, burn, close) is never refused for lacking them.
+  // Absent unit economics read N/A (UNIT_ECONOMICS_NOT_REPORTED), absent subscriptions read unknown, absent forecast plan reads "not reported".
+  unitEconomics: unitEconomics.optional(),
+  subscriptions: subscriptions.optional(),
+  forecastPlan: z.object({ version: z.string().min(1), basis: z.enum(["illustrative", "rebaselined"]), assumptions: z.array(z.string()) }).optional(),
 });
 
 const periodStatus = z.enum(["open", "reconciling", "blocked", "awaitingCpa", "readyToExport", "exporting", "failed", "closed", "reopened"]);

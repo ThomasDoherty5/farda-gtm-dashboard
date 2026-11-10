@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { financeDashboardDemo, ledgerDemo } from "@/fixtures/finance";
 import { caseAEvents, financeMetricDictionary, subscriptionCases, unitEconomicsCases } from "@/fixtures/financeUnitEconomics";
 import { known, unknown } from "@/fixtures/values";
-import { ACQUISITION_COMPONENTS, CONTRIBUTION_COMPONENTS, cacPaybackOf, componentTotal, contributionOf, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat, type UnitEconomicsInput } from "./unitEconomics";
+import { ACQUISITION_COMPONENTS, CONTRIBUTION_COMPONENTS, PER_ORDER_TIE_TOLERANCE_MINOR, cacPaybackOf, componentTotal, contributionOf, figureText, grossMarginOf, recurringRevenueOf, recurringText, ueFormat, type UnitEconomicsInput } from "./unitEconomics";
 
 const texts = (pnl: { revenue: number; cogs: number }, input: UnitEconomicsInput) => {
   const { acquisition, cac, paybackOrders } = cacPaybackOf(pnl, input);
@@ -19,7 +19,7 @@ const caseA = unitEconomicsCases[0]!;
 describe("hand-calculated synthetic cases", () => {
   it("are labeled synthetic and kept in their own dataset", () => {
     expect(financeMetricDictionary.datasetKey).toBe("finance-unit-economics-cases");
-    for (const c of unitEconomicsCases) expect(c.input.cohort.id).not.toBe(financeDashboardDemo().unitEconomics.cohort.id);
+    for (const c of unitEconomicsCases) expect(c.input.cohort.id).not.toBe(financeDashboardDemo().unitEconomics!.cohort.id);
   });
 
   it("source events sum to the case's revenue and COGS rows tie to its P&L, at source precision", () => {
@@ -65,6 +65,46 @@ describe("hand-calculated synthetic cases", () => {
   });
 });
 
+describe("whole-input checks", () => {
+  const sum = (input: UnitEconomicsInput, members: readonly (typeof CONTRIBUTION_COMPONENTS[number] | typeof ACQUISITION_COMPONENTS[number])[]) =>
+    members.reduce((n, c) => n + componentTotal(input, [c]).value!, 0);
+
+  it.each([["case A", caseA.input], ["dashboard demo", financeDashboardDemo().unitEconomics!]] as const)("per-component totals sum to their group total: %s", (_name, input) => {
+    expect(sum(input, CONTRIBUTION_COMPONENTS)).toBe(componentTotal(input, CONTRIBUTION_COMPONENTS).value);
+    expect(sum(input, ACQUISITION_COMPONENTS)).toBe(componentTotal(input, ACQUISITION_COMPONENTS).value);
+  });
+
+  it("refuses one obligation under two components in every figure, including each component on its own", () => {
+    const input = unitEconomicsCases.find((c) => c.id === "obligation-under-two-components")!.input;
+    for (const c of [...CONTRIBUTION_COMPONENTS, ...ACQUISITION_COMPONENTS]) expect(componentTotal(input, [c]).reasons).toEqual(["OBLIGATION_COMPONENT_CONFLICT"]);
+  });
+
+  it("refuses a component that is both declared and reported", () => {
+    const input = { ...caseA.input, declared: [...caseA.input.declared, { component: "paidMedia" as const, state: "knownZero" as const, reasonCode: "NONE" }] };
+    expect(texts(caseA.pnl, input).acquisitionCost).toBe("N/A · Paid media is both declared and reported");
+  });
+
+  it("refuses a cohort whose currency differs from the P&L's", () => {
+    const input = { ...caseA.input, cohort: { ...caseA.input.cohort, currency: "EUR" } };
+    expect(texts(caseA.pnl, input).contributionPerOrder).toBe("N/A · The cohort currency differs from the P&L currency");
+  });
+
+  it(`ties the source's per-order figure within ±${PER_ORDER_TIE_TOLERANCE_MINOR} minor unit of the exact $14.5533`, () => {
+    const at = (source: number) => contributionOf(caseA.pnl, caseA.input, source).perOrder.state;
+    expect([at(1455), at(1456)]).toEqual(["known", "known"]);
+    expect([at(1454), at(1457)]).toEqual(["notApplicable", "notApplicable"]);
+  });
+
+  it("reads absent unit economics as N/A, and keeps the P&L margin with its completeness caveat", () => {
+    expect(texts(caseA.pnl, undefined as unknown as UnitEconomicsInput)).toEqual({
+      grossMargin: "64.7% · Provisional · Landed-cost completeness not reported",
+      contributionPerOrder: "N/A · Unit-economics inputs are not reported", acquisitionCost: "N/A · Unit-economics inputs are not reported",
+      cac: "N/A · Unit-economics inputs are not reported", paybackOrders: "N/A · Unit-economics inputs are not reported",
+    });
+    expect(recurringRevenueOf(undefined)).toEqual({ kind: "unavailable", reason: "Subscription source not reported. Unknown, not zero." });
+  });
+});
+
 describe("recurring revenue", () => {
   it.each(subscriptionCases.map((c) => [c.id, c] as const))("%s matches its hand calculation", (_id, c) => {
     const r = recurringRevenueOf(c.source);
@@ -82,14 +122,14 @@ describe("recurring revenue", () => {
     const d = financeDashboardDemo();
     expect(d.pnl.revenue).toBe(1259600);
     expect(recurringRevenueOf(d.subscriptions).kind).toBe("none");
-    expect(recurringRevenueOf({ ...d.subscriptions, monthlyRecurring: known(d.pnl.revenue) }).kind).toBe("none");
+    expect(recurringRevenueOf({ ...d.subscriptions!, monthlyRecurring: known(d.pnl.revenue) }).kind).toBe("none");
     expect(recurringRevenueOf.length).toBe(1);
   });
 });
 
 describe("dashboard demo cohort", () => {
   const d = financeDashboardDemo();
-  const ue = d.unitEconomics;
+  const ue = d.unitEconomics!;
 
   it("ties contribution to the existing figures: $12,596 − $6,916 = $5,680, $14.20 an order over 400 orders", () => {
     const { total, perOrder } = contributionOf(d.pnl, ue, d.contributionPerOrder);
@@ -116,8 +156,8 @@ describe("dashboard demo cohort", () => {
   });
 
   it("keeps the forecast's version and assumptions apart from the actuals", () => {
-    expect(d.forecastPlan.version).not.toBe(d.version);
-    expect(d.forecastPlan.basis).toBe("illustrative");
+    expect(d.forecastPlan!.version).not.toBe(d.version);
+    expect(d.forecastPlan!.basis).toBe("illustrative");
   });
 
   it("states the definitions as proposed, never adopted, and never as professionally validated", () => {
