@@ -28,7 +28,7 @@ async function capture(page:Page,info:TestInfo,name:string) {
 }
 
 /** Read-only captures cover vertical content and every column of the source-order table. */
-async function captureDialog(page:Page,info:TestInfo,name:string,title:string) {
+async function captureDialog(page:Page,info:TestInfo,name:string,title:string,tableCaption="Unmatched source orders") {
   const dialog=page.getByRole("dialog",{name:title,exact:true});
   for(const width of [1440,390]) {
     await page.setViewportSize({width,height:1000});await page.evaluate(()=>document.fonts.ready);
@@ -38,7 +38,8 @@ async function captureDialog(page:Page,info:TestInfo,name:string,title:string) {
     const extent=await dialog.evaluate(e=>({height:e.scrollHeight,viewport:e.clientHeight}));
     const step=Math.max(1,extent.viewport-40),last=Math.max(0,extent.height-extent.viewport);
     const offsets=[...new Set([...Array.from({length:Math.ceil(last/step)},(_,i)=>i*step),last])];
-    const table=dialog.getByRole("region",{name:"Unmatched source orders",exact:true});
+    const table=dialog.getByRole("region",{name:tableCaption,exact:true});
+    if(await table.count())expect(await table.locator("th,td").evaluateAll(cells=>cells.every(cell=>cell.scrollWidth<=cell.clientWidth+1))).toBe(true);
     const horizontal=await table.count() ? await table.evaluate(e=>({last:Math.max(0,e.scrollWidth-e.clientWidth),step:Math.max(1,e.clientWidth-40)})) : {last:0,step:1};
     const lefts=[...new Set([...Array.from({length:Math.ceil(horizontal.last/horizontal.step)},(_,i)=>i*horizontal.step),horizontal.last])];
     const pager=dialog.getByRole("group",{name:"Source review pages",exact:true});
@@ -164,7 +165,7 @@ test("launch snapshot reads existing report schedules and cohort reservation pro
     const trigger=page.getByRole("button",{name:"Review reservations",exact:true});await trigger.click();
     const dialog=page.getByRole("dialog",{name:"Sample reservations",exact:true});await expect(dialog).toContainText("Fictional sample bottle");
     await expect(dialog).toContainText("$30.00");await expect(dialog).toContainText("approved");
-    await expect(dialog).toContainText("do not deplete physical stock");await capture(page,info,"reservations");
+    await expect(dialog).toContainText("do not deplete physical stock");await captureDialog(page,info,"reservations","Sample reservations","Cohort-linked sample reservations");
     await page.keyboard.press("Escape");await expect(trigger).toBeFocused();
     await screenReaderCheckpoint(page,"launch-reservation-focus-return",trigger,["Review reservations","button"]);
     allowed=false;await page.goto("/launch");await expect(page.getByRole("heading",{name:"No access to this account"})).toBeVisible();

@@ -51,9 +51,9 @@ export function NativeCampaignFunnel({ data, refresh, refreshing }: { data: Camp
       {!data.reservations ? <p>Reservation detail N/A. The sample owner has not supplied cohort-linked home, item, unit, cost approval and provenance evidence.</p> : <>
         <p>{data.reservations.rows.length} shown of {data.reservations.total ?? "unknown total"} source reservations · {data.reservations.coverage}{data.reservations.provisional ? " · provisional; approval authority needs review" : ""}.</p>
         <Table caption="Cohort-linked sample reservations" columns={[{ label: "Home / item", width: 230 }, { label: "Units / state", width: 150 }, { label: "Sample cost / approval", width: 260 }, { label: "Reservation provenance", width: 300 }]} rows={data.reservations.rows.map(row => ({ key: row.reservationRef, cells: [
-          <span>{row.home} · {row.itemLabel}<small className={styles.small}>{row.itemRef}</small></span>, `${row.units} · ${row.state}`,
-          <span><Fact fact={row.cost} format={nativeMoney} /> · {row.approval.state}<small className={styles.small}>Approval evidence {row.approval.evidenceRef ?? "N/A"} · version {row.approval.version ?? "N/A"}</small></span>,
-          <span>{row.reservationRef}<small className={styles.small}>{row.evidenceRef} · {row.sourceVersion} · observed {row.observedAt}</small></span>,
+          <span className={styles.sourceCell}>{row.home} · {row.itemLabel}<small className={styles.small}>{row.itemRef}</small></span>, `${row.units} · ${row.state}`,
+          <span className={styles.sourceCell}><Fact fact={row.cost} format={nativeMoney} /> · {row.approval.state}<small className={styles.small}>Approval evidence {row.approval.evidenceRef ?? "N/A"} · version {row.approval.version ?? "N/A"}</small></span>,
+          <span className={styles.sourceCell}>{row.reservationRef}<small className={styles.small}>{row.evidenceRef} · {row.sourceVersion} · observed {row.observedAt}</small></span>,
         ] }))} />
         {data.reservations.coverage === "complete" && data.reservations.total === 0 && <p>The source confirms no reservations for this cohort.</p>}
       </>}
