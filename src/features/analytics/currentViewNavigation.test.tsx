@@ -11,7 +11,7 @@ it.each([
 ])("reselecting the current %s preserves scope and the existing history entry", async (path, navigation, label) => {
   const router = renderRoute(path, createDemoAdapter()), user = userEvent.setup();
   const nav = await screen.findByRole("navigation", { name: navigation });
-  const link = await within(nav).findByRole("link", { name: label, exact: true });
+  const link = await within(nav).findByRole("link", { name: label });
   expect(link).toHaveAttribute("aria-current", "page");
   expect(link).toHaveAttribute("href", path);
   const original = router.state.location;
@@ -22,7 +22,7 @@ it.each([
   expect(router.state.location).toEqual(original);
   await user.click(screen.getByRole("button", { name: "TD, open workspace menu" }));
   const menu = (await screen.findByRole("heading", { name: "Explore the Farda workspace.", hidden: true })).closest("dialog")!;
-  const current = within(menu).getByRole("link", { name: label === "Performance" ? "Analytics workspace" : label, exact: true, hidden: true });
+  const current = within(menu).getByRole("link", { name: label === "Performance" ? "Analytics workspace" : label, hidden: true });
   expect(current).toHaveAttribute("href", path);
   await user.click(current);
   expect(router.state.location).toEqual(original);

@@ -7,6 +7,7 @@ import { usePagedView } from "./usePagedView";
 import { ScopeProvider } from "./scope";
 import { assertScopeMatches, dropProtectedData, protectedRead, useView } from "./useView";
 import { scriptedAdapter, testClient } from "@/test/renderWithAdapter";
+import { ViewError } from "@/components/ViewError";
 
 const response = (request: ReadRequest<unknown>, data: string, accountIds = request.requestedScope.accountIds): ReadResponse<unknown> => ({
   schemaVersion: request.schemaVersion,
@@ -38,6 +39,33 @@ function View() {
 const scope = (accountIds: string[]): RequestedScope => ({ workspaceId: "w", accountIds, environment: "demo" });
 
 describe("useView", () => {
+  it.each(["UNAUTHENTICATED", "FORBIDDEN"])("retains a recoverable %s state when a nested denial clears a completed parent", async code => {
+    let rejectNested: () => void = () => {};
+    let recovering = false;
+    const adapter = scriptedAdapter(async request => {
+      if (request.viewKey === "nested" && !recovering)
+        return new Promise((_resolve, reject) => { rejectNested = () => reject(denied(code)); });
+      return response(request, recovering ? "fresh authorized parent" : "protected parent");
+    });
+    const client = testClient();
+    function Nested() { const query = useView<object, string>("nested", {}); return <p>{query.error?.message ?? "nested loading"}</p>; }
+    function Parent() {
+      const query = useView<object, string>("parent", {});
+      return <>{query.isError && <ViewError error={query.error} subject="Parent" onRetry={() => void query.refetch()} />}
+        {query.data && <><p>{query.data.data}</p><Nested /></>}</>;
+    }
+    render(<QueryClientProvider client={client}><ScopeProvider adapter={adapter} scope={scope(["a"])} principal="p"><Parent /></ScopeProvider></QueryClientProvider>);
+    await screen.findByText("nested loading");
+    await act(async () => rejectNested());
+    await screen.findByRole("heading", { name: code === "FORBIDDEN" ? "No access to this account" : "Sign in again" });
+    expect(screen.queryByText("protected parent")).not.toBeInTheDocument();
+    expect(screen.queryByText("nested loading")).not.toBeInTheDocument();
+    expect(client.getQueryCache().getAll().every(query => query.state.data === undefined)).toBe(true);
+    recovering = true;
+    await act(async () => screen.getByRole("button", { name: "Check access again" }).click());
+    await screen.findByText("fresh authorized parent");
+    expect(screen.queryByRole("heading", { name: /No access|Sign in again/ })).not.toBeInTheDocument();
+  });
   it("isolates page cursor and limit in both the source request and cache identity",async()=>{
     const requests:ReadRequest<unknown>[]=[];
     const adapter=scriptedAdapter(async request=>{requests.push(request);return response(request,`${request.page.cursor??"first"}/${request.page.limit}`);});

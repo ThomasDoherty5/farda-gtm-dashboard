@@ -51,14 +51,14 @@ export async function overviewOwnersFixture(options: { now?: () => number; scope
   const monitorSource = monitorTestSource(() => { if (!monitor.allowed) throw new MonitorError("MONITOR_SOURCE_DENIED", 403); return monitor.snapshot; }, now);
   const sink = (name: string): IdentitySink => {
     const receipts = new Map<string, SinkReceipt>();
-    return { upsert(key, _record, binding) { const receipt: SinkReceipt = { ...binding, state: "applied", receiptRef: `fictional-${name}:${key}`, observedAt, validUntil };
+    return { upsert(key, _record, binding) { const receipt: SinkReceipt = { ...binding, state: "applied", receiptRef: `fictional-${name}:${key}`, observedAt: iso(now()), validUntil };
       receipts.set(key, receipt); return receipt; }, read(key, binding) { return receipts.get(key) ?? { ...binding, state: "notApplied", terminal: true,
-        receiptRef: `fictional-${name}-absence:${binding.attemptId}`, observedAt }; } };
+        receiptRef: `fictional-${name}-absence:${binding.attemptId}`, observedAt: iso(now()) }; } };
   };
   const intakeAuthority: IntakeAuthority = { route: () => "Ready", crosswalk: () => ({ version: "map-v1", entries: [] }),
     suppression: () => ({ version: "suppression-v1", entries: [] }), sinks: { "notion-creator-crm": sink("notion"), "sheets-watchlist": sink("sheets") } };
   async function seed(store: AgentStore) {
-    const intake = new IntakeRepository(store.database, scope, intakeAuthority, () => new Date(now()));
+    const intake = new IntakeRepository(store.database, { workspaceId: scope.workspaceId, accountId: scope.accountId }, intakeAuthority, () => new Date(now()));
     const ref = { source: "notion", accountId: scope.accountId, sourceId: cohortRef, url: null, canonicalId: cohortRef, identityState: "resolved", provenanceRef: "fictional-campaign-proof" };
     const input = intakeInputSchema.parse({ campaignRef: ref, briefRef: { ref: "fictional-brief", version: "v1" }, recruitmentSource: "social-cat", trigger: "signup", eventId: "fictional-overview-signup",
       sourceCandidate: { ...ref, source: "social-cat", accountId: "fictional-recruit-account", sourceId: "candidate-a", canonicalId: null, identityState: "unresolved", provenanceRef: "fictional-signup-receipt" },
@@ -69,6 +69,8 @@ export async function overviewOwnersFixture(options: { now?: () => number; scope
       policyVersion: "commission-only-v1", inputHash: digest(input), idempotencyKey: key, correlationId: "fictional-overview", requestedAt: observedAt, deadline: null, checkpoint: null } }, key);
     const creator = result.creatorRef?.canonicalId ?? result.creatorRef?.sourceId;
     if (!creator) throw new Error("Fictional overview intake did not produce a creator identity");
+    if (result.watchlistEligibility !== "active" || result.handoffs.some(handoff => handoff.state !== "confirmed" || !handoff.receiptRef))
+      throw new Error("Fictional overview intake did not confirm its canonical source handoffs");
     const member = monitor.snapshot.members[0]!;
     member.creatorId = creator; member.revision = intake.creator(creator)!.revision; member.cohort = cohortRef; post.creatorId = creator;
     member.notionReceipt = result.handoffs.find(h => h.target === "notion-creator-crm")!.receiptRef!;

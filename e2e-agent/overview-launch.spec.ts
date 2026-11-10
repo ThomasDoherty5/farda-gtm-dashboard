@@ -151,7 +151,8 @@ test("launch snapshot reads existing report schedules and cohort reservation pro
     await screenReaderCheckpoint(page,"launch-reservation-focus-return",trigger,["Review reservations","button"]);
     allowed=false;await page.goto("/launch");await expect(page.getByRole("heading",{name:"No access to this account"})).toBeVisible();
     await expect(page.getByRole("table",{name:"Reporting"})).toHaveCount(0);
-    allowed=true;await page.reload();await expect(page.getByRole("region",{name:"Report scheduling",exact:true}).last()).toContainText("weekdays");
+    allowed=true;await page.getByRole("button",{name:"Check access again",exact:true}).click();
+    await expect(page.getByRole("region",{name:"Report scheduling",exact:true}).last()).toContainText("weekdays");
     expect(writes).toEqual([]);
   } finally {await app.close();}
 });
