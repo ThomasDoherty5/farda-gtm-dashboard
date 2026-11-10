@@ -4,10 +4,12 @@ import type { SourceRef } from "../intake/contract.ts";
 import { VideoEvidenceError, type LedgerReceipt, type VideoEvidenceLedger } from "./ledger.ts";
 import {
   audienceProofState, classifyContext, deriveViewing, evidenceRefOf, isFullReview, likeGateOf, narratedWithinCoverage, packetCoverage,
-  recordNextAction, shownWithinCoverage,
+  recordNextAction, sampledFrameCredit, shownWithinCoverage,
 } from "./rules.ts";
+import { inferenceRefusals } from "./inferenceScreen.ts";
 import {
-  COLLECTOR_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, actorSchema, j20InputSchema, j20OutputSchema, postMetadataSchema, reviewReadSchema, sourceReadSchema,
+  COLLECTOR_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, actorSchema, j20InputSchema, j20OutputSchema, postMetadataSchema, reviewReadSchema, sampledFramePolicySchema,
+  screenedTextOf, sourceReadSchema, type SampledFramePolicy, type VideoEvidenceConfig,
   type AccessFailure, type CommentEvidence, type J20Input, type J20Output, type NextAction, type Platform, type PostMetadata,
   type PostReview, type VideoEvidenceRecord,
 } from "./schema.ts";
@@ -70,7 +72,7 @@ function assertIdentity(input: J20Input, postRef: SourceRef, metadata: PostMetad
 
 /** Builds one immutable record version from observed metadata and, for a gated post, its review. Nothing is inferred. */
 export function buildRecord(input: J20Input, postRef: SourceRef, metadata: PostMetadata, review: PostReview | null,
-  prior: VideoEvidenceRecord | null, reviewJobId: string): VideoEvidenceRecord {
+  prior: VideoEvidenceRecord | null, reviewJobId: string, sampledFramePolicy: SampledFramePolicy | null): VideoEvidenceRecord {
   const like = likeGateOf(metadata.likes);
   const context = classifyContext(metadata.context, metadata.relevant);
   const eligible = like.state === "pass" && context.relevant;
@@ -85,6 +87,9 @@ export function buildRecord(input: J20Input, postRef: SourceRef, metadata: PostM
     if (f.channel !== "shown" && !narratedWithinCoverage(viewing, f)) limitations.add("NARRATED_FEATURE_OUTSIDE_ASSESSED_AUDIO");
   }
   if (viewing && !isFullReview(viewing)) limitations.add(viewing.status === "sampled_playback" ? "SAMPLED_FRAMES_NOT_CONTINUOUS" : `VIEWING_${viewing.status.toUpperCase()}`);
+  if (viewing?.status === "sampled_playback") limitations.add(sampledFrameCredit(viewing, sampledFramePolicy).reason);
+  if (prior?.source.source_content_fingerprint && metadata.source_content_fingerprint && prior.source.source_content_fingerprint !== metadata.source_content_fingerprint)
+    limitations.add("SOURCE_CONTENT_CHANGED");
   if (viewing && viewing.audio_method === "asr") limitations.add("MACHINE_TRANSCRIPT_NOT_HEARD_AUDIO");
   if (viewing && viewing.audio_method === "unassessed") limitations.add("AUDIO_UNASSESSED");
   if (viewing && viewing.playback_elapsed_seconds !== null && viewing.status !== "complete_audio_visual") limitations.add("ELAPSED_PLAYBACK_NOT_COVERAGE");
@@ -99,7 +104,8 @@ export function buildRecord(input: J20Input, postRef: SourceRef, metadata: PostM
     keys: { platform: metadata.platform, creator_source_id: metadata.creator_source_id, post_source_id: metadata.post_source_id,
       canonical_post_key: canonicalPostKey(postRef), canonical_url: metadata.canonical_url, evidence_version: version, review_job_id: reviewJobId },
     brief: input.briefRef,
-    review_policy: { sampling_policy_version: input.samplingPolicyVersion, taxonomy_version: input.taxonomyVersion, policy_version: input.policyVersion },
+    review_policy: { sampling_policy_version: input.samplingPolicyVersion, taxonomy_version: input.taxonomyVersion, policy_version: input.policyVersion,
+      sampled_frame_policy: sampledFramePolicy },
     source: { route: metadata.route, provider_account_scope: metadata.provider_account_scope, permission_ref: metadata.permission_ref,
       permission_checked_at: metadata.permission_checked_at, published_at: metadata.published_at, retrieved_at: metadata.retrieved_at,
       source_content_fingerprint: metadata.source_content_fingerprint, access_state: "permitted", deleted_or_changed: false, evidence_refs: metadata.evidence_refs },
@@ -189,7 +195,20 @@ function summarize(input: J20Input, records: VideoEvidenceRecord[], missing: str
 export class VideoEvidenceCollector {
   private readonly ledger: VideoEvidenceLedger;
   private readonly reader: VideoSourceReader;
-  constructor(ledger: VideoEvidenceLedger, reader: VideoSourceReader) { this.ledger = ledger; this.reader = reader; }
+  private readonly sampledFramePolicy: SampledFramePolicy | null;
+  /** `config.sampledFramePolicy` has no default: leaving it unset keeps every sampled-frame review partial and uncredited. */
+  constructor(ledger: VideoEvidenceLedger, reader: VideoSourceReader, config: VideoEvidenceConfig) {
+    this.ledger = ledger; this.reader = reader;
+    const policy = config.sampledFramePolicy === undefined ? null : sampledFramePolicySchema.safeParse(config.sampledFramePolicy);
+    if (policy && !policy.success) throw new VideoEvidenceError("SAMPLED_FRAME_POLICY_INVALID", 500);
+    this.sampledFramePolicy = policy ? policy.data : null;
+  }
+
+  /** Refuses demographic, health or purchasing-power inference in free text before anything is staged or stored. */
+  private screen(texts: string[]) {
+    const refused = inferenceRefusals(texts);
+    if (refused.length) throw new VideoEvidenceError(refused[0]!, 422);
+  }
 
   private read<T>(schema: { safeParse(value: unknown): { success: true; data: T } | { success: false } }, raw: unknown): T {
     const parsed = schema.safeParse(raw);
@@ -213,16 +232,18 @@ export class VideoEvidenceCollector {
     const receipts: LedgerReceipt[] = [];
     const position = startOf(input, options.cursor);
     let calls = 0;
+    const recordCount = () => new Set(receipts.map((r) => r.evidenceRef)).size;
     const call = <T>(operation: () => Promise<T>) => { calls++; return invoke(operation); };
     while (position.index < input.postRefs.length) {
-      if (calls >= Math.min(maxCalls, options.maxRecords)) return { state: "checkpoint", nextCursor: cursorOf(input, position), receipts, recordCount: calls };
+      // Each source call writes at most one record version, so the record count never exceeds the runtime bound.
+      if (calls >= maxCalls || recordCount() >= options.maxRecords) return { state: "checkpoint", nextCursor: cursorOf(input, position), receipts, recordCount: recordCount() };
       const postRef = input.postRefs[position.index]!, platform = postRef.source as Platform, recordKey = recordKeyOf(input, postRef);
-      const request = { requestKey: `j20-req-${digest([input.idempotencyKey, runKey, recordKey]).slice(0, 40)}`, requestHash: digest([inputIdentity(input), recordKey]), recordKey };
+      const request = { requestKey: `j20-req-${digest([input.idempotencyKey, runKey, recordKey]).slice(0, 40)}`, requestHash: digest([inputIdentity(input), recordKey, this.sampledFramePolicy]), recordKey };
       const permissionRefs = [...input.sourcePermissionRefs];
       const next = () => { position.index++; position.stage = null; };
       const blocked = (failure: AccessFailure): CollectStep => {
         this.ledger.recordAccess({ recordKey, state: failure.state, sourceRef: failure.source_ref, observedAt: failure.observed_at, reasonCode: failure.reason_code, runKey });
-        return { state: "blocked", failure, cursor: cursorOf(input, position), receipts, recordCount: calls };
+        return { state: "blocked", failure, cursor: cursorOf(input, position), receipts, recordCount: recordCount() };
       };
       const loss = (read: { state: "removed" | "changed"; source_ref: string; observed_at: string; source_content_fingerprint?: string | null }) => {
         if (!this.ledger.latest(recordKey))
@@ -236,17 +257,20 @@ export class VideoEvidenceCollector {
         if (first.state !== "observed") return blocked(first);
         const metadata = first.observation;
         assertIdentity(input, postRef, metadata);
+        this.screen(screenedTextOf({ context: metadata.context }));
         const prior = this.ledger.latest(recordKey);
-        if (prior?.source.source_content_fingerprint && metadata.source_content_fingerprint && prior.source.source_content_fingerprint !== metadata.source_content_fingerprint)
+        const gated = likeGateOf(metadata.likes).state === "pass" && classifyContext(metadata.context, metadata.relevant).relevant;
+        // A changed gated post is marked now, because its new review is a separate step. A metadata-only post records the change on its new version.
+        if (gated && prior?.source.source_content_fingerprint && metadata.source_content_fingerprint && prior.source.source_content_fingerprint !== metadata.source_content_fingerprint)
           receipts.push(this.ledger.append({ ...request, requestKey: `${request.requestKey}-changed`,
             build: (latest) => lossRecord(latest!, "changed", metadata.retrieved_at, metadata.permission_ref, runKey, metadata.source_content_fingerprint) }));
-        if (likeGateOf(metadata.likes).state === "pass" && classifyContext(metadata.context, metadata.relevant).relevant) {
+        if (gated) {
           // Only a post strictly above the native-like gate and in an approved lifestyle context is opened for playback.
           position.stage = digest([runKey, recordKey, metadata]).slice(0, 40);
           this.ledger.stage(position.stage, recordKey, metadata);
           continue;
         }
-        receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, null, latest, runKey) }));
+        receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, null, latest, runKey, this.sampledFramePolicy) }));
         next();
         continue;
       }
@@ -257,7 +281,8 @@ export class VideoEvidenceCollector {
       if (second.state === "removed" || second.state === "changed") { loss(second); continue; }
       if (second.state !== "observed") return blocked(second);
       const review = second.review;
-      receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, review, latest, runKey) }));
+      this.screen(screenedTextOf(review));
+      receipts.push(this.ledger.append({ ...request, build: (latest) => buildRecord(input, postRef, metadata, review, latest, runKey, this.sampledFramePolicy) }));
       next();
     }
     const records: VideoEvidenceRecord[] = [], missing: string[] = [];
@@ -265,7 +290,7 @@ export class VideoEvidenceCollector {
       const latest = this.ledger.latest(recordKeyOf(input, postRef));
       if (latest) records.push(latest); else missing.push(canonicalPostKey(postRef));
     }
-    return { state: "completed", output: summarize(input, records, missing), receipts, recordCount: calls };
+    return { state: "completed", output: summarize(input, records, missing), receipts, recordCount: recordCount() };
   }
 }
 

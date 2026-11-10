@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { audienceProofState, classifyContext, deriveViewing, likeGateOf } from "./rules.ts";
+import { audienceProofState, classifyContext, deriveViewing, likeGateOf, sampledFrameCredit } from "./rules.ts";
+import { inferenceRefusals } from "./inferenceScreen.ts";
 import {
   audienceEvidenceSchema, commentEvidenceSchema, metricObservationSchema, postReviewSchema, videoEvidenceRecordSchema, viewingInputSchema,
   type AudienceEvidence, type ContextInput,
@@ -169,5 +170,32 @@ describe("J20 versioned evidence schema", () => {
     expect(Object.keys(shape)).toEqual(expect.arrayContaining(["schema_version", "collector_version", "keys", "brief", "review_policy", "like_gate", "viewing", "features",
       "production_choices", "metrics", "audience", "claims", "comments", "limitations", "next_action"]));
     for (const banned of ["creator_age", "creator_health", "audience_demographics", "purchasing_power", "diagnosis"]) expect(shape).not.toHaveProperty(banned);
+  });
+});
+
+describe("Sampled-frame credit rule", () => {
+  const sampled = deriveViewing(viewings.sampled);
+  it("has no default: unset or disabled never credits, and an enabled policy needs its frame and span minimums", () => {
+    expect(sampledFrameCredit(sampled, null)).toEqual({ credit: false, reason: "SAMPLED_FRAME_POLICY_UNSET" });
+    expect(sampledFrameCredit(sampled, { creditAsComplete: false })).toEqual({ credit: false, reason: "SAMPLED_FRAMES_NOT_CREDITED" });
+    expect(sampledFrameCredit(sampled, { creditAsComplete: true, minFrames: 4, minCoverageRatio: 0.66 }).credit).toBe(true);
+    expect(sampledFrameCredit(sampled, { creditAsComplete: true, minFrames: 4, minCoverageRatio: 0.7 }).credit).toBe(false);
+    expect(sampledFrameCredit(sampled, { creditAsComplete: true, minFrames: 5, minCoverageRatio: 0.1 }).credit).toBe(false);
+    expect(sampledFrameCredit({ ...sampled, duration_seconds: null }, { creditAsComplete: true, minFrames: 2, minCoverageRatio: 0.1 }).credit).toBe(false);
+    expect(sampledFrameCredit({ ...sampled, interruption_reason: "Synthetic stop" }, { creditAsComplete: true, minFrames: 2, minCoverageRatio: 0.1 }).credit).toBe(false);
+    expect(sampledFrameCredit(deriveViewing(viewings.complete), { creditAsComplete: true, minFrames: 2, minCoverageRatio: 0.1 }).credit).toBe(false);
+  });
+});
+
+describe("Inference screen", () => {
+  it("refuses the reviewer examples by category", () => {
+    expect(inferenceRefusals(["Creator looks pregnant, about 35 years old, likely high income."]))
+      .toEqual(["DEMOGRAPHIC_INFERENCE_REFUSED", "DIAGNOSIS_INFERENCE_REFUSED", "PURCHASING_POWER_INFERENCE_REFUSED"]);
+    expect(inferenceRefusals(["Styling suggests an older, wealthy audience."])).toEqual(["DEMOGRAPHIC_INFERENCE_REFUSED", "PURCHASING_POWER_INFERENCE_REFUSED"]);
+    expect(inferenceRefusals(["new moms over 40"])).toEqual(["DEMOGRAPHIC_INFERENCE_REFUSED"]);
+  });
+  it("passes ordinary observations of action, framing and production", () => {
+    expect(inferenceRefusals(["Unzips a fictional case and places it in the tote.", "Top-down framing of the bag.", "Reviewer reads this as an on-brief travel use.",
+      "Narration mentions a fictional comfort benefit.", "Enriches the shot with warm lighting.", "travel", "desk reset"])).toEqual([]);
   });
 });

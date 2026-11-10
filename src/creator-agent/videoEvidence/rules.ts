@@ -1,7 +1,8 @@
 import { deriveCommentStats, deriveMetadataBaseline, evidencePacketSchema, postEvidenceSchema, type EvidenceReview, type PostEvidence, type RecentPostMetadata } from "../evidence.ts";
 import { assessCreator, likeGate as j02LikeGate } from "../policy.ts";
+import { inferenceRefusals } from "./inferenceScreen.ts";
 import {
-  type AudienceEvidence, type ContextInput, type Feature, type LikeGate, type MetricObservation,
+  type AudienceEvidence, type ContextInput, type Feature, type LikeGate, type MetricObservation, type SampledFramePolicy,
   type NextAction, type ObservedInterval, type VideoEvidenceRecord, type Viewing, type ViewingInput, type ViewingStatus,
 } from "./schema.ts";
 
@@ -102,6 +103,22 @@ export function narratedWithinCoverage(viewing: Viewing | null, feature: Pick<Fe
   return modality !== null && spansOf(viewing.observed_intervals, modality).some((s) => s.start <= at && at <= s.end);
 }
 
+/**
+ * Whether a sampled-frame review may count as complete. With no owner policy, or `creditAsComplete: false`, it never does.
+ * With credit enabled it needs at least `minFrames` distinct frames, a known duration, a frame span of at least
+ * `minCoverageRatio` of the clip, and no interruption. It is still labelled sampled, never continuous.
+ */
+export function sampledFrameCredit(viewing: Viewing, policy: SampledFramePolicy | null): { credit: boolean; reason: string } {
+  if (viewing.method !== "sampled_frames") return { credit: false, reason: "NOT_SAMPLED_FRAMES" };
+  if (!policy) return { credit: false, reason: "SAMPLED_FRAME_POLICY_UNSET" };
+  if (!policy.creditAsComplete) return { credit: false, reason: "SAMPLED_FRAMES_NOT_CREDITED" };
+  const frames = [...new Set(viewing.observed_intervals.filter((i) => i.modality === "visual_frame").map((i) => i.start_seconds))].sort((a, b) => a - b);
+  const span = frames.length ? frames.at(-1)! - frames[0]! : 0;
+  if (viewing.interruption_reason || frames.length < policy.minFrames || viewing.duration_seconds === null || span / viewing.duration_seconds < policy.minCoverageRatio)
+    return { credit: false, reason: "SAMPLED_FRAMES_BELOW_MINIMUM" };
+  return { credit: true, reason: "SAMPLED_FRAMES_MEET_POLICY" };
+}
+
 /* ---------- Lifestyle taxonomy (J20-07) ---------- */
 
 const LIFESTYLE = new Set(["grwm", "workday", "organization", "travel_purse", "practical_product_use"]);
@@ -125,13 +142,13 @@ export function audienceProofState(evidence: AudienceEvidence): { accepted: bool
 /* ---------- Per-record next action ---------- */
 
 const CLAIM_TOPICS_FOR_HUMAN = new Set(["compatibility", "medical", "outcome"]);
-export function recordNextAction(record: Pick<VideoEvidenceRecord, "source" | "like_gate" | "deep_review" | "viewing" | "claims" | "limitations">): NextAction {
+export function recordNextAction(record: Pick<VideoEvidenceRecord, "source" | "like_gate" | "deep_review" | "viewing" | "claims" | "limitations" | "review_policy">): NextAction {
   if (record.source.access_state === "removed") return "source_unavailable";
   if (record.source.access_state === "changed") return "needs_playback";
   if (record.like_gate.state === "pending") return "needs_metric_proof";
   if (!record.deep_review.eligible) return "review_complete"; // metadata-only or excluded: nothing further to watch
   const v = record.viewing;
-  const reviewed = v && (isFullReview(v) || (v.status === "sampled_playback" && !v.interruption_reason));
+  const reviewed = v && (isFullReview(v) || (v.status === "sampled_playback" && sampledFrameCredit(v, record.review_policy.sampled_frame_policy).credit));
   if (!reviewed || record.limitations.includes("SHOWN_FEATURE_OUTSIDE_OBSERVED_RANGE")) return "needs_playback";
   // Uncertain compatibility/medical/outcome claims take the human exception path; the agent never resolves them.
   if (record.claims.some((c) => c.human_review.status === "pending" && (CLAIM_TOPICS_FOR_HUMAN.has(c.topic) || c.channel !== "shown"))) return "needs_claim_review";
@@ -147,7 +164,8 @@ function reviewOf(record: VideoEvidenceRecord, evidenceRef: string): EvidenceRev
     [{ atSec: c.video_timestamp, text: c.summary, method: c.method }]);
   const actions = record.features.filter((f) => f.feature_key === "handling_operation_use" && f.status === "observed" && f.channel === "shown" && shownWithinCoverage(v, f.video_timestamp!))
     .map((f) => ({ atSec: f.video_timestamp!, action: f.exact_observation!, meaningfulUse: f.brief_match === "matched" }));
-  const inferences = record.features.flatMap((f) => f.interpretation ? [f.interpretation.text] : []);
+  // Interpretations are screened at intake and on every stored version; screen again so nothing unscreened reaches J02.
+  const inferences = record.features.flatMap((f) => f.interpretation && !inferenceRefusals([f.interpretation.text]).length ? [f.interpretation.text] : []);
   const base = { reviewerRef: v?.reviewer, reviewedAt: v?.reviewed_at, inferences };
   if (!v || v.status === "not_opened" || !record.deep_review.eligible) {
     return { ...base, status: record.source.access_state === "removed" ? "blocked" : "unassessed", visualMethod: "unassessed", audioMethod: "unassessed",
@@ -158,9 +176,11 @@ function reviewOf(record: VideoEvidenceRecord, evidenceRef: string): EvidenceRev
     return { ...base, status: "partial", visualMethod: "unassessed", audioMethod, sampledPoints: [], watchedIntervals: [], observedActions: [], claims, sourceRef: null };
   if (v.method === "sampled_frames") {
     const points = [...new Set(v.observed_intervals.filter((i) => i.modality === "visual_frame").map((i) => i.start_seconds))];
-    const complete = !v.interruption_reason && record.next_action !== "needs_playback";
+    // Without an explicit owner policy, sampled frames stay partial and frame-only actions never count as meaningful use.
+    const credited = sampledFrameCredit(v, record.review_policy.sampled_frame_policy).credit;
+    const complete = credited && record.next_action !== "needs_playback";
     return { ...base, status: complete ? "complete" : "partial", visualMethod: "sampledFrames", audioMethod, heardIntervals,
-      sampledPoints: points, watchedIntervals: [], observedActions: actions, claims, sourceRef: complete ? evidenceRef : null };
+      sampledPoints: points, watchedIntervals: [], observedActions: credited ? actions : [], claims, sourceRef: complete ? evidenceRef : null };
   }
   const complete = isFullReview(v) && record.next_action !== "needs_playback";
   return { ...base, status: complete ? "complete" : "partial", visualMethod: "continuous", audioMethod, heardIntervals, sampledPoints: [],

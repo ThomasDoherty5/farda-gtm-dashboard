@@ -5,7 +5,7 @@ import { VideoEvidenceCollector, type VideoSourceReader } from "./collector.ts";
 import { VideoEvidenceLedger } from "./ledger.ts";
 import {
   SAMPLING_POLICY_VERSION, TAXONOMY_VERSION, type Feature, type J20Input, type MetricObservation, type ObservedInterval,
-  type PostMetadata, type PostReview, type ViewingInput,
+  type PostMetadata, type PostReview, type VideoEvidenceConfig, type ViewingInput,
 } from "./schema.ts";
 
 export const SYNTHETIC_J20_SCOPE = { workspaceId: "synthetic-workspace", accountId: "synthetic-account" };
@@ -114,11 +114,12 @@ export class ScriptedReader implements VideoSourceReader {
   }
 }
 
-export function syntheticService(path = ":memory:", start = Date.parse("2026-11-08T13:00:00.000Z")) {
+/** `config` defaults to an empty object, so the sampled-frame owner decision stays unset unless a test sets it. */
+export function syntheticService(path = ":memory:", start = Date.parse("2026-11-08T13:00:00.000Z"), config: VideoEvidenceConfig = {}) {
   let time = start;
   const store = new AgentStore(path, SYNTHETIC_J20_SCOPE);
   const ledger = new VideoEvidenceLedger(store, SYNTHETIC_J20_SCOPE, { now: () => time });
   const reader = new ScriptedReader();
-  const collector = new VideoEvidenceCollector(ledger, reader);
+  const collector = new VideoEvidenceCollector(ledger, reader, config);
   return { store, ledger, reader, collector, advance: (ms: number) => { time += ms; } };
 }

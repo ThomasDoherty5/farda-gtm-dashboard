@@ -10,6 +10,8 @@ import { syntheticBinding } from "../testFixtures.ts";
 import { decideClaim, recordKeyOf, type CollectStep } from "./collector.ts";
 import { toPostEvidence } from "./rules.ts";
 import { feature, likes, metadata, postRef, review, syntheticInput, syntheticService, viewings, SYNTHETIC_J20_SCOPE } from "./fixtures.testkit.ts";
+import { VideoEvidenceCollector } from "./collector.ts";
+import { videoEvidenceRecordSchema, type PostReview, type SampledFramePolicy } from "./schema.ts";
 import { VideoEvidenceLedger } from "./ledger.ts";
 import { AgentStore } from "../store.ts";
 
@@ -26,7 +28,7 @@ describe("J20-01 versioned records, identity, provenance and idempotency", () =>
     const record = s.ledger.latest(recordKeyOf(syntheticInput(1), postRef(1)))!;
     expect(record.keys).toMatchObject({ platform: "instagram", creator_source_id: "synthetic-creator-1", post_source_id: "SYNTH1", canonical_post_key: "instagram:SYNTH1", evidence_version: 1 });
     expect(record.source).toMatchObject({ route: "public_native_ui", permission_ref: "synthetic-permission-1", retrieved_at: "2026-11-08T12:00:00.000Z", evidence_refs: ["synthetic:post-read:1"] });
-    expect(record.review_policy).toEqual({ sampling_policy_version: "j20-sampling.2026-11-04.v1", taxonomy_version: "j20-lifestyle-taxonomy.v1", policy_version: "2026-11-04" });
+    expect(record.review_policy).toEqual({ sampling_policy_version: "j20-sampling.2026-11-04.v1", taxonomy_version: "j20-lifestyle-taxonomy.v1", policy_version: "2026-11-04", sampled_frame_policy: null });
     expect(record).toMatchObject({ schema_version: "farda.video-evidence.v1", collector_version: "j20-collector.v1" });
     expect(step.receipts[0]).toMatchObject({ version: 1, reused: false, recordedAt: "2026-11-08T13:00:00.000Z", evidenceRef: "instagram:SYNTH1:v1" });
     expect(step.output.evidenceRecordRefs).toEqual(["instagram:SYNTH1:v1"]);
@@ -82,7 +84,8 @@ describe("J20-01 versioned records, identity, provenance and idempotency", () =>
 describe("J20-02 review status and modality coverage through the collector", () => {
   it.each([
     ["complete", "complete_audio_visual", "review_complete"],
-    ["sampled", "sampled_playback", "review_complete"],
+    // With the sampled-frame owner decision unset, a sampled review is partial and needs playback.
+    ["sampled", "sampled_playback", "needs_playback"],
     ["captionOnly", "metadata_only", "needs_playback"],
     ["muted", "full_visual_only", "review_complete"],
     ["interrupted", "partial_playback", "needs_playback"],
@@ -173,13 +176,14 @@ describe("J20-03 source loss, login, MFA, removal, change and denied permission"
     const s = syntheticService();
     s.reader.observe(1).observe(2).observe(3);
     const first = await s.collector.collect(syntheticInput(3), { cursor: null, maxRecords: 2 });
-    expect(first).toMatchObject({ state: "checkpoint", recordCount: 2 });
+    expect(first).toMatchObject({ state: "checkpoint", recordCount: 2, receipts: [{ evidenceRef: "instagram:SYNTH1:v1" }, { evidenceRef: "instagram:SYNTH2:v1" }] });
     if (first.state !== "checkpoint") throw new Error("checkpoint");
     await expect(s.collector.collect(syntheticInput(2), { cursor: first.nextCursor, maxRecords: 2 })).rejects.toMatchObject({ code: "CHECKPOINT_INPUT_MISMATCH" });
     let step: CollectStep = first, steps = 1;
     while (step.state === "checkpoint") { step = await s.collector.collect(syntheticInput(3), { cursor: step.nextCursor, maxRecords: 2 }); steps++; }
     expect(step.state).toBe("completed");
-    expect(steps).toBe(3);
+    // The bound counts records: two gated posts (four source calls) fill the first step.
+    expect(steps).toBe(2);
     expect(s.store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_records").get()?.n).toBe(3);
   });
 });
@@ -366,5 +370,96 @@ describe("J20-12 source-linked packet fields", () => {
     expect(record).toMatchObject({ brief: { ref: "synthetic-brief-travel-case", version: "v1" }, source: { published_at: "2026-10-01T12:00:00.000Z" },
       like_gate: { state: "pass", raw_label: "201" }, viewing: { method: "continuous_native_playback", status: "complete_audio_visual", visual_coverage_percent: 100 },
       production_choices: [{ key: "framing", observation: "Top-down framing of the bag." }], comments: { declared_n: 2 } });
+  });
+});
+
+describe("Sampled-frame owner decision: no default, no packet credit until set", () => {
+  const oneFrame = (): PostReview => review({ ...viewings.sampled, observed_intervals: [{ start_seconds: 5, end_seconds: 5, modality: "visual_frame", evidence_ref: "synthetic:frame:5" }] },
+    { features: [feature("handling_operation_use", 5, "shown", "Places a fictional case in the tote.")] });
+  const run = async (rev: () => PostReview, policy?: SampledFramePolicy) => {
+    const s = syntheticService(":memory:", undefined, policy ? { sampledFramePolicy: policy } : {});
+    s.reader.observe(1, {}, rev()).observe(2, {}, rev()).observe(3, {}, rev());
+    return { s, step: completed(await s.collector.collect(syntheticInput(3), { cursor: null, maxRecords: 10 })) };
+  };
+  it("the one-frame repro earns no packet credit and no meaningful use while the policy is unset", async () => {
+    const { s, step } = await run(oneFrame);
+    expect(step.output.contentMixAssessment).toMatchObject({ packet: { status: "needsEvidence", qualifyingPosts: 0, meaningfulUsePosts: 0 } });
+    const record = s.ledger.latest(recordKeyOf(syntheticInput(3), postRef(1)))!;
+    expect(record).toMatchObject({ next_action: "needs_playback", review_policy: { sampled_frame_policy: null } });
+    expect(record.limitations).toEqual(expect.arrayContaining(["SAMPLED_FRAMES_NOT_CONTINUOUS", "SAMPLED_FRAME_POLICY_UNSET"]));
+    expect(toPostEvidence(record)!.review).toMatchObject({ status: "partial", visualMethod: "sampledFrames", observedActions: [], sourceRef: null });
+  });
+  it("creditAsComplete false keeps sampled reviews partial and uncredited", async () => {
+    const { step } = await run(() => review(viewings.sampled), { creditAsComplete: false });
+    expect(step.output.contentMixAssessment).toMatchObject({ packet: { status: "needsEvidence", qualifyingPosts: 0, meaningfulUsePosts: 0 } });
+    expect(step.output.limitations).toContain("SAMPLED_FRAMES_NOT_CREDITED");
+  });
+  it("an enabled policy enforces its frame and span minimums", async () => {
+    // One frame never meets a minimum of two or more frames.
+    expect((await run(oneFrame, { creditAsComplete: true, minFrames: 3, minCoverageRatio: 0.1 })).step.output.contentMixAssessment)
+      .toMatchObject({ packet: { status: "needsEvidence", qualifyingPosts: 0, meaningfulUsePosts: 0 } });
+    // Four frames spanning 20 of 30 seconds (0.67) miss a 0.8 span minimum and a five-frame minimum.
+    for (const policy of [{ creditAsComplete: true, minFrames: 4, minCoverageRatio: 0.8 }, { creditAsComplete: true, minFrames: 5, minCoverageRatio: 0.5 }] as const) {
+      const { step } = await run(() => review(viewings.sampled), policy);
+      expect(step.output.contentMixAssessment).toMatchObject({ packet: { qualifyingPosts: 0 } });
+      expect(step.output.limitations).toContain("SAMPLED_FRAMES_BELOW_MINIMUM");
+    }
+    const { s, step } = await run(() => review(viewings.sampled), { creditAsComplete: true, minFrames: 4, minCoverageRatio: 0.6 });
+    expect(step.output.contentMixAssessment).toMatchObject({ packet: { status: "packetComplete", qualifyingPosts: 3, meaningfulUsePosts: 3 } });
+    const record = s.ledger.latest(recordKeyOf(syntheticInput(3), postRef(1)))!;
+    expect(record.limitations).toEqual(expect.arrayContaining(["SAMPLED_FRAMES_NOT_CONTINUOUS", "SAMPLED_FRAMES_MEET_POLICY"]));
+    expect(toPostEvidence(record)!.review).toMatchObject({ status: "complete", visualMethod: "sampledFrames", watchedIntervals: [] });
+  });
+  it("refuses an invalid policy instead of defaulting", () => {
+    const s = syntheticService();
+    for (const policy of [{ creditAsComplete: true }, { creditAsComplete: true, minFrames: 1, minCoverageRatio: 0.5 }, { creditAsComplete: true, minFrames: 3, minCoverageRatio: 0 }])
+      expect(() => new VideoEvidenceCollector(s.ledger, s.reader, { sampledFramePolicy: policy as SampledFramePolicy })).toThrow("SAMPLED_FRAME_POLICY_INVALID");
+  });
+});
+
+describe("Free-text inference screen at intake", () => {
+  const PREGNANT = "Creator looks pregnant, about 35 years old, likely high income.";
+  const AUDIENCE = "Styling suggests an older, wealthy audience.";
+  const LABEL = "new moms over 40";
+  const nothingStored = (s: ReturnType<typeof syntheticService>) => {
+    expect(s.store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_records").get()?.n).toBe(0);
+    expect(s.store.database.prepare("SELECT COUNT(*) AS n FROM video_evidence_stages").get()?.n).toBe(s.reader.calls.includes("review:SYNTH1") ? 1 : 0);
+  };
+  it("refuses an interpretation that infers pregnancy, age and income, and never forwards it to J02", async () => {
+    const s = syntheticService();
+    const rev = review();
+    rev.features[1] = { ...rev.features[1]!, interpretation: { text: PREGNANT, reviewer: "synthetic-reviewer" } };
+    s.reader.observe(1, {}, rev);
+    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED", status: 422 });
+    nothingStored(s);
+  });
+  it("refuses a production-choice observation that infers an older, wealthy audience", async () => {
+    const s = syntheticService();
+    s.reader.observe(1, {}, review(viewings.complete, { production_choices: [{ key: "styling", video_timestamp: 0, observation: AUDIENCE, evidence_ref: "synthetic:production:styling" }] }));
+    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED" });
+    nothingStored(s);
+  });
+  it("refuses a context label naming a life-stage and age group before playback", async () => {
+    const s = syntheticService();
+    s.reader.observe(1, { context: { primary_bucket: "grwm", secondary_labels: [LABEL], excluded_topics: [], educator_or_credentialed: null, selection_reason: "ordinary_recent" } });
+    await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: "DEMOGRAPHIC_INFERENCE_REFUSED" });
+    expect(s.reader.calls).toEqual(["read:SYNTH1"]);
+    nothingStored(s);
+  });
+  it("screens claim summaries and exact observations too, and a stored version can never carry the text", async () => {
+    for (const rev of [
+      review(viewings.complete, { claims: [{ claim_id: "synthetic-claim", topic: "medical", video_timestamp: 9, channel: "narrated", method: "heard", summary: "Implies the creator has a health condition.", human_review: { status: "pending", reviewer: null, decided_at: null } }] }),
+      review(viewings.complete, { features: [feature("hook", 0, "shown", "Opens on an affluent kitchen, so viewers can afford it.")] }),
+    ]) {
+      const s = syntheticService();
+      s.reader.observe(1, {}, rev);
+      await expect(s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 })).rejects.toMatchObject({ code: expect.stringMatching(/INFERENCE_REFUSED$/) });
+    }
+    const s = syntheticService();
+    s.reader.observe(1);
+    completed(await s.collector.collect(syntheticInput(1), { cursor: null, maxRecords: 10 }));
+    const record = s.ledger.latest(recordKeyOf(syntheticInput(1), postRef(1)))!;
+    const tainted = { ...record, features: record.features.map((f) => f.interpretation ? { ...f, interpretation: { ...f.interpretation, text: AUDIENCE } } : f) };
+    expect(videoEvidenceRecordSchema.safeParse(tainted).success).toBe(false);
   });
 });
