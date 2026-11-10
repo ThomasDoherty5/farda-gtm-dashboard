@@ -37,7 +37,8 @@ Promotion records an approved immutable version. It does **not** change live ass
 A proposal's author states an evidence basis: a reference, a version, a window, source kinds, counts and limits. The counts are only a claim. The server checks them through a configured `basisResolver`, which reads the authoritative review records for the scope and window.
 
 - **No resolver configured.** Every evidence-policy proposal is held as `EVIDENCE_BASIS_UNVERIFIED`. It is not stored and never reaches J04.
-- **Observation not accepted.** The resolver's answer must match the scope, basis and window exactly. It must also be no older than 10 minutes and not dated in the future. Otherwise the proposal is held as unverified.
+- **Window still open.** The window's end must be at or before the proposal's creation time, by the injected clock. Otherwise the proposal is held as `EVIDENCE_WINDOW_NOT_CLOSED` before the resolver is called. An open or future window could gain records later, change the resolved counts and block approval for good.
+- **Observation not accepted.** The resolver must echo back the scope, basis, window and `sourceKinds`, and each must match exactly. The `sourceKinds` must be the same kinds in the same order. The observation must also be no older than 10 minutes and not dated in the future. Otherwise the proposal is held as unverified.
 - **Claim differs from the resolved counts.** The proposal is held as `EVIDENCE_BASIS_MISMATCH`.
 - **Sufficiency and the J04 gate.** Both use the resolved counts only.
 - **Reviewer disagreements.** This count is not resolved. It stays an unverified claim.
@@ -58,6 +59,7 @@ The resolver is an injected interface with no default. The existing review store
    - The gate's version is bound to the resolved counts, so changed counts hold the approval. Its validity ends 10 minutes after the observation, not at the proposal's expiry.
    - The gate does not represent a provider or creator permission.
    - For a rollback, the gate's source is the target version in this module's own immutable table.
+   - More than 10 minutes after the last observation, J04's `readApproval(...).current` can show the source gate as stale until a proof is resolved again. This is expected. The basis is re-verified whenever a decision is observed or a proof is resolved.
 
    J04 then requires a verified Slack decision with a Linear readback, founder authority, and a decider who is a different person from the proposer. The registry requires the J04 previewer to be the proposal's author.
 3. **Promote** (`promote`). This applies an approval and is the only way the head moves.
@@ -66,7 +68,7 @@ The resolver is an injected interface with no default. The existing review store
    - It then writes `evidence-policy.rev-N` with the approver's principal, person and receipt.
    - After the commit, it links the new version to the approval through J04's public `recordOutcomeLink`. The result reports `j04Outcome` as either `recorded` or `notRecorded` with a reason.
 
-   An observed approval alone changes nothing.
+   An observed approval alone changes nothing. If `promote` returns `j04Outcome: notRecorded`, the version is promoted, but the caller must replay `promote` with the same idempotency key to link the outcome. No background sweep retries it.
 4. **Reject or withdraw** (`recordDecision`). This records a verified J04 `rejected` or `canceled` receipt against the proposal, with the named decider. Only the approval's head manifest version counts. A decision on an older version is refused as `STALE_DECISION`, so an earlier rejection cannot override a later approval.
 5. **Expire** (`expireDue`, or inside `promote`). This records an expiry once `expiresAt` passes. A proposal whose base is no longer the head reads as `stale` and cannot be promoted.
 6. **Roll back** (`proposeRollback`). A rollback is an ordinary proposal: its after-values are an earlier version's config, and it goes through the same approval. The new version's config equals the target's. All earlier versions remain readable.

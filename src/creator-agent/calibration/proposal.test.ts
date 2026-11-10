@@ -150,15 +150,30 @@ describe("the evidence basis is verified by a server-configured resolver, never 
 
   it.each([
     ["outage", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.fail = true; }],
-    ["another scope", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ ...q, sourceKinds: undefined, scope: { workspaceId: "synthetic-other", accountId: "synthetic-account" }, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
-    ["another basis", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: "synthetic:other-basis", basisVersion: q.basisVersion, window: q.window, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
-    ["a stale observation", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW - 11 * 60_000).toISOString() }); }],
-    ["a future observation", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW + 1).toISOString() }); }],
+    ["another scope", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ ...q, scope: { workspaceId: "synthetic-other", accountId: "synthetic-account" }, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
+    ["another basis", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: "synthetic:other-basis", basisVersion: q.basisVersion, window: q.window, sourceKinds: q.sourceKinds, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
+    ["a stale observation", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, sourceKinds: q.sourceKinds, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW - 11 * 60_000).toISOString() }); }],
+    ["different source kinds", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, sourceKinds: ["completedPostReviews"], reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
+    ["source kinds in another order", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, sourceKinds: [...q.sourceKinds].reverse(), reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
+    ["no source kinds", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW).toISOString() }); }],
+    ["a future observation", (b: ReturnType<typeof syntheticBasisResolver>) => { b.state.override = q => ({ scope: q.scope, basisRef: q.basisRef, basisVersion: q.basisVersion, window: q.window, sourceKinds: q.sourceKinds, reviewedPackets: { state: "known", value: 24 }, distinctCreators: { state: "known", value: 12 }, observedAt: new Date(NOW + 1).toISOString() }); }],
   ])("holds the proposal when the resolver reports %s", async (_name, setup) => {
     const { repo, db, basis } = repository();
     setup(basis);
     expect(await repo.createProposal(packetChangeInput(NOW), actor, "resolver-case")).toMatchObject({ status: "blocked", reasonCodes: ["EVIDENCE_BASIS_UNVERIFIED"] });
     expect(count(db)).toBe(0);
+  });
+
+  it("holds a basis whose window has not closed at creation, without asking the resolver", async () => {
+    const { repo, db, basis } = repository();
+    for (const to of [new Date(NOW + 1).toISOString(), "2027-01-01T00:00:00.000Z"]) {
+      const outcome = await repo.createProposal(packetChangeInput(NOW, { evidenceBasis: syntheticBasis({ window: { from: "2026-10-01T00:00:00.000Z", to } }) }), actor, `open-${to}`.replace(/[^A-Za-z0-9.-]/g, "-"));
+      expect(outcome).toMatchObject({ status: "blocked", reasonCodes: ["EVIDENCE_WINDOW_NOT_CLOSED"] });
+    }
+    expect(basis.state.calls).toBe(0);
+    const closed = await repo.createProposal(packetChangeInput(NOW, { evidenceBasis: syntheticBasis({ window: { from: "2026-10-01T00:00:00.000Z", to: new Date(NOW).toISOString() } }) }), actor, "closed-at-now");
+    expect(closed.status).toBe("proposed");
+    expect(count(db)).toBe(1);
   });
 
   it("stores the resolved counts and their observation time on the proposal", async () => {

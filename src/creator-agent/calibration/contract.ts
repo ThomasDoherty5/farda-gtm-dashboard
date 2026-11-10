@@ -99,11 +99,12 @@ export type KnownOrUnknown = z.infer<typeof knownOrUnknown>;
  * What the proposal is based on and where it stops. Only reviewed evidence records are an accepted basis.
  * There is deliberately no field for audience demographics, health or diagnosis, or sales outcomes.
  */
+const sourceKindsSchema = z.array(z.enum(["completedPostReviews", "reviewerAnnotations", "gateOutcomes"])).min(1).max(3);
 export const evidenceBasisSchema = z.object({
   kind: z.literal("reviewedEvidence"),
   basisRef: refSchema, basisVersion: refSchema,
   window: z.object({ from: instantSchema, to: instantSchema }).strict(),
-  sourceKinds: z.array(z.enum(["completedPostReviews", "reviewerAnnotations", "gateOutcomes"])).min(1).max(3),
+  sourceKinds: sourceKindsSchema,
   reviewedPackets: knownOrUnknown, distinctCreators: knownOrUnknown, reviewerDisagreements: knownOrUnknown,
   /** Mature retained-sales cohorts are not available, so this mode can never claim them. */
   retainedSalesCohorts: z.object({ state: z.literal("unavailable"), reason: text }).strict(),
@@ -118,6 +119,8 @@ export const resolvedBasisSchema = z.object({
   scope: z.object({ workspaceId: z.string().min(1), accountId: z.string().min(1) }).strict(),
   basisRef: refSchema, basisVersion: refSchema,
   window: z.object({ from: instantSchema, to: instantSchema }).strict(),
+  /** Echoed back by the resolver; it must equal the requested kinds exactly. */
+  sourceKinds: sourceKindsSchema,
   reviewedPackets: knownOrUnknown, distinctCreators: knownOrUnknown,
   observedAt: instantSchema,
 }).strict();

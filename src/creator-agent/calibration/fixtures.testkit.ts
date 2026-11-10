@@ -55,7 +55,7 @@ export function syntheticBasisResolver(now: () => number) {
     state.calls++;
     if (state.fail) throw new Error("Synthetic resolver outage");
     if (state.override) return state.override(query);
-    return { scope: query.scope, basisRef: query.basisRef, basisVersion: query.basisVersion, window: query.window,
+    return { scope: query.scope, basisRef: query.basisRef, basisVersion: query.basisVersion, window: query.window, sourceKinds: query.sourceKinds,
       reviewedPackets: state.reviewedPackets, distinctCreators: state.distinctCreators, observedAt: new Date(now()).toISOString() };
   };
   return { state, resolve };

@@ -149,6 +149,9 @@ export class CalibrationRepository {
       basis.basisRef, basis.basisVersion, ...basis.limits, basis.retainedSalesCohorts.reason, ...unknownReasons, ...candidateTexts(input.candidateSet)]);
     if (refusals.length) return this.finish(key, input, { status: "refused", mode: CALIBRATION_MODE, reasonCodes: refusals, detail: ["Proposals may not rest on or introduce demographic, diagnosis or sales inference."] });
     // Resolver-dependent reports are returned, not cached, so a retry can succeed once the source verifies.
+    // A window still open at creation could gain records later, changing the resolved counts and blocking approval for good.
+    if (Date.parse(basis.window.to) > this.now()) return { status: "blocked", mode: CALIBRATION_MODE, reasonCodes: ["EVIDENCE_WINDOW_NOT_CLOSED"], numericModel: "unchanged",
+      detail: ["The evidence window must end at or before the proposal is created."] };
     const resolved = await this.resolveBasis(basis);
     if (!resolved) return unverified(this.resolver ? "The configured resolver did not verify this evidence basis." : "No evidence-basis resolver is configured.");
     if (digest(countsOf(basis)) !== digest(countsOf(resolved)))
@@ -170,6 +173,7 @@ export class CalibrationRepository {
     const parsed = resolvedBasisSchema.safeParse(raw); if (!parsed.success) return null;
     const value = parsed.data, now = this.now(), observed = Date.parse(value.observedAt);
     if (value.scope.workspaceId !== this.scope.workspaceId || value.scope.accountId !== this.scope.accountId || value.basisRef !== basis.basisRef || value.basisVersion !== basis.basisVersion
+      || digest(value.sourceKinds) !== digest(basis.sourceKinds)
       || Date.parse(value.window.from) !== Date.parse(basis.window.from) || Date.parse(value.window.to) !== Date.parse(basis.window.to)
       || observed > now || now - observed >= BASIS_OBSERVATION_TTL_MS) return null;
     return value;
