@@ -6,20 +6,45 @@
 
 The real posting clock will come from the Notion collaboration source. Until that source is connected, the module accepts only a posting clock event marked `origin: "synthetic"`, and synthetic delivery evidence that reuses the collaboration workflow's publication shape. Tests use synthetic identities only.
 
+## Conflict with the collaboration workflow's reminder rule
+
+The two reminder rules disagree, and the owner has to decide which one wins.
+
+- **Collaboration workflow.** `intentHold` in `collaborationWorkflowSchema.ts` accepts a `reminder` proposal only after the grace period has elapsed. Before that it returns `POSTING_GRACE_NOT_ELAPSED`.
+- **This module (`preDue`).** Creator reminders run from two days before the due day through the grace period. After grace, the collaboration goes to human review with `expired` as the suggested closure.
+
+Neither path can reach the other's window. The workflow never reminds a creator before the deadline, and this module under `preDue` never reminds one after grace.
+
+So the module has a required `reminderPolicy` setting with no default:
+
+| Setting | Before grace ends | After grace |
+| -- | -- | -- |
+| unset | Creator reminders refused (`REMINDER_POLICY_UNSET`) | Refused |
+| `preDue` | Reminders at `due-minus-2` and `within-grace` | Human review only |
+| `postGraceOnly` | No reminder | One `post-grace` creator reminder, matching the workflow's rule, plus human review |
+
 ## Reminders
 
 `decideReminder` is pure. It counts the current day in the configured timezone and compares it with the due day.
 
-| Local day | Decision |
-| -- | -- |
-| More than two days before the due day | Wait |
-| From two days before up to the due day | Creator reminder, step `due-minus-2` |
-| After the due day, within the grace days | Creator reminder, step `within-grace` |
-| After the grace days | Human review, step `past-grace`, with `expired` as the suggested closure |
+A missing due date, grace period, obligation or source timezone goes to human review. So does a source timezone that differs from the configured one. A missing source timezone is never filled in from configuration. Voluntary posting has no reminder.
 
-A missing due date, grace period or obligation goes to human review. So does a timezone on the source that differs from the configured one. None of these produce a guessed deadline. Voluntary posting has no reminder. Creator reminders also need clear outreach eligibility and no unreconciled earlier send.
+A creator reminder also needs clear outreach eligibility and no earlier creator message that is dispatched, unreconciled or in an open conflict. The human-review escalation past grace is still proposed when a reminder is held.
 
-The due-date version is a hash of the due day, grace and timezone. A new source revision with the same date is the same version, and a changed date is a new one. The repository keeps at most one intent per collaboration, step and due-date version, enforced by a unique index. A proposed reminder that was never handed off is superseded by a later step, a newer due-date version or a closure.
+The due-date version is a hash of the due day, grace and timezone. A new source revision with the same date is the same version, and a changed date is a new one. A unique index allows at most one intent per collaboration, step and due-date version.
+
+## Withdrawn intents
+
+An intent is withdrawn (`superseded`) in these cases:
+
+- Closure withdraws every intent that hasn't been sent or become uncertain.
+- A changed due date withdraws intents from older versions.
+- Outreach suppression withdraws creator messages.
+- A later step withdraws only proposals that were never handed to J04.
+
+Withdrawing an intent that J04 is already approving or running doesn't cancel it there. That case opens a blocking `withdrawnWhileInJ04` conflict, and an operator must cancel the approval or run in J04 and then resolve the conflict.
+
+Any outcome that later arrives for a withdrawn intent is stored as a `lateOutcome` conflict, and the intent stays superseded. This includes a real `sent` receipt, which stays in the audit log. Every conflict except a late `notSent` blocks new creator reminders for the collaboration until it is resolved.
 
 ## Content review
 
@@ -27,11 +52,26 @@ A review decision names the exact content version. A decision on any version exc
 
 ## Rights
 
-`evaluatePaidReuse` delegates eligibility to the asset store's `evaluateAssetUse`, so missing (`J09_RIGHTS_UNAVAILABLE`), expired, revoked, pending, stale or unknown rights block paid reuse in the same way. It adds a warning window ahead of the rights end date. The repository records at most one expiry warning per asset version, rights version and end date.
+`evaluatePaidReuse` delegates eligibility to the asset store's `evaluateAssetUse`. Missing (`J09_RIGHTS_UNAVAILABLE`), expired, revoked, pending, stale or unknown rights therefore block paid reuse in the same way.
+
+The status is the first non-granted one along the chain, checking the asset first and then each ancestor. The expiry warning uses the earliest end date anywhere in the chain. The repository records at most one warning per asset version, rights version and end date, and dates it in the configured timezone.
 
 ## Fees and closure
 
-A creator reply that asks for a fee, or proposed terms that fail the commission-only rule, is a terms mismatch for human review. Nothing is auto-accepted. The closure reasons are posted and verified, declined, expired, terms mismatch, rights unavailable and cancelled. Each one needs its own evidence, and a collaboration closes once.
+A creator reply that asks for a fee, or proposed terms that fail the commission-only rule (`evaluateTerms`), is a terms mismatch for human review. Nothing is auto-accepted.
+
+A collaboration closes once. `close()` parses its evidence and recomputes terms and rights itself, so it never trusts a supplied verdict. Closing as rights unavailable needs a definite `missing`, `expired` or `revoked` status. Unknown or stale rights don't qualify.
+
+The collaboration workflow's `close` outcomes are coarser than these reasons. The adapter keeps the exact reason in the proposal's reason text.
+
+| Closure reason | Evidence | `workflowIntentSchema.outcome` |
+| -- | -- | -- |
+| `posted-verified` | Visible native publication of the approved content version | `completed` |
+| `declined` | Source reference | `declined` |
+| `expired` | Posting clock past grace | `no-response` |
+| `terms-mismatch` | Reply or terms, re-evaluated | `canceled` |
+| `rights-unavailable` | Rights chain, re-evaluated as missing, expired or revoked | `canceled` |
+| `cancelled` | Source reference | `canceled` |
 
 ## Storage
 
@@ -41,9 +81,11 @@ The repository shares the scoped agent SQLite connection, which is bound through
 
 `actionAdapter.ts` produces envelopes in the shapes of the actions service's `foundationActionSchema` and of the collaboration workflow's `workflowIntentSchema`.
 
-- A creator reminder becomes a `previewAction` that J04 binds to the exact intent version. Any send happens only through J04 approval and the existing runner.
-- Approved, queued or running is not sent. Only a succeeded run with a receipt is recorded as sent.
-- An uncertain send is never replayed. A dispatched run is reconciled with `reconcileRun` `lookup`, and an uncertain approval request with `reconcileApproval`. Without a run or approval reference, the intent is held for an operator. Leaving the uncertain state needs a terminal receipt for the same run.
-- Human review items and closures become `human-handoff` and `close` workflow intents. The workflow's closure outcomes are coarser than ours, so the exact closure reason is kept in the reason text.
+- **Creator reminders.** Each becomes a `previewAction` that J04 binds to the exact intent version. Any send happens only through J04 approval and the existing runner.
+- **Approved is not sent.** Approved, queued or running is never recorded as sent. Only a succeeded run with a receipt is recorded as sent.
+- **Held approvals.** A blocked answer, or a denial that applied nothing, becomes `approvalHeld`, separate from a recorded approval.
+- **Uncertain sends.** These are never replayed. A dispatched run is reconciled with `reconcileRun` `lookup`, and an uncertain approval request with `reconcileApproval`. With neither a run nor an approval reference, the intent is held for an operator.
+- **Run binding.** The first signed run version stays the binding. Leaving the uncertain state needs a terminal receipt for the same run and version.
+- **Workflow intents.** Human review items become `human-handoff`, the `postGraceOnly` reminder becomes `reminder`, and closures become `close` with the mapping above.
 
 The action kind `creatorFollowUpReminder` is not registered. Registration, the real posting clock and message sending are left to their owners.
