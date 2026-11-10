@@ -27,7 +27,7 @@ async function capture(page:Page,info:TestInfo,name:string) {
   await page.setViewportSize({width:1440,height:1000});
 }
 
-/** Read-only viewport captures cover the entire real modal scroll area at both widths. */
+/** Read-only captures cover vertical content and every column of the source-order table. */
 async function captureDialog(page:Page,info:TestInfo,name:string,title:string) {
   const dialog=page.getByRole("dialog",{name:title,exact:true});
   for(const width of [1440,390]) {
@@ -38,10 +38,25 @@ async function captureDialog(page:Page,info:TestInfo,name:string,title:string) {
     const extent=await dialog.evaluate(e=>({height:e.scrollHeight,viewport:e.clientHeight}));
     const step=Math.max(1,extent.viewport-40),last=Math.max(0,extent.height-extent.viewport);
     const offsets=[...new Set([...Array.from({length:Math.ceil(last/step)},(_,i)=>i*step),last])];
-    for(let i=0;i<offsets.length;i++) {
-      await dialog.evaluate((e,top)=>{e.scrollTop=top;},offsets[i]!);
-      await page.screenshot({path:info.outputPath(`overview-launch-${name}-${width}-scroll-${i}.png`)});
+    const table=dialog.getByRole("region",{name:"Unmatched source orders",exact:true});
+    const horizontal=await table.count() ? await table.evaluate(e=>({last:Math.max(0,e.scrollWidth-e.clientWidth),step:Math.max(1,e.clientWidth-40)})) : {last:0,step:1};
+    const lefts=[...new Set([...Array.from({length:Math.ceil(horizontal.last/horizontal.step)},(_,i)=>i*horizontal.step),horizontal.last])];
+    const pager=dialog.getByRole("group",{name:"Source review pages",exact:true});
+    if(await pager.count()) {
+      for(const button of await pager.getByRole("button").all()) {
+        const box=await button.boundingBox();expect(box).not.toBeNull();expect(box!.height).toBeLessThan(100);
+      }
+      const reason=await pager.getByText("First supplied review page",{exact:true}).boundingBox();
+      expect(reason).not.toBeNull();expect(reason!.width).toBeGreaterThan(120);expect(reason!.height).toBeLessThan(80);
     }
+    for(let x=0;x<lefts.length;x++) {
+      if(await table.count())await table.evaluate((e,left)=>{e.scrollLeft=left;},lefts[x]!);
+      for(let i=0;i<offsets.length;i++) {
+        await dialog.evaluate((e,top)=>{e.scrollTop=top;},offsets[i]!);
+        await page.screenshot({path:info.outputPath(`overview-launch-${name}-${width}-scroll-${i}${x?`-x-${x}`:""}.png`)});
+      }
+    }
+    if(horizontal.last>0)expect(await table.evaluate(e=>e.scrollLeft+e.clientWidth>=e.scrollWidth-1)).toBe(true);
     expect(await dialog.evaluate(e=>e.scrollTop+e.clientHeight>=e.scrollHeight-1)).toBe(true);
     await dialog.evaluate(e=>{e.scrollTop=0;});
   }

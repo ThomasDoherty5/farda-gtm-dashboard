@@ -92,7 +92,7 @@ function NativeUnattributedReview({ data }: { data: Attribution }) {
             <div><dt>Source as of / observed</dt><dd>{row.sourceAsOf ?? "N/A"} · {row.observedAt}</dd></div>
             <div><dt>Qualification</dt><dd>{row.provisional ? "Provisional source evidence" : "Current source evidence"}</dd></div>
           </dl></details>] }))} />
-      {last > 0 && <div className={styles.btnRow}><Button variant="secondary" disabledReason={current === 0 ? "First supplied review page" : undefined} onClick={() => setPage(current - 1)}>Previous review rows</Button><Button variant="secondary" disabledReason={current === last ? "Last supplied review page" : undefined} onClick={() => setPage(current + 1)}>Next review rows</Button></div>}
+      {last > 0 && <div className={styles.reviewPager} role="group" aria-label="Source review pages"><div><Button variant="secondary" disabledReason={current === 0 ? "First supplied review page" : undefined} onClick={() => setPage(current - 1)}>Previous review rows</Button></div><div><Button variant="secondary" disabledReason={current === last ? "Last supplied review page" : undefined} onClick={() => setPage(current + 1)}>Next review rows</Button></div></div>}
     </> : <p>{detail.total.state === "known" && detail.total.value === 0 ? "No orders need review in this complete source selection." : "Exact review rows are unavailable. No clean attribution result is inferred."}</p>}
   </section>;
 }
