@@ -1,11 +1,12 @@
 import { digest } from "../config.ts";
 import { evidencePacketSchema, type EvidencePacket, type PostEvidence } from "../evidence.ts";
-import { CalibrationError, candidateSetSchema, type CandidateComparison, type CandidateSetInput, type ComparisonReport, type EvidencePolicyConfig,
+import { CalibrationError, baselineEvidencePolicy, candidateSetSchema, type BaselineWeakening, type CandidateComparison, type CandidateSetInput, type ComparisonReport, type EvidencePolicyConfig,
   type GateResult, type GateState, type PolicyChange, type Recommendation } from "./contract.ts";
 
 /**
  * The content gates of `assessCreator`, parameterised by an evidence-policy config. At the baseline config the
- * gate ids, states and reasons equal `policy.ts` exactly; `calibration.conformance.test.ts` proves it.
+ * gate ids, states and reasons match `policy.ts` on the 10-packet synthetic boundary set in `conformance.test.ts`, which also
+ * fails if a baseline literal drifts from where `policy.ts` flips a gate.
  */
 export function likeGateAt(post: PostEvidence, config: EvidencePolicyConfig): GateState {
   return post.nativeLikes.status !== "known" || !post.nativeLikes.exact ? "unknown" : post.nativeLikes.value > config.likeGate.minNativeLikesExclusive ? "pass" : "fail";
@@ -52,6 +53,16 @@ const GATE_DRIVERS: Record<string, string[]> = {
   DEMO_FLOOR: ["likeGate.minNativeLikesExclusive", "criticalFloors.demonstrationStorytelling"],
 };
 
+const GATE_PATHS = ["likeGate.minNativeLikesExclusive", "packet.minIndependentPosts", "packet.minPublicationDates", "packet.minMeaningfulUsePosts",
+  "criticalFloors.routineFit", "criticalFloors.demonstrationStorytelling"] as const;
+/** Every gate the config sets below the launch baseline, whatever the proposal's own base version was. */
+export function baselineWeakenings(config: EvidencePolicyConfig): BaselineWeakening[] {
+  const baseline = baselineEvidencePolicy();
+  const read = (value: EvidencePolicyConfig, path: string) => path.split(".").reduce<unknown>((cursor, key) => (cursor as Record<string, unknown>)[key], value) as number;
+  return GATE_PATHS.flatMap(path => read(config, path) < read(baseline, path)
+    ? [{ path, baseline: read(baseline, path), proposed: read(config, path), disablesGate: read(config, path) === 0 }] : []);
+}
+
 /** Synthetic rows only: candidate identities must be visibly fictional so no creator data enters a proposal. */
 export function parseCandidateSet(raw: CandidateSetInput) {
   const parsed = candidateSetSchema.safeParse(raw);
@@ -81,12 +92,14 @@ export function compareConfigs(prior: EvidencePolicyConfig, proposed: EvidencePo
   });
   const transitions: Record<string, number> = {};
   for (const result of results) if (result.changed) transitions[`${result.prior}->${result.proposed}`] = (transitions[`${result.prior}->${result.proposed}`] ?? 0) + 1;
+  const weakensBaseline = baselineWeakenings(proposed);
   return {
+    weakensBaseline,
     candidateSet: { setRef: set.setRef, label: set.label, provenance: "synthetic", limit: set.limit, candidateCount: set.candidates.length, hash: digest(raw) },
     scope: "Synthetic, explicitly limited candidate set. Not a population estimate, not creator data, and not a sales or demographic inference.",
     numericScoring: "unchanged-not-evaluated",
     results,
     anchorChanges: changes.filter(change => change.path.startsWith("anchors.")).map(change => ({ path: change.path, reviewImpact: "humanReReviewRequired" as const })),
-    summary: { changed: results.filter(r => r.changed).length, unchanged: results.filter(r => !r.changed).length, transitions },
+    summary: { changed: results.filter(r => r.changed).length, unchanged: results.filter(r => !r.changed).length, transitions, weakensBaseline: weakensBaseline.length },
   };
 }

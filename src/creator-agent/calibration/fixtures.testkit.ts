@@ -3,7 +3,7 @@ import { evidencePacketSchema, type EvidencePacket } from "../evidence.ts";
 import { syntheticPacket, syntheticPost } from "../testFixtures.ts";
 import { approvalFixture, approvalTestScope } from "../approvals/fixtures.testkit.ts";
 import { ApprovalRepository, approvalDispatchBinding } from "../approvals/repository.ts";
-import { CALIBRATION_ACTION_KIND, type CandidateSetInput, type EvidenceBasis, type ProposalInput } from "./contract.ts";
+import { CALIBRATION_ACTION_KIND, type CandidateSetInput, type EvidenceBasis, type EvidenceBasisQuery, type EvidenceBasisResolver, type KnownOrUnknown, type ProposalInput } from "./contract.ts";
 import { CalibrationRepository, type CalibrationApprovalAuthority } from "./repository.ts";
 import { createCalibrationApprovalRegistry } from "./approvalBridge.ts";
 import type { ProposalOutcome } from "./repository.ts";
@@ -44,6 +44,23 @@ export function syntheticBasis(overrides: Partial<EvidenceBasis> = {}): Evidence
     limits: ["Fictional review counts.", "Packet gates only; no outcome or score evidence."], ...overrides };
 }
 
+/**
+ * Fictional server-side resolver. It answers for the synthetic basis only and reports whatever counts the test sets,
+ * observed at the injected clock. Deployment must supply a resolver over authoritative review records.
+ */
+export function syntheticBasisResolver(now: () => number) {
+  const state = { reviewedPackets: { state: "known", value: 24 } as KnownOrUnknown, distinctCreators: { state: "known", value: 12 } as KnownOrUnknown,
+    fail: false, override: null as null | ((query: EvidenceBasisQuery) => unknown), calls: 0 };
+  const resolve: EvidenceBasisResolver = async query => {
+    state.calls++;
+    if (state.fail) throw new Error("Synthetic resolver outage");
+    if (state.override) return state.override(query);
+    return { scope: query.scope, basisRef: query.basisRef, basisVersion: query.basisVersion, window: query.window,
+      reviewedPackets: state.reviewedPackets, distinctCreators: state.distinctCreators, observedAt: new Date(now()).toISOString() };
+  };
+  return { state, resolve };
+}
+
 export function packetChangeInput(now: number, overrides: Partial<ProposalInput> = {}): ProposalInput {
   return { mode: "evidencePolicy", baseVersionRef: "evidence-policy.2026-11-04.launch-v1",
     rationale: "Synthetic reviewers found two independent on-brief posts on two dates sufficient for review.",
@@ -52,7 +69,7 @@ export function packetChangeInput(now: number, overrides: Partial<ProposalInput>
 }
 
 export function proposed(outcome: ProposalOutcome) {
-  if (outcome.status !== "proposed") throw new Error(`Expected a stored proposal, got ${outcome.status}: ${outcome.reasonCodes.join(",")}`);
+  if (outcome.status !== "proposed") throw new Error(`Expected a stored proposal, got ${outcome.status}: ${outcome.reasonCodes.join(",")} ${outcome.detail.join(" ")}`);
   return outcome.read.proposal;
 }
 
@@ -60,14 +77,17 @@ export function proposed(outcome: ProposalOutcome) {
 export function calibrationFixture() {
   const a = approvalFixture();
   let approvals: ApprovalRepository | null = null;
+  const basis = syntheticBasisResolver(() => a.state.now);
   const authority: CalibrationApprovalAuthority = {
+    database: a.db,
+    recordOutcomeLink: input => approvals!.recordOutcomeLink(input),
     resolveCurrentProof: binding => approvals!.resolveCurrentProof(binding),
     assertCurrentProof: (proof, now) => approvals!.assertCurrentProof(proof, now),
     readApproval: (ref, version) => approvals!.readApproval(ref, version),
   };
-  const calibration = new CalibrationRepository(a.db, { scope: approvalTestScope, now: () => a.state.now, approvals: authority });
+  const calibration = new CalibrationRepository(a.db, { scope: approvalTestScope, now: () => a.state.now, approvals: authority, basisResolver: basis.resolve });
   const registry = createCalibrationApprovalRegistry(calibration, { policyVersion: a.policy.version, linearIssueRef: "synthetic:owning-issue" }, () => a.state.now);
-  approvals = new ApprovalRepository(a.db, { ...a.options, registry });
+  approvals = new ApprovalRepository(a.db, { ...a.options, registry, verifyOutcome: input => calibration.verifyOutcome(input) });
   let events = 0;
   /** Proposer previews and requests the decision; a distinct human decides in the fictional Slack source. */
   async function decide(proposal: { proposalRef: string; proposalHash: string }, decision: "approved" | "rejected" | "canceled" = "approved",
@@ -79,5 +99,5 @@ export function calibrationFixture() {
     const read = await approvals!.observeDecision(event.locator, { ingressRef: "synthetic:authenticated-ingress" });
     return { read, binding: approvalDispatchBinding(read.manifest, proposal.proposalRef) };
   }
-  return { a, calibration, approvals: approvals!, registry, decide };
+  return { a, calibration, approvals: approvals!, registry, decide, basis, authority };
 }

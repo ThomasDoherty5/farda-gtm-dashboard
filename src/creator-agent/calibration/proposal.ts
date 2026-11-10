@@ -26,14 +26,16 @@ export function diffConfigs(from: EvidencePolicyConfig, to: EvidencePolicyConfig
 }
 
 /**
- * Explicit sensitive-inference guard for author-supplied text (rationales, limits and changed anchors). It refuses wording
- * that names a health/diagnosis, protected-demographic or sales-outcome inference. It is a floor, not a classifier:
- * the named human approver still owns the review. Unchanged baseline anchors are not re-scanned.
+ * Sensitive-inference guard over every free-text and reference field a person supplies in a proposal: rationales,
+ * changed anchor text, basis limits and references, rollback reasons and limits, and candidate-set and candidate labels
+ * and references. It refuses wording that names a health or diagnosis, protected-demographic or sales-outcome inference.
+ * It is a floor, not a classifier: the named human approver still owns the review. Unchanged baseline anchors, which
+ * name authorized aggregate audience dimensions, are not re-scanned.
  */
 const PROHIBITED_INFERENCE: { code: string; pattern: RegExp }[] = [
   { code: "DIAGNOSIS_INFERENCE_REFUSED", pattern: /\b(diagnos\w*|medical condition|health condition|disorder|illness|disabilit\w*|neurodivergen\w*|pregnan\w*)\b/i },
-  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\b(ethnic\w*|race|racial|religio\w*|sexual orientation|gender|sex|nationality|immigration status|age group|years old|apparent age|looks? (young|old|older|younger))\b/i },
-  { code: "SALES_INFERENCE_REFUSED", pattern: /\b(predicted sales|expected sales|sales (lift|uplift|forecast|potential)|revenue|conversion rate|gmv|purchase intent|likely to (buy|purchase|convert))\b/i },
+  { code: "DEMOGRAPHIC_INFERENCE_REFUSED", pattern: /\b(ethnic\w*|race|racial|religio\w*|sexual orientation|gender|sex|nationality|immigration status|age group|years old|apparent age|looks? (young|old|older|younger))\b|\baged?\s*(over|under)?\s*\d|\b\d+\s*-\s*\d+\s*(years|yrs|year-olds)\b/i },
+  { code: "SALES_INFERENCE_REFUSED", pattern: /\b(predicted sales|expected sales|sales (lift|uplift|forecast|potential)|revenue|conversion rate|gmv|purchase intent|likely to (buy|purchase|convert)|buying power|spending power)\b/i },
 ];
 export function inferenceRefusals(texts: string[]): string[] {
   const codes = new Set<string>();

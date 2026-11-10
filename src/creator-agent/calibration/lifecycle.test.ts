@@ -4,6 +4,7 @@ import { digest } from "../config.ts";
 import { BASELINE_VERSION_REF, baselineEvidencePolicy } from "./contract.ts";
 import { CalibrationRepository } from "./repository.ts";
 import { approvalTestScope } from "../approvals/fixtures.testkit.ts";
+import { approvalDispatchBinding } from "../approvals/repository.ts";
 import { calibrationFixture, packetChangeInput, proposed, syntheticCandidateSet } from "./fixtures.testkit.ts";
 
 const closers: (() => void)[] = [];
@@ -14,7 +15,7 @@ const requester = { principalRef: "synthetic:requester" };
 describe("promotion requires a named human approval through J04 and never mutates the baseline", () => {
   it("does not auto-promote: an observed approval leaves the head on the baseline until promote is called", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "p1"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "p1"));
     const { read, binding } = await f.decide(proposal);
     expect(read.current.state).toBe("approved");
     expect(read.manifest.draft).toMatchObject({ phase: "policyChange", effects: { changesPolicy: true, spendsMoney: false, sendsCreator: false }, payloadHash: proposal.proposalHash });
@@ -23,7 +24,9 @@ describe("promotion requires a named human approval through J04 and never mutate
 
     const receipt = await f.calibration.promote({ proposalRef: proposal.proposalRef, approval: binding }, "promote-1");
     expect(receipt).toMatchObject({ status: "promoted", versionRef: "evidence-policy.rev-2", seq: 2, parentVersionRef: BASELINE_VERSION_REF, configHash: proposal.proposedConfigHash,
-      approval: { principalRef: "synthetic:founder", personRef: "synthetic:founder", approvalRef: read.manifest.approvalRef } });
+      approval: { principalRef: "synthetic:founder", personRef: "synthetic:founder", approvalRef: read.manifest.approvalRef },
+      j04Outcome: { state: "recorded", outcomeRef: "calibration:version:evidence-policy.rev-2" } });
+    expect(f.approvals.readApproval(read.manifest.approvalRef)!.outcomeRefs).toEqual(["calibration:version:evidence-policy.rev-2"]);
     const head = f.calibration.head();
     expect(head.config.packet.minIndependentPosts).toBe(2);
     expect(head.numericBindings).toEqual(f.calibration.version(BASELINE_VERSION_REF)!.numericBindings);
@@ -39,19 +42,19 @@ describe("promotion requires a named human approval through J04 and never mutate
 
   it("holds promotion without an approved decision, from a non-founder, or from the proposer approving their own change", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "p2"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "p2"));
     await expect(f.decide(proposal, "approved", "synthetic:reviewer")).rejects.toThrow("FOUNDER_REQUIRED");
-    const self = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Second fictional proposal for self-approval." }), { principalRef: "synthetic:founder" }, "p3"));
+    const self = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Second fictional proposal for self-approval." }), { principalRef: "synthetic:founder" }, "p3"));
     await expect(f.decide(self, "approved", "synthetic:founder", "synthetic:founder")).rejects.toThrow("SECOND_PERSON_REQUIRED");
-    const other = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Third fictional proposal previewed by someone else." }), requester, "p4"));
+    const other = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Third fictional proposal previewed by someone else." }), requester, "p4"));
     await expect(f.decide(other, "approved", "synthetic:founder", "synthetic:reviewer")).rejects.toThrow("PROPOSER_MISMATCH");
     expect(f.calibration.head().versionRef).toBe(BASELINE_VERSION_REF);
   });
 
   it("refuses a binding for a different proposal and an unconfigured approval authority", async () => {
     const f = fixture();
-    const first = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "pa"));
-    const second = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Another fictional proposal." }), requester, "pb"));
+    const first = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "pa"));
+    const second = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { rationale: "Another fictional proposal." }), requester, "pb"));
     const { binding } = await f.decide(first);
     await expect(f.calibration.promote({ proposalRef: second.proposalRef, approval: binding }, "wrong")).rejects.toThrow("APPROVAL_BINDING_MISMATCH");
     const unconfigured = new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now });
@@ -61,8 +64,8 @@ describe("promotion requires a named human approval through J04 and never mutate
 
   it("makes a sibling proposal stale once another promotion moves the head", async () => {
     const f = fixture();
-    const first = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "s1"));
-    const second = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { changes: [{ path: "criticalFloors.routineFit", before: 3, after: 4, rationale: "Fictional stricter floor." }] }), requester, "s2"));
+    const first = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "s1"));
+    const second = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { changes: [{ path: "criticalFloors.routineFit", before: 3, after: 4, rationale: "Fictional stricter floor." }] }), requester, "s2"));
     const a = await f.decide(first), b = await f.decide(second);
     await f.calibration.promote({ proposalRef: first.proposalRef, approval: a.binding }, "s1-promote");
     expect(f.calibration.readProposal(second.proposalRef)!.state).toBe("stale");
@@ -71,10 +74,89 @@ describe("promotion requires a named human approval through J04 and never mutate
   });
 });
 
+describe("the J04 source gate rests on a fresh resolver observation", () => {
+  it("binds the gate to the resolved counts with a short validity, not the proposal expiry", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "g1"));
+    const { read } = await f.decide(proposal);
+    const gate = read.manifest.draft.gates.sourcePermission;
+    expect(gate).toMatchObject({ state: "satisfied", sourceRef: "synthetic:review-basis", sourceVersion: `counts-${proposal.verifiedBasis!.countsHash.slice(0, 40)}`,
+      validUntil: new Date(f.a.state.now + 10 * 60_000).toISOString() });
+    expect(Date.parse(proposal.expiresAt)).toBeGreaterThan(Date.parse((gate as { validUntil: string }).validUntil));
+    expect(() => f.registry.assertCurrentDraft!(read.manifest, read.manifest.draft, f.a.state.now + 10 * 60_000)).toThrow("EVIDENCE_BASIS_UNVERIFIED");
+    expect(() => f.registry.assertCurrentDraft!(read.manifest, read.manifest.draft, f.a.state.now)).not.toThrow();
+  });
+
+  it("holds approval when the resolved counts change after the proposal", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "g2"));
+    f.basis.state.reviewedPackets = { state: "known", value: 30 };
+    await expect(f.decide(proposal)).rejects.toThrow("EVIDENCE_BASIS_CHANGED");
+  });
+
+  it("holds promotion when the resolver cannot re-verify the basis after approval", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "g3"));
+    const { binding } = await f.decide(proposal);
+    f.basis.state.fail = true;
+    await expect(f.calibration.promote({ proposalRef: proposal.proposalRef, approval: binding }, "g3-promote")).rejects.toMatchObject({ code: "APPROVAL_HELD", reasonCodes: ["EVIDENCE_BASIS_UNVERIFIED"] });
+    expect(f.calibration.head().versionRef).toBe(BASELINE_VERSION_REF);
+  });
+});
+
+describe("the J04 connection and outcome seams", () => {
+  it("refuses an approval authority on a different SQLite connection", async () => {
+    const f = fixture(), other = calibrationFixture(); closers.push(() => other.a.db.close());
+    expect(() => new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now, approvals: { ...f.authority, database: other.a.db } })).toThrow("APPROVAL_CONNECTION_MISMATCH");
+  });
+
+  it("reports an unrecorded outcome link when J04's outcome seam is not supplied, without undoing the promotion", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "o1"));
+    const { binding } = await f.decide(proposal);
+    const authority = { ...f.authority, recordOutcomeLink: undefined };
+    const plain = new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now, approvals: authority });
+    expect(await plain.promote({ proposalRef: proposal.proposalRef, approval: binding }, "o1-promote")).toMatchObject({ versionRef: "evidence-policy.rev-2", j04Outcome: { state: "notRecorded", reasonCode: "OUTCOME_LINK_UNAVAILABLE" } });
+    expect(f.calibration.head().versionRef).toBe("evidence-policy.rev-2");
+  });
+
+  it("verifies only an outcome that matches a promoted version exactly", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "o2"));
+    const { read, binding } = await f.decide(proposal);
+    await f.calibration.promote({ proposalRef: proposal.proposalRef, approval: binding }, "o2-promote");
+    const genuine = { approvalRef: read.manifest.approvalRef, manifestVersion: 1, manifestHash: read.manifest.manifestHash, itemRef: proposal.proposalRef,
+      runRef: "calibration:promotion:evidence-policy.rev-2", outcomeRef: "calibration:version:evidence-policy.rev-2" };
+    expect(f.calibration.verifyOutcome(genuine)).toBe(true);
+    expect(f.calibration.verifyOutcome({ ...genuine, outcomeRef: "calibration:version:evidence-policy.2026-11-04.launch-v1", runRef: "calibration:promotion:evidence-policy.2026-11-04.launch-v1" })).toBe(false);
+    expect(f.calibration.verifyOutcome({ ...genuine, manifestHash: "0".repeat(64) })).toBe(false);
+    expect(() => f.approvals.recordOutcomeLink({ ...genuine, outcomeRef: "calibration:version:evidence-policy.rev-9" })).toThrow("OUTCOME_SOURCE_UNVERIFIED");
+  });
+});
+
 describe("rejection and expiry are recorded", () => {
+  it("records a decision only from the head J04 manifest version, so an older rejection cannot override a later approval", async () => {
+    const f = fixture();
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "h1"));
+    const rejected = await f.decide(proposal, "rejected");
+    const approvalRef = rejected.read.manifest.approvalRef;
+    const command = { actionKind: "calibration.promoteEvidencePolicy", entityRef: proposal.proposalRef, entityVersion: proposal.proposalHash, selectionRefs: [proposal.proposalRef], approvalRef, expectedVersion: 1 };
+    const v2 = await f.approvals.preparePreview(command, requester, "h1-preview-v2");
+    expect(v2.manifest.manifestVersion).toBe(2);
+    const requested = await f.approvals.requestDecision({ approvalRef, expectedVersion: 2 }, requester, "h1-request-v2");
+    const event = f.a.event(requested, "approved", "synthetic:founder", "synthetic:event-h1-v2");
+    const approved = await f.approvals.observeDecision(event.locator, { ingressRef: "synthetic:authenticated-ingress" });
+    expect(approved.current.state).toBe("approved");
+    expect(() => f.calibration.recordDecision(proposal.proposalRef, approvalRef, 1)).toThrow("STALE_DECISION");
+    expect(() => f.calibration.recordDecision(proposal.proposalRef, approvalRef)).toThrow("DECISION_NOT_TERMINAL");
+    expect(f.calibration.readProposal(proposal.proposalRef)!.state).toBe("open");
+    const receipt = await f.calibration.promote({ proposalRef: proposal.proposalRef, approval: approvalDispatchBinding(approved.manifest, proposal.proposalRef) }, "h1-promote");
+    expect(receipt.approval).toMatchObject({ manifestVersion: 2 });
+  });
+
   it("records a verified J04 rejection with the named decider and then refuses promotion", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "r1"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "r1"));
     const { read, binding } = await f.decide(proposal, "rejected");
     expect(() => f.calibration.recordDecision(proposal.proposalRef, "j04:approval:unknown")).toThrow("APPROVAL_BINDING_MISMATCH");
     const recorded = f.calibration.recordDecision(proposal.proposalRef, read.manifest.approvalRef);
@@ -86,14 +168,14 @@ describe("rejection and expiry are recorded", () => {
 
   it("does not treat an approval as a terminal decision outside promote", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "r2"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "r2"));
     const { read } = await f.decide(proposal);
     expect(() => f.calibration.recordDecision(proposal.proposalRef, read.manifest.approvalRef)).toThrow("DECISION_NOT_TERMINAL");
   });
 
-  it("records expiry once the deadline passes and keeps the head unchanged", () => {
+  it("records expiry once the deadline passes and keeps the head unchanged", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { expiresAt: new Date(f.a.state.now + 60_000).toISOString() }), requester, "e1"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { expiresAt: new Date(f.a.state.now + 60_000).toISOString() }), requester, "e1"));
     expect(f.calibration.expireDue()).toEqual([]);
     f.a.state.now += 60_000;
     expect(f.calibration.readProposal(proposal.proposalRef)!.state).toBe("expired");
@@ -108,10 +190,10 @@ describe("rejection and expiry are recorded", () => {
 describe("the injected clock is read after awaits", () => {
   it("records expiry inside the final transaction when the deadline passes while the approval proof is resolving", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now, { expiresAt: new Date(f.a.state.now + 60_000).toISOString() }), requester, "late"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now, { expiresAt: new Date(f.a.state.now + 60_000).toISOString() }), requester, "late"));
     const { binding } = await f.decide(proposal);
     let asserted = 0;
-    const slow = new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now, approvals: {
+    const slow = new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now, approvals: { database: f.a.db,
       resolveCurrentProof: async b => { const current = await f.approvals.resolveCurrentProof(b); f.a.state.now += 60_000; return current; },
       assertCurrentProof: (proof, now) => { asserted++; f.approvals.assertCurrentProof(proof, now); }, readApproval: (ref, v) => f.approvals.readApproval(ref, v) } });
     await expect(slow.promote({ proposalRef: proposal.proposalRef, approval: binding }, "late-promote")).rejects.toThrow("PROPOSAL_EXPIRED");
@@ -124,7 +206,7 @@ describe("the injected clock is read after awaits", () => {
 describe("rollback creates a new version equal to an earlier config and preserves history", () => {
   it("restores the baseline config as rev-3 through the same human approval path", async () => {
     const f = fixture();
-    const change = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "rb-change"));
+    const change = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "rb-change"));
     await f.calibration.promote({ proposalRef: change.proposalRef, approval: (await f.decide(change)).binding }, "rb-promote-1");
     const before = f.calibration.history();
 
@@ -133,7 +215,8 @@ describe("rollback creates a new version equal to an earlier config and preserve
       candidateSet: syntheticCandidateSet(), expiresAt: new Date(f.a.state.now + 3_600_000).toISOString() }, requester, "rb-propose"));
     expect(rollback).toMatchObject({ kind: "rollback", rollbackTargetVersionRef: BASELINE_VERSION_REF, sufficiency: { status: "notRequired" },
       changes: [{ path: "packet.minIndependentPosts", before: 2, after: 3 }] });
-    expect(rollback.comparison.summary).toEqual({ changed: 2, unchanged: 4, transitions: { "pass->reviewNeeded": 2 } });
+    expect(rollback.comparison.summary).toEqual({ changed: 2, unchanged: 4, transitions: { "pass->reviewNeeded": 2 }, weakensBaseline: 0 });
+    expect(rollback.verifiedBasis).toBeNull();
     expect(f.calibration.head().versionRef).toBe("evidence-policy.rev-2");
 
     const receipt = await f.calibration.promote({ proposalRef: rollback.proposalRef, approval: (await f.decide(rollback)).binding }, "rb-promote-2");
@@ -147,7 +230,7 @@ describe("rollback creates a new version equal to an earlier config and preserve
     expect(new Set(history.map(v => v.numericBindingsHash)).size).toBe(1);
   });
 
-  it("refuses a rollback to a later or identical version", () => {
+  it("refuses a rollback to a later or identical version", async () => {
     const f = fixture();
     const input = { mode: "evidencePolicy" as const, baseVersionRef: BASELINE_VERSION_REF,
       basis: { kind: "rollback" as const, targetVersionRef: BASELINE_VERSION_REF, reason: "Fictional no-op.", limits: ["Synthetic."] },
@@ -159,7 +242,7 @@ describe("rollback creates a new version equal to an earlier config and preserve
 describe("persistence is append-only and restart-safe", () => {
   it("rejects direct edits to versions, proposals and outcomes, and re-verifies the baseline on restart", async () => {
     const f = fixture();
-    const proposal = proposed(f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "imm"));
+    const proposal = proposed(await f.calibration.createProposal(packetChangeInput(f.a.state.now), requester, "imm"));
     await f.calibration.promote({ proposalRef: proposal.proposalRef, approval: (await f.decide(proposal)).binding }, "imm-promote");
     expect(() => f.a.db.exec("UPDATE calibration_versions SET body='{}' WHERE seq=1")).toThrow("CALIBRATION_VERSION_IMMUTABLE");
     expect(() => f.a.db.exec("DELETE FROM calibration_versions WHERE seq=2")).toThrow("CALIBRATION_VERSION_IMMUTABLE");
@@ -172,7 +255,7 @@ describe("persistence is append-only and restart-safe", () => {
     expect(() => new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now, numericBindings: changedNumeric })).toThrow("NUMERIC_BASELINE_CHANGED");
   });
 
-  it("rejects a non-finite clock", () => {
+  it("rejects a non-finite clock", async () => {
     const f = fixture();
     const broken = new CalibrationRepository(f.a.db, { scope: approvalTestScope, now: () => f.a.state.now });
     f.a.state.now = Number.NaN;

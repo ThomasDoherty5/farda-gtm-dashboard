@@ -17,6 +17,8 @@ export const EVIDENCE_BASIS_MINIMUMS = { reviewedPackets: 20, distinctCreators: 
 export const MAX_CHANGES = 20;
 export const MAX_CANDIDATES = 25;
 export const MAX_PROPOSAL_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000;
+/** A resolved evidence-basis observation backs the J04 source gate only briefly; approval paths re-resolve it. */
+export const BASIS_OBSERVATION_TTL_MS = 10 * 60 * 1000;
 
 export class CalibrationError extends Error {
   readonly code: string; readonly status: number; readonly reasonCodes: readonly string[];
@@ -52,7 +54,7 @@ export type EvidencePolicyConfig = z.infer<typeof evidencePolicyConfigSchema>;
 
 /**
  * The named immutable baseline. Gate values mirror the hard-coded launch gates in `policy.ts`
- * (a conformance test proves equality), and floors and anchors are read from `ratingPolicy`.
+ * (`policy.ts` does not export them; conformance and drift tests check the copies), and floors and anchors are read from `ratingPolicy`.
  */
 export function baselineEvidencePolicy(): EvidencePolicyConfig {
   return evidencePolicyConfigSchema.parse({
@@ -108,6 +110,23 @@ export const evidenceBasisSchema = z.object({
   limits: z.array(text).min(1).max(20),
 }).strict();
 export type EvidenceBasis = z.infer<typeof evidenceBasisSchema>;
+/**
+ * Server-configured verification of an evidence basis. The resolver reads the authoritative review records for the
+ * scope and window and returns the counts it observed. Author-supplied counts are only a claim checked against it.
+ */
+export const resolvedBasisSchema = z.object({
+  scope: z.object({ workspaceId: z.string().min(1), accountId: z.string().min(1) }).strict(),
+  basisRef: refSchema, basisVersion: refSchema,
+  window: z.object({ from: instantSchema, to: instantSchema }).strict(),
+  reviewedPackets: knownOrUnknown, distinctCreators: knownOrUnknown,
+  observedAt: instantSchema,
+}).strict();
+export type ResolvedBasis = z.infer<typeof resolvedBasisSchema>;
+export type EvidenceBasisQuery = { scope: { workspaceId: string; accountId: string }; basisRef: string; basisVersion: string; window: { from: string; to: string };
+  sourceKinds: EvidenceBasis["sourceKinds"] };
+export type EvidenceBasisResolver = (query: EvidenceBasisQuery) => Promise<unknown>;
+export type BasisObservation = { proposalRef: string; basisRef: string; basisVersion: string; countsHash: string;
+  reviewedPackets: KnownOrUnknown; distinctCreators: KnownOrUnknown; observedAt: string; validUntil: string };
 export const rollbackBasisSchema = z.object({ kind: z.literal("rollback"), targetVersionRef: refSchema, reason: text, limits: z.array(text).min(1).max(20) }).strict();
 export type RollbackBasis = z.infer<typeof rollbackBasisSchema>;
 
@@ -147,13 +166,17 @@ export type Recommendation = "pass" | "hold" | "reviewNeeded";
 export type GateResult = { id: string; state: GateState; reason: string };
 export type CandidateComparison = { candidateRef: string; label: string; prior: Recommendation; proposed: Recommendation; changed: boolean;
   gateChanges: { id: string; before: GateResult; after: GateResult; drivenBy: string[] }[] };
+/** A gate value below the named launch baseline. A value of zero disables that gate. */
+export type BaselineWeakening = { path: string; baseline: number; proposed: number; disablesGate: boolean };
 export type ComparisonReport = {
+  /** Shown first: every gate this config loosens relative to the launch baseline. */
+  weakensBaseline: BaselineWeakening[];
   candidateSet: { setRef: string; label: string; provenance: "synthetic"; limit: number; candidateCount: number; hash: string };
   scope: "Synthetic, explicitly limited candidate set. Not a population estimate, not creator data, and not a sales or demographic inference.";
   numericScoring: "unchanged-not-evaluated";
   results: CandidateComparison[];
   anchorChanges: { path: string; reviewImpact: "humanReReviewRequired" }[];
-  summary: { changed: number; unchanged: number; transitions: Record<string, number> };
+  summary: { changed: number; unchanged: number; transitions: Record<string, number>; weakensBaseline: number };
 };
 
 export type Sufficiency =
@@ -166,6 +189,8 @@ export type CalibrationProposal = {
   baseVersionRef: string; baseConfigHash: string; rollbackTargetVersionRef: string | null;
   rationale: string; changes: PolicyChange[];
   evidenceBasis: EvidenceBasis | RollbackBasis; sufficiency: Sufficiency;
+  /** Counts from the configured resolver, which sufficiency and the J04 gate use. Null for a rollback to an approved version. */
+  verifiedBasis: { reviewedPackets: KnownOrUnknown; distinctCreators: KnownOrUnknown; countsHash: string; observedAt: string } | null;
   comparison: ComparisonReport;
   proposedConfig: EvidencePolicyConfig; proposedConfigHash: string; numericBindingsHash: string;
   proposedBy: string; createdAt: string; expiresAt: string;
@@ -195,3 +220,5 @@ export type ProposalState = "open" | "stale" | "promoted" | "rejected" | "withdr
 export type ProposalRead = { proposal: CalibrationProposal; events: ProposalEvent[]; state: ProposalState };
 export type PromotionReceipt = { status: "promoted"; versionRef: string; seq: number; parentVersionRef: string; configHash: string; proposalRef: string;
   approval: Extract<VersionOrigin, { kind: "promotion" }>["approval"]; promotedAt: string };
+/** The J04 outcome link is attempted after the promotion commits; the promotion stands either way. */
+export type PromotionResult = PromotionReceipt & { j04Outcome: { state: "recorded"; outcomeRef: string } | { state: "notRecorded"; reasonCode: string } };
