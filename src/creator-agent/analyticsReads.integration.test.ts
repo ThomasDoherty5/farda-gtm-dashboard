@@ -54,7 +54,7 @@ describe("all seven native analytics keys through actual authenticated HTTP and 
       const parsed = readResponseSchema(analyticsViewSchemas[key]!).safeParse(result.body);
       expect(parsed.success, JSON.stringify(parsed.error?.issues.slice(0, 3))).toBe(true);
       expect(result.body).toMatchObject({ requestId: "synthetic-analytics-read", scope: { ...f.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, page: { nextCursor: null, hasMore: false }, data: { datasetKey: "analytics-native", viewKey: key, provenance: { evidenceStage: "synthetic", synthetic: true } } });
-      expect(result.body.dataVersion).toMatch(/^analytics-v1-[a-f0-9]{64}$/);
+      expect(result.body.dataVersion).toMatch(key === "overviewSummary" ? /^overview-v1-[a-f0-9]{64}$/ : /^analytics-v1-[a-f0-9]{64}$/);
       expect(JSON.stringify(result.body.data)).not.toMatch(/fictional-|synthetic-shopify|cust-shopify|permissionVersion|principalRef/);
       expect(JSON.stringify(result.body)).not.toContain(SYNTHETIC_READ_TOKEN);
     }

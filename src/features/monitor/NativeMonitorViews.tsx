@@ -1,4 +1,5 @@
 import { SourceReadGrant } from "@/components/SourceReadGrant";
+import { useReportingPeriod } from "@/features/analytics/reportingPeriod";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link,useParams,useSearchParams } from "react-router-dom";
@@ -27,10 +28,10 @@ const stamp=(s:string|null)=>s?dateTime(s):"Unknown";
 const sourceLabels={current:"Current source snapshot",partial:"Partial source coverage",expired:"Expired source snapshot",
   unconfigured:"Hourly monitoring source not configured",unavailable:"Hourly monitoring source unavailable"};
 
-function PageReads<T extends Native>({view,filters,kind,render,before}:{view:string;filters:Record<string,string>;kind:T["kind"];
+function PageReads<T extends Native>({view,filters,kind,render,before}:{view:string;filters:Record<string,unknown>;kind:T["kind"];
   render:(pages:T[])=>ReactNode;before?:(latest:T)=>ReactNode}){
   const ctx=useScope(),client=useQueryClient(),pageSize=50;
-  const query=usePagedView<Record<string,string>,T>(view,filters,null,pageSize);
+  const query=usePagedView<Record<string,unknown>,T>(view,filters,null,pageSize);
   const frozenKey=JSON.stringify([...scopeKey(ctx),SCHEMA_VERSION,"cursor-pages",view,filters,null,pageSize]);
   useEffect(()=>()=>{const key=JSON.parse(frozenKey);void client.cancelQueries({queryKey:key,exact:true});client.removeQueries({queryKey:key,exact:true});},[client,frozenKey]);
   const pages=(query.isError?undefined:query.data)?.pages.flatMap(p=>p.data?.kind===kind?[p.data]:[])??[];
@@ -61,7 +62,7 @@ const sources=options([["all","All intake sources"],["social-cat","Social Cat"],
 function useFilters(){
   const [params,set]=useSearchParams();
   const get=(key:string,allowed:string[],fallback:string)=>allowed.includes(params.get(key)??"")?params.get(key)!:fallback;
-  const change=(key:string,selection:string)=>set(p=>{const n=new URLSearchParams(p);if(!selection||selection==="all")n.delete(key);else n.set(key,selection);return n;},{replace:key==="q"});
+  const change=(key:string,selection:string)=>set(p=>{const n=new URLSearchParams(p);if(!selection||selection==="all")n.delete(key);else n.set(key,selection);if(key==="window")for(const name of ["report-start","report-end","report-zone"])n.delete(name);return n;},{replace:key==="q"});
   return {params,get,change};
 }
 function Heading({title,sub,children}:{title:string;sub:string;children:ReactNode}){
@@ -79,7 +80,9 @@ function RunLink({id,label="View hourly runs"}:{id:string|null;label?:string}){
 function postSales(p:NativePost["post"]){return p.attribution?.level==="post"&&p.attribution.complete?p.attribution:null;}
 export function NativeContentMonitor(){
   const {params,get,change}=useFilters();
-  const filters={source:get("source",sources.map(s=>s.value),"all"),network:get("network",["all","instagram","tiktok"],"all"),window:get("window",["last-30","last-7"],"last-30"),q:(params.get("q")??"").slice(0,80)};
+  const reportingPeriod=useReportingPeriod();
+  const filters={source:get("source",sources.map(s=>s.value),"all"),network:get("network",["all","instagram","tiktok"],"all"),window:get("window",["last-30","last-7"],"last-30"),q:(params.get("q")??"").slice(0,80),
+    ...(reportingPeriod?{reportingPeriod}:{}),...(params.has("campaign")?{campaign:params.get("campaign")!}:{})};
   return <section aria-labelledby="native-monitor-title" data-figma-source="23:73" className={`${a.page} ${m.native}`}>
     <PageReads<NativeContent> view="contentMonitor" kind="saved-content-monitor" filters={filters} before={latest=><>
       <Heading title="Creator content, without the blind spots." sub="Track published posts, creator replies, and measurable results from one watchlist."><LinkButton variant="secondary" style={{minWidth:172}} to="/creators/watchlist">Open watchlist</LinkButton><RunLink id={latest.latestRunRef}/></Heading>
@@ -88,7 +91,7 @@ export function NativeContentMonitor(){
       <div className={m.filtersRow}><Badge tone="violet" width={256}>Selected source scope</Badge><Choice label="Intake source" title="Filter by creator source" value={filters.source} options={sources} onChange={v=>change("source",v)} width={192}/><Choice label="Post network" title="Filter by post network" value={filters.network} options={options([["all","All post networks"],["instagram","Instagram"],["tiktok","TikTok"]])} onChange={v=>change("network",v)} width={184}/><Choice label="Observation window" title="Choose an observation window" value={filters.window} options={options([["last-30","Last 30 days"],["last-7","Last 7 days"]])} onChange={v=>change("window",v)} width={156}/><span style={{flex:"0 1 160px"}}/><div className={n.snapshot}><SourceStamp data={latest}/></div></div>
     </>} render={pages=>{
       const latest=pages.at(-1)!,posts=pages.flatMap(d=>d.posts);
-      return <><KpiGrid>
+      return <>{latest.selection?.period&&<p className={a.small} role="status">Overview reporting scope: {latest.selection.period.startAt} to {latest.selection.period.endAt} (exclusive) · {latest.selection.period.timezone}. {latest.selection.campaign?"One source-qualified campaign.":"All campaigns."} Publication visibility is observed as of {latest.observedAt}; metrics retain their own cumulative or interval basis.</p>}<KpiGrid>
         <KpiCard label={latest.metricBasis?.semantics==="cumulative"?"Cumulative views":"Observed views"} context={latest.metricBasis?`${latest.metricBasis.definition} · ${latest.metricBasis.semantics} · ${latest.metricBasis.window} · ${latest.metricBasis.context}`:"Comparable source basis unavailable"}>{value(latest.views)}</KpiCard>
         <KpiCard label="Engagement rate" context="Likes, comments and shares / views">{latest.rate===null?"Unknown":latest.rate.toFixed(1)+"%"}</KpiCard>
         <KpiCard label="Attributed orders" context="Reconciled attribution window">{value(latest.orders)}</KpiCard><KpiCard label="Attributed net sales" context="After discounts and refunds">{latest.net?usdExact(latest.net):"Unknown"}</KpiCard>

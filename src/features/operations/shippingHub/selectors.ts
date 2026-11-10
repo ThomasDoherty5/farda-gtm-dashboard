@@ -1,4 +1,11 @@
 import type { HubFilters, HubShipment, SelectedShipment } from "./types";
+import { analyticsPeriodSchemaNative } from "@/creator-agent/analytics/contract";
+
+export function shippingReportingPeriod(f: Pick<HubFilters, "start" | "end" | "timezone">) {
+  if (!f.start && !f.end && !f.timezone) return { state: "none" as const };
+  const parsed = analyticsPeriodSchemaNative.safeParse({ startAt: f.start, endAt: f.end, timezone: f.timezone, basis: "eventTime" });
+  return parsed.success ? { state: "valid" as const, period: parsed.data } : { state: "invalid" as const };
+}
 
 export const pipelineLabels = { ready: "Ready to ship", label: "Label created", transit: "In transit", delivered: "Delivered", returns: "Return in progress" } as const;
 export const originLabel = (s: HubShipment) => `${{ order: "Order", allocation: "Allocation", replacement: "Case", reward: "Reward" }[s.origin.kind]} ${s.origin.ref}`;
@@ -15,10 +22,13 @@ export function hubCounts(rows: HubShipment[], now: string) {
     exceptions: rows.filter(s => s.exception).length, late: rows.filter(s => isLate(s, now)).length, needsAction: rows.filter(needsAction).length };
 }
 export function filterShipments(rows: HubShipment[], f: HubFilters, now: string) {
+  const reporting = shippingReportingPeriod(f);
+  if (reporting.state === "invalid") return [];
   const q = f.query.trim().toLowerCase();
   return rows.filter(s => (f.recipient === "all" || s.recipient.type === f.recipient) && (f.purpose === "all" || s.purpose === f.purpose)
     && (f.location === "all" || s.location === f.location) && (f.carrier === "all" || s.carrier === f.carrier) && (f.owner === "all" || s.owner === f.owner)
     && (f.state === "all" || (f.state === "exceptions" ? Boolean(s.exception) : s.pipeline === f.state))
+    && (reporting.state !== "valid" || Date.parse(s.requestedAt) >= Date.parse(reporting.period.startAt) && Date.parse(s.requestedAt) < Date.parse(reporting.period.endAt))
     && (f.date === "all" || (f.date === "late" ? isLate(s, now) : Date.parse(s.requestedAt) >= Date.parse(now) - 7 * 86400000))
     && (!q || [s.id, s.parcelId, s.recipient.display, s.recipient.ref, s.origin.ref, s.trackingRef, s.recipient.type === "creator" ? s.recipient.collaborationRef : ""].join(" ").toLowerCase().includes(q)))
     .sort((a, b) => (isLate(b, now) ? 2 : Number(Boolean(b.exception))) - (isLate(a, now) ? 2 : Number(Boolean(a.exception))) || Number(b.pipeline === "ready") - Number(a.pipeline === "ready") || Date.parse(a.requestedAt) - Date.parse(b.requestedAt) || a.id.localeCompare(b.id));

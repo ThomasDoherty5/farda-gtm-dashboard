@@ -20,7 +20,7 @@ import { ViewError } from "@/components/ViewError";
 import { FilterButton } from "@/features/acquisition/FilterButton";
 import { SourceDialog } from "@/features/approvals/shared";
 import { useLayout } from "../useLayout";
-import { filterShipments, hubCounts, isLate, originLabel, pipelineLabels, reviewSelection, selectShipment } from "./selectors";
+import { filterShipments, hubCounts, isLate, originLabel, pipelineLabels, shippingReportingPeriod, reviewSelection, selectShipment } from "./selectors";
 import { HUB_DEFAULT_FILTERS, type HubFilters, type HubShipment, type SelectedShipment, type ShippingHubData } from "./types";
 import styles from "./ShippingHub.module.css";
 
@@ -93,8 +93,9 @@ function HubBody({ data, res, demo, refresh, refreshing }: { data: ShippingHubDa
     }
   }, [data]);
   const filters = Object.fromEntries(Object.entries(HUB_DEFAULT_FILTERS).map(([k, fallback]) => [k, search.get(`ship-${k}`) ?? fallback])) as HubFilters;
+  const reporting = shippingReportingPeriod(filters);
   const matching = filterShipments(data.shipments, filters, now);
-  const count = hubCounts(matching, now), total = hubCounts(data.shipments, now);
+  const count = hubCounts(matching, now), total = hubCounts(filterShipments(data.shipments, { ...HUB_DEFAULT_FILTERS, start: filters.start, end: filters.end, timezone: filters.timezone, location: filters.location }, now), now);
   const baseCount = hubCounts(filterShipments(data.shipments, { ...filters, state: "all" }, now), now);
   const pageSize = mobile ? 3 : 10;
   const requestedPage = Math.max(1, Number(search.get("ship-page")) || 1);
@@ -105,7 +106,7 @@ function HubBody({ data, res, demo, refresh, refreshing }: { data: ShippingHubDa
   const detail = data.shipments.find(s => s.id === detailId);
   const staleFeeds = data.shipments.filter(s => s.freshness.some(f => f.field === "tracking" && f.state !== "current")).length;
   const readyReview = reviewSelection(matching.filter(s => s.pipeline === "ready").map(selectShipment), data.shipments, now, sourceHold).eligible.length;
-  const change = (key: keyof HubFilters, value: string) => { const next = new URLSearchParams(search); if (value === HUB_DEFAULT_FILTERS[key]) next.delete(`ship-${key}`); else next.set(`ship-${key}`, value); next.delete("ship-page"); setSearch(next); };
+  const change = (key: keyof HubFilters, value: string) => { const next = new URLSearchParams(search); if (key === "date") for (const periodKey of ["start", "end", "timezone"]) next.delete(`ship-${periodKey}`); if (value === HUB_DEFAULT_FILTERS[key]) next.delete(`ship-${key}`); else next.set(`ship-${key}`, value); next.delete("ship-page"); setSearch(next); };
   const href = (key: keyof HubFilters, value: string) => { const p = new URLSearchParams(search); p.set("view", "hub"); if (value === HUB_DEFAULT_FILTERS[key]) p.delete(`ship-${key}`); else p.set(`ship-${key}`, value); p.delete("ship-page"); return `/operations?${p}`; };
   const toggle = (s: HubShipment, checked: boolean) => setSelected(previous => checked ? [...previous.filter(p => p.id !== s.id), selectShipment(s)] : previous.filter(p => p.id !== s.id));
   const recipientTabs = [{ label: `All · ${total.total}`, to: href("recipient", "all"), current: filters.recipient === "all", width: mobile ? 80 : 130 }, { label: mobile ? "Customers" : `Customers · ${total.customers}`, to: href("recipient", "customer"), current: filters.recipient === "customer", width: mobile ? 120 : 150 }, { label: mobile ? "Creators" : `Creators · ${total.creators}`, to: href("recipient", "creator"), current: filters.recipient === "creator", width: mobile ? 118 : 150 }];
@@ -113,7 +114,7 @@ function HubBody({ data, res, demo, refresh, refreshing }: { data: ShippingHubDa
   const facets = [
     { key: "purpose", name: "Purpose", options: [{ value: "all", label: "all" }, ...["sale", "sample", "replacement", "reward"].map(value => ({ value, label: titleCase(value) }))] },
     { key: "location", name: "Home", options: options("location") }, { key: "carrier", name: "Carrier", options: options("carrier") }, { key: "owner", name: "Owner", options: options("owner") },
-    { key: "date", name: "Date", options: [{ value: "all", label: "all" }, { value: "week", label: "Last 7 days" }, { value: "late", label: "Past carrier ETA" }] },
+    { key: "date", name: "Date", options: [{ value: "all", label: reporting.state === "valid" ? "Linked period" : "all" }, { value: "week", label: "Last 7 days" }, { value: "late", label: "Past carrier ETA" }] },
   ] as const;
   const pipelineTabs = ([['all', 'All'], ['ready', 'Ready'], ['label', 'Labels'], ['transit', 'In transit'], ['delivered', 'Delivered'], ['exceptions', 'Exceptions'], ['returns', 'Returns']] as const).map(([key, label]) => ({ label: `${label} · ${key === "all" ? baseCount.total : baseCount[key]}`, to: href("state", key), current: filters.state === key, width: ({ all: 108, ready: 145, label: 145, transit: 170, delivered: 170, exceptions: 180, returns: 150 })[key] }));
   const openRow = (s: HubShipment) => setDetailId(s.id);
@@ -126,12 +127,14 @@ function HubBody({ data, res, demo, refresh, refreshing }: { data: ShippingHubDa
         .find(button => button.dataset.shipmentDetail === closedId)?.focus();
     });
   };
+  if (reporting.state === "invalid") return <><h1 id="shipping-title">Shipping hub</h1><EmptyState state="Error" title="Invalid shipment reporting period" alert><p>The linked period is incomplete or invalid. No shipment count is inferred. Return to the source overview or clear the period explicitly.</p><Button onClick={() => {const p = new URLSearchParams(search); for (const k of ["start", "end", "timezone"]) p.delete(`ship-${k}`); setSearch(p);}}>Clear reporting period</Button></EmptyState></>;
   if (native && leaseExpired) return <><h1 id="shipping-title">Shipping hub</h1><EmptyState state="Error" title="Shipping access lease expired" alert><p>Refresh the source to verify current access before viewing shipment evidence.</p><Button onClick={refresh} loading={refreshing}>Refresh shipping evidence</Button></EmptyState></>;
   return <div ref={hubElement} className={styles.hub} data-native={native ? "true" : undefined}>
     {mobile ? <><h1 id="shipping-title" className={styles.title}>Shipping hub</h1><Badge tone="violet" width={200} testId={demo ? "shipping-demo-banner" : undefined}>{demo ? "DEMO · " : ""}{total.total}{observedLabel} shipments</Badge><p className={styles.small}>{total.customers} customers · {total.creators} creators<br />Snapshot {time(data.observedAt)} {zoneLabel} · {staleFeeds} feed{staleFeeds === 1 ? "" : "s"} stale</p></> :
       <div className={styles.header}><PageHeader id="shipping-title" title="Shipping hub" subtitle="Customer orders, creator samples and replacements — one dispatch queue." titleWidth={880}><Badge tone="violet" width={176}>{demo ? "DEMO · " : ""}{total.total}{observedLabel} shipments</Badge><Button className={styles.reviewButton} onClick={() => setReviewOpen(true)} disabledReason={!selected.length ? "Select one or more shipments to review." : null} reasonFor="selection-help">Review {selected.length} selected</Button></PageHeader></div>}
     {!mobile && <SectionTabs label="Operations sections" gap={8} tabs={[{ label: "Overview", to: "/operations", width: 160 }, { label: "Orders", to: "/operations?view=orders", width: 160 }, { label: "Shipping hub", to: "/operations?view=hub", current: true, width: 160 }, { label: "Stock", to: "/inventory", width: 160 }, { label: "Support", to: "/support/cases/TEST-ISS-021", width: 160 }]} />}
     <ReadState res={res} subject="Shipping hub" only={["partial", "stale"]} />
+    {reporting.state === "valid" && <Strip title="Linked reporting period">{reporting.period.startAt} to {reporting.period.endAt} (exclusive) · {reporting.period.timezone} · requestedAt. Counts describe source rows requested in this window; recipient, purpose and home filters still apply.</Strip>}
     {native && <p className={styles.small} role="status">{native.provenance.evidenceStage === "synthetic" ? "Synthetic owner evidence · sandbox" : "Provider-observed source evidence"}. {complete ? "Counts reconcile to the complete observed shipment window." : "Counts and filters describe observed rows only. Full shipment totals are Unknown."} Read only; this view grants no label or dispatch authority.</p>}
     {!mobile && <Strip title={`${demo ? "Demo data · " : ""}source snapshot ${date(data.observedAt, true)} ${zoneLabel}`}>{data.sourceLabel} · {res.coverage.observedCount ?? "Unknown"} of {res.coverage.expectedCount ?? "unknown"} records mapped · {staleFeeds} tracking feed{staleFeeds === 1 ? "" : "s"} stale. Exceptions overlap pipeline states; they are not extra shipments.</Strip>}
     {!mobile && <KpiRow><Kpi label="Recipients" context={`${count.customers} customers · ${count.creators} creators${observedLabel}`} testId="hub-recipients">{complete ? count.total : "Unknown"}</Kpi><Kpi label="Ready to ship" context={`${readyReview} reviewable · ${count.ready - readyReview} held${observedLabel}`} testId="hub-ready">{complete ? count.ready : "Unknown"}</Kpi><Kpi label="Late" context={`Carrier ETA passed${observedLabel}`} testId="hub-late">{complete ? count.late : "Unknown"}</Kpi><Kpi label="Needs action" context={`${count.exceptions} exceptions · ${count.returns} return${count.returns === 1 ? "" : "s"}${observedLabel}`} testId="hub-needs-action">{complete ? count.needsAction : "Unknown"}</Kpi></KpiRow>}

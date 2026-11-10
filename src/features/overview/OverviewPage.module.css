@@ -11,6 +11,7 @@
 .contextSpace { flex: 0 1 250px; }
 .primary { display: grid; grid-template-columns: minmax(0, 376fr) minmax(0, 900fr); gap: var(--space-20); align-items: start; }
 .secondary { display: grid; grid-template-columns: minmax(0, 376fr) minmax(0, 484fr) minmax(0, 396fr); gap: var(--space-20); align-items: start; }
+.ownerSummaries { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-20); align-items: start; overflow-wrap: anywhere; }
 .kpis { display: flex; flex-direction: column; gap: var(--space-16); }
 /* Figma children are 48px narrower than their card, border included, so they run 2px past a plain 24px inset. */
 .card { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; padding: var(--space-24) 22px var(--space-24) var(--space-24); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--space-24); }
@@ -80,7 +81,7 @@
 .footerSpace { flex: 0 1 300px; }
 .footer a { font: var(--text-small); }
 @media (max-width: 1179px) {
-  .primary, .secondary { grid-template-columns: minmax(0, 1fr); }
+  .primary, .secondary, .ownerSummaries { grid-template-columns: minmax(0, 1fr); }
   .contextSpace, .chartSpace, .totalsSpace, .footerSpace { display: none; }
 }
 @media (max-width: 479px) {

@@ -35,12 +35,31 @@ export const nativeAnalyticsRequestSchema = z.discriminatedUnion("viewKey", [
   z.object({ ...requestBase, viewKey: z.literal("metricDictionary"), filters: nativeAnalyticsFilters.metricDictionary }).strict(),
 ]);
 export const nativeAnalyticsBindingSchema = z.object({ scope: analyticsScopeSchema, principal: analyticsPrincipalSchema, request: nativeAnalyticsRequestSchema }).strict();
-export const analyticsOwnerKinds = ["commerceOrders", "adReporting", "economicCosts", "retainedCustomers", "creatorActivity", "launchReadiness", "campaignEvents", "sampleCapacity", "metricDefinitions", "reconciliation"] as const;
+export const analyticsOwnerKinds = ["commerceOrders", "adReporting", "economicCosts", "retainedCustomers", "creatorActivity", "creatorPortfolio", "launchReadiness", "campaignEvents", "sampleCapacity", "metricDefinitions", "reconciliation"] as const;
+/** Outcome of a bounded source-wide check, distinct from the newest row event time.
+ * An unchanged successful check may renew coverage; a failed attempt cannot do so. */
+export const analyticsSyncSchema = z.object({ state: z.enum(["changed", "unchanged", "neverSynced", "partial", "error", "unknown"]),
+  attemptedAt: instantSchema.nullable(), successfulCoverageAt: instantSchema.nullable(),
+  expectedCount: analyticsCountSchema.nullable(), observedCount: analyticsCountSchema.nullable(),
+}).strict().superRefine((s, ctx) => {
+  const bad = (message: string) => ctx.addIssue({ code: "custom", message });
+  if (s.successfulCoverageAt && (!s.attemptedAt || Date.parse(s.successfulCoverageAt) > Date.parse(s.attemptedAt))) bad("Coverage cannot follow its source attempt.");
+  if (s.expectedCount !== null && s.observedCount !== null && s.observedCount > s.expectedCount) bad("Source observations exceed the bounded population.");
+  if (["changed", "unchanged"].includes(s.state) && (!s.successfulCoverageAt || s.expectedCount === null || s.observedCount !== s.expectedCount)) bad("Successful source checks need complete counted coverage.");
+  if (s.state === "neverSynced" && (s.successfulCoverageAt !== null || s.observedCount !== null)) bad("Never-synced coverage is unknown, not a counted zero.");
+});
 export const analyticsOwnerProofSchema = z.object({ proofRef: analyticsRefSchema, owner: z.enum(analyticsOwnerKinds), scope: analyticsScopeSchema, principalRef: analyticsRefSchema,
   requestDigest: analyticsHashSchema, accountRef: analyticsRefSchema, sourceVersion: analyticsRefSchema, permissionVersion: analyticsRefSchema, definitionVersion: analyticsRefSchema,
   cohortRef: analyticsRefSchema.nullable(), period: analyticsPeriodSchemaNative.nullable(), observedAt: instantSchema, sourceAsOf: instantSchema.nullable(), validUntil: instantSchema,
-  maxAgeMs: z.number().int().min(1).max(26 * 3_600_000), coverage: z.enum(["complete", "partial", "missing"]),
-}).strict().refine(value => Date.parse(value.validUntil) > Date.parse(value.observedAt) && (value.sourceAsOf === null || Date.parse(value.sourceAsOf) <= Date.parse(value.observedAt)));
+  maxAgeMs: z.number().int().min(1).max(26 * 3_600_000), coverage: z.enum(["complete", "partial", "missing"]), sync: analyticsSyncSchema.optional(),
+}).strict().refine(value => Date.parse(value.validUntil) > Date.parse(value.observedAt) && (value.sourceAsOf === null || Date.parse(value.sourceAsOf) <= Date.parse(value.observedAt)))
+  .superRefine((owner, ctx) => {
+    const s = owner.sync; if (!s) return;
+    const sameCoverage = s.successfulCoverageAt === null || owner.sourceAsOf === null ? s.successfulCoverageAt === owner.sourceAsOf : Date.parse(s.successfulCoverageAt) === Date.parse(owner.sourceAsOf);
+    if (s.attemptedAt && Date.parse(s.attemptedAt) > Date.parse(owner.observedAt) || !sameCoverage ||
+      s.state === "neverSynced" && owner.coverage !== "missing" || ["changed", "unchanged"].includes(s.state) && owner.coverage !== "complete")
+      ctx.addIssue({ code: "custom", message: "Source-wide sync evidence must agree with the owner watermark and coverage." });
+  });
 export const analyticsInputFact = <T extends z.ZodTypeAny>(value: T) => z.object({ value: value.nullable(), reason: analyticsReasonSchema.nullable(), proofRef: analyticsRefSchema.nullable(), evidenceRefs: z.array(analyticsRefSchema).max(100) }).strict()
   .refine(input => input.value === null ? input.reason !== null : input.reason === null && input.proofRef !== null && input.evidenceRefs.length > 0);
 export const countInput = analyticsInputFact(analyticsCountSchema);
@@ -56,7 +75,9 @@ const ads = z.object({ proofRef: analyticsRefSchema, snapshot: adPlatformsSnapsh
 const commerceFacts = { orders, ads, economics: analyticsEconomicsSchema.nullable() };
 const activity = z.object({ activityRef: analyticsRefSchema, creatorRef: analyticsRefSchema.nullable(), kind: z.enum(["reviewed", "qualified", "invitationConfirmed", "reply", "termsAccepted", "contentAccepted", "published"]), eventAt: instantSchema, proofRef: analyticsRefSchema, evidenceRefs: z.array(analyticsRefSchema).min(1).max(20) }).strict();
 const post = z.object({ postRef: analyticsRefSchema, views: countInput, likes: countInput, comments: countInput, shares: countInput }).strict();
-export const overviewFactsSchema = z.object({ ...commerceFacts, activity: z.array(activity).max(100), posts: z.array(post).max(100), postsTotal: countInput }).strict();
+export const overviewFactsSchema = z.object({ ...commerceFacts, activity: z.array(activity).max(100), posts: z.array(post).max(100), postsTotal: countInput,
+  portfolio: z.object({ proofRef: analyticsRefSchema, reviewKey: analyticsHashSchema, reviewHash: analyticsHashSchema }).strict().nullable().optional(),
+}).strict();
 export const attributionFactsSchema = z.object({ ...commerceFacts, creators: z.array(z.object({ creatorRef: analyticsRefSchema, roi: analyticsInputFact(z.number().finite()) }).strict()).max(100) }).strict();
 export const paidMediaFactsSchema = z.object({ ads, creatorSampleEconomics: moneyInput }).strict();
 const gate = z.object({ gateId: z.enum(["terms", "stock", "sampleAuthority", "content", "sourceAccess", "budget", "approval"]), state: z.enum(["ready", "held", "unknown"]), reasonCodes: z.array(analyticsReasonSchema).max(20), proofRef: analyticsRefSchema, evidenceRefs: z.array(analyticsRefSchema).min(1).max(20), relativeOffsetDays: z.number().int().min(-366).max(366).nullable(), anchorEventAt: instantSchema.nullable() }).strict()
@@ -70,11 +91,26 @@ const reconciliationCell = z.object({ viewKey: z.enum([...nativeAnalyticsViewKey
 export const reconciliationFactsSchema = z.object({ asOf: instantSchema, matrix: z.array(z.object({ metricId: z.enum(analyticsMetricIds), definitionVersion: analyticsRefSchema, unit: z.enum(["count", "minorUnits", "percent", "multiple"]), currency: z.literal("USD").nullable(), cells: z.array(reconciliationCell).min(2).max(10) }).strict()
   .refine(value => (value.unit === "minorUnits") === (value.currency !== null))).max(100) }).strict();
 const funnelCounts = z.object({ contacted: countInput, replied: countInput, agreed: countInput, shipped: countInput, delivered: countInput, posted: countInput }).strict();
+/** Read-only sample owner evidence; this packet cannot reserve, release or ship stock. */
+export const campaignReservationsSchema = z.object({ proofRef: analyticsRefSchema, campaignRef: analyticsRefSchema, cohortRef: analyticsRefSchema,
+  period: analyticsPeriodSchemaNative, coverage: z.enum(["complete", "partial"]), total: analyticsCountSchema.nullable(),
+  rows: z.array(z.object({ reservationRef: analyticsRefSchema, home: z.enum(["H1", "H2", "H3"]), itemRef: analyticsRefSchema,
+    itemLabel: z.string().trim().min(1).max(160), units: analyticsCountSchema.positive(), state: z.enum(["active", "released", "fulfilled"]),
+    cost: moneyInput, approval: z.object({ state: z.enum(["approved", "pending", "rejected", "expired", "unknown"]),
+      evidenceRef: analyticsRefSchema.nullable(), version: analyticsRefSchema.nullable() }).strict()
+      .refine(v => v.state !== "approved" || !!v.evidenceRef && !!v.version),
+    sourceVersion: analyticsRefSchema, evidenceRef: analyticsRefSchema, observedAt: instantSchema,
+  }).strict()).max(100),
+}).strict().superRefine((v, ctx) => {
+  if (new Set(v.rows.map(r => r.reservationRef)).size !== v.rows.length || v.total !== null && v.total < v.rows.length || v.coverage === "complete" && v.total !== v.rows.length)
+    ctx.addIssue({ code: "custom", message: "Reservation coverage must be unique and counted." });
+});
 export const campaignFactsSchema = z.object({ campaignRef: analyticsRefSchema, cohortRef: analyticsRefSchema, maturity: z.enum(["mature", "immature", "unknown"]), progression: z.literal("distinctOpportunityCumulative"), aggregation: z.enum(["disjointComplete", "unknown"]), maturePosted: countInput,
   /** Public route selectors explicitly mapped by this source revision; never an echoed arbitrary request. */
   selection: nativeAnalyticsFilters.campaignFunnel,
   channels: z.array(z.object({ channel: z.enum(["instagram", "tiktokWebsite", "tiktokShop"]), contactReference: countInput, steps: funnelCounts, giftCap: countInput, reserved: countInput, historical: z.object({ replies: countInput, agreements: countInput }).strict() }).strict()).max(3), notYetMature: countInput,
   historicalBasis: z.object({ period: analyticsPeriodSchemaNative, cohortRef: analyticsRefSchema, definitionVersion: analyticsRefSchema }).strict().nullable(),
+  reservations: campaignReservationsSchema.nullable().optional(),
 }).strict();
 /** Definitions are versioned application facts. No caller-provided formula or prose is evaluated. */
 export const dictionaryFactsSchema = z.object({ proofRef: analyticsRefSchema, effectiveAt: instantSchema, formulaVersion: z.literal("headline-metrics.v1"), allocationVersion: z.literal("economic-events@1"), economics: analyticsEconomicsSchema.nullable() }).strict();

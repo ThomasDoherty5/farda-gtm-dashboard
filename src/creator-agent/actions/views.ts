@@ -2,6 +2,7 @@ import { z } from "zod";
 import { approvalPhaseSchema, approvalInstantSchema as instant, approvalRefSchema as ref, versionRequirementSchema } from "../approvals/contract.ts";
 import { jobRunViewSchema } from "../jobs/schema.ts";
 import { readinessPayloadSchema } from "./contract.ts";
+import { readinessGatePresentationSchema, readinessPresentationSchema } from "./readinessPresentation.ts";
 import { readinessEntityRefSchema } from "./wire.ts";
 import { commercialEligibilityViewSchema } from "../commercialPolicy/views.ts";
 import { providerOutcomeSchema } from "../jobs/dispatchSchema.ts";
@@ -89,7 +90,8 @@ export type ReadinessRequestRecovery = z.infer<typeof readinessRequestRecoverySc
 export const nativeReadinessViewSchema = z.object({ kind: z.literal("native-launch-readiness"), targetRef: ref, version: ref, actorRef: ref,
   observedAt: instant, validUntil: instant, launchDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable(), launchDateApproved: z.boolean(),
   phase: z.enum(["review", "effective-l-minus-4"]), phaseAllowed: z.boolean(), policyVersion: ref,
-  gates: z.array(z.object({ id: ref, required: z.boolean(), state: z.enum(["pass", "fail", "unknown"]), evidenceRef: ref.nullable() }).strict()).min(1).max(100),
+  gates: z.array(z.object({ id: ref, required: z.boolean(), state: z.enum(["pass", "fail", "unknown"]), evidenceRef: ref.nullable(), presentation: readinessGatePresentationSchema.optional() }).strict()).min(1).max(100),
+  presentation: readinessPresentationSchema.optional(),
   evidenceRefs: z.array(ref).min(1).max(100), confersRelease: z.literal(false), requestRecovery: readinessRequestRecoverySchema.nullable(),
 }).strict();
 export type NativeReadinessView = z.infer<typeof nativeReadinessViewSchema>;

@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { NativeCampaignFunnel as CampaignData } from "@/creator-agent/analytics/views";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
-import { Fact, NativeAnalyticsEvidence, factText, nativeCount, nativePercent } from "./NativeAnalyticsEvidence";
+import { Fact, NativeAnalyticsEvidence, factText, nativeCount, nativeMoney, nativePeriod, nativePercent } from "./NativeAnalyticsEvidence";
 import { BarList, Card, DetailRow, HandoffDialog, KpiCard, KpiGrid, SectionHeading, Table } from "./parts";
 import styles from "./Analytics.module.css";
 const steps = ["contacted", "replied", "agreed", "shipped", "delivered", "posted"] as const;
@@ -45,6 +45,18 @@ export function NativeCampaignFunnel({ data, refresh, refreshing }: { data: Camp
         <Badge tone="warning">{factText(data.matureNoPost, nativeCount)} follow-ups need review</Badge><p className={styles.small}>All published posts are not a substitute for posts among mature recipients. Early posts and not-yet-due recipients do not inflate this denominator. Voluntary gifts have no contractual posting requirement.</p><LinkButton variant="secondary" to="/operations?view=hub&ship-recipient=creator&ship-state=delivered">Review delivered creator shipments</LinkButton>
       </Card>
     </div>
-    <HandoffDialog open={reservations} onClose={() => setReservations(false)} title="Sample reservations" rows={data.channels.map(row => ({ label: labels[row.channel], value: `${factText(row.steps.shipped, nativeCount)} shipped + ${factText(row.reserved, nativeCount)} reserved of ${factText(row.giftCap, nativeCount)}` }))}><p>This is a source read, not a reservation release or shipment. Canonical homes, items, costs and approvals stay with their owning workflow.</p></HandoffDialog>
+    <HandoffDialog open={reservations} onClose={() => setReservations(false)} title="Sample reservations" rows={data.channels.map(row => ({ label: labels[row.channel], value: `${factText(row.steps.shipped, nativeCount)} shipped + ${factText(row.reserved, nativeCount)} reserved of ${factText(row.giftCap, nativeCount)}` }))}>
+      <p>{nativePeriod(data)} · Campaign {data.selection.campaignId} · Cohort {data.selection.cohort}</p>
+      <p>Reservations hold capacity; they do not deplete physical stock or confirm a shipment. New acquisition is commission-only; sample cost approval remains separate.</p>
+      {!data.reservations ? <p>Reservation detail N/A. The sample owner has not supplied cohort-linked home, item, unit, cost approval and provenance evidence.</p> : <>
+        <p>{data.reservations.rows.length} shown of {data.reservations.total ?? "unknown total"} source reservations · {data.reservations.coverage}{data.reservations.provisional ? " · provisional; approval authority needs review" : ""}.</p>
+        <div className={styles.reservationTable}><Table caption="Cohort-linked sample reservations" columns={[{ label: "Home / item", width: 230 }, { label: "Units / state", width: 150 }, { label: "Sample cost / approval", width: 260 }, { label: "Reservation provenance", width: 300 }]} rows={data.reservations.rows.map(row => ({ key: row.reservationRef, cells: [
+          <span className={styles.sourceCell}>{row.home} · {row.itemLabel}<small className={styles.small}>{row.itemRef}</small></span>, `${row.units} · ${row.state}`,
+          <span className={styles.sourceCell}><Fact fact={row.cost} format={nativeMoney} /> · {row.approval.state}<small className={styles.small}>Approval evidence {row.approval.evidenceRef ?? "N/A"} · version {row.approval.version ?? "N/A"}</small></span>,
+          <span className={styles.sourceCell}>{row.reservationRef}<small className={styles.small}>{row.evidenceRef} · {row.sourceVersion} · observed {row.observedAt}</small></span>,
+        ] }))} /></div>
+        {data.reservations.coverage === "complete" && data.reservations.total === 0 && <p>The source confirms no reservations for this cohort.</p>}
+      </>}
+    </HandoffDialog>
   </>;
 }

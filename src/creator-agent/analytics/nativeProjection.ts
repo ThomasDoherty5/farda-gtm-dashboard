@@ -2,7 +2,7 @@ import { allocateCosts } from "../../features/analytics/economicCosts.ts";
 import { digest } from "../config.ts";
 import { daysOf, localDay } from "./reader.ts";
 import type { AnalyticsInputFact, AnalyticsOwnerProof, AnalyticsReason, NativeAnalyticsSnapshot } from "./contract.ts";
-import { nativeAnalyticsViewSchema, type AnalyticsFact, type NativeAnalyticsView, type NativePaidMedia } from "./views.ts";
+import { nativeAnalyticsViewSchema, type AnalyticsFact, type NativeAnalyticsView, type NativeAttribution, type NativePaidMedia } from "./views.ts";
 import { NativeAnalyticsError } from "./nativeSource.ts";
 import type { OrderRow } from "./sources.ts";
 
@@ -20,11 +20,12 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     return result;
   };
   const stale = (owner: AnalyticsOwnerProof) => owner.sourceAsOf === null || at - Date.parse(owner.sourceAsOf) >= owner.maxAgeMs;
+  const syncIncomplete = (owner: AnalyticsOwnerProof) => !!owner.sync && ["partial", "error", "neverSynced", "unknown"].includes(owner.sync.state);
   function unknown<T>(reason: AnalyticsReason = "SOURCE_MISSING", owner?: AnalyticsOwnerProof): AnalyticsFact<T> {
     return { state: reason === "NOT_APPLICABLE" ? "notApplicable" : "unknown", value: null, reasonCodes: [reason], evidenceRefs: [], sourceAsOf: owner?.sourceAsOf ?? null, observedAt, provisional: false };
   }
   function known<T>(value: T, owner: AnalyticsOwnerProof, refs: string[] = [owner.proofRef]): AnalyticsFact<T> {
-    const reasons: AnalyticsReason[] = [...(owner.coverage === "complete" ? [] : ["COVERAGE_PARTIAL" as const]), ...(stale(owner) ? ["SOURCE_STALE" as const] : [])];
+    const reasons: AnalyticsReason[] = [...(owner.coverage === "complete" && !syncIncomplete(owner) ? [] : [owner.sync?.state === "error" ? "SOURCE_ERROR" as const : "COVERAGE_PARTIAL" as const]), ...(stale(owner) ? ["SOURCE_STALE" as const] : [])];
     if ((value === 0 || value !== null && typeof value === "object" && "minorUnits" in value && value.minorUnits === 0) && reasons.length) return unknown(reasons[0], owner);
     return { state: "known", value, reasonCodes: reasons, evidenceRefs: refs.map(ref => alias("evidence", ref)), sourceAsOf: owner.sourceAsOf, observedAt, provisional: reasons.length > 0 };
   }
@@ -56,11 +57,11 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     return { metricId, formulaVersion: "headline-metrics.v1" as const, unit, numerator, denominator, result };
   }
   const owners = snapshot.owners;
-  const coverage = owners.every(owner => owner.coverage === "complete") ? "complete" as const : owners.every(owner => owner.coverage === "missing") ? "missing" as const : "partial" as const;
+  const coverage = owners.every(owner => owner.coverage === "complete" && !syncIncomplete(owner)) ? "complete" as const : owners.every(owner => owner.coverage === "missing") ? "missing" as const : "partial" as const;
   const current = owners.every(owner => !stale(owner));
   const lease = Math.min(Date.parse(snapshot.validUntil), Date.parse(snapshot.observedAt) + 15 * 60_000, ...owners.map(owner => Date.parse(owner.validUntil)));
   const header = { datasetKey: "analytics-native" as const, viewKey: snapshot.viewKey, provenance: { evidenceStage: snapshot.evidenceStage, synthetic: snapshot.synthetic, sourceVersion: alias("version", snapshot.sourceVersion), observedAt: snapshot.observedAt, validUntil: new Date(lease).toISOString() }, period: snapshot.period, cohortRef: snapshot.cohortRef ? alias("cohort", snapshot.cohortRef) : null,
-    sources: owners.map(owner => ({ proofRef: alias("evidence", owner.proofRef), owner: owner.owner, accountRef: alias("account", owner.accountRef), sourceVersion: alias("version", owner.sourceVersion), definitionVersion: alias("definition", owner.definitionVersion), cohortRef: owner.cohortRef ? alias("cohort", owner.cohortRef) : null, period: owner.period, observedAt: owner.observedAt, sourceAsOf: owner.sourceAsOf, validUntil: owner.validUntil, coverage: owner.coverage, maxAgeMs: owner.maxAgeMs })),
+    sources: owners.map(owner => ({ proofRef: alias("evidence", owner.proofRef), owner: owner.owner, accountRef: alias("account", owner.accountRef), sourceVersion: alias("version", owner.sourceVersion), definitionVersion: alias("definition", owner.definitionVersion), cohortRef: owner.cohortRef ? alias("cohort", owner.cohortRef) : null, period: owner.period, observedAt: owner.observedAt, sourceAsOf: owner.sourceAsOf, validUntil: owner.validUntil, coverage: owner.coverage, maxAgeMs: owner.maxAgeMs, sync: owner.sync ?? null })),
     coverage: { state: coverage, reasonCodes: coverage === "complete" ? [] : ["COVERAGE_PARTIAL" as const] }, freshness: { state: current ? "current" as const : owners.every(owner => owner.sourceAsOf === null) ? "unknown" as const : "stale" as const, sourceAsOf: owners.every(owner => owner.sourceAsOf !== null) ? owners.map(owner => owner.sourceAsOf!).sort((a, b) => Date.parse(a) - Date.parse(b))[0]! : null },
   };
   function economics(input: Extract<NativeAnalyticsSnapshot, { viewKey: "attribution" }>["facts"]["economics"]) {
@@ -88,7 +89,7 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
       const feeds = input?.snapshot.feeds.filter(feed => feed.channel === channel) ?? [];
       const feed = feeds.find(value => value.origin === "native") ?? feeds.find(value => value.origin === "mirror");
       const native = feeds.find(value => value.origin === "native"), mirror = feeds.find(value => value.origin === "mirror");
-      const material = (rows: OrderRow[]) => rows.map(row => [row.canonicalOrderId ?? row.orderRef, row.recordOwner, row.valid, row.currency, row.netReceiptsMinor]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+      const material = (rows: OrderRow[]) => rows.map(row => [row.canonicalOrderId ?? row.orderRef, row.recordOwner, row.valid, row.currency, row.netReceiptsMinor, row.placedAt, row.attribution, row.codeOwner]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
       const mismatch = native && mirror && digest(material(native.orders)) !== digest(material(mirror.orders));
       const rows = feed?.orders.filter(row => row.recordOwner === channel && row.valid) ?? [];
       for (const row of rows) { if (row.canonicalOrderId === null || seen.has(row.canonicalOrderId)) conflict = true; else seen.add(row.canonicalOrderId); }
@@ -96,7 +97,7 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
       const effective = owner && feed ? { ...owner, coverage: mismatch || feed.coverage === "partial" ? "partial" as const : owner.coverage, sourceAsOf: feed.lastSuccessAt, maxAgeMs: Math.min(owner.maxAgeMs, 15 * 60_000) } : owner;
       const countRows = (selected: OrderRow[]) => usable && effective ? known(selected.length, effective) : unknown<number>();
       const netRows = (selected: OrderRow[]) => !usable || !effective ? unknown<Money>() : selected.some(row => row.currency !== "USD") ? unknown<Money>("CURRENCY_UNSUPPORTED", effective) : monetary(sum([known(selected.reduce((n, row) => n + row.netReceiptsMinor, 0), effective)], effective));
-      return { channel, rows, countRows, netRows, orders: countRows(rows), netReceipts: netRows(rows) };
+      return { channel, feed, effective, usable, rows, countRows, netRows, orders: countRows(rows), netReceipts: netRows(rows) };
     });
     if (conflict) for (const channel of channels) { channel.orders = unknown("IDENTITY_UNRESOLVED", owner ?? undefined); channel.netReceipts = unknown("IDENTITY_UNRESOLVED", owner ?? undefined); }
     const rows = channels.flatMap(channel => channel.rows);
@@ -104,6 +105,45 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     const countWhere = (predicate: (row: OrderRow) => boolean) => combine(channels.map(channel => channel.countRows(channel.rows.filter(predicate))));
     return { owner, channels, rows, conflict, countWhere, orders: combine(channels.map(channel => channel.orders)), net: monetary(combine(channels.map(channel => numeric(channel.netReceipts)))),
       creatorOrders: countWhere(row => row.attribution === "code" && row.codeOwner === "creator"), creatorNet: monetary(combine(channels.map(channel => numeric(channel.netRows(channel.rows.filter(row => row.attribution === "code" && row.codeOwner === "creator")))))) };
+  }
+  function attributionReview(c: ReturnType<typeof commerce>): NonNullable<NativeAttribution["unattributedReview"]> {
+    const isReviewRow = (row: OrderRow): row is OrderRow & { attribution: "code" | "unattributed" | null } => row.attribution === "unattributed" || row.attribution === null || row.attribution === "code" && row.codeOwner === "unknown";
+    const reasons = new Set<AnalyticsReason>();
+    if (!c.owner) reasons.add("SOURCE_MISSING");
+    if (c.owner && stale(c.owner)) reasons.add("SOURCE_STALE");
+    if (c.conflict) reasons.add("IDENTITY_UNRESOLVED");
+    for (const channel of c.channels) {
+      const effective = channel.effective;
+      if (!channel.usable) reasons.add(channel.feed?.syncState === "error" ? "SOURCE_ERROR" : "SOURCE_MISSING");
+      if (effective) {
+        if (effective.coverage !== "complete" || syncIncomplete(effective)) reasons.add(effective.sync?.state === "error" ? "SOURCE_ERROR" : "COVERAGE_PARTIAL");
+        if (stale(effective)) reasons.add("SOURCE_STALE");
+        if (channel.rows.some(row => row.attributionEvidence && at - Date.parse(row.attributionEvidence.observedAt) >= effective.maxAgeMs)) reasons.add("SOURCE_STALE");
+      }
+    }
+    if (c.rows.some(row => row.attribution === null || row.attribution === "code" && row.codeOwner === "unknown")) reasons.add("INPUT_UNKNOWN");
+    const unavailable = !c.owner || c.conflict || !c.channels.some(channel => channel.usable && channel.effective?.coverage !== "missing");
+    const rows: NonNullable<NativeAttribution["unattributedReview"]>["rows"] = [];
+    if (!unavailable) for (const channel of c.channels) {
+      const { feed, effective } = channel;
+      if (!channel.usable || !feed?.lastSuccessAt || !effective || effective.coverage === "missing") continue;
+      for (const row of channel.rows.filter(isReviewRow)) {
+        // Identity uncertainty suppresses the whole review above; no customer reference ever leaves the source boundary.
+        if (row.canonicalOrderId === null) continue;
+        const classification = row.attribution === null ? "notEvaluated" : row.attribution === "code" ? "unknownCodeOwner" : "unattributed";
+        rows.push({ orderRef: alias("order", JSON.stringify([effective.accountRef, channel.channel, feed.feedRef, row.orderRef])), canonicalOrderRef: alias("order", JSON.stringify([effective.accountRef, row.canonicalOrderId])),
+          channel: channel.channel, placedAt: row.placedAt, classification,
+          reason: classification === "notEvaluated" ? "ATTRIBUTION_NOT_EVALUATED" : classification === "unknownCodeOwner" ? "CODE_OWNER_UNKNOWN" : "SOURCE_REPORTED_UNATTRIBUTED",
+          sourceReason: row.attributionEvidence?.reason ?? null, evidenceRefs: row.attributionEvidence?.evidenceRefs.map(ref => alias("evidence", ref)) ?? [], reasonObservedAt: row.attributionEvidence?.observedAt ?? null,
+          sourceAttribution: row.attribution, codeOwner: row.codeOwner,
+          feedRef: alias("feed", JSON.stringify([effective.accountRef, feed.feedRef])), proofRef: alias("evidence", effective.proofRef), sourceVersion: alias("version", effective.sourceVersion), definitionVersion: alias("definition", effective.definitionVersion),
+          sourceAsOf: feed.lastSuccessAt, observedAt: feed.observedAt, provisional: reasons.size > 0,
+        });
+      }
+    }
+    rows.sort((left, right) => Date.parse(left.placedAt) - Date.parse(right.placedAt) || left.orderRef.localeCompare(right.orderRef));
+    return { state: unavailable ? "unavailable" : reasons.has("SOURCE_STALE") ? "stale" : reasons.size ? "partial" : "ready", reasonCodes: [...reasons],
+      period: snapshot.period, cohortRef: header.cohortRef, precedence: ["code", "utm", "platform"], total: unavailable ? unknown(c.conflict ? "IDENTITY_UNRESOLVED" : "SOURCE_MISSING", c.owner ?? undefined) : c.countWhere(isReviewRow), limit: 100, truncated: rows.length > 100, rows: rows.slice(0, 100) };
   }
   function commerceProjection(s: Extract<NativeAnalyticsSnapshot, { viewKey: "overviewSummary" | "attribution" }>) {
     const c = commerce(s.facts.orders), e = economics(s.facts.economics);
@@ -139,8 +179,8 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
       measures.push(measure(`platformRoas.${platform}`, "multiple", attributionWindow ? total("platformPurchaseValueMinor") : unknown<number>("ATTRIBUTION_WINDOW_UNKNOWN"), total("spendMinor")));
       return { platform, attributionWindow };
     });
-    return { ...header, ...common, platformReports, retainedUnits: !c.owner || c.conflict || c.rows.some(row => row.unitsRetained === null) ? unknown<number>() : sum(c.channels.map(channel => channel.orders.value === null ? unknown<number>() : known(channel.rows.reduce((n, row) => n + row.unitsRetained!, 0), c.owner!)), c.owner), weeks,
-      attribution, economicEvidence: e.evidence,
+    return { ...header, ...common, attributedOrders: c.creatorOrders, attributedNetSales: c.creatorNet, platformReports, retainedUnits: !c.owner || c.conflict || c.rows.some(row => row.unitsRetained === null) ? unknown<number>() : sum(c.channels.map(channel => channel.orders.value === null ? unknown<number>() : known(channel.rows.reduce((n, row) => n + row.unitsRetained!, 0), c.owner!)), c.owner), weeks,
+      attribution, unattributedReview: attributionReview(c), economicEvidence: e.evidence,
       creators: s.facts.creators.map(row => ({ creatorRef: alias("creator", row.creatorRef), roi: fact(row.roi, "economicCosts") })) };
   }
   let body: unknown;
@@ -167,8 +207,19 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
         const expiring = asset.expiresOn !== null && snapshot.window !== null && Date.parse(asset.expiresOn + "T00:00:00Z") - Date.parse(localDay(at, snapshot.window.timezone) + "T00:00:00Z") <= 30 * 86_400_000;
         const rights = asset.rights === "notGranted" ? asset.rights : expired ? "expired" : asset.rights === "cleared" && (!effective || effective.coverage !== "complete" || stale(effective)) ? "unknown" : asset.rights === "cleared" && expiring ? "expiring" : asset.rights;
         if (filters.rights !== "all" && filters.rights !== rights) continue;
-        const assetRef = alias("asset", asset.assetRef);
-        assets.push({ assetRef, platform, label: asset.label ?? `Asset ${assetRef.slice(-8)}`, clicks: n(asset.clicks), impressions: n(asset.impressions), ctr: measure("assetCtr", "percent", n(asset.clicks), n(asset.impressions), 100).result, rights, expiresOn: asset.expiresOn });
+        const assetRef = alias("asset", JSON.stringify([effective?.accountRef ?? null, platform, asset.assetRef]));
+        const grant = asset.rightsGrant;
+        const rightsEvidence: NativePaidMedia["assets"][number]["rightsEvidence"] = { state: "missing", reasonCodes: ["RIGHTS_UNKNOWN", "SOURCE_MISSING"], grant: null };
+        if (grant && effective && feed) {
+          const grantStale = !!owner && stale(owner) || stale(effective) || at - Date.parse(grant.observedAt) >= effective.maxAgeMs;
+          const incomplete = effective.coverage !== "complete" || syncIncomplete(effective) || feed.syncState === "error";
+          const unknownRights = asset.rights === "unknown" || grant.expiresOn === null || !grant.usageScope.some(scope => scope === "paidAdvertising" || scope === "creatorHandleAdvertising");
+          rightsEvidence.reasonCodes = [...(expired || asset.rights === "expired" ? ["RIGHTS_EXPIRED" as const] : []), ...(grantStale ? ["SOURCE_STALE" as const] : []), ...(incomplete ? [feed.syncState === "error" || effective.sync?.state === "error" ? "SOURCE_ERROR" as const : "COVERAGE_PARTIAL" as const] : []), ...(unknownRights ? ["RIGHTS_UNKNOWN" as const] : [])];
+          rightsEvidence.state = expired || asset.rights === "expired" ? "expired" : grantStale ? "stale" : incomplete ? "partial" : unknownRights ? "unknown" : "available";
+          rightsEvidence.grant = { assetRef, platform, accountRef: alias("account", grant.accountRef), feedRef: alias("feed", JSON.stringify([grant.accountRef, feed.feedRef])), proofRef: alias("evidence", effective.proofRef),
+            usageScope: grant.usageScope, agreementRef: alias("agreement", grant.agreementRef), agreementVersion: alias("version", grant.agreementVersion), grantVersion: alias("version", grant.grantVersion), evidenceRefs: grant.evidenceRefs.map(ref => alias("evidence", ref)), sourceVersion: alias("version", grant.sourceVersion), observedAt: grant.observedAt, expiresOn: grant.expiresOn };
+        }
+        assets.push({ assetRef, platform, label: asset.label ?? `Asset ${assetRef.slice(-8)}`, clicks: n(asset.clicks), impressions: n(asset.impressions), ctr: measure("assetCtr", "percent", n(asset.clicks), n(asset.impressions), 100).result, rights, expiresOn: asset.expiresOn, rightsEvidence });
       }
       return { platform, spend, impressions, clicks, platformPurchaseValue, attributionWindow, measures };
     });
@@ -210,7 +261,23 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     };
     if (maturePosted.value !== null && !maturePosted.provisional && totals.posted.value !== null && !totals.posted.provisional && maturePosted.value > totals.posted.value) return fail();
     const matureDelivered = difference(totals.delivered, notYetMature), matureNoPost = difference(matureDelivered, maturePosted);
+    let reservations = null;
+    if (f.reservations) {
+      const r = f.reservations, owner = proof(r.proofRef, "sampleCapacity");
+      if (r.campaignRef !== f.campaignRef || r.cohortRef !== f.cohortRef || r.cohortRef !== snapshot.cohortRef || owner.cohortRef !== r.cohortRef ||
+        digest(r.period) !== digest(snapshot.period) || digest(owner.period) !== digest(r.period) ||
+        r.rows.some(row => Date.parse(row.observedAt) > Date.parse(owner.observedAt) || row.cost.value !== null && row.cost.proofRef !== r.proofRef)) return fail();
+      const units = r.rows.filter(row => row.state === "active").reduce((sum, row) => sum + row.units, 0);
+      if (!Number.isSafeInteger(units) || r.coverage === "complete" && reserved.state === "known" && !reserved.provisional && units !== reserved.value) return fail();
+      const provisional = stale(owner) || owner.coverage !== "complete" || syncIncomplete(owner) || r.coverage !== "complete";
+      reservations = { coverage: r.coverage, total: r.total, provisional, rows: r.rows.map(row => ({ ...row,
+        reservationRef: alias("reservation", row.reservationRef), itemRef: alias("item", row.itemRef), cost: fact(row.cost, "sampleCapacity"),
+        approval: { state: provisional ? "unknown" as const : row.approval.state, evidenceRef: row.approval.evidenceRef ? alias("evidence", row.approval.evidenceRef) : null, version: row.approval.version ? alias("version", row.approval.version) : null },
+        sourceVersion: alias("version", row.sourceVersion), evidenceRef: alias("evidence", row.evidenceRef),
+      })) };
+    }
     body = { ...header, campaignRef: alias("campaign", f.campaignRef), cohortRef: alias("cohort", f.cohortRef), selection: f.selection, maturity: f.maturity, progression: f.progression, aggregation: f.aggregation, channels, totals, reserved, giftCap, notYetMature, matureDelivered, maturePosted, matureNoPost,
+      reservations,
       measures: [measure("replyConversion", "percent", totals.replied, totals.contacted, 100), measure("maturePostingRate", "percent", maturePosted, matureDelivered, 100)],
       historicalBasis: f.historicalBasis ? { period: f.historicalBasis.period, cohortRef: alias("cohort", f.historicalBasis.cohortRef), definitionVersion: alias("definition", f.historicalBasis.definitionVersion) } : null };
   } else if (snapshot.viewKey === "launchReconciliation") {

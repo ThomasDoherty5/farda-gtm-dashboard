@@ -42,7 +42,11 @@ test("loads the next real ledger page, resets a filtered scan, recovers an expir
   await page.getByRole("button",{name:"Load more"}).click();await expect(panel).toContainText(target);await expect(panel).toContainText("Showing 26 of 26");
   await page.getByRole("button",{name:"Clear filters"}).click();await expect(panel).toContainText("Showing 25 of 26");
   await context.clearCookies(); await page.getByRole("button",{name:"Load more"}).click();
-  await expect(page.getByRole("heading",{name:"Sign in again"})).toBeVisible(); await expect(panel).toHaveCount(0);
+  const denials=page.getByRole("heading",{name:"Sign in again"});
+  await expect(denials).toHaveCount(2); // Both independently scoped readers lose their grant.
+  await expect(denials.nth(0)).toBeVisible();
+  await expect(page.getByRole("region",{name:"Task and recovery controls evidence and review controls",exact:true}).getByRole("heading",{name:"Sign in again"})).toBeVisible();
+  await expect(panel).toHaveCount(0);
 });
 test("opens a registered job, saves and reloads its draft, preserves a conflicting edit, and keeps execution disabled",async({page,browser})=>{
   seedJob();await signIn(page,true);await page.goto("/automations?tab=zaps");await page.getByRole("link",{name:/schedule draft/}).click();

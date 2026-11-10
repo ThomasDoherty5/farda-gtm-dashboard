@@ -49,10 +49,11 @@ test("served orders retain original arithmetic and missing-source distinctions, 
     await expect(page.getByTestId("metric-Net receipts")).toHaveText("$12,596.00");
     await expect(page.getByTestId("metric-Paid orders")).toHaveText("400");
     await expect(page.getByText("$31.49 average net receipts")).toBeVisible();
-    for (const key of ["Contribution", "Marketing efficiency", "Blended CAC", "Views"]) await expect(page.getByTestId(`metric-${key}`)).toHaveText("Unknown");
+    for (const key of ["Contribution", "Marketing efficiency", "Blended CAC"]) await expect(page.getByTestId(`metric-${key}`)).toHaveText("Unknown");
     await expect(page.getByTestId("metric-Contribution").locator("[title]")).toHaveAttribute("title", "COST_INCOMPLETE");
     // 180 code orders include20 sitewide promotion orders; only160 belong to creators.
-    await expect(page.getByTestId("metric-Attributed orders")).toHaveText("160");
+    await expect(page.getByRole("region", {name:"Creator economics",exact:true})).toContainText("160");
+    for (const key of ["Views", "Attributed orders"]) await expect(page.getByTestId(`metric-${key}`)).toHaveText("N/A");
     await expect(page.getByText("Demo performance")).toHaveCount(0); await accessible(page);
     // eslint-disable-next-line no-restricted-globals -- Read-only privacy assertion; this test writes no browser storage.
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);

@@ -48,6 +48,7 @@ const headerRefine = (f: { observedAt: string; lastSuccessAt: string | null; syn
 
 export const orderChannels = ["shopify", "tiktokShop"] as const;
 export type OrderChannel = typeof orderChannels[number];
+export const attributionReviewReasons = ["noMatchingSignal", "conflictingSignals", "unrecognizedCode", "missingTracking", "notEvaluated", "sourceUnresolved"] as const;
 const orderRow = z.object({
   orderRef: ref,
   /**
@@ -64,10 +65,19 @@ const orderRow = z.object({
   attribution: z.enum(["code", "utm", "platform", "unattributed"]).nullable(),
   /** Who issued the discount code: a creator's code, a sitewide promotion, or not known. Present only for code attribution. */
   codeOwner: z.enum(["creator", "sitewide", "unknown"]).nullable(),
+  /** Optional source explanation for an unresolved classification. Its absence is never filled with an inferred cause. */
+  attributionEvidence: z.object({ reason: z.enum(attributionReviewReasons), sourceVersion: ref, observedAt: instantSchema,
+    evidenceRefs: z.array(ref).min(1).max(20).refine(values => new Set(values).size === values.length),
+  }).strict().nullable().optional(),
   /** Opaque, source-pseudonymous customer reference used only to count distinct customers. It is never returned. */
   customerRef: ref.nullable(),
   newRetainedCustomer: z.boolean().nullable(), unitsRetained: count.nullable(),
-}).strict().refine(o => (o.attribution === "code") === (o.codeOwner !== null), "A code owner belongs only to code-attributed orders.");
+}).strict().refine(o => (o.attribution === "code") === (o.codeOwner !== null), "A code owner belongs only to code-attributed orders.")
+  .refine(o => !o.attributionEvidence || Date.parse(o.attributionEvidence.observedAt) >= Date.parse(o.placedAt) && (
+    o.attribution === null ? ["notEvaluated", "sourceUnresolved"].includes(o.attributionEvidence.reason)
+      : o.attribution === "code" && o.codeOwner === "unknown" ? ["unrecognizedCode", "conflictingSignals", "sourceUnresolved"].includes(o.attributionEvidence.reason)
+        : o.attribution === "unattributed" && ["noMatchingSignal", "conflictingSignals", "missingTracking", "sourceUnresolved"].includes(o.attributionEvidence.reason)
+  ), "The source reason must describe this unresolved order classification.");
 export type OrderRow = z.infer<typeof orderRow>;
 /** Refunds posted in the period for orders placed before it. They correct the earlier period and never reduce this period's cohort. */
 const priorPeriodRefunds = z.object({ count, amountMinor: minor, currency }).strict();
@@ -76,6 +86,7 @@ const orderFeed = z.object({ ...feedHeader, channel: z.enum(orderChannels), orig
   .strict().superRefine(headerRefine).superRefine((f, c) => {
     const ids = f.orders.map(o => o.canonicalOrderId).filter((v): v is string => v !== null);
     if (new Set(ids).size !== ids.length) c.addIssue({ code: "custom", message: "Duplicate canonical order within one feed." });
+    if (f.orders.some(o => o.attributionEvidence && Date.parse(o.attributionEvidence.observedAt) > Date.parse(f.observedAt))) c.addIssue({ code: "custom", message: "An order reason cannot postdate its source observation." });
   });
 export type OrderFeed = z.infer<typeof orderFeed>;
 export const ordersSnapshotSchema = z.object({ scope: scopeSchema, window: windowSchema, feeds: z.array(orderFeed).max(8) }).strict().superRefine((s, c) => {
@@ -92,6 +103,18 @@ export const attributionWindowSchema = z.object({ clickDays: z.number().int().mi
   .refine(w => w.clickDays + w.viewDays > 0, "An attribution window needs a click or view duration.");
 export type AttributionWindow = z.infer<typeof attributionWindowSchema>;
 export const assetRights = ["cleared", "expiring", "expired", "notGranted", "unknown"] as const;
+/** Source-declared uses for one exact asset/platform/account. Reading these never authorizes reuse. */
+export const adAssetUsageScopes = ["paidAdvertising", "creatorHandleAdvertising", "organicRepost"] as const;
+export const adAssetRightsGrantSchema = z.object({
+  assetRef: ref, platform: z.enum(["meta", "tiktok"]), accountRef: ref, sourceVersion: ref,
+  usageScope: z.array(z.enum(adAssetUsageScopes)).min(1).max(3).refine(values => new Set(values).size === values.length),
+  agreementRef: ref, agreementVersion: ref, grantVersion: ref,
+  evidenceRefs: z.array(ref).min(1).max(20).refine(values => new Set(values).size === values.length),
+  observedAt: instantSchema,
+  /** Null means no recorded expiry; it is not an inferred perpetual grant. */
+  expiresOn: day.nullable(),
+}).strict();
+export type AdAssetRightsGrant = z.infer<typeof adAssetRightsGrantSchema>;
 const campaignRow = z.object({
   campaignRef: ref,
   /** GMV Max optimises TikTok Shop GMV that the shop would partly see anyway. Its value is never treated as incremental. */
@@ -102,12 +125,15 @@ const campaignRow = z.object({
 }).strict().refine(r => r.clicks <= r.impressions, "Clicks cannot exceed impressions.");
 /** An asset label is a short code ("AD-01"), never a caption, handle or name; without one the asset is shown by an opaque alias. */
 const assetRow = z.object({ assetRef: ref, label: z.string().regex(/^[A-Z]{2,6}-\d{1,6}$/).nullable(), clicks: count, impressions: count,
-  rights: z.enum(assetRights), expiresOn: day.nullable() }).strict()
-  .refine(r => r.clicks <= r.impressions, "Clicks cannot exceed impressions.");
+  rights: z.enum(assetRights), expiresOn: day.nullable(), rightsGrant: adAssetRightsGrantSchema.nullable().optional() }).strict()
+  .refine(r => r.clicks <= r.impressions, "Clicks cannot exceed impressions.")
+  .refine(r => !r.rightsGrant || r.rightsGrant.assetRef === r.assetRef && r.rightsGrant.expiresOn === r.expiresOn && r.rights !== "notGranted", "A grant must describe this exact asset and recorded expiry.");
 const adFeed = z.object({ ...feedHeader, platform: z.enum(["meta", "tiktok"]), currency, campaigns: z.array(campaignRow).max(500), assets: z.array(assetRow).max(500) })
   .strict().superRefine(headerRefine).superRefine((f, c) => {
     if (new Set(f.campaigns.map(x => x.campaignRef)).size !== f.campaigns.length) c.addIssue({ code: "custom", message: "Duplicate campaign." });
     if (new Set(f.assets.map(x => x.assetRef)).size !== f.assets.length) c.addIssue({ code: "custom", message: "Duplicate asset." });
+    for (const asset of f.assets) if (asset.rightsGrant && (asset.rightsGrant.platform !== f.platform || Date.parse(asset.rightsGrant.observedAt) > Date.parse(f.observedAt)))
+      c.addIssue({ code: "custom", message: "A grant must belong to the observed asset platform." });
   });
 export type AdFeed = z.infer<typeof adFeed>;
 export const adPlatformsSnapshotSchema = z.object({ scope: scopeSchema, window: windowSchema, feeds: z.array(adFeed).max(4) }).strict().superRefine((s, c) => {

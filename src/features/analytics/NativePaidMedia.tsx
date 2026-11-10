@@ -60,19 +60,51 @@ export function NativePaidMedia({ data, filters, setFilter, clear, next, first, 
       </div>
       <p className={styles.small} role="status">{data.pagination.returned} returned of {factText(data.assetTotal, nativeCount)} filtered assets. Source selection: {data.selection.platform} · {data.selection.rights}. Metrics observed {data.provenance.observedAt}.</p>
       {data.assets.length ? <Table caption="Top assets by click-through rate" columns={[{ label: "Asset", width: 300 }, { label: "Clicks / impressions", width: 290 }, { label: "CTR", width: 150 }, { label: "Rights state", width: 300 }, { label: "Next action", width: 208 }]}
-        rows={data.assets.map(row => ({ key: row.assetRef, cells: [row.label, `${factText(row.clicks, nativeCount)} / ${factText(row.impressions, nativeCount)}`, <Fact key="ctr" fact={row.ctr} format={nativePercent} />, <Badge key="rights" tone={row.rights === "cleared" ? "success" : "warning"}>{row.rights}</Badge>, <Button key="action" variant="secondary" onClick={() => setSelected(row.assetRef)} aria-haspopup="dialog" aria-label={`Review source evidence for ${row.label}`}>Review evidence</Button>] }))} /> : <p>{data.assetTotal.state === "known" && data.assetTotal.value === 0 ? "No assets match this qualified source selection." : "No asset rows supplied; total coverage remains Unknown."}</p>}
+        rows={data.assets.map(row => ({ key: row.assetRef, cells: [row.label, `${factText(row.clicks, nativeCount)} / ${factText(row.impressions, nativeCount)}`, <Fact key="ctr" fact={row.ctr} format={nativePercent} />, <span key="rights"><Badge tone={row.rights === "cleared" && row.rightsEvidence?.state === "available" ? "success" : "warning"}>{row.rights}</Badge><small className={styles.small}>Grant evidence: {row.rightsEvidence?.state ?? "missing"}</small></span>, <Button key="action" variant="secondary" onClick={() => setSelected(row.assetRef)} aria-haspopup="dialog" aria-label={`Review source evidence for ${row.label}`}>Review evidence</Button>] }))} /> : <p>{data.assetTotal.state === "known" && data.assetTotal.value === 0 ? "No assets match this qualified source selection." : "No asset rows supplied; total coverage remains Unknown."}</p>}
       <div className={styles.btnRow}><Button variant="secondary" onClick={clear}>Clear asset filters</Button>{paged && <Button variant="secondary" onClick={first}>First asset page</Button>}{data.pagination.nextCursor && <Button onClick={next} loading={refreshing}>Next asset page</Button>}</div>
       <p className={styles.small}>Expired, missing or unknown rights hold paid reuse. Expiry within 30 days requires review. These controls inspect evidence only.</p>
     </Card>
     <Dialog open={asOf} focusHeading title="Metrics as of" onClose={() => setAsOf(false)}>
-      <p>Observed {data.provenance.observedAt}; source access valid until {data.provenance.validUntil}.</p>
+      <p>{data.period ? `${data.period.startAt} to ${data.period.endAt} (end exclusive) · ${data.period.timezone} · ${data.period.basis}.` : "Reporting window and timezone unavailable."}</p>
+      <p>Snapshot observed {data.provenance.observedAt}; source access valid until {data.provenance.validUntil}. Access expiry is separate from a successful source check.</p>
       <p>Coverage: {data.coverage.state}. Freshness: {data.freshness.state}. Every asset keeps its own source observation and rights state.</p>
+      <p>Individual event timestamps are not supplied by these aggregate reports. The report window and successful source watermarks below do not replace event times.</p>
+      {data.sources.map(source => <section key={source.proofRef} aria-label={`${source.owner} source timestamps`} style={{ width: "100%", overflowWrap: "anywhere" }}>
+        <h3>{source.owner}</h3><dl className={styles.defs}>
+          <div><dt>Source as of</dt><dd>{source.sourceAsOf ?? "N/A — no successful source coverage"}</dd></div>
+          <div><dt>Owner observed</dt><dd>{source.observedAt}</dd></div>
+          <div><dt>Coverage / sync outcome</dt><dd>{source.coverage} · {source.sync?.state ?? "Outcome not supplied"}</dd></div>
+          <div><dt>Last successful coverage</dt><dd>{source.sync ? source.sync.successfulCoverageAt ?? "Never established" : source.sourceAsOf ?? "N/A"}</dd></div>
+          <div><dt>Last attempted check</dt><dd>{source.sync?.attemptedAt ?? "N/A"}</dd></div>
+          <div><dt>Source version / evidence</dt><dd>{source.sourceVersion} · {source.proofRef}</dd></div>
+        </dl>
+      </section>)}
       <p>The initial $1,500 test requires qualified product, usable permissioned content, functioning checkout, attribution and fulfillment. These reads do not authorize spend.</p>
       <Button variant="secondary" onClick={() => setAsOf(false)}>Close metrics timestamp</Button>
     </Dialog>
     <Dialog open={Boolean(asset)} focusHeading title={asset ? `Asset evidence · ${asset.label}` : "Asset evidence"} onClose={() => setSelected(null)}>
-      {asset && <><p>Platform: {label(asset.platform)}. Rights: {asset.rights}. Expiry: {asset.expiresOn ?? "Unknown / no dated expiry supplied"}.</p><p>Clicks: <Fact fact={asset.clicks} format={nativeCount} />. Impressions: <Fact fact={asset.impressions} format={nativeCount} />. CTR: <Fact fact={asset.ctr} format={nativePercent} />.</p><p className={styles.small}>Evidence source time {asset.clicks.sourceAsOf ?? "Unknown"}; observed {asset.clicks.observedAt}. Evidence references stay bound to the current source version.</p><p>No verified external asset link or grant document is supplied here. Review the canonical content-rights workflow before paid reuse.</p></>}
+      {asset && <><p>Platform: {label(asset.platform)}. Source-reported rights: {asset.rights}. Expiry: {asset.expiresOn ?? "Unknown / no dated expiry supplied"}.</p><p>Clicks: <Fact fact={asset.clicks} format={nativeCount} />. Impressions: <Fact fact={asset.impressions} format={nativeCount} />. CTR: <Fact fact={asset.ctr} format={nativePercent} />.</p><p className={styles.small}>Metric source time {asset.clicks.sourceAsOf ?? "Unknown"}; observed {asset.clicks.observedAt}. Metric freshness does not establish rights.</p>
+        <NativeAssetGrant asset={asset} />
+      </>}
       <Button variant="secondary" onClick={() => setSelected(null)}>Close asset evidence</Button>
     </Dialog>
   </>;
+}
+
+function NativeAssetGrant({ asset }: { asset: PaidData["assets"][number] }) {
+  const evidence = asset.rightsEvidence, grant = evidence?.grant;
+  return <section aria-label="Asset rights grant" style={{ width: "100%", overflowWrap: "anywhere" }}>
+    <h3>Rights evidence</h3><p>{evidence?.state ?? "missing"}{evidence?.reasonCodes.length ? ` · ${evidence.reasonCodes.join(" · ")}` : ""}.</p>
+    {grant ? <dl className={styles.defs}>
+      <div><dt>Exact asset / platform</dt><dd>{grant.assetRef} · {label(grant.platform)}</dd></div>
+      <div><dt>Account / feed</dt><dd>{grant.accountRef} · {grant.feedRef}</dd></div>
+      <div><dt>Usage scope</dt><dd>{grant.usageScope.join(" · ") || "No permitted use supplied"}</dd></div>
+      <div><dt>Source agreement / version</dt><dd>{grant.agreementRef} · {grant.agreementVersion}</dd></div>
+      <div><dt>Grant / source version</dt><dd>{grant.grantVersion} · {grant.sourceVersion}</dd></div>
+      <div><dt>Rights observed</dt><dd>{grant.observedAt}</dd></div>
+      <div><dt>Grant expiry</dt><dd>{grant.expiresOn ?? "Not supplied — the reuse window cannot be established"}</dd></div>
+      <div><dt>Grant evidence / proof</dt><dd>{grant.evidenceRefs.join(" · ")} · {grant.proofRef}</dd></div>
+    </dl> : <p>Exact agreement, version and usage scope are unavailable. A reported cleared status alone cannot establish permission for paid reuse.</p>}
+    <p>Missing, expired, stale, partial or out-of-scope rights hold the affected reuse. Organic repost permission does not grant paid or creator-handle advertising rights. This inspection does not authorize any reuse or spend.</p>
+  </section>;
 }

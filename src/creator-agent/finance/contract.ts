@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { analyticsPeriodSchemaNative } from "../analytics/contract.ts";
 
 /** Finance (THO-303) and payable/settlement (THO-300) read models served at the authenticated `/v1/read` boundary. Read only. */
 export const financeViewKeys = ["financeDashboard", "periodClose", "monthsHistory", "closePackage", "reportManifest",
@@ -14,7 +15,8 @@ const period = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
  * pick what the service answers. No view accepts a free-form query.
  */
 export const financeFilters = {
-  financeDashboard: z.object({}).strict(),
+  financeDashboard: z.object({ startAt: z.string().optional(), endAt: z.string().optional(), timezone: z.string().optional() }).strict().refine(v =>
+    Object.keys(v).length === 0 || analyticsPeriodSchemaNative.safeParse({ ...v, basis: "eventTime" }).success, "An exact reporting period is required."),
   commissionLedger: z.object({}).strict(),
   monthsHistory: z.object({}).strict(),
   reportManifest: z.object({}).strict(),

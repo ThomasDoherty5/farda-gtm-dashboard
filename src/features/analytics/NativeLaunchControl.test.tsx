@@ -142,7 +142,8 @@ describe("native launch readiness source and exact original recovery", () => {
     if (changed === "draft") h.d.evidenceRefs = ["other-source-evidence"];
     await act(async () => { await h.client.invalidateQueries(); });
     await act(async () => { release(); });
-    await waitFor(() => expect(e.getByText(/changed during preparation/)).toBeInTheDocument());
+    if (changed === "expiry") { expect(await screen.findByText(/Source access has expired/)).toBeInTheDocument(); expect(screen.queryByLabelText("Rationale")).not.toBeInTheDocument(); }
+    else await waitFor(() => expect(e.getByText(/changed during preparation/)).toBeInTheDocument());
     expect(h.requests).toHaveLength(0); expect(h.router.state.location.search).not.toContain("readinessRequestKey");
   });
 
@@ -154,4 +155,40 @@ describe("native launch readiness source and exact original recovery", () => {
     expect(JSON.stringify(window.sessionStorage)).not.toContain("Legacy protected text"); expect(h.requests).toHaveLength(0);
   });
 
+});
+
+describe("launch source handoffs", () => {
+  function supplied(stage: "source" | "synthetic") {
+    const d=fixture(); d.launchDate=null; d.launchDateApproved=false;
+    d.presentation={evidenceStage:stage,recordRef:d.targetRef,recordVersion:d.version,recordUrl:"https://www.notion.so/fictional-launch",
+      dateProposalUrl:"https://www.notion.so/fictional-date-workflow",sampleAcceptance:{state:"verified",evidenceRef:d.evidenceRefs[0]!,version:"fictional-sample-v1",observedAt:d.observedAt}};
+    d.gates[0]!.presentation={label:"Product qualification",owner:"Fictional product owner",taskUrl:"https://linear.app/fictional/issue/TEST-1",evidenceUrl:"https://www.notion.so/fictional-evidence",dueRelative:"L − 7"};
+    return d;
+  }
+  it("uses the qualified source task and sample acceptance without recording or approving a date", async () => {
+    const h=harness(supplied("source")); await screen.findByTestId("metric-gates");
+    expect(screen.getByText("Fictional product owner")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button",{name:"Inspect evidence for gate 1"}));
+    const dialog=within(screen.getByText("Launch gate evidence",{selector:"h2"}).closest("dialog")!);
+    expect(dialog.getByRole("link",{name:"Open task in source",hidden:true})).toHaveAttribute("href","https://linear.app/fictional/issue/TEST-1");
+    await userEvent.click(dialog.getByRole("button",{name:"Close",hidden:true}));
+    await userEvent.click(screen.getByRole("button",{name:"Open date proposal"}));
+    expect(screen.queryByRole("link",{name:"Open verified date-approval workflow"})).not.toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Proposed L"),"2027-03-01"); await userEvent.type(screen.getByLabelText("Reason / evidence"),"Review verified sample acceptance");
+    await userEvent.click(screen.getByRole("button",{name:"Open date proposal"}));
+    expect(screen.getByRole("link",{name:"Open verified date-approval workflow"})).toHaveAttribute("href","https://www.notion.so/fictional-date-workflow");
+    expect(screen.getByText("Launch date is not set")).toBeInTheDocument();expect(h.requests).toHaveLength(0);
+    expect(JSON.stringify([Object.entries(window.sessionStorage),Object.entries(window.localStorage)])).not.toContain("Review verified sample acceptance");
+  });
+  it("does not expose fixture navigation and clears the gate drilldown when its source revision changes", async () => {
+    const h=harness(supplied("synthetic"));await screen.findByTestId("metric-gates");
+    await userEvent.click(screen.getByRole("button",{name:"Inspect evidence for gate 1"}));
+    expect(screen.queryByRole("link",{name:"Open task in source",hidden:true})).not.toBeInTheDocument();
+    h.d.version="new-source-version";h.d.presentation!.recordVersion=h.d.version;
+    await act(async()=>{await h.client.invalidateQueries();});
+    const dialog=screen.getByText("Launch gate evidence",{selector:"h2"}).closest("dialog")!;
+    await waitFor(()=>expect(dialog).not.toHaveAttribute("open"));
+    expect(within(dialog).queryByText(h.d.gates[0]!.id,{exact:true})).not.toBeInTheDocument();
+    expect(h.requests).toHaveLength(0);
+  });
 });

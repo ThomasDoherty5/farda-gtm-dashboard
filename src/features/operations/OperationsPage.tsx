@@ -109,6 +109,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
   };
 
   const summary = home === "all" ? data.all : data.byHome[home];
+  const basis = demo ? null : data.summaryBasis;
   const scopeLabel = home === "all" ? null : homeLabel(home);
   const inScope = (row: { home: Home }) => home === "all" || row.home === home;
   const allRows = oldestQueueFirst(data.queue.rows.filter(inScope));
@@ -127,6 +128,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
     const Compact = layout === "mobile" ? MobileOperations : TabletOperations;
     return <>
       {reportingLabel && <p className={styles.meta}>Source period: {reportingLabel}</p>}
+      {basis && <p className={styles.meta}>Latency: {basis.latency.definition} · {basis.latency.denominator} eligible shipments. Shipping cost: {basis.shippingCost.definition} · {basis.shippingCost.denominator} eligible orders.</p>}
       {view === "shipping" ? <><nav aria-label="Operations sections" className={styles.compactTabs}><LinkButton variant="ghost" to={tabTo("overview")}>Overview</LinkButton><LinkButton variant="ghost" to={tabTo("orders")}>To ship</LinkButton><LinkButton to={tabTo("shipping")} aria-current="page">Shipping</LinkButton></nav><ShippingPanels reportingContext={search} /></> : <>
         <Compact data={data} demo={demo} home={home} view={view} overviewTo={tabTo("overview")} ordersTo={tabTo("orders")} ready={ready} held={held} syncedMinutesAgo={behind} stale={staleSource} complete={demo || res.coverage.complete === true && res.dataState !== "stale" && res.dataState !== "partial"} />
       </>}
@@ -136,6 +138,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
   return (
     <>
       {reportingLabel && <p className={styles.meta}>Source period: {reportingLabel}</p>}
+      {basis && <p className={styles.meta}>Latency: {basis.latency.definition} · {basis.latency.denominator} eligible shipments. Shipping cost: {basis.shippingCost.definition} · {basis.shippingCost.denominator} eligible orders.</p>}
       <OpsTabs current={view} hrefs={{ overview: tabTo("overview"), orders: tabTo("orders"), shipping: tabTo("shipping") }} />
 
       <Notice tone={staleSource ? "warning" : "violet"} label={staleSource ? "Behind" : "Source"} title={`${data.source.label} · ${lastSync ? `Synced ${minutesAgoLabel(behind ?? 0)}` : "No successful sync recorded"}`} role={staleSource ? "status" : undefined} testId="source-freshness">
@@ -145,7 +148,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
       <KpiRow>
         <Kpi label="To ship" context={`${figure(summary.waitingOverTwoDays, String)} waiting more than 2 days`} testId="metric-To ship">{figure(summary.toShip, String)}</Kpi>
         <Kpi label="Shipped today" context={scopeLabel ? `At ${scopeLabel}` : "Across 3 shipping homes"} testId="metric-Shipped today">{figure(summary.shippedToday, String)}</Kpi>
-        <Kpi label="Time to ship" context={reasonText(summary.timeToShipDays) ?? "7-day average · order to carrier"} testId="metric-Time to ship">{figure(summary.timeToShipDays, (d) => `${d} days`)}</Kpi>
+        <Kpi label="Time to ship" context={reasonText(summary.timeToShipDays) ?? (demo ? "7-day average · order to carrier" : basis ? `${basis.latency.definition} · ${basis.latency.denominator} eligible shipments` : "Source denominator unavailable")} testId="metric-Time to ship">{figure(summary.timeToShipDays, (d) => `${d} days`)}</Kpi>
         <Kpi label="Open issues" context={scopeLabel ? "Issues are not assigned to a home" : `${data.needHumanResponse} need a human response`} testId="metric-Open issues">{scopeLabel ? "N/A" : figure(data.openIssues, String)}</Kpi>
       </KpiRow>
 
@@ -202,7 +205,7 @@ function Body({ res, data, layout, home, demo, reportingLabel }: { reportingLabe
           )}
           {exceptions.length > 0 && <LinkButton to={operationsHref(`/shipments/${encodeURIComponent(exceptions[0]!.shipmentRef)}/exceptions/${encodeURIComponent(exceptions[0]!.exceptionId)}`, search)} style={{ minWidth: 190, alignSelf: "flex-start" }}>Review exceptions</LinkButton>}
         </Panel>
-        <Panel title="A clear path to delivered" subtitle={`Last 7 days${demo ? " · synthetic sample data" : ""}`} testId="health-panel">
+        <Panel title="A clear path to delivered" subtitle={demo ? "Last 7 days · synthetic sample data" : reportingLabel ?? "Source period unavailable"} testId="health-panel">
           <FactList wide label="Fulfillment health" rows={[
             ["Carrier transit", figure(data.health.carrierTransitDays, (d) => `${d} days average`)],
             ["Shipping cost", figure(data.health.shippingCostPerOrder, (m) => `${formatMoneyExact(m)} per order`)],

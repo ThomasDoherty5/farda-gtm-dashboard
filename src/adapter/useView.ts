@@ -14,7 +14,7 @@ export async function protectedRead<T>(client: QueryClient, root: readonly unkno
   try { value = await read(); }
   catch (error) {
     if (error instanceof AdapterError && mustClearProtectedData(error.category) && started === currentEpoch(client, root))
-      dropProtectedData(client, root, queryKey);
+      dropProtectedData(client, root, queryKey, error);
     throw error;
   }
   if (started !== currentEpoch(client, root)) throw new AdapterError({ code: "SESSION_EXPIRED", message: "Authorization changed while this read was in progress.",
@@ -73,7 +73,7 @@ export function useView<F, T>(viewKey: string, filters: F, period: Period | null
   });
 }
 
-export function dropProtectedData(client: QueryClient, root: readonly unknown[], denyingKey?: readonly unknown[]) {
+export function dropProtectedData(client: QueryClient, root: readonly unknown[], denyingKey?: readonly unknown[], denial?: AdapterError) {
   const epochs = authEpochs.get(client) ?? new Map<string,number>();
   epochs.set(JSON.stringify(root), currentEpoch(client, root) + 1);
   authEpochs.set(client, epochs);
@@ -86,6 +86,10 @@ export function dropProtectedData(client: QueryClient, root: readonly unknown[],
     if (query !== denyingQuery && query.state.fetchStatus !== "idle") {
       void query.cancel({silent:true,revert:false});
       query.setState({data:undefined,dataUpdatedAt:0,fetchStatus:"idle",status:"error",error:expired});
+    } else if (query !== denyingQuery) {
+      // A completed ancestor may own the denied nested view. Clearing only its
+      // data would unmount that view and lose the sole denial/recovery UI.
+      query.setState({data:undefined,dataUpdatedAt:0,fetchStatus:"idle",status:"error",error:denial ?? expired});
     } else query.setState({data:undefined,dataUpdatedAt:0});
   }
 }

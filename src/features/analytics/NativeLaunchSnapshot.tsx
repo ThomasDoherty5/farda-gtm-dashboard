@@ -4,6 +4,7 @@ import { LinkButton } from "@/components/Button";
 import { DataTable } from "@/components/DataTable";
 import { Card, KpiCard, KpiGrid } from "./parts";
 import { Fact, factText, nativeCount, nativeMoney, nativePeriod, NativeAnalyticsEvidence } from "./NativeAnalyticsEvidence";
+import { NativeReportSchedule } from "./NativeReportSchedule";
 import styles from "./Analytics.module.css";
 const labels = { instagram: "Instagram", tiktokWebsite: "TikTok website", tiktokShop: "TikTok Shop" };
 const gates = { terms: "Accepted terms", stock: "Dispatch stock", sampleAuthority: "Sample authority", content: "Permissioned content", sourceAccess: "Source access", budget: "Budget authority", approval: "Exact approval" };
@@ -24,6 +25,6 @@ export function NativeLaunchSnapshot({ data, refresh, refreshing }: { data: Snap
     <div className={styles.split} style={{ gridTemplateColumns: "636fr 640fr", gap: 20 }}>
       <Card labelledBy="decisions-title"><h2 id="decisions-title" className={styles.cardH2}>Decisions waiting</h2><p className={styles.small}>Source requests remain separate from approval, dispatch and confirmation.</p><ul className={styles.approvals}>{data.approvals.map((row, index) => <li key={row.approvalRef} className={styles.approval}><span className={styles.monogram} aria-hidden="true">{index + 1}</span><span className={styles.approvalCopy}><strong className={styles.label}>Observed approval · {row.state}</strong><span>{row.requestedAt}</span></span><Badge tone={row.state === "approved" ? "success" : "warning"}>{row.state}</Badge></li>)}</ul>{data.approvals.length === 0 && <p>No approval records supplied; the complete decision queue remains Unknown.</p>}<LinkButton variant="secondary" to="/approvals">Open authoritative approvals</LinkButton></Card>
       <Card labelledBy="owners-title"><h2 id="owners-title" className={styles.cardH2}>Connected, with a clear owner.</h2><p className={styles.small}>Each supplied owner retains its own source time and completeness.</p>{data.sources.map(row => <dl key={row.proofRef} className={styles.sourceRow}><dt>{row.owner}</dt><dd>{row.sourceAsOf ?? "Source time Unknown"}</dd><dd><Badge width={182}>{row.coverage}</Badge></dd></dl>)}<p className={styles.violetSmall}>A reporting source does not grant browser access, recurring execution or media-spend permission.</p></Card>
-    </div><footer className={styles.footer}><p>{nativePeriod(data)}</p><p>Source facts stay with their owners. Synthetic evidence is labeled.</p></footer>
+    </div><Card labelledBy="launch-report-schedule"><NativeReportSchedule /></Card><footer className={styles.footer}><p>{nativePeriod(data)}</p><p>Source facts stay with their owners. Synthetic evidence is labeled.</p></footer>
   </>;
 }

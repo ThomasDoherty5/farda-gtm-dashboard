@@ -1,4 +1,5 @@
 import { useId, useState, type ReactNode } from "react";
+import { useLocation } from "react-router-dom";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { Money, ProvenanceValue, ReadResponse } from "@/adapter/contract";
 import { staleReasonText } from "@/adapter/freshness";
@@ -8,6 +9,7 @@ import { useScope } from "@/adapter/scope";
 import { Alert } from "@/components/Alert";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
+import { currentViewNavigation } from "@/components/currentViewNavigation";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
 import { ViewError } from "@/components/ViewError";
@@ -285,9 +287,10 @@ export function ChoiceButton({ legend, title, options, value, onChange, width, b
 
 /** Workspace navigation (Figma 14:100): the current page is a primary button, the others are ghost buttons. */
 export function WorkspaceTabs({ tabs }: { tabs: { label: string; to: string; current: boolean }[] }) {
+  const { pathname, search, hash } = useLocation();
   return (
     <nav aria-label="Overview sections" className={styles.actions} style={{ gap: 8 }}>
-      {tabs.map((t) => <LinkButton key={t.label} to={t.to} variant={t.current ? "primary" : "ghost"} style={{ minWidth: 152 }} aria-current={t.current ? "page" : undefined}>{t.label}</LinkButton>)}
+      {tabs.map((t) => <LinkButton key={t.label} to={t.current ? pathname + search + hash : t.to} onClick={t.current ? currentViewNavigation : undefined} variant={t.current ? "primary" : "ghost"} style={{ minWidth: 152 }} aria-current={t.current ? "page" : undefined}>{t.label}</LinkButton>)}
     </nav>
   );
 }
