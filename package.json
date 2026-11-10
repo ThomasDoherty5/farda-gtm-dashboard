@@ -22,6 +22,7 @@
     "adapter:register": "node scripts/adapter-freeze-extract.mjs",
     "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
     "creator-agent": "node tools/creator-agent/run.mjs",
+    "sim": "node tools/sandbox-sim/run.mjs",
     "test:e2e:agent": "playwright test -c playwright.agent.config.ts"
   },
   "dependencies": {
