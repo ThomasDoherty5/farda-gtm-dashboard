@@ -37,6 +37,7 @@
 .reviewPager button { width: 100%; flex: none; }
 .sourceCell { display: block; overflow-wrap: anywhere; }
 .sourceCell small { display: block; }
+.reservationTable { width: 100%; min-width: 0; }
 .gap18 { gap: 18px; }
 .cardH2 { font: var(--text-h2); }
 .sectionHeading { display: flex; flex-direction: column; gap: 6px; }

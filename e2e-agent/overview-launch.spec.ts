@@ -35,12 +35,15 @@ async function captureDialog(page:Page,info:TestInfo,name:string,title:string,ta
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
     const audit=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
     expect(audit.violations.map(v=>({id:v.id,targets:v.nodes.map(n=>n.target)}))).toEqual([]);
+    expect(await dialog.evaluate(e=>e.scrollWidth<=e.clientWidth+1)).toBe(true);
     const extent=await dialog.evaluate(e=>({height:e.scrollHeight,viewport:e.clientHeight}));
     const step=Math.max(1,extent.viewport-40),last=Math.max(0,extent.height-extent.viewport);
     const offsets=[...new Set([...Array.from({length:Math.ceil(last/step)},(_,i)=>i*step),last])];
     const table=dialog.getByRole("region",{name:tableCaption,exact:true});
+    if(name==="reservations"||name==="order-review"||name==="order-provenance")await expect(table).toHaveCount(1);
     if(await table.count())expect(await table.locator("th,td").evaluateAll(cells=>cells.every(cell=>cell.scrollWidth<=cell.clientWidth+1))).toBe(true);
     const horizontal=await table.count() ? await table.evaluate(e=>({last:Math.max(0,e.scrollWidth-e.clientWidth),step:Math.max(1,e.clientWidth-40)})) : {last:0,step:1};
+    if(width===390&&(name==="reservations"||name==="order-review"||name==="order-provenance"))expect(horizontal.last).toBeGreaterThan(0);
     const lefts=[...new Set([...Array.from({length:Math.ceil(horizontal.last/horizontal.step)},(_,i)=>i*horizontal.step),horizontal.last])];
     const pager=dialog.getByRole("group",{name:"Source review pages",exact:true});
     if(await pager.count()) {
