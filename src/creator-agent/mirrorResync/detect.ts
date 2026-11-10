@@ -21,8 +21,8 @@ const row = (r: SourceRecord | MirrorRow): ReconciliationRow => ({ key: r.key, s
  * AC2. Compares one record's mirrored fields with an authoritative source read, through the reconciliation comparator
  * rather than a second set of rules. Both reads are declared complete for the record's dataset; the comparator still
  * demotes a read that finished before the period's cutoff. Findings for other keys cannot arise, since only this record is
- * passed in. `set` is what a resync would write: the source values of the fields the findings name, or every mirrored
- * field when the mirror has no row.
+ * passed in. `set` is what a resync would write: the source values of the fields the findings name, or every declared
+ * mirrored field when the mirror has no row.
  */
 export function detectRecordDifference(schedule: CheckSchedule, ref: RecordRef, source: SourceSide, mirror: MirrorSide, atMs: number,
   secret: string, runId: string): RecordDifference {
@@ -44,10 +44,13 @@ export function detectRecordDifference(schedule: CheckSchedule, ref: RecordRef, 
   if (!group || group.comparison.coverage !== "complete") return { kind: "incomplete", reason: REASONS.reconciliationIncomplete, detail: "COVERAGE_NOT_COMPLETE" };
   const findings = result.findings.filter(f => f.recordKey === ref.recordKey);
   if (!findings.length) return { kind: "matched" };
+  // Only fields the dataset declares as mirrored are ever written.
+  const statusMirrored = schedule.expectedDatasets.some(d => d.scope === ref.scope && d.grain === ref.grain && d.mirroredFields?.includes("record-status"));
   const set: Partial<MirroredFields> = {};
   for (const f of findings) {
     if (f.conflict.category === "missing_mirror" || f.conflict.category === "amount") set.amountMinor = source.record.amountMinor;
-    if ((f.conflict.category === "missing_mirror" || f.conflict.category === "field") && source.record.status !== undefined) set.status = source.record.status;
+    if ((f.conflict.category === "missing_mirror" || f.conflict.category === "field") && statusMirrored && source.record.status !== undefined)
+      set.status = source.record.status;
   }
   return { kind: "differences", findings, set };
 }

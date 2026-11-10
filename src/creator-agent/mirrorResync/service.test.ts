@@ -19,10 +19,12 @@ const SECRET = "synthetic-test-secret-0123456789abcdef";
 const DAY = "2027-02-11";
 const START = Date.parse("2027-02-12T06:00:00Z");
 const LEASE = 60_000;
+/** The fake writer's default `maxWriteMs` and the service's default settle margin. */
+const MAX_WRITE = 10_000, MARGIN = 10_000;
 const OPERATOR = "synthetic-operator-1";
 const schedule: CheckSchedule = {
   checkId: "synthetic-orders-check", version: 1, timezone: "Europe/London", runAt: "03:00", cutoffLagMinutes: 120, coverage: { lookbackDays: 2 },
-  expectedDatasets: [{ scope: "synthetic-store-a", grain: "order", amountField: "net-sales", currencies: ["GBP"] }],
+  expectedDatasets: [{ scope: "synthetic-store-a", grain: "order", amountField: "net-sales", currencies: ["GBP"], mirroredFields: ["record-status"] }],
 };
 const record = (key: string, amountMinor: number, status?: SourceRecord["status"]): SourceRecord =>
   ({ key, scope: "synthetic-store-a", grain: "order", period: DAY, currency: "GBP", amountMinor, ...(status ? { status } : {}) });
@@ -44,14 +46,14 @@ const MIRROR = [record("order-1", 900, "confirmed"), record("order-2", 500, "pen
 const dirs: string[] = [];
 afterEach(() => { while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true }); });
 
-function setup(path = ":memory:") {
+function setup(path = ":memory:", sched: CheckSchedule = schedule) {
   const db = new DatabaseSync(path);
   db.exec("CREATE TABLE IF NOT EXISTS capability_scope(id INTEGER PRIMARY KEY,workspace_id TEXT,account_id TEXT,environment TEXT)");
   db.prepare("INSERT OR IGNORE INTO capability_scope VALUES(1,?,?,?)").run(scope.workspaceId, scope.accountId, scope.environment);
   const clock = { at: START, reads: 0 };
   const now = () => { clock.reads++; return clock.at; };
   const reconciliation = new MirrorReconciliationRepository(db, scope, { secret: SECRET, now });
-  reconciliation.saveSchedule(schedule);
+  reconciliation.saveSchedule(sched);
   const check = reconciliation.recordCheck({ runId: "synthetic-run-1", checkId: schedule.checkId, scheduleVersion: 1, periods: [DAY],
     coverage: [read("source"), read("mirror")], sourceRows: SOURCE.map(asRow), mirrorRows: MIRROR.map(asRow) });
   clock.at += 60_000;
@@ -172,7 +174,8 @@ describe("mirror resync", () => {
     const out = await t.apply("synthetic-key-1");
     expect([out.proposal.state, out.replayed]).toEqual(["verified", false]);
     expect(t.writer.writes).toEqual([{ ref: ref("order-1"), expectedVersion: "synthetic-mirror-v1", set: { amountMinor: 1000 },
-      writeKey: `${proposal.proposalId}.a1` }]);
+      writeKey: `${proposal.proposalId}.a1`, deadline: new Date(t.clock.at + MAX_WRITE).toISOString() }]);
+    expect(t.writer.signals[0]).toBeInstanceOf(AbortSignal);
     const stored = t.writer.current("order-1")!;
     expect(stored.row).toEqual({ ...record("order-1", 1000, "confirmed"), local: LOCAL });
     expect(stored.history).toEqual([...LOCAL_HISTORY, { version: "synthetic-mirror-v2", actor: "resync", changes: { amountMinor: 1000 },
@@ -205,15 +208,26 @@ describe("mirror resync", () => {
     await expect(t.apply("synthetic-key-1", "synthetic-operator-2")).rejects.toThrow("RESYNC_OPERATOR_MISMATCH");
   });
 
-  it("AC7: a timeout is settled by reading back, and only an explicit apply tries again", async () => {
+  it("AC7: a timeout stays uncertain until its deadline has passed, and only an explicit apply then tries again", async () => {
     const t = setup();
     t.propose("synthetic-key-1", "order-1");
     t.writer.next("timeout");
+    const deadline = t.clock.at + MAX_WRITE;
     let out = await t.apply("synthetic-key-1");
-    expect([out.proposal.state, out.proposal.reasonCode, out.finding?.status, t.writer.calls]).toEqual(["not_applied", "WRITE_NOT_APPLIED", "open",
+    // The row is unchanged, but the write could still land until its deadline plus the margin.
+    expect([out.proposal.state, out.proposal.reasonCode, out.finding?.status, t.writer.calls]).toEqual(["uncertain", "WRITE_OUTCOME_PENDING", "open",
       { read: 2, write: 1, readBack: 1 }]);
+    t.clock.at = deadline + MARGIN - 1;
+    out = await t.apply("synthetic-key-1");
+    expect([out.proposal.state, out.proposal.reasonCode, t.writer.calls]).toEqual(["uncertain", "WRITE_OUTCOME_PENDING", { read: 2, write: 1, readBack: 2 }]);
+    t.clock.at = deadline + MARGIN;
+    out = await t.apply("synthetic-key-1");
+    expect([out.proposal.state, out.proposal.reasonCode, t.writer.calls]).toEqual(["not_applied", "WRITE_NOT_APPLIED", { read: 2, write: 1, readBack: 3 }]);
     out = await t.apply("synthetic-key-1");
     expect([out.proposal.state, out.proposal.attempts, t.writer.writes.map(w => w.writeKey.split(".").pop())]).toEqual(["verified", 2, ["a1", "a2"]]);
+    expect(t.repo.auditTrail(out.proposal.proposalId).map(e => [e.attempt, e.event, e.reasonCode])).toEqual([[0, "proposed", null],
+      [1, "planned", null], [1, "applying", null], [1, "uncertain", "WRITE_OUTCOME_PENDING"], [1, "uncertain", "WRITE_OUTCOME_PENDING"],
+      [1, "not_applied", "WRITE_NOT_APPLIED"], [2, "planned", "WRITE_NOT_APPLIED"], [2, "applying", null], [2, "verified", "RESYNC_VERIFIED"]]);
   });
 
   it("AC7: a lost acknowledgement is settled from the read-back, never by writing again", async () => {
@@ -254,7 +268,70 @@ describe("mirror resync", () => {
     release();
     await expect(first).rejects.toThrow("RESYNC_LEASE_LOST");
     expect(t.repo.proposal("synthetic-key-1")!.state).toBe("verified");
-    expect(events(t, "synthetic-key-1").map(([e]) => e)).toEqual(["proposed", "planned", "applying", "verified", "lease_lost"]);
+    const trail = t.repo.auditTrail(t.repo.proposal("synthetic-key-1")!.proposalId);
+    expect(trail.map(e => [e.attempt, e.event, e.state])).toEqual([[0, "proposed", "proposed"], [1, "planned", "proposed"], [1, "applying", "applying"],
+      [1, "verified", "verified"], [1, "late_result", "verified"]]);
+    expect(trail[4]!.detail).toMatchObject({ intended: { event: "verified", state: "verified", reasonCode: "RESYNC_VERIFIED" } });
+  });
+
+  it("AC7: refuses a lease that cannot cover the writer's longest write plus the margin", () => {
+    const t = setup();
+    const make = (maxWriteMs: number) => () => new MirrorResyncService(t.repo, { source: t.source, writer: new FakeMirrorWriter(() => t.clock.at, maxWriteMs),
+      secret: SECRET, leaseMs: LEASE });
+    expect(make(LEASE - MARGIN)).toThrow("RESYNC_LEASE_SHORTER_THAN_WRITE");
+    expect(make(0)).toThrow("INVALID_RESYNC_OPTIONS");
+    expect(make(LEASE - MARGIN - 1)).not.toThrow();
+  });
+
+  it("AC7: a write stalled past the lease is not settled as not applied, and is never written again, before its deadline", async () => {
+    const t = setup();
+    t.propose("synthetic-key-1", "order-1");
+    const claimedAt = t.clock.at, write = t.writer.write.bind(t.writer);
+    let release!: () => void, invocations = 0;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    // The first write stalls before reaching the provider and lands only when released; later writes go straight through.
+    t.writer.write = async request => { if (++invocations === 1) await held; return write(request); };
+    // The planning reads are slow, so the write starts late in the lease and its deadline falls after the lease expires.
+    t.writer.onRead = (how, n) => { if (how === "read" && n === 2) t.clock.at = claimedAt + LEASE - 5_000; };
+    const first = t.apply("synthetic-key-1");
+    await vi.waitFor(() => expect(invocations).toBe(1));
+    t.writer.onRead = null;
+    const deadline = claimedAt + LEASE - 5_000 + MAX_WRITE;
+    expect(t.repo.proposal("synthetic-key-1")!.plan!.writeDeadline).toBe(new Date(deadline).toISOString());
+
+    for (const at of [claimedAt + LEASE + 1, deadline + 1, deadline + MARGIN - 1]) {
+      t.clock.at = at;
+      const out = await t.apply("synthetic-key-1");
+      expect([out.proposal.state, out.proposal.reasonCode, out.proposal.attempts, invocations]).toEqual(["uncertain", "WRITE_OUTCOME_PENDING", 1, 1]);
+    }
+    // Only once the deadline plus the margin has passed does an unchanged row prove the write did not land.
+    t.clock.at = deadline + MARGIN;
+    expect((await t.apply("synthetic-key-1")).proposal.state).toBe("not_applied");
+    const second = await t.apply("synthetic-key-1");
+    expect([second.proposal.state, second.proposal.attempts, invocations]).toEqual(["verified", 2, 2]);
+    // The stalled first write finally arrives. The provider's atomic compare-and-set refuses it, and its late result is
+    // recorded under attempt 1, not the proposal's current attempt.
+    release();
+    await expect(first).rejects.toThrow("RESYNC_LEASE_LOST");
+    expect(t.writer.current("order-1")!.history.filter(h => h.actor === "resync")).toHaveLength(1);
+    const trail = t.repo.auditTrail(second.proposal.proposalId), late = trail.at(-1)!;
+    // One late result: the refused write is not then read back as if it were uncertain.
+    expect(trail.filter(e => e.event === "late_result")).toHaveLength(1);
+    expect([late.attempt, late.event, late.state]).toEqual([1, "late_result", "verified"]);
+    expect(late.detail).toMatchObject({ intended: { state: "conflict", reasonCode: "MIRROR_VERSION_CHANGED" } });
+    expect(t.repo.proposal("synthetic-key-1")).toMatchObject({ state: "verified", attempts: 2 });
+  });
+
+  it("writes only the mirrored fields the dataset declares", async () => {
+    const undeclared: CheckSchedule = { ...schedule, expectedDatasets: schedule.expectedDatasets.map(({ mirroredFields: _, ...d }) => d) };
+    const t = setup(":memory:", undeclared);
+    // Without the declaration, order-2's status difference is not a finding, and creating order-3 sets only its amount.
+    expect(t.check.raised.map(f => [f.recordKey, f.conflict.category]).sort()).toEqual([["order-1", "amount"], ["order-3", "missing_mirror"],
+      ["order-4", "missing_source"]]);
+    t.propose("synthetic-key-3", "order-3");
+    const out = await t.apply("synthetic-key-3");
+    expect([out.proposal.state, t.writer.writes.map(w => w.set)]).toEqual(["verified", [{ amountMinor: 700 }]]);
+    expect(t.writer.current("order-3")!.row.status).toBeUndefined();
   });
 
   it("AC8: closes the finding only when the read-back matches, and leaves a partial apply open with its reason", async () => {

@@ -16,6 +16,8 @@ export type ResyncPlan = {
   set: Partial<MirroredFields>;
   /** Plain fingerprints of the differences detected for this attempt. */
   detected: string[];
+  /** Set when the write starts: the service-clock instant after which the write must not apply. Null before then. */
+  writeDeadline: string | null;
 };
 export type ResyncProposal = {
   proposalId: string; idempotencyKey: string; ref: RecordRef; fingerprint: string; category: ReconciliationConflict["category"];
@@ -27,10 +29,12 @@ export type FindingResolution = { fingerprint: string; checkId: string; status: 
 export type AuditEntry = { sequence: number; proposalId: string; attempt: number; event: string; state: ResyncState; reasonCode: string | null;
   at: string; detail: unknown };
 export type Transition = {
+  /** The attempt that produced this step, which the audit entry records. */
+  attempt: number;
   state: ResyncState; reasonCode: string | null; event: string;
   /** Replaces the stored plan when given. */
   plan?: ResyncPlan;
-  /** Keep and extend the lease because the attempt continues. Otherwise the lease is released. */
+  /** Keep the lease, unchanged, because the attempt continues. Otherwise the lease is released. */
   hold?: boolean;
   finding?: FindingResolution["status"];
   detail?: unknown;
@@ -106,9 +110,9 @@ export class MirrorResyncRepository {
   private openFinding(checkId: string, fingerprint: string) {
     return this.reconciliation.findings(checkId, "open").find(f => f.fingerprint === fingerprint) ?? null;
   }
-  private audit(p: ResyncProposal, event: string, state: ResyncState, reasonCode: string | null, at: number, detail: unknown = {}) {
+  private audit(p: ResyncProposal, attempt: number, event: string, state: ResyncState, reasonCode: string | null, at: number, detail: unknown = {}) {
     this.db.prepare("INSERT INTO mirror_resync_audit(proposal_id,attempt,event,state,reason_code,at,detail) VALUES(?,?,?,?,?,?,?)")
-      .run(p.proposalId, p.attempts, event, state, reasonCode, iso(at), JSON.stringify(detail));
+      .run(p.proposalId, attempt, event, state, reasonCode, iso(at), JSON.stringify(detail));
   }
   private resolve(p: ResyncProposal, status: FindingResolution["status"], reasonCode: string, at: number) {
     this.db.prepare(`INSERT INTO mirror_resync_findings(fingerprint,check_id,status,reason_code,proposal_id,updated_at) VALUES(?,?,?,?,?,?)
@@ -146,7 +150,7 @@ export class MirrorResyncRepository {
           finding.group.period, finding.group.currency, finding.recordKey, finding.category, request.intent.operatorRef, request.intent.reason,
           iso(at), iso(at));
       const proposal = proposalFrom(this.row(request.idempotencyKey)!);
-      this.audit(proposal, "proposed", "proposed", null, at, { category: finding.category, authoritativeVersion: finding.conflict.authoritativeVersion,
+      this.audit(proposal, 0, "proposed", "proposed", null, at, { category: finding.category, authoritativeVersion: finding.conflict.authoritativeVersion,
         mirrorVersion: finding.conflict.mirrorVersion });
       this.resolve(proposal, "open", "RESYNC_PROPOSED", at);
       return { proposal, duplicate: false };
@@ -168,7 +172,7 @@ export class MirrorResyncRepository {
         throw new MirrorResyncError("RESYNC_IN_PROGRESS", 409);
       this.db.prepare("UPDATE mirror_resync_proposals SET state='cancelled',reason_code=?,lease_token=NULL,lease_until=NULL,updated_at=? WHERE proposal_id=?")
         .run(REASONS.cancelled, iso(at), p.proposalId);
-      this.audit(p, "cancelled", "cancelled", REASONS.cancelled, at);
+      this.audit(p, p.attempts, "cancelled", "cancelled", REASONS.cancelled, at);
       this.resolve(p, "open", REASONS.cancelled, at);
       return proposalFrom(this.row(p.idempotencyKey)!);
     });
@@ -196,23 +200,24 @@ export class MirrorResyncRepository {
 
   /**
    * Applies one decided transition under the lease. The clock, the proposal and the reconciliation finding are read inside
-   * the lock and handed to `decide`, so its checks see current state. If the lease was lost to another caller, nothing
-   * changes except a `lease_lost` audit entry.
+   * the lock and handed to `decide`, so its checks see current state. If the lease was lost to another caller, the
+   * proposal is left as it is, and what this attempt saw is recorded as a `late_result` under its own attempt number.
    */
-  step(idempotencyKey: string, token: string, leaseMs: number, decide: (ctx: StepContext) => Transition): { proposal: ResyncProposal; leaseLost: boolean } {
+  step(idempotencyKey: string, token: string, decide: (ctx: StepContext) => Transition): { proposal: ResyncProposal; leaseLost: boolean } {
     return this.transaction(() => {
       const at = this.clock(), row = this.row(idempotencyKey);
       if (!row) throw new MirrorResyncError("RESYNC_PROPOSAL_NOT_FOUND", 404);
       const p = proposalFrom(row);
+      const t = decide({ now: at, proposal: p, openFinding: this.openFinding(p.ref.checkId, p.fingerprint) });
       if (row.lease_token !== token) {
-        this.audit(p, "lease_lost", p.state, REASONS.leaseLost, at);
+        this.audit(p, t.attempt, "late_result", p.state, REASONS.leaseLost, at,
+          { intended: { event: t.event, state: t.state, reasonCode: t.reasonCode }, detail: t.detail ?? {} });
         return { proposal: p, leaseLost: true };
       }
-      const t = decide({ now: at, proposal: p, openFinding: this.openFinding(p.ref.checkId, p.fingerprint) });
-      this.db.prepare(`UPDATE mirror_resync_proposals SET state=?,reason_code=?,plan=COALESCE(?,plan),lease_token=?,lease_until=?,updated_at=?
-          WHERE proposal_id=?`).run(t.state, t.reasonCode, t.plan ? JSON.stringify(t.plan) : null, t.hold ? token : null, t.hold ? at + leaseMs : null,
-        iso(at), p.proposalId);
-      this.audit(p, t.event, t.state, t.reasonCode, at, t.detail ?? {});
+      this.db.prepare(`UPDATE mirror_resync_proposals SET state=?,reason_code=?,plan=COALESCE(?,plan),lease_token=?,
+          lease_until=CASE WHEN ? THEN lease_until ELSE NULL END,updated_at=? WHERE proposal_id=?`)
+        .run(t.state, t.reasonCode, t.plan ? JSON.stringify(t.plan) : null, t.hold ? token : null, t.hold ? 1 : 0, iso(at), p.proposalId);
+      this.audit(p, t.attempt, t.event, t.state, t.reasonCode, at, t.detail ?? {});
       if (t.finding) this.resolve(p, t.finding, t.reasonCode ?? t.event, at);
       return { proposal: proposalFrom(this.row(idempotencyKey)!), leaseLost: false };
     });

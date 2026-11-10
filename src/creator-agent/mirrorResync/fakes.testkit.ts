@@ -25,14 +25,17 @@ type Stored = { row: MirrorRow; version: number; history: FakeHistoryEntry[] };
  */
 export class FakeMirrorWriter implements MirrorWriter {
   readonly rows = new Map<string, Stored>();
-  readonly writes: MirrorWriteRequest[] = [];
+  /** Each write request, without its abort signal, which is kept in `signals`. */
+  readonly writes: Omit<MirrorWriteRequest, "signal">[] = [];
+  readonly signals: AbortSignal[] = [];
   readonly calls = { read: 0, write: 0, readBack: 0 };
   private behaviours: FakeWriteBehaviour[] = [];
   private failing = { read: 0, readBack: 0 };
   /** Runs before each read or read-back returns, so a test can change the mirror between the service's steps. */
   onRead: ((how: "read" | "readBack", n: number) => void) | null = null;
   private readonly now: () => number;
-  constructor(now: () => number) { this.now = now; }
+  readonly maxWriteMs: number;
+  constructor(now: () => number, maxWriteMs = 10_000) { this.now = now; this.maxWriteMs = maxWriteMs; }
 
   private version(n: number) { return `synthetic-mirror-v${n}`; }
   seed(row: MirrorRow, history: FakeHistoryEntry[] = []) {
@@ -66,7 +69,9 @@ export class FakeMirrorWriter implements MirrorWriter {
 
   async write(request: MirrorWriteRequest): Promise<MirrorWriteResult> {
     this.calls.write++;
-    this.writes.push(structuredClone(request));
+    const { signal, ...recorded } = request;
+    this.signals.push(signal);
+    this.writes.push(structuredClone(recorded));
     for (const k of Object.keys(request.set)) if (!(MIRRORED_FIELDS as readonly string[]).includes(k)) throw new Error(`Local field in write: ${k}`);
     const behaviour = this.behaviours.shift() ?? "ok";
     if (behaviour === "timeout") throw new MirrorWriteUncertainError("SYNTHETIC_TIMEOUT");

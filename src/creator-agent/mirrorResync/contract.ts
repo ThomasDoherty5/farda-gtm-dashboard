@@ -48,6 +48,13 @@ export type MirrorWriteRequest = {
   set: Partial<MirroredFields>;
   /** Unique per attempt, so a provider that deduplicates by key cannot replay an earlier attempt's outcome. */
   writeKey: string;
+  /**
+   * The instant, on the service clock, after which the write must not apply. It is the start of the write plus the writer's
+   * `maxWriteMs`. Until it has passed, plus the service's settle margin, a write with no acknowledgement may still land.
+   */
+  deadline: string;
+  /** Aborts at `maxWriteMs` of wall time. A writer that cannot cancel the provider call must still honour `deadline`. */
+  signal: AbortSignal;
 };
 export const mirrorWriteResultSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("applied"), version: ref(120) }).strict(),
@@ -66,8 +73,13 @@ export class MirrorWriteUncertainError extends Error {
  * The injected mirror writer. The real Zapier or Notion writer implements it; tests use `FakeMirrorWriter`. Any thrown
  * error from `write` is treated as uncertain, never as "not applied". `readBack` is a separate call so a real writer can
  * bypass any cache and read the row as the provider now holds it.
+ *
+ * `write` must be an atomic compare-and-set in the provider. Reading the version and then writing is not acceptable: a
+ * late write from an earlier attempt could then overwrite a later one.
  */
 export interface MirrorWriter {
+  /** The longest a write can take to apply or fail, in milliseconds. The service refuses to start unless its lease is longer, with a margin. */
+  readonly maxWriteMs: number;
   read(ref: RecordRef): Promise<MirrorRead>;
   write(request: MirrorWriteRequest): Promise<MirrorWriteResult>;
   readBack(ref: RecordRef): Promise<MirrorRead>;
@@ -113,6 +125,8 @@ export const REASONS = {
   mirrorVersionChanged: "MIRROR_VERSION_CHANGED",
   writeRejected: "WRITE_REJECTED",
   writeNotApplied: "WRITE_NOT_APPLIED",
+  /** The mirror is unchanged and the write is unacknowledged, but its deadline plus the settle margin has not passed. */
+  writeOutcomePending: "WRITE_OUTCOME_PENDING",
   readBackFailed: "READBACK_FAILED",
   readBackContradictsAck: "READBACK_CONTRADICTS_ACK",
   localFieldsChanged: "LOCAL_FIELDS_CHANGED",
