@@ -5,6 +5,8 @@ const ROUTES = [
   "/finance",
   "/finance?scenario=insufficient",
   "/finance?scenario=zeroburn",
+  "/finance?scenario=zeroorders",
+  "/finance?scenario=subscriptionunread",
   "/finance/close/2026-10",
   "/finance/close/2026-10?scenario=exportfailed",
   "/analytics/finance",
@@ -85,6 +87,21 @@ test("the section navigation moves between the finance screens and keeps Back wo
   await expect(page.getByTestId("metric-Close progress")).toHaveText("4 / 7");
   await page.goBack();
   await expect(page.getByTestId("metric-Cash balance")).toBeVisible();
+});
+
+test("unit economics explain CAC payback, and the definitions dialog states them as proposed with no axe violations", async ({ page }) => {
+  await page.goto("/finance");
+  await expect(page.getByTestId("unit-economics")).toContainText("1.76 orders · Provisional · Creator costs partly allocated · Attribution coverage incomplete");
+  await expect(page.getByTestId("subscription-state")).toHaveText("No subscription revenue");
+  const trigger = page.getByRole("button", { name: "View metric definitions" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Metric definitions" });
+  await expect(dialog).toContainText("Proposed · finance-unit-economics@1 · not adopted");
+  await expect(dialog).toContainText("N/A · pilot cohort only; see the commission ledger");
+  const results = await new AxeBuilder({ page: page as never }).include("dialog[open]").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
 });
 
 test("opening the reconciliation is read only and returns focus", async ({ page }) => {

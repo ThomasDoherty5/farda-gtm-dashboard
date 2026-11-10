@@ -2,6 +2,8 @@ import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createDemoAdapter } from "@/adapter/demoAdapter";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
+import { respondWith } from "@/adapter/demoViews";
+import { financeRecord } from "@/creator-agent/finance/fixtures.testkit";
 import type { FardaAdapter } from "@/adapter/adapter";
 import { financeDashboardDemo, runwayOf } from "@/fixtures/finance";
 import { periodCloseDemo } from "@/fixtures/financeClose";
@@ -110,6 +112,77 @@ describe("finance dashboard", () => {
     open("/finance", createLiveAdapter("sandbox"));
     expect(await screen.findByRole("alert")).toHaveTextContent("not connected");
     expect(screen.queryByTestId("metric-Cash balance")).not.toBeInTheDocument();
+  });
+});
+
+describe("dashboard unit economics", () => {
+  const facts = (name: string) => within(document.querySelector(`dl[aria-label="${name}"]`) as HTMLElement);
+  const fact = (label: string, list = "Unit economics") => facts(list).getByText(label, { selector: "dt" }).nextElementSibling!;
+  const unit = async () => within(await screen.findByTestId("unit-economics"));
+
+  it("calculates CAC payback in orders and says it is provisional while creator costs and attribution are incomplete", async () => {
+    open("/finance");
+    await unit();
+    expect(fact("CAC payback")).toHaveTextContent("1.76 orders · Provisional · Creator costs partly allocated · Attribution coverage incomplete");
+    expect(fact("Creator costs · attribution")).toHaveTextContent("6 of 8 creators · 352 of 400 orders");
+    expect(fact("Pre-marketing contribution / order")).toHaveTextContent("$14.20");
+    expect(metric("Pre-marketing contribution")).toHaveTextContent("$14.20");
+    expect(screen.queryByText("Awaiting creator allocation")).not.toBeInTheDocument();
+  });
+
+  it("gives an explained N/A for zero orders, never $0 economics", async () => {
+    open("/finance?scenario=zeroorders");
+    await unit();
+    expect(fact("Gross margin")).toHaveTextContent("N/A · No net revenue in the period");
+    expect(fact("Pre-marketing contribution / order")).toHaveTextContent("N/A · No valid orders in the cohort");
+    expect(fact("CAC payback")).toHaveTextContent("N/A · No new customers in the cohort");
+    expect(metric("Pre-marketing contribution")).toHaveTextContent("N/A");
+  });
+
+  it("marks margin, contribution and payback provisional while a landed cost is missing", async () => {
+    open("/finance?scenario=landedincomplete");
+    await unit();
+    expect(fact("Gross margin")).toHaveTextContent("65.0% · Provisional · Landed cost incomplete");
+    expect(fact("CAC payback")).toHaveTextContent(/^1\.76 orders · Provisional · Landed cost incomplete/);
+  });
+
+  it("says no subscription revenue only when verified, and unknown when the source is not read", async () => {
+    open("/finance");
+    expect(await screen.findByTestId("subscription-state")).toHaveTextContent("No subscription revenue");
+    expect(screen.getByTestId("subscription-state")).toHaveAttribute("data-state", "none");
+  });
+
+  it("keeps an unread subscription source unknown, not 'none'", async () => {
+    open("/finance?scenario=subscriptionunread");
+    expect(await screen.findByTestId("subscription-state")).toHaveTextContent("Subscription revenue unknown");
+    expect(screen.queryByText("No subscription revenue")).not.toBeInTheDocument();
+    expect(screen.getByText(/Subscription source not read \(SUBSCRIPTION_SOURCE_NOT_READ\)\. Unknown, not zero\./)).toBeInTheDocument();
+  });
+
+  it("shows the definitions as proposed, the pilot's commission as not applicable, and the forecast's own version", async () => {
+    const { user } = open("/finance");
+    await user.click(await screen.findByRole("button", { name: "View metric definitions" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Metric definitions" }));
+    expect(dialog.getByText(/^Proposed · finance-unit-economics@1 · not adopted\. No adopted finance policy exists in this repository, and these definitions have not been reviewed by a CPA\.$/)).toBeInTheDocument();
+    expect(fact("Accrued commission · acquisition", "Cohort cost components")).toHaveTextContent("N/A · pilot cohort only; see the commission ledger");
+    expect(fact("Landed COGS · contribution", "Cohort cost components")).toHaveTextContent("$4,410.00");
+    expect(fact("Actuals", "Actuals and forecast")).toHaveTextContent("Source version fin1 · management P&L");
+    expect(fact("Forecast", "Actuals and forecast")).toHaveTextContent("forecast-illustrative@1 · illustrative");
+    expect(fact("CAC payback", "Unit-economics definitions")).toHaveTextContent(/^CAC ÷ Pre-marketing contribution per order\./);
+  });
+
+  it("applies the same unknown semantics to a live source record", async () => {
+    const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+      if (request.kind !== "read" || request.envelope.viewKey !== "financeDashboard") throw new Error("Unexpected finance operation");
+      return respondWith(request.envelope, { ...financeRecord("financeDashboard"), readAccess: { validUntil: "2999-01-01T00:00:00.000Z" } }, { dataVersion: "synthetic-live" });
+    } } });
+    open("/finance", adapter);
+    await unit();
+    expect(fact("Gross margin")).toHaveTextContent("90.0% · Provisional · Landed cost incomplete");
+    expect(fact("Pre-marketing contribution / order")).toHaveTextContent("N/A · Customer shipping unknown · Provider fees unknown · Fulfillment unknown");
+    expect(fact("CAC payback")).toHaveTextContent("N/A · Paid media unknown");
+    expect(fact("Creator costs · attribution")).toHaveTextContent("creators unknown · orders unknown");
+    expect(screen.getByTestId("subscription-state")).toHaveTextContent("Subscription revenue unknown");
   });
 });
 
