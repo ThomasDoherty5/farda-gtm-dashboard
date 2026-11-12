@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { reportEventSchema, type ReportFact, type ReportSnapshot } from "./contract.ts";
 import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
+import { weeklyReportBody } from "../weeklySnapshots/format.ts";
 import {
   digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
   type DailyDigestContext, type DigestResult,
@@ -112,6 +113,7 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
     : mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
   const body = event.dailyDigest
     ? dailyDigestBody(event.dailyDigest, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
+    : event.weeklySnapshot ? weeklyReportBody(event.weeklySnapshot, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
     : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
   return { body, bodyHash: createHash("sha256").update(body).digest("hex") };

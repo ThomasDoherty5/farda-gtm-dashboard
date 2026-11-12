@@ -1,5 +1,6 @@
 import { digest } from "../config.ts";
 import { dailyDigestWindow } from "../dailyDigest/schedule.ts";
+import { weeklySnapshotWindow } from "../weeklySnapshots/schedule.ts";
 import { ReportError, reportGrantSchema, reportSnapshotSchema, type ReportCommand, type ReportGrant, type ReportLocator, type ReportMachine, type ReportScope, type ReportSnapshot, type ReportingSource } from "./contract.ts";
 
 export function reportMaterial(snapshot: ReportSnapshot) {
@@ -45,6 +46,13 @@ export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot
         const parts = new Intl.DateTimeFormat("en-US", { timeZone: identity.timezone, weekday: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(snapshot.delivery.notBefore));
         const value = (type: string) => parts.find(part => part.type === type)?.value;
         if (value("hour") !== "08" || value("minute") !== "30" || value("second") !== "00" || ["Sat", "Sun"].includes(value("weekday") ?? "") || (identity.cadence === "mondayWeekly" && value("weekday") !== "Mon")) throw new ReportError("REPORT_SCHEDULE_MISMATCH");
+      }
+      const weekly = snapshot.event.weeklySnapshot?.snapshot;
+      if (weekly && (digest(weekly.scope) !== digest(scope) ||
+          digest(weekly.window) !== digest(weeklySnapshotWindow(weekly.window.reportDate)) ||
+          snapshot.delivery.notBefore !== weekly.window.scheduledAt ||
+          Date.parse(snapshot.event.occurredAt) < Date.parse(weekly.window.scheduledAt))) {
+        throw new ReportError("REPORT_SCHEDULE_MISMATCH");
       }
     }
   }

@@ -5,6 +5,7 @@ import { analyticsTestScope } from "../src/creator-agent/analytics/fixtures.test
 import { nativeAnalyticsFixture } from "../src/creator-agent/analytics/nativeFixtures.testkit.ts";
 import type { NativeAnalyticsSnapshot } from "../src/creator-agent/analytics/contract.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
+import { first, second, weeklySnapshotFixture } from "../src/creator-agent/weeklySnapshots/fixture.testkit.ts";
 import { screenReaderCheckpoint } from "./support/screen-reader.ts";
 
 /** Actual HTTP/SQLite with fictional, source-qualified permissions, never live provider proof. */
@@ -120,6 +121,33 @@ test("a native cohort deep link reaches the source unchanged and cannot fall bac
     const response = await denied; expect(response.request().postDataJSON().filters.cohort).toBe("unbound-cohort"); expect(response.status()).toBe(403);
     await expect(page.getByTestId("metric-contacts")).toHaveCount(0);
   } finally { await app.close(); }
+});
+
+test("two frozen KPI weeks reach the Figma trend chart with keyboard and actual speech evidence", async ({ page }, info) => {
+  const fixture = await weeklySnapshotFixture({ port: Number(process.env.E2E_AGENT_SERVER_PORT) });
+  try {
+    fixture.reporting.advance(Date.now() - fixture.reporting.now);
+    expect((await fixture.accept(first.reportDate, "synthetic-trend-week-one")).status).toBe(200);
+    expect((await fixture.accept(second.reportDate, "synthetic-trend-week-two")).status).toBe(200);
+    await login(page);
+    const query = new URLSearchParams({ "report-start": first.start, "report-end": second.end, "report-zone": first.timezone });
+    await page.goto("/analytics/attribution?" + query.toString());
+    const week = page.getByRole("button", { name: /2026-11-02 to 2026-11-09 exclusive.*snapshot v1/i });
+    await expect(week).toBeVisible();
+    await week.focus();
+    await page.keyboard.press("Enter");
+    await expect(week).toHaveAttribute("aria-pressed", "true");
+    const summary = page.getByRole("status").filter({ hasText: "Snapshot v1" });
+    await expect(summary).toContainText("Shopify $75.00 · TikTok Shop $25.00");
+    await screenReaderCheckpoint(page, "weekly-kpi-selected-week", week, ["Shopify", "TikTok Shop", "snapshot"]);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await accessible(page);
+      await page.screenshot({ path: info.outputPath(`weekly-kpi-trend-${width}.png`), fullPage: true });
+    }
+    expect(fixture.reporting.state.calls).toHaveLength(0);
+  } finally { await fixture.close(); }
 });
 
 test("all reporting families preserve complete responsive content and actual assistive speech", async ({ page }, info) => {

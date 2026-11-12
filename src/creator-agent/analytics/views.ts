@@ -80,7 +80,8 @@ export const nativeAttributionReviewSchema = z.object({
   }).strict().refine(row => (row.sourceReason === null) === (row.reasonObservedAt === null) && (row.sourceReason === null ? row.evidenceRefs.length === 0 : row.evidenceRefs.length > 0), "Source reasons require their own observation and evidence.")).max(100),
 }).strict();
 export const nativeAttributionSchema = z.object({ ...header, viewKey: z.literal("attribution"), ...commonCommerce, attributedOrders: analyticsCountViewSchema, attributedNetSales: analyticsMoneyViewSchema, platformReports: z.array(z.object({ platform: z.enum(["meta", "tiktok"]), attributionWindow: z.object({ clickDays: z.number().int().nonnegative(), viewDays: z.number().int().nonnegative() }).strict().nullable() }).strict()).max(2), retainedUnits: analyticsCountViewSchema,
-  weeks: z.array(z.object({ startDay: analyticsDaySchema, endDayExclusive: analyticsDaySchema, channels: z.array(channel).max(2) }).strict()).max(53),
+  weeks: z.array(z.object({ startDay: analyticsDaySchema, endDayExclusive: analyticsDaySchema,
+    channels: z.array(channel).max(2), snapshotVersion: z.string().regex(/^v[1-9]\d{0,6}$/).optional() }).strict()).max(53),
   attribution: z.array(z.object({ method: z.enum(["creatorCode", "sitewideCode", "unknownCode", "utm", "platform", "unattributed"]), orders: analyticsCountViewSchema }).strict()).max(6), economicEvidence: economicEvidence.nullable(),
   unattributedReview: nativeAttributionReviewSchema.nullable().default(null),
   creators: z.array(z.object({ creatorRef: analyticsPublicRefSchema, roi: analyticsNumberViewSchema }).strict()).max(100),
