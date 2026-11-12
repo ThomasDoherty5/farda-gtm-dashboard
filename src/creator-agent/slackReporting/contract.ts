@@ -8,6 +8,8 @@ import { weeklyReportContextSchema } from "../weeklySnapshots/comparison.ts";
 import { thresholdReportContextSchema } from "../operationalAlerts/presentation.ts";
 import { launchPulseContextSchema } from "../launchPulse/contract.ts";
 import { launchPulsePrefix, pulseTimeFromRef } from "../launchPulse/schedule.ts";
+import { creatorDashboardPath, creatorHandoffIdentitySchema, creatorHandoffPrefix, creatorHandoffRef,
+  creatorHandoffSchema, creatorWeeklyContextSchema, creatorWeeklyPrefix } from "../creatorHandoff/contract.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -53,7 +55,7 @@ export const automationFailureContextSchema = z.object({
   recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
     "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
 }).strict();
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional(), launchPulse: launchPulseContextSchema.optional() }).strict().superRefine((value, ctx) => {
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window, creatorHandoffIdentitySchema]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional(), launchPulse: launchPulseContextSchema.optional(), creatorHandoff: creatorHandoffSchema.optional(), creatorWeekly: creatorWeeklyContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
   const threshold = value.thresholdAlert;
   if (/^threshold-[a-f0-9]{32}-[1-9]\d*-(breach|clear)$/.test(value.eventRef) !== Boolean(threshold)) {
@@ -107,6 +109,32 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
       value.subject.kind !== "aggregate" || value.subject.category !== "finance" || weekly.version !== "v1" ||
       weekly.correction !== null || value.mirror || value.dailyDigest || value.automationFailure)) {
     ctx.addIssue({ code: "custom", message: "The weekly pre-read must identify the original completed snapshot." });
+  }
+  const handoff = value.creatorHandoff, creatorWeek = value.creatorWeekly;
+  const unrelated = value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot ||
+    value.thresholdAlert || value.thresholdDigestRecovery || value.launchPulse;
+  if (value.eventRef.startsWith(creatorHandoffPrefix) || value.identity.kind === "creatorHandoff" || handoff) {
+    const identity = value.identity;
+    if (!handoff || identity.kind !== "creatorHandoff" || value.subject.kind !== "creator" ||
+        value.severity !== "info" || value.nextAction !== "reviewCreator" || unrelated || creatorWeek ||
+        value.eventRef !== creatorHandoffRef(identity.collaborationId, identity.sequence) ||
+        identity.previousEventRef !== (identity.sequence === 1 ? null : creatorHandoffRef(identity.collaborationId, identity.sequence - 1)) ||
+        (identity.sequence === 1) !== (handoff.kind === "agreement") ||
+        !creatorDashboardPath(handoff.dashboardLink, identity.collaborationId) ||
+        Date.parse(handoff.observedAt) < Date.parse(value.occurredAt)) {
+      ctx.addIssue({ code: "custom", message: "A handoff requires an exact collaboration, source event and authorized record link." });
+    }
+  }
+  if (value.eventRef.startsWith(creatorWeeklyPrefix) || creatorWeek) {
+    const identity = value.identity;
+    if (!creatorWeek || identity.kind !== "window" || identity.cadence !== "mondayWeekly" ||
+        value.subject.kind !== "aggregate" || value.subject.category !== "creators" || value.severity !== "info" ||
+        value.nextAction !== "reviewCreator" || unrelated || handoff ||
+        value.eventRef !== creatorWeeklyPrefix + creatorWeek.window.reportDate || identity.windowRef !== value.eventRef ||
+        identity.start !== creatorWeek.window.start || identity.end !== creatorWeek.window.end ||
+        value.eventVersion !== creatorWeek.sourceVersion || !creatorDashboardPath(creatorWeek.dashboardLink)) {
+      ctx.addIssue({ code: "custom", message: "A creator summary requires its exact source-owned Monday window." });
+    }
   }
   if (value.identity.kind === "window" && value.identity.cadence === "reconciliationRecovery" &&
       (value.subject.kind !== "aggregate" || value.subject.category !== "automation" || value.nextAction !== "continueMonitoring" ||

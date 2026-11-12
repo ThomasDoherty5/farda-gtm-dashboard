@@ -949,6 +949,12 @@ export function createAgentServer(options: AgentServerOptions) {
           activation: options.actionFoundation?.reporting?.launchPulse?.window?.enabled ? "source-owned" : "unconfigured",
           delivery: options.actionFoundation?.reporting?.launchPulse ? "shared-reporting" : "notConnected",
         },
+        creatorHandoffFeed: {
+          sourceAuthority: options.actionFoundation?.reporting?.creatorFeed ? "injected" : "notConnected",
+          delivery: options.actionFoundation?.reporting?.creatorFeed ? "shared-reporting" : "notConnected",
+          schedule: { cadence: "monday", localTime: "08:30", timezone: "America/Los_Angeles",
+            activation: options.actionFoundation?.reporting?.creatorFeed ? "source-owned" : "unconfigured" },
+        },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });
       const match = /^\/v1\/creators\/([^/]+)$/.exec(path);
