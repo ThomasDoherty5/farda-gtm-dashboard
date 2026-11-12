@@ -36,7 +36,8 @@ export type OperationsControlServiceReaders={
   }|{reference:OperationsServiceReference;unavailableReason:string;assertCurrent():void}>;
 };
 type Input={db:DatabaseSync;scope:OperationsScope;secret:string;ledger:CapabilityLedger;jobs:JobRepository;health:ReturnType<typeof createProviderHealth>;source?:OperationsControlSource;now?:()=>number;
-  authority?:OperationsControlAuthority;canonical?:()=>OperationsControlBridge|undefined;serviceReaders?:OperationsControlServiceReaders};
+  authority?:OperationsControlAuthority;canonical?:()=>OperationsControlBridge|undefined;serviceReaders?:OperationsControlServiceReaders;
+  reconciliationSource?:OperationsControlSource};
 type Section=NativeOperationsControl["section"];
 const sectionFor={task:"runs",takeover:"runs",repair:"reconciliation",permissionEvidence:"capabilities"} as const;
 const targetSchema=z.object({kind:z.enum(["task","takeover","repair","permissionEvidence","run","binding"]),id:z.string().min(1).max(240)}).strict();
@@ -61,7 +62,7 @@ export function createOperationsControls(input:Input){
   function callerFence(caller?:OperationsControlCaller){return ()=>{if(caller?.signal?.aborted)fail("REQUEST_CANCELLED",499);if(!caller)return;
     try{assertSynchronousVoid(caller.assertCurrent);}catch(error){throw new OperationsControlError("OPERATIONS_CALLER_DENIED",error instanceof OperationsControlError&&[401,403].includes(error.status)?error.status:403);}};}
   const readBinding=(operation:OperationsReadBinding["operation"],request:unknown,actorRef:string,role:Role)=>operationsReadBindingSchema.parse({scope,principalRef:actorRef,role,operation,requestDigest:digest(request)});
-  async function snapshot(request:OperationsReadBinding,caller?:OperationsControlCaller){
+  async function snapshot(request:OperationsReadBinding,caller?:OperationsControlCaller,source=input.source){
     const assertCaller=callerFence(caller);assertCaller();
     if(!source)return {snapshot:null,accessValidUntil:null,assertCurrent:assertCaller};
     if(typeof source.read!=="function"||typeof source.assertCurrent!=="function")fail("SOURCE_RESPONSE_INVALID",502);
@@ -169,7 +170,8 @@ export function createOperationsControls(input:Input){
     if(f.proposalRequestKey&&role!=="reviewer")fail("SOURCE_SCOPE_DENIED",403);
     const assertCaller=callerFence(caller);assertCaller();
     const proof=input.authority?await input.authority.resolve({principalRef:actorRef}):undefined;
-    assertCaller();const observed=proof?null:await snapshot(readBinding("read",f,actorRef,role),caller);
+    const sectionSource=f.section==="reconciliation"&&Object.keys(f).length===1?input.reconciliationSource??source:source;
+    assertCaller();const observed=proof?null:await snapshot(readBinding("read",f,actorRef,role),caller,sectionSource);
     const s=proof?.snapshot??observed?.snapshot??null,v=version(s,proof),sourceState=!s?"notConnected":!fresh(s.observedAt)?"stale":s.coverage==="partial"?"partial":"current";
     let reportJob:string|null=null;
     if(f.jobRef){
@@ -183,8 +185,12 @@ export function createOperationsControls(input:Input){
       if(f.section==="reports")for(const r of s.reports.filter(r=>!reportJob||r.jobId===reportJob))row(r.id,categoryTitle[r.category],[["Category",r.category],["Cadence",r.cadence],["Timezone",r.timezone],["Configuration",r.configuration],["Destination",r.destination?r.destination.kind+" · "+alias(r.destination.ref):"Unknown"],["Owner",r.ownerRef?alias(r.ownerRef):"Unknown"],["Last complete",display(r.lastCompleteAt)],["Next source run",display(r.nextRunAt)],...r.preview.map(p=>[p.label,p.value===null?"Unknown":String(p.value)] as [string,string]),["Delivery history coverage",Math.min(50,r.history.length)+" shown of "+r.history.length+" returned; total source history unknown"],...r.history.slice(0,50).map(h=>["Delivery "+h.at,h.state+" · "+(h.receiptRef?alias(h.receiptRef):"Receipt unknown")] as [string,string])] as [string,string][]);
       if(f.section==="capabilities")for(const r of s.attribution)row(r.id,"Attribution verification",[["Account",alias(r.account)],["Expected",r.expected],["Observed",display(r.observed)],["State",r.state],["Evidence",alias(r.evidenceRef)],["Observed at",r.observedAt]]);
       if(f.section==="reconciliation"){
-        for(const r of s.comparisons)row(r.id,"Source / mirror comparison",[["Coverage",r.coverage],["Grain",r.grain],["Window",r.period.startAt+" — "+r.period.endAt],["Timezone",r.period.timezone],["Currency",r.currency],["Source keys",r.sourceCount===null?"Unknown":String(r.sourceCount)],["Mirror keys",r.mirrorCount===null?"Unknown":String(r.mirrorCount)],["Source amount",r.sourceAmount?String(r.sourceAmount.minorUnits)+" minor "+r.currency:"Unknown"],["Mirror amount",r.mirrorAmount?String(r.mirrorAmount.minorUnits)+" minor "+r.currency:"Unknown"],["Cutoff",r.cutoff],["Evidence",alias(r.evidenceRef)]]);
-        for(const r of s.conflicts)row(r.id,r.field,[["Category",r.category],["Ownership",r.ownership],["Source",safeValue(r.sourceValue)],["Mirror",safeValue(r.mirrorValue)],["State",r.state],["Authoritative version",r.authoritativeVersion?alias(r.authoritativeVersion):"Unknown"],["Mirror version",r.mirrorVersion?alias(r.mirrorVersion):"Unknown"],["Repair receipt",r.receiptRef?alias(r.receiptRef):"Unknown"]]);
+        for(const r of s.comparisons)row(r.id,"Source / mirror comparison",[["Coverage",r.coverage],["Grain",r.grain],["Window",r.period.startAt+" — "+r.period.endAt],["Timezone",r.period.timezone],["Currency",r.currency],["Source keys",r.sourceCount===null?"Unknown":String(r.sourceCount)],["Mirror keys",r.mirrorCount===null?"Unknown":String(r.mirrorCount)],["Source amount",r.sourceAmount?String(r.sourceAmount.minorUnits)+" minor "+r.currency:r.amountField===null?"Not applicable":"Unknown"],["Mirror amount",r.mirrorAmount?String(r.mirrorAmount.minorUnits)+" minor "+r.currency:r.amountField===null?"Not applicable":"Unknown"],["Cutoff",r.cutoff],["Evidence",alias(r.evidenceRef)],
+          ...(r.amountField?[["Amount measure",r.amountField] as [string,string]]:[]),
+          ...(r.sourceWatermark!==undefined?[["Source watermark",display(r.sourceWatermark)] as [string,string]]:[]),
+          ...(r.mirrorWatermark!==undefined?[["Mirror watermark",display(r.mirrorWatermark)] as [string,string]]:[])]);
+        for(const r of s.conflicts)row(r.id,r.field,[["Category",r.category],["Ownership",r.ownership],["Source",safeValue(r.sourceValue)],["Mirror",safeValue(r.mirrorValue)],["State",r.state],["Authoritative version",r.authoritativeVersion?alias(r.authoritativeVersion):"Unknown"],["Mirror version",r.mirrorVersion?alias(r.mirrorVersion):"Unknown"],["Repair receipt",r.receiptRef?alias(r.receiptRef):"Unknown"],
+          ...(r.ownerRef?[["Recovery owner",alias(r.ownerRef)] as [string,string],["Evidence",alias(r.evidenceRef)] as [string,string]]:[])]);
       }
       const add=(kind:OperationsReviewPayload["kind"],id:string,title:string,details:[string,string][])=>{
         const reason=role!=="reviewer"?"REVIEWER_REQUIRED":hold(s,kind,id);

@@ -1,6 +1,6 @@
 # Mirror reconciliation check
 
-`src/creator-agent/mirrorReconciliation/` builds the reconciliation `comparisons` and `conflicts` from source and mirror row sets. Until now, the operations-control snapshot arrived with comparisons already computed. This module computes them, records each run, and keeps findings across runs. It has no server route, no provider reader and no repair.
+`src/creator-agent/mirrorReconciliation/` compares source and mirror row sets and records each check. A trusted binding connects the existing job runtime and the authenticated `nightlyReconciliation` read. Source connections and job activation are deployment-owned. The comparison has no repair authority.
 
 ## Pieces
 
@@ -10,6 +10,8 @@
 | `schedule.ts` | Local-day periods, cutoffs, due periods and the next run, all in the schedule's timezone. |
 | `comparator.ts` | `compareMirror`, a pure comparator. `toOperationsControlSlice` turns a result into snapshot arrays. |
 | `repository.ts` | `MirrorReconciliationRepository`, which stores schedules, runs and findings on the shared agent SQLite. |
+| `runtime.ts` | Binds a daily observation registration and publishes its scoped dashboard read. |
+| `report.ts` | Builds an aggregate event from the saved run for the existing reporter. |
 
 ## Check schedule record
 
@@ -19,7 +21,7 @@ A schedule has a `checkId` and a `version`. It also sets:
 - a daily local `runAt`;
 - `cutoffLagMinutes`;
 - `coverage.lookbackDays`, the number of past due days each run rechecks;
-- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`) and the currencies always compared.
+- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`) and the currencies always compared. A count-only dataset declares a null amount field.
 
 A period is one local day. Its cutoff is the end of the day plus the lag. A period cannot be checked before its cutoff. `duePeriods` and `nextRunAt` derive the run plan from the record, including across DST changes. Where a DST change skips local midnight, as in America/Santiago or America/Havana, the day starts at the first instant after the skipped time. Where midnight occurs twice, the day starts at the first one.
 
@@ -27,7 +29,7 @@ The repository stores schedules by version. Saving the same version again does n
 
 ## Inputs
 
-A check input has a `runId`, the check and schedule version, the local-day `periods`, and source rows and mirror rows. Each row has a `key`, `scope`, `grain`, `period`, `currency` and an integer `amountMinor`. It also has a row-level `read` flag: a `partial` row was seen, but its amount is not trusted.
+A check input has a `runId`, the check and schedule version, the local-day `periods`, and source rows and mirror rows. Each row has a `key`, `scope`, `grain`, `period`, `currency` and an integer or null `amountMinor`. Null leaves a required monetary comparison incomplete. A `partial` row was observed with incomplete fields.
 
 Dataset coverage is declared separately, per side, scope, grain and period, as `complete`, `partial` or `failed`, with a version, a `readAt` time and the source-owned `sourceAsOf` watermark. A dataset with no declaration is `unknown`. A complete snapshot requires a watermark at or before its read time. A watermark before the cutoff leaves the comparison partial even when the poll finished later.
 
@@ -71,15 +73,16 @@ A run is `matched` only when every group matched. If any group is incomplete or 
 - `mirror_reconciliation_schedules`
 - `mirror_reconciliation_runs`
 - `mirror_reconciliation_findings`
+- `mirror_reconciliation_group_basis`
 - `mirror_reconciliation_run_findings`
 
 Rechecks are idempotent:
 
 - **Same run id, same input.** The stored run is returned, and nothing is written.
 - **Same run id, different input.** The run is refused with `RUN_ID_REUSED`.
-- **Identical finding.** A finding's fingerprint covers the check, group, key, side, category, field and values. It excludes versions and times. Because values are included, a changed value is a different finding: the old one clears and the new one opens. A new run that sees an open finding counts it as `repeated`, and it is not raised again. Only `opened` and `reopened` findings are returned in `raised`, so alerts carry only those.
-- **Clearing.** An open finding is `cleared` only when a later run compares its group with complete coverage and no longer sees it. An incomplete or unknown recheck leaves it open. A cleared finding that returns is `reopened`.
-- **Read order.** Each finding keeps the newest `sourceAsOf` watermark for each side. A later poll that returns an older snapshot leaves the finding open. The run records the stale observation.
+- **Repeated finding.** The fingerprint covers the check, group, key, side, category and field. Values, versions and times can change within one incident. Only `opened` and `reopened` findings contribute new alerts.
+- **Clearing.** A complete comparison must show the affected record matches before the finding clears. A category change leaves the previous finding open. A cleared finding that returns is `reopened`.
+- **Read order.** Each group retains the watermark of its latest complete comparison. An older observation cannot open, reopen or clear a finding, and the run records it as stale.
 - **Periods outside the run.** A finding whose period is not in a later run stays open. It never disappears silently. Once its period has left the lookback window, it keeps the snapshot `partial` until a check that includes that period runs; a manual recheck of that period clears it.
 
 `runs` returns the audit trail with its total. `runFindings` returns each run's dispositions. `findings` returns first and last run, occurrences, clearing and the read basis.
@@ -88,24 +91,19 @@ Rechecks are idempotent:
 
 - `openFindings`, every open finding for the check;
 - `unconfirmedOpenFindings`, open findings the latest run did not confirm, because their period was outside it, their group was not fully read, or its reads were older;
-- `coverage`, which is `partial` when the slice was truncated or any open finding is unconfirmed.
+- `coverage`, which is `partial` for an incomplete or stale comparison, a truncated slice or an unconfirmed finding.
 
 So a matched latest run cannot hide an open finding. Open findings that the latest run confirmed do not make coverage partial: that would hold every repair whenever a difference exists.
 
 ## Plugging it in
 
-The server is not wired; the backend owner makes that change. A source reader for the `nightlyReconciliation` view would work like this:
+The server accepts a trusted `mirrorReconciliation` binding for one registered daily observe job. Its timezone and local time must match the recorded schedule. The source plan supplies one item whose subject is the check ID. The executor reads the periods due at the intended slot. It rechecks the source receipt and job authority before writing the journal. The existing runtime owns activation, quotas and retry limits.
 
-1. Build `MirrorReconciliationRepository` on the same `db` and `scope` that `createOperationsControls` receives, with `secret: operationsSecret` and the same `now`, as the other modules in `server.ts` do.
-2. Save the schedule record. On each scheduled run, read the source and mirror datasets for `duePeriods(schedule, now)`, and call `recordCheck` with their rows and coverage declarations. Emit a mirror read declaration for every scope seen in the mirror and for every group with an open finding (`findings(checkId, "open")`), not only the expected datasets. Without one, an orphan group stays `unknown` and its findings cannot clear.
-3. In the injected `OperationsControlSource.read`, take `repo.latestSlice(checkId)`. Put its `comparisons` and `conflicts` into the snapshot, and use its `coverage` as the snapshot coverage. The schema allows 100 of each, and groups with differences come first.
+Emit a mirror read declaration for every scope seen in the mirror or still covered by an open finding. Without it an orphan scope stays unknown. Use separate scope definitions for distinct monetary measures and keep count-only datasets separate from money. Preserve the authoritative source version and watermark for both sides.
 
-`operationsControlSourceSchema` already accepts the output unchanged. The browser aliasing in `operationsControls.ts` applies as it does today.
+The scoped read uses the existing operations-control adapter and its source permission fence. Named operations authority retains its existing precedence. A trusted report resolver can use the server's `mirrorReconciliation.report(runId, binding)` to derive the saved aggregate event. The existing reporter owns admission, delivery and receipt reconciliation.
 
-## Out of scope
-
-- Provider reads, a real sandbox mirror row and Slack delivery need provider access.
-- Repair and its ownership policy have a separate owner.
+Native dataset bindings and writer qualification require source-owned evidence. An unbound deployment remains held. The repair action stays disabled in this projection.
 
 ## Verification
 
@@ -113,3 +111,4 @@ All test data is synthetic.
 
 - `comparator.test.ts` covers the schedule record, timezones and DST, including skipped and repeated midnights. It covers the five categories, currency separation, partial, failed and unread datasets, late reads, partial rows, overflow and known zeros. It also covers keyed public ids, orphan and open-group rechecks, input refusals, and parsing with the existing comparison, conflict and source-snapshot schemas, including the 100-item cap.
 - `repository.test.ts` covers scope binding, the secret, schedule versions, idempotent replay and id reuse, suppression, clearing and reopening, orphan clearing, out-of-order reads, findings outside the run's periods, the audit trail, the snapshot slice and its coverage, the clock read inside the lock, and rollback.
+- `runtimeIntegration.test.ts` covers scheduled admission, retry after a partial read, missing-row and amount drift through the authenticated read, reporting payload and permission withdrawal.

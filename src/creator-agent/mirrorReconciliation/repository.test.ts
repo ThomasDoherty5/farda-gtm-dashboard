@@ -121,6 +121,31 @@ describe("mirror reconciliation repository", () => {
     expect(repo.runs(schedule.checkId, 1)).toMatchObject({ total: 2, partial: true });
   });
 
+  it("keeps the incident through amount and category changes until a complete record comparison matches", () => {
+    const { repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    const sourceRows = [row("order-1", 1000)];
+    const first = repo.recordCheck(input("original", { sourceRows, mirrorRows: [row("order-1", 900)] }));
+    clock.at += 60_000;
+    const changed = repo.recordCheck(input("different-amount", { sourceRows, mirrorRows: [row("order-1", 800)] }));
+    expect(changed).toMatchObject({ raised: [], cleared: [], run: { dispositions: { repeated: 1 } } });
+    expect(repo.findings(schedule.checkId, "open")[0]!.conflict).toMatchObject({ id: first.raised[0]!.conflict.id, mirrorValue: { minorUnits: 800 } });
+    const missing = repo.recordCheck(input("missing-row", { sourceRows }));
+    expect(missing).toMatchObject({ cleared: [], raised: [{ conflict: { category: "missing_mirror" } }] });
+    expect(repo.findings(schedule.checkId, "open")).toHaveLength(2);
+    expect(repo.recordCheck(input("matching-row", { sourceRows, mirrorRows: sourceRows })).cleared).toHaveLength(2);
+  });
+
+  it("holds an old first discrepancy after a newer clean check, and leaves the view partial", () => {
+    const { repo } = setup();
+    repo.saveSchedule(schedule);
+    const newer = (side: ReadCoverage["side"]) => read(side, "complete", { readAt: "2027-02-12T05:30:00Z" });
+    repo.recordCheck(input("matching", { coverage: [newer("source"), newer("mirror")] }));
+    const late = repo.recordCheck(input("late", twoDifferences));
+    expect(late).toMatchObject({ raised: [], run: { staleComparisons: 1, dispositions: { stale: 2 } } });
+    expect(repo.latestSlice(schedule.checkId)).toMatchObject({ coverage: "partial", conflicts: [], openFindings: 0 });
+  });
+
   it("AC4/AC7: clears a finding only on a complete recheck, never on an incomplete one, and reopens it if it returns", () => {
     const { repo, clock } = setup();
     repo.saveSchedule(schedule);

@@ -170,13 +170,23 @@ describe("mirror reconciliation comparator", () => {
     expect(operationsControlSourceSchema.safeParse(envelope(slice, "partial")).error?.issues).toBeUndefined();
   });
 
-  it("gives identical findings the same fingerprint and conflict id on every run", () => {
+  it("keeps the incident identity stable when the value of a discrepancy changes", () => {
     const data = { sourceRows: [row("order-1", 1000)], mirrorRows: [row("order-1", 900)] };
     const first = compare(schedule, input(data), AT), second = compare(schedule, input({ ...data, runId: "synthetic-run-2" }), AT + 3_600_000);
     expect(second.findings.map(f => [f.fingerprint, f.conflict.id])).toEqual(first.findings.map(f => [f.fingerprint, f.conflict.id]));
     expect(second.comparisons.map(c => c.comparison.id)).toEqual(first.comparisons.map(c => c.comparison.id));
     const changed = compare(schedule, input({ ...data, mirrorRows: [row("order-1", 800)] }), AT);
-    expect(changed.findings[0]!.fingerprint).not.toBe(first.findings[0]!.fingerprint);
+    expect(changed.findings[0]!.fingerprint).toBe(first.findings[0]!.fingerprint);
+    expect(changed.findings[0]!.conflict.mirrorValue).toMatchObject({ minorUnits: 800 });
+  });
+
+  it("compares count-only datasets without inventing monetary zeros", () => {
+    const countSchedule = { ...schedule, expectedDatasets: [{ ...schedule.expectedDatasets[0]!, amountField: null }] };
+    const sourceRows = [row("order-1", 1000)].map(value => ({ ...value, amountMinor: null }));
+    const result = compare(countSchedule, input({ sourceRows, mirrorRows: sourceRows }), AT);
+    expect(result.outcome).toBe("matched");
+    expect(orders(result).comparison).toMatchObject({ sourceCount: 1, mirrorCount: 1, sourceAmount: null, mirrorAmount: null });
+    expect(compare(schedule, input({ sourceRows, mirrorRows: sourceRows }), AT).outcome).toBe("incomplete");
   });
 
   it("refuses periods before their cutoff, stale schedules, rows outside the run and unexpected source datasets", () => {
@@ -231,8 +241,7 @@ describe("mirror reconciliation comparator after review", () => {
     // An unkeyed digest over the guessable inputs, the brute-force route, does not reproduce the public id.
     const conflict = finding!.conflict;
     const guesses = ["order-104216", "order-104217", "order-104218"].map(recordKey => digest({ checkId: schedule.checkId, scope: "synthetic-store-a",
-      grain: "order", period: DAY, currency: "GBP", recordKey, side: "mirror", category: conflict.category, field: conflict.field,
-      sourceValue: conflict.sourceValue, mirrorValue: conflict.mirrorValue }));
+      grain: "order", period: DAY, currency: "GBP", recordKey, side: "mirror", category: conflict.category, field: conflict.field }));
     expect(guesses).toContain(finding!.fingerprint);
     for (const guess of guesses) for (const id of [`mrf-${guess.slice(0, 40)}`, `mrf-${digest(guess).slice(0, 40)}`]) expect(id).not.toBe(conflict.id);
     const published = JSON.stringify(toOperationsControlSlice(a));
@@ -244,7 +253,7 @@ describe("mirror reconciliation comparator after review", () => {
     const o1 = compare(schedule, input({ coverage: [read("source"), read("mirror"), retiredRead], mirrorRows: [retired("X1")] }), AT);
     const orphanGroup = o1.comparisons.find(c => !c.group.expected)!;
     expect(orphanGroup).toMatchObject({ outcome: "differences", comparison: { coverage: "complete", sourceCount: 0, mirrorCount: 1,
-      sourceAmount: { minorUnits: 0 }, sourceVersion: "synthetic-orders-check/schedule/v1" } });
+      sourceAmount: null, mirrorAmount: null, sourceVersion: "synthetic-orders-check/schedule/v1" } });
     // X1 has been removed: the group is compared again because it has an open finding, and now matches.
     const o2 = compare(schedule, input({ runId: "synthetic-run-2", coverage: [read("source"), read("mirror"), retiredRead] }), AT,
       { openGroups: [orphanGroup.group] });

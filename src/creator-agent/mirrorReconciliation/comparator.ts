@@ -27,6 +27,7 @@ const presence = (value: "present" | "missing" | "duplicate" | "unknown"): Value
 function total(rows: ReconciliationRow[]): number | null {
   let sum = 0;
   for (const row of rows) {
+    if (row.amountMinor === null) return null;
     sum += row.amountMinor;
     if (!Number.isSafeInteger(sum)) return null;
   }
@@ -57,7 +58,11 @@ export type CompareOptions = {
 
 function byKey(rows: ReconciliationRow[]) {
   const keys = new Map<string, ReconciliationRow[]>();
-  for (const row of rows) keys.set(row.key, [...(keys.get(row.key) ?? []), row]);
+  for (const row of rows) {
+    const existing = keys.get(row.key);
+    if (existing) existing.push(row);
+    else keys.set(row.key, [row]);
+  }
   return keys;
 }
 
@@ -129,23 +134,25 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     const mirrorState = readState("mirror", g);
     // No expected source dataset owns an orphan's scope and grain, so the source side is a known empty set once the mirror is fully read.
     const sourceState = g.dataset ? readState("source", g) : mirrorState === "complete" ? "complete" : "unknown";
-    let overflow = false;
+    const amountField = g.dataset?.amountField ?? null;
+    let amountIncomplete = false;
     const amount = (state: ReconciliationCoverage, rows: ReconciliationRow[]) => {
-      if (state !== "complete" || rows.some(r => r.read !== "complete")) return null;
+      if (!amountField || state !== "complete" || rows.some(r => r.read !== "complete")) return null;
       const minorUnits = total(rows);
-      if (minorUnits === null) { overflow = true; return null; }
+      if (minorUnits === null) { amountIncomplete = true; return null; }
       return { minorUnits, currency: g.currency };
     };
     const sourceAmount = amount(sourceState, g.source), mirrorAmount = amount(mirrorState, g.mirror);
     const rowsPartial = [...g.source, ...g.mirror].some(r => r.read === "partial");
-    const coverage = worst(sourceState, mirrorState, rowsPartial || overflow ? "partial" : "complete");
+    const coverage = worst(sourceState, mirrorState, rowsPartial || amountIncomplete ? "partial" : "complete");
     const comparisonId = publicIds.comparison(schedule.checkId, g);
     const sourceVersion = g.dataset ? sourceRead?.version ?? "source-unread" : ownershipVersion;
     const comparison: ReconciliationComparison = {
       id: comparisonId, label: `${g.scope} ${g.grain} ${g.period} ${g.currency}`, grain: g.grain,
       period: { startAt: iso(window.startAt), endAt: iso(window.endAt), timezone: schedule.timezone }, currency: g.currency,
       sourceCount: sourceState === "complete" ? g.source.length : null, mirrorCount: mirrorState === "complete" ? g.mirror.length : null,
-      sourceAmount, mirrorAmount,
+      sourceAmount, mirrorAmount, amountField,
+      sourceWatermark: sourceRead?.sourceAsOf ?? null, mirrorWatermark: mirrorRead?.sourceAsOf ?? null,
       coverage, cutoff: iso(window.cutoff), sourceVersion, evidenceRef, observedAt,
     };
 
@@ -153,7 +160,7 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     const raise = (recordKey: string, side: ReconciliationFinding["side"], category: ReconciliationConflict["category"],
       field: ReconciliationConflict["field"], sourceValue: Value, mirrorValue: Value) => {
       const fingerprint = digest({ checkId: schedule.checkId, scope: g.scope, grain: g.grain, period: g.period, currency: g.currency,
-        recordKey, side, category, field, sourceValue, mirrorValue });
+        recordKey, side, category, field });
       raised.push({ fingerprint, comparisonId, recordKey, side, conflict: {
         id: publicIds.conflict(fingerprint), comparisonId, category, field,
         // Source owns records of an expected source dataset; a record the source cannot vouch for has unknown ownership.
@@ -176,11 +183,11 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
         raise(k, "mirror", "missing_mirror", "record-key", presence("present"), presence("missing"));
       for (const k of mirror.keys()) if (!source.has(k) && sourceState === "complete")
         raise(k, "source", "missing_source", "record-key", presence("missing"), presence("present"));
-      if (sourceState === "complete" && mirrorState === "complete") {
+      if (amountField && sourceState === "complete" && mirrorState === "complete") {
         for (const [k, [s, ...moreSource]] of source) {
           const [m, ...moreMirror] = mirror.get(k) ?? [];
           if (!s || !m || moreSource.length || moreMirror.length || s.read !== "complete" || m.read !== "complete") continue;
-          if (s.amountMinor !== m.amountMinor) raise(k, "both", "amount", g.dataset.amountField,
+          if (s.amountMinor !== null && m.amountMinor !== null && s.amountMinor !== m.amountMinor) raise(k, "both", "amount", amountField,
             { kind: "money", minorUnits: s.amountMinor, currency: g.currency }, { kind: "money", minorUnits: m.amountMinor, currency: g.currency });
         }
       }
@@ -204,7 +211,8 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
 
   const outcome = comparisons.some(c => c.outcome === "incomplete" || c.outcome === "unknown") ? "incomplete"
     : comparisons.some(c => c.outcome === "differences") ? "differences" : "matched";
-  return { runId: input.runId, checkId: input.checkId, scheduleVersion: input.scheduleVersion, observedAt, outcome, comparisons, findings };
+  return { runId: input.runId, checkId: input.checkId, scheduleVersion: input.scheduleVersion, observedAt, outcome,
+    ...(input.scheduledWindow ? { scheduledWindow: input.scheduledWindow } : {}), coverage: input.coverage, comparisons, findings };
 }
 
 /**

@@ -30,7 +30,7 @@ const localDate = z.string().date();
 const minorUnits = z.number().int().safe();
 
 export const expectedDatasetSchema = z.object({
-  scope: ref(80), grain: z.enum(GRAINS), amountField: z.enum(AMOUNT_FIELDS),
+  scope: ref(80), grain: z.enum(GRAINS), amountField: z.enum(AMOUNT_FIELDS).nullable(),
   /** Currencies always compared for this dataset, so a complete read with no rows is a known zero rather than an absent row. */
   currencies: z.array(currency).min(1).max(10),
 }).strict().refine(d => new Set(d.currencies).size === d.currencies.length, "Duplicate currency.");
@@ -53,7 +53,7 @@ export type ExpectedDataset = z.infer<typeof expectedDatasetSchema>;
 
 /** One source or mirror row. `read` is the row-level coverage flag: a partial row was seen but its amount is not trusted. */
 export const reconciliationRowSchema = z.object({
-  key: ref(200), scope: ref(80), grain: z.enum(GRAINS), period: localDate, currency, amountMinor: minorUnits,
+  key: ref(200), scope: ref(80), grain: z.enum(GRAINS), period: localDate, currency, amountMinor: minorUnits.nullable(),
   read: z.enum(["complete", "partial"]),
 }).strict();
 export type ReconciliationRow = z.infer<typeof reconciliationRowSchema>;
@@ -75,6 +75,8 @@ export type ReadCoverage = z.infer<typeof readCoverageSchema>;
 
 export const checkInputSchema = z.object({
   runId: ref(120), checkId: ref(80), scheduleVersion: z.number().int().positive().safe(),
+  scheduledWindow: z.object({ start: instant, end: instant, timezone }).strict()
+    .refine(window => Date.parse(window.start) < Date.parse(window.end)).optional(),
   periods: z.array(localDate).min(1).max(31),
   coverage: z.array(readCoverageSchema).max(2000),
   sourceRows: z.array(reconciliationRowSchema).max(50_000),
@@ -99,8 +101,8 @@ export type ComparisonResult = {
 };
 export type ReconciliationFinding = {
   /**
-   * Stable across runs: identical findings, values included, share it, which is what suppression keys on. It is a plain
-   * digest of the record key and other guessable inputs, so it stays server side. The public conflict id is an HMAC.
+   * Stable across runs and amount changes for the same incident. It stays server side because it hashes a guessable
+   * record key. The public conflict id is an HMAC.
    */
   fingerprint: string;
   comparisonId: string;
@@ -111,7 +113,8 @@ export type ReconciliationFinding = {
 };
 export type CheckResult = {
   runId: string; checkId: string; scheduleVersion: number; observedAt: string; outcome: RunOutcome;
-  comparisons: ComparisonResult[]; findings: ReconciliationFinding[];
+  scheduledWindow?: CheckInput["scheduledWindow"];
+  coverage: ReadCoverage[]; comparisons: ComparisonResult[]; findings: ReconciliationFinding[];
 };
 
 export class MirrorReconciliationError extends Error {

@@ -24,6 +24,8 @@ import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts
 import { MirrorFreshnessRepository, unconfiguredMirrorFreshness, type MirrorFreshnessOptions } from "./mirrorFreshnessRepository.ts";
 import { toD13SourceFreshness, mirrorRefSchema } from "./mirrorFreshness.ts";
 import { MirrorFreshnessRuntime, type MirrorRuntimeConfig } from "./mirrorFreshnessRuntime.ts";
+import { MirrorReconciliationRepository } from "./mirrorReconciliation/repository.ts";
+import { bindMirrorReconciliation, type MirrorReconciliationBinding } from "./mirrorReconciliation/runtime.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 import { EvidenceReviewRepository, EvidenceReviewError } from "./evidenceReviewStore.ts";
@@ -163,6 +165,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
   runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
+  /** Trusted source and existing daily observe registration. This does not activate a job or bind a repair writer. */
+  mirrorReconciliation?: MirrorReconciliationBinding;
   /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
    * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
   mirrorFreshness?: Pick<MirrorFreshnessOptions, "approval" | "policies"> & MirrorRuntimeConfig;
@@ -229,6 +233,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let mediaDomain: MediaComposition | undefined;
   let runtime: JobRuntime;
   let runtimeApi: ReturnType<typeof createRuntimeApi>;
+  let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null = null;
   let commercialProjection: ReturnType<typeof createCommercialProjection>;
   let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
   try {
@@ -252,6 +257,13 @@ export function createAgentServer(options: AgentServerOptions) {
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
+    const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
+    reconciliation = options.mirrorReconciliation
+      ? bindMirrorReconciliation(new MirrorReconciliationRepository(store.database, reconciliationScope, { secret: operationsSecret, now: options.operations?.now }),
+        reconciliationScope, runtimeRegistry, options.mirrorReconciliation)
+      : null;
+    if (reconciliation) runtimeRegistry = reconciliation.registry;
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
     commercialProjection = createCommercialProjection({ offers, db: store.database,
@@ -299,7 +311,7 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now,
-      authority:controlAuthority,canonical:()=>operationsBridge,
+      authority:controlAuthority,canonical:()=>operationsBridge,reconciliationSource:reconciliation?.view,
       serviceReaders:controlAuthority?createOperationsControlServiceReaders({authority:controlAuthority,
         runtime:()=>options.runtime?runtimeApi:undefined,reporting:()=>actionFoundation.reporting}):undefined });
     if(options.operationsCanonical&&controlAuthority)operationsBridge=createOperationsControlBridge({
@@ -369,7 +381,7 @@ export function createAgentServer(options: AgentServerOptions) {
       } });
     runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
-      registry: options.runtime?.registry ?? { registrations: new Map(), executors: new Map() },
+      registry: runtimeRegistry,
       authority: options.runtime?.authority, now: options.operations?.now });
     runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
@@ -883,6 +895,7 @@ export function createAgentServer(options: AgentServerOptions) {
         shippingHub: { sourceAuthority: options.shippingHubSource ? "injected" : "notConnected", readOnly: true },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
+        nightlyReconciliation: { readBinding: options.mirrorReconciliation ? "injected" : "notConnected", repairWriter: "notConnected" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
           importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
         dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
@@ -1565,7 +1578,8 @@ export function createAgentServer(options: AgentServerOptions) {
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime,
+    mirrorReconciliation: reconciliation, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     mirrorRuntime?.stop();
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
