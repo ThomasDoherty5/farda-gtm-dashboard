@@ -12,7 +12,7 @@ export class MirrorFreshnessRuntime {
   readonly repository: MirrorFreshnessRepository;
   readonly scope: MirrorCompletion["scope"];
   readonly source: MirrorRunSource | undefined;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
   private schedule: MirrorSchedule = {state:"unconfigured",everyMinutes:15,timezone:"America/Los_Angeles",deploymentRef:null,lastSweepAt:null,nextSweepAt:null};
   constructor(repository: MirrorFreshnessRepository, scope: MirrorCompletion["scope"],
     source: MirrorRunSource | undefined, bindings: readonly MirrorBinding[] = []) {
@@ -61,11 +61,16 @@ export class MirrorFreshnessRuntime {
     if(this.timer)return;
     if(!this.repository.approval)throw new MirrorFreshnessError("MIRROR_POLICY_UNAPPROVED",409);
     this.schedule={...this.schedule,state:"running",deploymentRef};
-    const tick=()=>{try{this.sweep();}catch{this.stop();this.schedule.state="failed";}};
+    // Schedule from the completed observation. A fixed interval can fire a few
+    // milliseconds before a delayed preceding check becomes due, skipping an
+    // entire 15-minute cycle at the repository's exact cadence boundary.
+    const tick=()=>{
+      try{this.sweep();}catch{this.stop();this.schedule.state="failed";}
+      if(this.schedule.state==="running"){this.timer=setTimeout(tick,900_000);this.timer.unref();}
+    };
     tick();
-    if(this.schedule.state==="running"){this.timer=setInterval(tick,900_000);this.timer.unref();}
   }
-  stop(){if(this.timer)clearInterval(this.timer);this.timer=null;if(this.schedule.state==="running")this.schedule.state="stopped";this.schedule.nextSweepAt=null;}
+  stop(){if(this.timer)clearTimeout(this.timer);this.timer=null;if(this.schedule.state==="running")this.schedule.state="stopped";this.schedule.nextSweepAt=null;}
   scheduleEvidence():MirrorSchedule{return structuredClone(this.schedule);}
   events(after=0,limit=100){
     z.number().int().nonnegative().safe().parse(after);z.number().int().min(1).max(100).parse(limit);

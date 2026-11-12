@@ -81,6 +81,21 @@ describe("qualified mirror completion and health sweep",()=>{
     w.runtime.stop();expect(w.runtime.scheduleEvidence()).toMatchObject({state:"stopped",nextSweepAt:null});
     w.runtime.start("synthetic-deployment");w.clock.at=NaN;vi.advanceTimersByTime(900_000);expect(w.runtime.scheduleEvidence()).toMatchObject({state:"failed",nextSweepAt:null});
   });
+  it("does not skip an entire cycle after a delayed preceding observation",()=>{
+    vi.useFakeTimers();vi.setSystemTime(mirrorTestNow);
+    const w=setup();Object.defineProperty(w.clock,"at",{get:()=>Date.now()});
+    const original=w.repository.sweep.bind(w.repository),observations:ReturnType<typeof original>[]=[];
+    vi.spyOn(w.repository,"sweep").mockImplementation(()=>{
+      if(observations.length===1)vi.advanceTimersByTime(20);
+      const result=original();observations.push(result);return result;
+    });
+    w.runtime.start("synthetic-deployment");
+    vi.advanceTimersByTime(900_000);
+    vi.advanceTimersByTime(900_000);
+    expect(observations).toHaveLength(3);
+    expect(observations.every(result=>result.skipped.length===0&&result.summaries.length===7)).toBe(true);
+    expect(Date.parse(observations[2]!.checkedAt)-Date.parse(observations[1]!.checkedAt)).toBeGreaterThanOrEqual(900_000);
+  });
   it("rejects client inventory, declared freshness and schedule contradictions",()=>{
     const w=setup();const data={kind:"mirror-freshness",configured:true,mirrors:w.repository.evaluate(),policy:mirrorTestApproval,schedule:w.runtime.scheduleEvidence(),incidents:[]};
     expect(mirrorFreshnessViewSchema.safeParse(data).success).toBe(true);
