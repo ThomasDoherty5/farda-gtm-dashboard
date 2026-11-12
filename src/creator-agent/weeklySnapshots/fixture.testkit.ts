@@ -9,7 +9,7 @@ import { reportEventSchema, ReportError, type ReportSnapshot } from "../slackRep
 import { createReportingSourceFixture, reportFixture, reportingScope as scope } from "../slackReporting/fixtures.testkit.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../testFixtures.ts";
 import { weeklyExpectedMeasures, weeklyFactsSchema, weeklyMetrics, type WeeklyFacts } from "./contract.ts";
-import { weeklySnapshotAfterLaunch, weeklySnapshotWindow } from "./schedule.ts";
+import { weeklySnapshotWindow } from "./schedule.ts";
 import type { WeeklySnapshotConfig } from "./service.ts";
 
 const machineToken = "synthetic-weekly-report-machine-000000000000";

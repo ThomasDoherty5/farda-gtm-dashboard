@@ -5,6 +5,13 @@ const week = 7 * 86_400_000;
 const pacificDate = new Intl.DateTimeFormat("en-US", {
   timeZone: weeklyTimezone, year: "numeric", month: "2-digit", day: "2-digit",
 });
+export type WeeklyWindow = {
+  reportDate: string;
+  timezone: typeof weeklyTimezone;
+  start: string;
+  end: string;
+  scheduledAt: string;
+};
 
 function wallTime(date: number, localTime: string) {
   const occurrence = nextRun({ cadence: "weekly-monday", timezone: weeklyTimezone, localTime, activeCohortOverride: false }, new Date(date));
@@ -13,7 +20,7 @@ function wallTime(date: number, localTime: string) {
 }
 
 /** Completed Monday-to-Monday Pacific week, including weeks with a DST change. */
-export function weeklySnapshotWindow(reportDate: string) {
+export function weeklySnapshotWindow(reportDate: string): WeeklyWindow | null {
   const monday = new Date(reportDate + "T00:00:00.000Z");
   if (!Number.isFinite(+monday) || monday.toISOString().slice(0, 10) !== reportDate || monday.getUTCDay() !== 1) return null;
   return {
@@ -22,8 +29,6 @@ export function weeklySnapshotWindow(reportDate: string) {
     scheduledAt: wallTime(+monday, "08:30"),
   };
 }
-
-export type WeeklyWindow = NonNullable<ReturnType<typeof weeklySnapshotWindow>>;
 
 export function previousWeeklyDate(reportDate: string) {
   return new Date(Date.parse(reportDate + "T00:00:00.000Z") - week).toISOString().slice(0, 10);
