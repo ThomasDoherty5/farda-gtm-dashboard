@@ -38,6 +38,9 @@ const variants: { viewKey: string; filters: object; throws?: string }[] = [
   { viewKey: "financeDashboard", filters: { scenario: "stale" } },
   { viewKey: "financeDashboard", filters: { scenario: "insufficient" } },
   { viewKey: "financeDashboard", filters: { scenario: "zeroburn" } },
+  { viewKey: "financeDashboard", filters: { scenario: "zeroorders" } },
+  { viewKey: "financeDashboard", filters: { scenario: "landedincomplete" } },
+  { viewKey: "financeDashboard", filters: { scenario: "subscriptionunread" } },
   { viewKey: "financeDashboard", filters: { scenario: "unavailable" }, throws: "SOURCE_UNAVAILABLE" },
   { viewKey: "periodClose", filters: { period: "2026-10" } },
   { viewKey: "periodClose", filters: { period: "2026-10", scenario: "exportfailed" } },
@@ -88,7 +91,15 @@ describe("finance view schemas: every demo response parses", () => {
     expect(parsed.group.state).toBe("paid");
   });
 
-  it("keeps the dashboard's unknowns and known zero distinct", async () => {
+  it("accepts a dashboard without the optional unit-economics, subscription and forecast add-ons", () => {
+    const frozen: Record<string, unknown> = { ...financeDashboardDemo() };
+    for (const key of ["unitEconomics", "subscriptions", "forecastPlan"]) delete frozen[key];
+    const parsed = financeDashboardSchema.parse(frozen);
+    expect(parsed.pnl.revenue).toBe(1259600);
+    expect(parsed).not.toHaveProperty("unitEconomics");
+  });
+
+    it("keeps the dashboard's unknowns and known zero distinct", async () => {
     const adapter = createDemoAdapter();
     const base = financeDashboardSchema.parse((await adapter.readView(request("financeDashboard"))).data);
     expect(base.pnl.ytd).toMatchObject({ state: "unknown", value: null, reasonCode: "YTD_REPORT_NOT_RECEIVED" });
@@ -161,6 +172,32 @@ const negatives: { view: string; schema: z.ZodTypeAny; valid: unknown; cases: Ca
       ["fractional payable", (d) => (d.accountsPayable = 480000.25)],
       ["negative cost line", (d) => (d.costBreakdown[0].minor = -1)],
       ["revenue as a string", (d) => (d.pnl.revenue = "1259600")],
+      ["cohort currency other than the P&L's", (d) => (d.unitEconomics.cohort.currency = "EUR")],
+      ["one obligation under two components", (d) => (d.unitEconomics.costs[1].obligationId = d.unitEconomics.costs[0].obligationId)],
+      ["a component declared unknown and also reported", (d) => d.unitEconomics.declared.push({ component: "paidMedia", state: "unknown", reasonCode: "NOT_READ" })],
+      ["a component declared known zero and also reported", (d) => d.unitEconomics.declared.push({ component: "landedCogs", state: "knownZero", reasonCode: "NONE" })],
+      ["a component declared twice", (d) => d.unitEconomics.declared.push({ ...d.unitEconomics.declared[0] })],
+      ["COGS evidence ID reused on a sample row with another obligation", (d) => d.unitEconomics.costs.push({ ...d.unitEconomics.costs[0], component: "sampleLanded", obligationId: "TEST-OBL-sample-2" })],
+      ["sample shipping carrying the customer shipping cash ID", (d) => (d.unitEconomics.costs.find((c: any) => c.component === "sampleShipping").cashId = d.unitEconomics.costs.find((c: any) => c.component === "shipping").cashId)],
+      ["obligation ID with a zero-width space", (d) => (d.unitEconomics.costs[0].obligationId += "\u200B")],
+      ["evidence ID with a trailing space", (d) => (d.unitEconomics.costs[0].evidenceId += " ")],
+      ["cash ID with a byte-order mark", (d) => (d.unitEconomics.costs[1].cashId = "\uFEFF" + d.unitEconomics.costs[1].cashId)],
+      ["cohort ID with a no-break space", (d) => (d.unitEconomics.cohort.id += "\u00A0")],
+      ["adopted definition without a reference", (d) => (d.unitEconomics.definition.state = "adopted")],
+      ["complete creator coverage with unequal counts", (d) => (d.unitEconomics.creatorCosts.state = "complete")],
+      ["partial attribution without a reason", (d) => (d.unitEconomics.attribution.reasonCodes = [])],
+      ["observed coverage above expected", (d) => (d.unitEconomics.attribution.observed = 401)],
+      ["unknown valid orders carrying zero", (d) => Object.assign(d.unitEconomics.validOrders, { state: "unknown", value: 0, reasonCode: "X" })],
+      ["complete landed cost listing a missing SKU", (d) => (d.unitEconomics.landedCost.missingSkus = ["TEST-SKU-02"])],
+      ["unknown cost component", (d) => (d.unitEconomics.costs[0].component = "overhead")],
+      ["negative cost row", (d) => (d.unitEconomics.costs[0].minorUnits = -1)],
+      ["fractional cost row", (d) => (d.unitEconomics.costs[0].minorUnits = 441000.5)],
+      ["declared component without a reason", (d) => (d.unitEconomics.declared[0].reasonCode = "")],
+      ["unread subscription source with a product count", (d) => Object.assign(d.subscriptions, { access: "unknown", reasonCode: "NOT_READ", subscriptionProducts: 0 })],
+      ["unread subscription source without a reason", (d) => Object.assign(d.subscriptions, { access: "unknown", reasonCode: null, subscriptionProducts: null })],
+      ["verified subscription access without a product count", (d) => (d.subscriptions.subscriptionProducts = null)],
+      ["recurring revenue with no subscription product", (d) => Object.assign(d.subscriptions.monthlyRecurring, { state: "known", value: 45000, reasonCode: null })],
+      ["forecast without a version", (d) => (d.forecastPlan.version = "")],
     ],
   },
   {

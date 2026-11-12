@@ -2,10 +2,10 @@ import { createHmac } from "node:crypto";
 import { digest } from "../config.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
 import type { OperationsScope } from "../operations.ts";
-import { nativeFinanceViewSchemas } from "../../adapter/viewSchemas/finance.ts";
+import { financeDashboardSchema, nativeFinanceViewSchemas } from "../../adapter/viewSchemas/finance.ts";
 import { financeDetailViews, financeFilters, financeSnapshotSchema, type FinanceSnapshot, type FinanceViewKey } from "./contract.ts";
 import { FinanceError, financeMaxObservationAgeMs, financeSourceTimeoutMs, type FinanceSourceReader, type FinancePrincipal, type FinanceReadBinding } from "./source.ts";
-import { financeSummaryContextSchema } from "./headlines.ts";
+import { financeCohortMatches } from "./headlines.ts";
 
 export { FinanceError } from "./source.ts";
 /** Freeze parsed input retained by the final fence; source code cannot mutate a published basis. */
@@ -27,6 +27,49 @@ const intents: Record<FinanceViewKey, Capability[]> = {
 };
 /** The record field that must equal the requested address, so a source cannot answer one record with another. */
 const identity: Partial<Record<FinanceViewKey, string>> = { settlementDetail: "settlementId", payableDetail: "payableId", periodClose: "period", closePackage: "period" };
+
+type FinanceDashboardRecord = ReturnType<typeof financeDashboardSchema.parse>;
+type Alias = (kind: string, value: string) => string;
+
+/** Project only matched cost evidence and keep its internal reference joins intact. */
+function projectFinanceAddOns(report: FinanceDashboardRecord, alias: Alias) {
+  const { summaryContext, unitEconomics: economics, subscriptions, forecastPlan } = report;
+  const measure = (value: FinanceDashboardRecord["pnl"]["ytd"]) => ({
+    ...value, sourceRef: null, evidenceRefs: value.evidenceRefs.map(ref => alias("finance-evidence", ref)),
+  });
+  const definition = (value: NonNullable<FinanceDashboardRecord["unitEconomics"]>["definition"]) => ({
+    ...value, version: alias("finance-definition", value.version),
+    reference: value.reference === null ? null : alias("finance-definition-evidence", value.reference),
+  });
+  if (economics) {
+    const { cohort } = economics;
+    if (!financeCohortMatches(summaryContext, cohort) || economics.costs.some(row =>
+      row.cohortId !== cohort.id || row.currency !== cohort.currency || row.period.start !== cohort.period.start ||
+      row.period.end !== cohort.period.end || row.period.timezone !== cohort.period.timezone)) {
+      delete report.unitEconomics;
+    } else {
+      report.unitEconomics = {
+        ...economics, definition: definition(economics.definition),
+        cohort: { ...cohort, id: alias("finance-cohort", cohort.id), label: "Source report cohort" },
+        validOrders: measure(economics.validOrders), newCustomers: measure(economics.newCustomers),
+        landedCost: { ...economics.landedCost, missingSkus: economics.landedCost.missingSkus.map(sku => alias("finance-sku", sku)) },
+        costs: economics.costs.map(row => ({
+          ...row, cohortId: alias("finance-cohort", row.cohortId), obligationId: alias("finance-obligation", row.obligationId),
+          evidenceId: alias("finance-evidence", row.evidenceId), cashId: row.cashId === null ? null : alias("finance-cash", row.cashId),
+        })),
+      };
+    }
+  }
+  if (subscriptions) report.subscriptions = {
+    ...subscriptions, definition: definition(subscriptions.definition), monthlyRecurring: measure(subscriptions.monthlyRecurring),
+  };
+  if (forecastPlan) report.forecastPlan = { ...forecastPlan, version: alias("finance-forecast", forecastPlan.version), assumptions: [] };
+  if (summaryContext) report.summaryContext = {
+    ...summaryContext, ...(summaryContext.cohortRef ? { cohortRef: alias("finance-cohort", summaryContext.cohortRef) } : {}),
+    policy: { ...summaryContext.policy, version: alias("policy-version", summaryContext.policy.version),
+      evidenceRef: alias("policy-evidence", summaryContext.policy.evidenceRef) },
+  };
+}
 
 export type FinanceReadResult = {
   data: unknown; version: string; dataState: "ready" | "empty" | "partial" | "stale";
@@ -138,12 +181,11 @@ export function createFinanceReader(options: Options) {
     const reasonCodes = [...new Set([...(stale ? ["FINANCE_SOURCE_STALE"] : []), ...s.coverage.reasonCodes])];
     const data = s.record === null ? null : nativeFinanceViewSchemas[viewKey]!.parse(projectedRecord);
     if (viewKey === "financeDashboard" && data) {
-      const context = financeSummaryContextSchema.nullable().optional().parse((data as { summaryContext?: unknown }).summaryContext);
+      const dashboard = data as FinanceDashboardRecord, context = dashboard.summaryContext;
       if (context && Date.parse(context.cashAsOf) > Date.parse(s.observedAt)) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_CASH_TIME_INVALID"]);
       if (f.startAt && (!context || Date.parse(context.period.startAt) !== Date.parse(f.startAt) || Date.parse(context.period.endAt) !== Date.parse(f.endAt!) || context.period.timezone !== f.timezone))
         throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_REPORTING_PERIOD_MISMATCH"]);
-      if (context) (data as { summaryContext: typeof context }).summaryContext = { ...context,
-        policy: { ...context.policy, version: alias("policy-version", context.policy.version), evidenceRef: alias("policy-evidence", context.policy.evidenceRef) } };
+      projectFinanceAddOns(dashboard, alias);
     }
     if (data && (data as { provenance: { observedAt: string } }).provenance.observedAt !== s.observedAt) throw new FinanceError("SOURCE_RESPONSE_INVALID", 502, ["FINANCE_PROVENANCE_MISMATCH"]);
     const finalFence = () => {
