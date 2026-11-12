@@ -26,7 +26,7 @@ const currency = z.string().regex(/^[A-Z]{3}$/);
 const timezone = z.string().min(1).max(64).refine(v => { try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; } },
   "Use an IANA timezone.");
 /** A period is one local calendar day in the schedule's timezone. */
-const localDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v => new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), "Use a real date.");
+const localDate = z.string().date();
 const minorUnits = z.number().int().safe();
 
 export const expectedDatasetSchema = z.object({
@@ -59,13 +59,18 @@ export const reconciliationRowSchema = z.object({
 export type ReconciliationRow = z.infer<typeof reconciliationRowSchema>;
 
 /**
- * Dataset-level read coverage for one side, scope, grain and period. A dataset with no declaration is `unknown`. `readAt`
- * is when the read finished; a read that finished before the period's cutoff cannot prove completeness.
+ * Dataset-level read coverage for one side, scope, grain and period. `readAt` is when the read finished.
+ * `sourceAsOf` is the source-owned snapshot watermark. A recent poll alone cannot prove complete coverage.
  */
 export const readCoverageSchema = z.object({
   side: z.enum(["source", "mirror"]), scope: ref(80), grain: z.enum(GRAINS), period: localDate,
-  state: z.enum(["complete", "partial", "failed"]), version: ref(120), readAt: instant,
-}).strict();
+  state: z.enum(["complete", "partial", "failed"]), version: ref(120), readAt: instant, sourceAsOf: instant.nullable(),
+}).strict().superRefine((value, ctx) => {
+  if ((value.state === "complete" && value.sourceAsOf === null) ||
+      (value.sourceAsOf !== null && Date.parse(value.sourceAsOf) > Date.parse(value.readAt))) {
+    ctx.addIssue({ code: "custom", message: "Complete coverage requires a source watermark at or before the completed read." });
+  }
+});
 export type ReadCoverage = z.infer<typeof readCoverageSchema>;
 
 export const checkInputSchema = z.object({
@@ -88,7 +93,7 @@ export type ComparisonResult = {
   comparison: ReconciliationComparison;
   group: GroupRef & { expected: boolean };
   outcome: ComparisonOutcome;
-  /** When each side's read of this group finished, or null when it was not read. Orders runs whose reads arrive out of order. */
+  /** Source-owned watermarks on each side, or null when unavailable. Orders observations that arrive out of sequence. */
   reads: { source: string | null; mirror: string | null };
   findingFingerprints: string[];
 };

@@ -25,7 +25,8 @@ const DAY = "2027-02-11";
 const row = (key: string, amountMinor: number, extra: Partial<ReconciliationRow> = {}): ReconciliationRow =>
   ({ key, scope: "synthetic-store-a", grain: "order", period: DAY, currency: "GBP", amountMinor, read: "complete", ...extra });
 const read = (side: ReadCoverage["side"], state: ReadCoverage["state"] = "complete", extra: Partial<ReadCoverage> = {}): ReadCoverage =>
-  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v7`, readAt: "2027-02-12T05:00:00Z", ...extra });
+  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v7`, readAt: "2027-02-12T05:00:00Z",
+    sourceAsOf: state === "complete" ? extra.readAt ?? "2027-02-12T05:00:00Z" : null, ...extra });
 const input = (extra: Partial<CheckInput> = {}): CheckInput => ({
   runId: "synthetic-run-1", checkId: schedule.checkId, scheduleVersion: 1, periods: [DAY],
   coverage: [read("source"), read("mirror")], sourceRows: [], mirrorRows: [], ...extra });
@@ -37,6 +38,22 @@ const envelope = ({ comparisons, conflicts }: { comparisons: unknown[]; conflict
   comparisons, conflicts });
 
 describe("mirror reconciliation comparator", () => {
+  it("withholds totals when a fresh poll returns a snapshot from before cutoff", () => {
+    const result = compare(schedule, input({
+      coverage: [read("source", "complete", { sourceAsOf: "2027-02-12T01:59:00Z" }), read("mirror")],
+      sourceRows: [row("order-1", 400)], mirrorRows: [row("order-1", 400)],
+    }), AT);
+    expect(orders(result)).toMatchObject({ outcome: "incomplete", comparison: { sourceCount: null, sourceAmount: null },
+      reads: { source: "2027-02-12T01:59:00.000Z", mirror: "2027-02-12T05:00:00.000Z" } });
+    expect(result.outcome).toBe("incomplete");
+  });
+
+  it("rejects a complete read with no valid source watermark and an impossible calendar period", () => {
+    expect(() => compare(schedule, input({ coverage: [read("source", "complete", { sourceAsOf: null })] }), AT)).toThrow("INVALID_CHECK_INPUT");
+    expect(() => compare(schedule, input({ coverage: [read("source", "complete", { sourceAsOf: "2027-02-12T05:01:00Z" })] }), AT)).toThrow("INVALID_CHECK_INPUT");
+    expect(() => compare(schedule, input({ periods: ["2027-13-01"] }), AT)).toThrow("INVALID_CHECK_INPUT");
+  });
+
   it("AC2: matches complete reads on keys, counts and money totals", () => {
     const result = compare(schedule, input({ sourceRows: [row("order-1", 1250), row("order-2", -300)],
       mirrorRows: [row("order-2", -300), row("order-1", 1250)] }), AT);

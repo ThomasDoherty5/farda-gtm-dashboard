@@ -29,7 +29,7 @@ The repository stores schedules by version. Saving the same version again does n
 
 A check input has a `runId`, the check and schedule version, the local-day `periods`, and source rows and mirror rows. Each row has a `key`, `scope`, `grain`, `period`, `currency` and an integer `amountMinor`. It also has a row-level `read` flag: a `partial` row was seen, but its amount is not trusted.
 
-Dataset coverage is declared separately, per side, scope, grain and period, as `complete`, `partial` or `failed`, with a version and a `readAt` time. A dataset with no declaration is `unknown`. A `complete` read that finished before the period's cutoff may have missed late rows, so it counts as `partial`.
+Dataset coverage is declared separately, per side, scope, grain and period, as `complete`, `partial` or `failed`, with a version, a `readAt` time and the source-owned `sourceAsOf` watermark. A dataset with no declaration is `unknown`. A complete snapshot requires a watermark at or before its read time. A watermark before the cutoff leaves the comparison partial even when the poll finished later.
 
 ## Comparison rules
 
@@ -79,7 +79,7 @@ Rechecks are idempotent:
 - **Same run id, different input.** The run is refused with `RUN_ID_REUSED`.
 - **Identical finding.** A finding's fingerprint covers the check, group, key, side, category, field and values. It excludes versions and times. Because values are included, a changed value is a different finding: the old one clears and the new one opens. A new run that sees an open finding counts it as `repeated`, and it is not raised again. Only `opened` and `reopened` findings are returned in `raised`, so alerts carry only those.
 - **Clearing.** An open finding is `cleared` only when a later run compares its group with complete coverage and no longer sees it. An incomplete or unknown recheck leaves it open. A cleared finding that returns is `reopened`.
-- **Read order.** Each finding keeps the newest `readAt`, per side, of the reads behind its current state. Runs can be recorded out of order, so a run whose reads of the group are older cannot clear or reopen it. That is recorded as `stale`.
+- **Read order.** Each finding keeps the newest `sourceAsOf` watermark for each side. A later poll that returns an older snapshot leaves the finding open. The run records the stale observation.
 - **Periods outside the run.** A finding whose period is not in a later run stays open. It never disappears silently. Once its period has left the lookback window, it keeps the snapshot `partial` until a check that includes that period runs; a manual recheck of that period clears it.
 
 `runs` returns the audit trail with its total. `runFindings` returns each run's dispositions. `findings` returns first and last run, occurrences, clearing and the read basis.

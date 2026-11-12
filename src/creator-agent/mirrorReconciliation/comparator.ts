@@ -89,11 +89,11 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     if (Date.parse(read.readAt) > observedAtMs) throw new MirrorReconciliationError("READ_IN_FUTURE", 422);
     reads.set(coverageKey(read.side, read.scope, read.grain, read.period), read);
   }
-  /** A read that finished before the cutoff may have missed late rows, so it cannot prove completeness. */
+  /** Compare the source's actual watermark with the cutoff, including when a fresh poll returns a cached snapshot. */
   const readState = (side: Side, g: Group): ReconciliationCoverage => {
     const read = reads.get(coverageKey(side, g.scope, g.grain, g.period));
     if (!read) return "unknown";
-    if (read.state === "complete" && Date.parse(read.readAt) < windows.get(g.period)!.cutoff) return "partial";
+    if (read.state === "complete" && (read.sourceAsOf === null || Date.parse(read.sourceAsOf) < windows.get(g.period)!.cutoff)) return "partial";
     return read.state;
   };
 
@@ -192,7 +192,8 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     if (outcome === "matched" && (comparison.sourceCount !== comparison.mirrorCount || comparison.sourceAmount?.minorUnits !== comparison.mirrorAmount?.minorUnits))
       throw new MirrorReconciliationError("COMPARATOR_INVARIANT", 500);
     comparisons.push({ comparison, group: { scope: g.scope, grain: g.grain, period: g.period, currency: g.currency, expected: g.dataset !== null },
-      outcome, reads: { source: sourceRead ? iso(Date.parse(sourceRead.readAt)) : null, mirror: mirrorRead ? iso(Date.parse(mirrorRead.readAt)) : null },
+      outcome, reads: { source: sourceRead?.sourceAsOf ? iso(Date.parse(sourceRead.sourceAsOf)) : null,
+        mirror: mirrorRead?.sourceAsOf ? iso(Date.parse(mirrorRead.sourceAsOf)) : null },
       findingFingerprints: unique.map(f => f.fingerprint) });
     findings.push(...unique);
   }

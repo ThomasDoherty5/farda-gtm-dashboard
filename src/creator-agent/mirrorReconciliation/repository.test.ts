@@ -24,7 +24,8 @@ const SECRET = "synthetic-test-secret-0123456789abcdef";
 const row = (key: string, amountMinor: number, extra: Partial<ReconciliationRow> = {}): ReconciliationRow =>
   ({ key, scope: "synthetic-store-a", grain: "order", period: DAY, currency: "GBP", amountMinor, read: "complete", ...extra });
 const read = (side: ReadCoverage["side"], state: ReadCoverage["state"] = "complete", extra: Partial<ReadCoverage> = {}): ReadCoverage =>
-  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v1`, readAt: "2027-02-12T05:00:00Z", ...extra });
+  ({ side, scope: "synthetic-store-a", grain: "order", period: DAY, state, version: `synthetic-${side}-v1`, readAt: "2027-02-12T05:00:00Z",
+    sourceAsOf: state === "complete" ? extra.readAt ?? "2027-02-12T05:00:00Z" : null, ...extra });
 const input = (runId: string, extra: Partial<CheckInput> = {}): CheckInput => ({ runId, checkId: schedule.checkId, scheduleVersion: 1,
   periods: [DAY], coverage: [read("source"), read("mirror")], sourceRows: [], mirrorRows: [], ...extra });
 const twoDifferences = { sourceRows: [row("order-1", 1000), row("order-2", 500)], mirrorRows: [row("order-1", 900)] };
@@ -40,6 +41,26 @@ function setup(path = ":memory:") {
 const count = (db: InstanceType<typeof DatabaseSync>, table: string) => Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get()!.n);
 
 describe("mirror reconciliation repository", () => {
+  it("keeps a finding open when a later poll presents an older matching snapshot", () => {
+    const { repo, clock } = setup();
+    repo.saveSchedule(schedule);
+    repo.recordCheck(input("synthetic-initial", { sourceRows: [row("order-1", 400)], mirrorRows: [row("order-1", 500)] }));
+    clock.at += 3_600_000;
+    const sameRows = { sourceRows: [row("order-1", 400)], mirrorRows: [row("order-1", 400)] };
+    const delayed = repo.recordCheck(input("synthetic-delayed", { ...sameRows, coverage: [
+      read("source", "complete", { readAt: "2027-02-12T06:30:00Z", sourceAsOf: "2027-02-12T04:30:00Z" }),
+      read("mirror", "complete", { readAt: "2027-02-12T06:30:00Z" }),
+    ] }));
+    expect(delayed).toMatchObject({ cleared: [], run: { dispositions: { stale: 1 } } });
+    expect(repo.findings(schedule.checkId, "open")).toHaveLength(1);
+    const fresh = repo.recordCheck(input("synthetic-fresh", { ...sameRows, coverage: [
+      read("source", "complete", { readAt: "2027-02-12T06:31:00Z" }),
+      read("mirror", "complete", { readAt: "2027-02-12T06:31:00Z" }),
+    ] }));
+    expect(fresh.run.dispositions.cleared).toBe(1);
+    expect(repo.findings(schedule.checkId, "open")).toHaveLength(0);
+  });
+
   it("refuses a database bound to another scope", () => {
     const { db } = setup();
     expect(() => new MirrorReconciliationRepository(db, { ...scope, accountId: "synthetic-other" }, { secret: SECRET })).toThrow("DATABASE_SCOPE_MISMATCH");
