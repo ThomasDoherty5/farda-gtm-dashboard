@@ -6,7 +6,7 @@ import {
   type DailyDigestContext, type DigestResult,
 } from "../dailyDigest/contract.ts";
 
-const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
+const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", resolvedFindings: "Findings resolved", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
 const statuses = { unavailable: "unavailable", permissionDenied: "permission denied", rateLimited: "rate limited", partial: "partial", complete: "complete", breached: "breached", cleared: "cleared", unknown: "unknown" };
 const actions = { inspectShipment: "Inspect the shipment and its source record.", reviewAutomation: "Review the automation and reconcile its original attempt.", reviewSource: "Review the source and its missing evidence.", reviewCreator: "Review the creator record.", reviewContent: "Review the content record.", reviewFinance: "Review the finance record; this report does not authorize payment.", reviewSupport: "Review the support record.", reviewLaunch: "Review launch readiness; this report does not release media or approve a launch.", continueMonitoring: "Continue monitoring the source." };
 const automationErrors = {

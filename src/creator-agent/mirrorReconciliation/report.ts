@@ -21,12 +21,13 @@ export function reconciliationReport(repo: MirrorReconciliationRepository, runId
     eventVersion: `schedule-v${run.scheduleVersion}`,
     occurredAt: run.observedAt,
     severity: needsReview ? "orange" : "info",
-    identity: { kind: "window", cadence: "orangeDigest", windowRef: `reconciliation:${run.runId}`, start: window.start, end: window.end,
+    identity: { kind: "window", cadence: needsReview ? "orangeDigest" : "reconciliationRecovery", windowRef: `reconciliation:${run.runId}`, start: window.start, end: window.end,
       timezone: window.timezone, launchWindowRef: null },
     subject: { kind: "aggregate", category: "automation" },
     facts: [
       { label: "coverage", value: incomplete ? "partial" : "complete" },
-      { label: "records", value: affected, unit: "count", missingReason: null },
+      ...(needsReview ? [{ label: "records", value: affected, unit: "count", missingReason: null }] : []),
+      ...(cleared ? [{ label: "resolvedFindings", value: cleared, unit: "count", missingReason: null }] : []),
     ],
     nextAction: needsReview ? "reviewSource" : "continueMonitoring",
   });
