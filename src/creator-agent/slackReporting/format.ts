@@ -4,6 +4,7 @@ import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
 import { weeklyReportBody } from "../weeklySnapshots/format.ts";
 import { thresholdText } from "../operationalAlerts/presentation.ts";
 import { launchPulseBody } from "../launchPulse/format.ts";
+import { creatorHandoffBody, creatorWeeklyBody } from "../creatorHandoff/format.ts";
 import {
   digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
   type DailyDigestContext, type DigestResult,
@@ -100,7 +101,9 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
   const event = reportEventSchema.parse(snapshot.event);
   const verdict = (event.severity === "red" ? "🔴 Act now" : event.severity === "orange" ? "🟠 Act today" : "🟢 Info") + (snapshot.testProvenance?.kind === "controlledSandbox" ? " · Controlled sandbox test" : "");
   const subject = event.subject.kind === "order" ? `Order ${event.subject.orderRef}` : event.subject.kind === "creator" ? `Creator @${event.subject.handle}` : `${event.subject.category[0]!.toUpperCase()}${event.subject.category.slice(1)} aggregate`;
-  const context = event.identity.kind === "window" ? `${subject} · ${event.identity.start}–${event.identity.end} (${event.identity.timezone})` : `${subject} · ${event.identity.transition === "clear" ? "Source-confirmed recovery" : "Source-confirmed incident"}`;
+  const context = event.identity.kind === "window"
+    ? `${subject} · ${event.identity.start}–${event.identity.end} (${event.identity.timezone})`
+    : `${subject} · ${event.identity.kind === "incident" && event.identity.transition === "clear" ? "Source-confirmed recovery" : "Source-confirmed incident"}`;
   const owner = snapshot.destination.owner.state === "active" ? `<@${snapshot.destination.owner.memberId}>` : snapshot.destination.owner.state === "deactivated" ? "unassigned (previous owner deactivated; no backup configured)" : "unassigned (no backup configured)";
   const provenance = createHash("sha256").update(JSON.stringify([event.eventRef, event.eventVersion, snapshot.programme.version])).digest("hex").slice(0, 12);
   const link = `https://linear.app/${event.link.workspaceSlug}/issue/${event.link.issueIdentifier}`;
@@ -128,6 +131,10 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
   if (event.dailyDigest) body = dailyDigestBody(event.dailyDigest, owner, link, provenance, controlled);
   else if (event.weeklySnapshot) body = weeklyReportBody(event.weeklySnapshot, owner, link, provenance, controlled);
   else if (event.launchPulse) body = launchPulseBody(event.launchPulse, owner, link, provenance, controlled);
+  else if (event.creatorHandoff && event.identity.kind === "creatorHandoff" && event.subject.kind === "creator") {
+    body = creatorHandoffBody(event.creatorHandoff, { collaborationId: event.identity.collaborationId,
+      handle: event.subject.handle, occurredAt: event.occurredAt, owner, sourceLink: link, provenance, controlled: !!controlled });
+  } else if (event.creatorWeekly) body = creatorWeeklyBody(event.creatorWeekly, link, provenance, !!controlled);
   else body = [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines,
       ...(event.thresholdAlert ? [thresholdText(event.thresholdAlert)] : []),
       `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
