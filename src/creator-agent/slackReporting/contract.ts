@@ -5,6 +5,7 @@ import type { JobRunView } from "../jobs/schema.ts";
 import { mirrorIncidentPayloadSchema } from "../mirrorFreshness.ts";
 import { dailyDigestContextSchema, digestAllClear } from "../dailyDigest/contract.ts";
 import { weeklyReportContextSchema } from "../weeklySnapshots/comparison.ts";
+import { thresholdReportContextSchema } from "../operationalAlerts/presentation.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -50,8 +51,21 @@ export const automationFailureContextSchema = z.object({
   recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
     "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
 }).strict();
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional() }).strict().superRefine((value, ctx) => {
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
+  const threshold = value.thresholdAlert;
+  if (/^threshold-[a-f0-9]{32}-[1-9]\d*-(breach|clear)$/.test(value.eventRef) !== Boolean(threshold)) {
+    ctx.addIssue({ code: "custom", message: "Threshold event identity requires its typed source evidence." });
+  }
+  if (threshold && (value.identity.kind !== "incident" || value.subject.kind !== "aggregate" ||
+      value.subject.category !== "automation" || value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot ||
+      value.eventRef !== `${value.identity.conditionRef}-${value.identity.generation}-${value.identity.transition}` ||
+      threshold.state !== (value.identity.transition === "clear" ? "clear" : "breached"))) {
+    ctx.addIssue({ code: "custom", message: "Threshold reports require a source-confirmed incident transition." });
+  }
+  if (value.thresholdDigestRecovery && (!threshold || value.identity.kind !== "incident" || value.identity.transition !== "clear")) {
+    ctx.addIssue({ code: "custom", message: "Digest recovery requires a source-confirmed threshold clear." });
+  }
   if(value.mirror && (value.identity.kind!=="incident" || value.subject.kind!=="aggregate" || value.subject.category!=="automation" ||
     value.identity.conditionRef!==value.mirror.incident.incidentId || value.identity.generation!==1 || value.identity.sequence!==(value.mirror.incident.event==="cleared"?2:1) ||
     value.identity.transition!==(value.mirror.incident.event==="cleared"?"clear":"breach"))) ctx.addIssue({code:"custom",message:"Mirror identity must match its immutable incident transition."});

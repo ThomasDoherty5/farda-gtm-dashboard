@@ -51,7 +51,7 @@ const sample: DigestRow[] = [
   { dataset: "freshness", ref: "synthetic-ad-import", state: "stale", adImport: { lastSuccessAt: "2026-11-10T18:00:00Z" } },
 ];
 
-async function fixture(rows: readonly DigestRow[] = [], clock = initialNow) {
+async function fixture(rows: readonly DigestRow[] = [], clock = initialNow, thresholds?: DailyDigestConfig["thresholds"]) {
   const dir = mkdtempSync(join(tmpdir(), "farda-digest-"));
   const reporting = createReportingSourceFixture(scope, clock);
   const route = reportFixture(clock);
@@ -65,6 +65,7 @@ async function fixture(rows: readonly DigestRow[] = [], clock = initialNow) {
     ownerMissing: false, cohort: null as DigestCohort | null, failDuring: null as (() => Promise<void>) | null,
   };
   const config: DailyDigestConfig = {
+    thresholds,
     producerRef: "producer:synthetic-daily-exceptions",
     policy: { version: route.programme.version, adoptionRef: route.programme.adoptionRef, effectiveAt: "2026-01-01T00:00:00Z" },
     destination: { targetRef: route.destination.targetRef, workspaceId: route.destination.workspaceId, channelId: route.destination.channelId },
@@ -219,6 +220,58 @@ describe("daily exceptions through the configured reporting machine", () => {
     expect(message).not.toContain("<@");
     expect(f.reads.map(read => read.dataset)).toEqual(digestDatasets);
     expect(f.event().dailyDigest?.results.every(result => result.coverage?.rows === 0)).toBe(true);
+  });
+
+  it("freezes orange threshold values and recovers only in the original confirmed digest thread", async () => {
+    let active = 1;
+    const condition = "threshold-" + "a".repeat(32);
+    const f = await fixture([], initialNow, () => ({
+      sourceLink: "https://linear.app/synthetic/issue/EXAMPLE-8", state: "complete", active, activeRed: 1, incomplete: 0,
+      conditions: active ? [condition + "-1"] : [],
+      details: active ? [{ kind: "lowStock", observed: 4, threshold: 8, unit: "units", currency: null, decimals: null,
+        sourceAsOf, state: "breached" }] : [],
+    }));
+    const accepted = reportReadSchema.parse((await f.accept()).body);
+    active = 0;
+    expect(await f.post("work", { reportRef: accepted.reportRef })).toMatchObject({
+      status: 409, body: { code: "DIGEST_ALERT_COVERAGE_CHANGED" },
+    });
+    expect(f.reporting.state.calls).toHaveLength(0);
+    active = 1;
+    f.reporting.state.mode = "lostAck";
+    expect((await f.post("work", { reportRef: accepted.reportRef })).body.executionCertainty).toBe("uncertain");
+    const original = f.reporting.state.calls[0]!;
+    const message = original.body;
+    expect(message).toContain("Active orange conditions 1");
+    expect(message).toContain("Open red incidents 1");
+    expect(message).toContain("4 units · threshold 8 units");
+    expect(message).not.toContain("No exceptions");
+
+    f.reporting.advance(1000);
+    const base = reportFixture(f.reporting.now);
+    const locator = { eventRef: condition + "-1-clear", eventVersion: "synthetic-verified-clear" };
+    f.reporting.add({ ...base, event: {
+      ...base.event, ...locator, occurredAt: new Date(f.reporting.now).toISOString(), severity: "info",
+      identity: { kind: "incident", conditionRef: condition, generation: 1, transition: "clear", sequence: 2, previousClearEventRef: null },
+      subject: { kind: "aggregate", category: "automation" }, facts: [{ label: "incidentStatus", value: "cleared" }],
+      nextAction: "continueMonitoring", thresholdDigestRecovery: true,
+      thresholdAlert: { kind: "lowStock", observed: 12, threshold: 8, unit: "units", currency: null, decimals: null,
+        sourceAsOf: new Date(f.reporting.now).toISOString(), state: "clear" },
+    } });
+    expect(await f.accept("synthetic-clear", locator)).toMatchObject({
+      status: 409, body: { code: "REPORT_ORIGINAL_DIGEST_THREAD_UNVERIFIED" },
+    });
+    expect(f.reporting.state.calls).toHaveLength(1);
+    expect((await f.post("reconcile", { reportRef: accepted.reportRef })).body.executionCertainty).toBe("applied");
+    const confirmed = f.reporting.outcomes.get(original.requestKey);
+    expect(confirmed?.state).toBe("applied");
+    const recovered = reportReadSchema.parse((await f.accept("synthetic-clear", locator)).body);
+    f.reporting.state.mode = "applied";
+    expect((await f.post("work", { reportRef: recovered.reportRef })).body.executionCertainty).toBe("applied");
+    expect(f.reporting.state.calls).toHaveLength(2);
+    if (confirmed?.state === "applied") expect(f.reporting.state.calls[1]!.threadTs).toBe(confirmed.receipt.messageTs);
+    expect((await f.accept("synthetic-clear", locator)).body.reportRef).toBe(recovered.reportRef);
+    expect(f.reporting.state.calls).toHaveLength(2);
   });
 
   it("keeps incomplete pagination unavailable after bounded retries, without partial money totals or another delivery", async () => {

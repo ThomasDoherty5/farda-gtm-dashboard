@@ -47,10 +47,35 @@ export class ReportMetadata {
     const row = this.db.prepare("SELECT event_hash FROM report_source_events WHERE producer_ref=? AND event_ref=? AND event_version=?").get(event.producerRef, event.eventRef, event.eventVersion);
     if (row && row.event_hash !== digest(event)) throw new ReportError("REPORT_EVENT_VERSION_REUSED");
   }
+  private thresholdDigestParent(snapshot: ReportSnapshot, conditionKey: string): StoredReport {
+    const { targetRef, workspaceId, channelId, botId } = snapshot.destination;
+    const row = this.db.prepare(`
+      SELECT r.body FROM report_records r
+      JOIN json_each(r.body,'$.snapshot.event.dailyDigest.thresholdAlerts.conditions') c ON c.value=?
+      WHERE json_extract(r.body,'$.snapshot.destination.targetRef')=?
+        AND json_extract(r.body,'$.snapshot.destination.workspaceId')=?
+        AND json_extract(r.body,'$.snapshot.destination.channelId')=?
+        AND json_extract(r.body,'$.snapshot.destination.botId')=?
+        AND json_extract(r.body,'$.createdAt')<?
+      ORDER BY r.rowid LIMIT 1
+    `).get(conditionKey, targetRef, workspaceId, channelId, botId, Date.parse(snapshot.event.occurredAt));
+    const parent = row ? parse<StoredReport>(row.body) : null;
+    if (!parent || !this.applied(parent.reportRef)) throw new ReportError("REPORT_ORIGINAL_DIGEST_THREAD_UNVERIFIED");
+    const prior = parent.snapshot;
+    if (prior.destination.version !== snapshot.destination.version ||
+        prior.programme.programmeRef !== snapshot.programme.programmeRef ||
+        prior.programme.version !== snapshot.programme.version || prior.programme.adoptionRef !== snapshot.programme.adoptionRef) {
+      throw new ReportError("REPORT_RECOVERY_TARGET_CHANGED");
+    }
+    return parent;
+  }
   parent(snapshot: ReportSnapshot): StoredReport | null {
     const identity = snapshot.event.identity;
     if (identity.kind !== "incident") return null;
     if (identity.transition === "clear") {
+      if (snapshot.event.thresholdDigestRecovery) {
+        return this.thresholdDigestParent(snapshot, `${identity.conditionRef}-${identity.generation}`);
+      }
       const ref = this.alias("report", [snapshot.event.producerRef, [identity.conditionRef, identity.generation, "breach"]]);
       const parent = this.get(ref);
       if (!parent || !this.applied(ref)) throw new ReportError("REPORT_ORIGINAL_THREAD_UNVERIFIED");
@@ -70,7 +95,8 @@ export class ReportMetadata {
   }
   /** Called exclusively inside JobRepository.ingest's transaction. */
   admit(record: StoredReport, event: ReportSnapshot, requestRef: string, requestHash: string): void {
-    this.admission(requestRef, requestHash); this.validateEvent(event); this.parent(event);
+    this.admission(requestRef, requestHash); this.validateEvent(event);
+    if (record.parentRef !== (this.parent(event)?.reportRef ?? null)) throw new ReportError("REPORT_RECOVERY_TARGET_CHANGED");
     const sourceEvent = this.db.prepare("SELECT report_ref FROM report_source_events WHERE producer_ref=? AND event_ref=? AND event_version=?").get(event.event.producerRef, event.event.eventRef, event.event.eventVersion);
     if (sourceEvent && sourceEvent.report_ref !== record.reportRef) throw new ReportError("REPORT_SOURCE_IDENTITY_CONFLICT");
     const existing = this.get(record.reportRef);

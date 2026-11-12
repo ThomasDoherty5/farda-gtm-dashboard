@@ -102,5 +102,5 @@ export function createRuntimeApi(options:RuntimeApiOptions){
   }
   async function readRun(runRef:string,principalRef:string){const evidence=await readRunEvidence(runRef,principalRef);evidence.assertCurrent();return evidence.data;}
   async function readRegistration(registrationRef:string,principalRef:string){const evidence=await readRegistrationEvidence(registrationRef,principalRef);evidence.assertCurrent();return evidence.data;}
-  return{authenticateMachine,execute,readRun,readRegistration,readRunEvidence,readRegistrationEvidence,registrationRef:(ref:string)=>seal("registration",runtimeRef.parse(ref)),runRef:(ref:string)=>seal("run",runtimeRef.parse(ref))};
+  return{authenticateMachine,execute,readRun,readRegistration,readRunEvidence,readRegistrationEvidence,registrationRef:(ref:string)=>seal("registration",runtimeRef.parse(ref)),runRef:(ref:string)=>seal("run",runtimeRef.parse(ref)),readOpaqueRunRef:(ref:string)=>unseal("run",publicRef.parse(ref),true)};
 }
