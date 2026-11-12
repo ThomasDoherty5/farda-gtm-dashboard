@@ -64,8 +64,10 @@ export const analyticsInputFact = <T extends z.ZodTypeAny>(value: T) => z.object
   .refine(input => input.value === null ? input.reason !== null : input.reason === null && input.proofRef !== null && input.evidenceRefs.length > 0);
 export const countInput = analyticsInputFact(analyticsCountSchema);
 export const moneyInput = analyticsInputFact(analyticsMoneySchema.refine(value => value.minorUnits >= 0));
-export const analyticsCostSchema = z.object({ key: z.enum(["creatorCommission", "sample", "shipping", "paidMedia", "platformFee", "otherAcquisition"]), basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative().safe().nullable(),
-  alsoInCash: z.boolean(), obligationRef: analyticsRefSchema, evidenceRef: analyticsRefSchema, cashRef: analyticsRefSchema.nullable() }).strict();
+export const analyticsCostKindSchema = z.enum(["creatorCommission", "historicalCreatorFee", "sample", "shipping", "paidMedia", "platformFee", "otherAcquisition"]);
+export const analyticsCostSchema = z.object({ key: analyticsCostKindSchema, basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative().safe().nullable(),
+  alsoInCash: z.boolean(), obligationRef: analyticsRefSchema, evidenceRef: analyticsRefSchema, cashRef: analyticsRefSchema.nullable() }).strict()
+  .refine(value => value.key !== "historicalCreatorFee" || value.basis !== "estimated", "Historical fees require an existing accepted obligation.");
 export const analyticsEconomicsSchema = z.object({ proofRef: analyticsRefSchema, cohortRef: analyticsRefSchema, period: analyticsPeriodSchemaNative, currency: z.literal("USD"), allocationVersion: z.literal("economic-events@1"),
   costs: z.array(analyticsCostSchema).max(2000), retention: z.enum(["mature", "immature", "unknown"]), landedCost: z.enum(["complete", "incomplete", "unknown"]), refundRevision: analyticsRefSchema.nullable(),
   contribution: analyticsInputFact(analyticsMoneySchema), newRetainedCustomers: countInput,
@@ -79,7 +81,8 @@ export const overviewFactsSchema = z.object({ ...commerceFacts, activity: z.arra
   portfolio: z.object({ proofRef: analyticsRefSchema, reviewKey: analyticsHashSchema, reviewHash: analyticsHashSchema }).strict().nullable().optional(),
 }).strict();
 export const attributionFactsSchema = z.object({ ...commerceFacts, creators: z.array(z.object({ creatorRef: analyticsRefSchema, roi: analyticsInputFact(z.number().finite()) }).strict()).max(100) }).strict();
-export const paidMediaFactsSchema = z.object({ ads, creatorSampleEconomics: moneyInput }).strict();
+export const paidMediaFactsSchema = z.object({ ads, creatorSampleEconomics: moneyInput,
+  economics: analyticsEconomicsSchema.nullable().optional() }).strict();
 const gate = z.object({ gateId: z.enum(["terms", "stock", "sampleAuthority", "content", "sourceAccess", "budget", "approval"]), state: z.enum(["ready", "held", "unknown"]), reasonCodes: z.array(analyticsReasonSchema).max(20), proofRef: analyticsRefSchema, evidenceRefs: z.array(analyticsRefSchema).min(1).max(20), relativeOffsetDays: z.number().int().min(-366).max(366).nullable(), anchorEventAt: instantSchema.nullable() }).strict()
   .refine(value => value.relativeOffsetDays === null || value.anchorEventAt !== null);
 export const launchSnapshotFactsSchema = z.object({ launchDate: analyticsInputFact(analyticsDaySchema), targetWindow: analyticsInputFact(analyticsPeriodSchemaNative), stage: analyticsInputFact(z.enum(["planning", "pilot", "launch", "monitoring"])), conversations: countInput, readyForNextStep: countInput, firstWaveSamples: countInput, budgetCeiling: moneyInput,

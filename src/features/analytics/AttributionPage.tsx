@@ -1,5 +1,5 @@
 import type { NativeAttribution as NativeAttributionData, NativeMetricDictionary } from "@/creator-agent/analytics/views";
-import { NativeAttribution, NativeDictionary, NativeEconomicEvidence } from "./NativeAttribution";
+import { NativeAttribution, NativeDictionary, NativeEconomicEvidence, NativeRetainedCosts } from "./NativeAttribution";
 import { nativePeriod } from "./NativeAnalyticsEvidence";
 import { useReportingPeriod } from "./reportingPeriod";
 import { useSourceLease } from "@/adapter/useSourceLease";
@@ -42,7 +42,7 @@ export function AttributionPage() {
         {(data) => data.datasetKey === "analytics-native" ? <NativeAttribution data={data} refresh={() => void query.refetch()} refreshing={query.isFetching} definitions={() => setDialog("definitions")} /> : <Body data={data} openDefinitions={() => setDialog("definitions")} />}
       </ViewShell>
       <PeriodDialog open={dialog === "period"} onClose={() => setDialog(null)} period={periodLabel} />
-      <Dialog open={dialog === "definitions"} focusHeading={!demo} title="Metric definitions" badge="Proposed" onClose={() => setDialog(null)}>
+      <Dialog open={dialog === "definitions"} focusHeading={!demo} title="Metric definitions" badge={demo ? "Proposed" : undefined} onClose={() => setDialog(null)}>
         {dialog === "definitions" && <Definitions data={report ?? null} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
@@ -67,7 +67,10 @@ function Definitions({ data }: { data: AttributionData | NativeAttributionData |
       <dl className={styles.defs} data-testid="static-definitions">
         {STATIC_DEFS.map(([t, d]) => <div key={t}><dt>{t}</dt><dd>{d}</dd></div>)}
       </dl>
-      {data && (data.datasetKey === "analytics-native" ? <NativeEconomicEvidence evidence={data.economicEvidence} /> : <PeriodEvidence data={data} />)}
+      {data && (data.datasetKey === "analytics-native" ? <>
+        <NativeEconomicEvidence evidence={data.economicEvidence} />
+        <NativeRetainedCosts data={data} />
+      </> : <PeriodEvidence data={data} />)}
       <DictionaryRead />
       {!demo && <NativeTrafficDefinitionRead />}
     </div>

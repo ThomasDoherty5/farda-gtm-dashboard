@@ -74,8 +74,14 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     const allocation = window ? allocateCosts(input.costs.map(cost => ({ key: cost.key, label: cost.key, basis: cost.basis, minorUnits: cost.minorUnits, alsoInCash: cost.alsoInCash, cohortId: input.cohortRef, obligationId: cost.obligationRef, evidenceId: cost.evidenceRef, cashId: cost.cashRef, currency: input.currency, period: window })), { cohortId: input.cohortRef, currency: input.currency, period: window, coverage: owner.coverage === "missing" ? "unknown" : owner.coverage }) : null;
     let spend = allocation?.totalMinor != null ? known<Money>({ minorUnits: allocation.totalMinor, currency: "USD" }, owner) : unknown<Money>("COST_INCOMPLETE", owner);
     if (allocation?.state === "provisional" && spend.state === "known") spend = { ...spend, provisional: true, reasonCodes: [...spend.reasonCodes, "ESTIMATED_COST"] };
+    if (input.landedCost !== "complete" && spend.state === "known") {
+      spend = { ...spend, provisional: true, reasonCodes: [...spend.reasonCodes, "COST_INCOMPLETE"] };
+    }
     let customers = fact(input.newRetainedCustomers, "retainedCustomers");
-    if (input.retention !== "mature" && customers.state === "known") customers = { ...customers, provisional: true, reasonCodes: [...customers.reasonCodes, "RETENTION_IMMATURE"] };
+    if (input.retention !== "mature" && customers.state === "known") {
+      customers = { ...customers, provisional: true,
+        reasonCodes: [...customers.reasonCodes, input.retention === "immature" ? "RETENTION_IMMATURE" : "INPUT_UNKNOWN"] };
+    }
     let contribution = fact(input.contribution, "economicCosts");
     if (input.landedCost !== "complete" && contribution.state === "known") contribution = { ...contribution, provisional: true, reasonCodes: [...contribution.reasonCodes, "COST_INCOMPLETE"] };
     const evidence = { allocationVersion: input.allocationVersion, cohortRef: alias("cohort", input.cohortRef), period: input.period, currency: input.currency, coverage: owner.coverage, retention: input.retention, landedCost: input.landedCost, refundRevision: input.refundRevision ? alias("revision", input.refundRevision) : null,
@@ -173,7 +179,19 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
       measures.push(measure(`platformRoas.${platform}`, "multiple", attributionWindow ? total("platformPurchaseValueMinor") : unknown<number>("ATTRIBUTION_WINDOW_UNKNOWN"), total("spendMinor")));
       return { platform, attributionWindow };
     });
-    return { ...header, ...common, attributedOrders: c.creatorOrders, attributedNetSales: c.creatorNet, platformReports, retainedUnits: !c.owner || c.conflict || c.rows.some(row => row.unitsRetained === null) ? unknown<number>() : sum(c.channels.map(channel => channel.orders.value === null ? unknown<number>() : known(channel.rows.reduce((n, row) => n + row.unitsRetained!, 0), c.owner!)), c.owner), weeks,
+    const retentionKnown = !!c.owner && !c.conflict && c.rows.every(row => row.unitsRetained !== null);
+    const retainedOrders = retentionKnown ? c.countWhere(row => row.unitsRetained! > 0) : unknown<number>("INPUT_UNKNOWN");
+    const unitCounts = retentionKnown ? c.channels.map(channel => {
+      if (channel.orders.value === null || !channel.effective) return unknown<number>("COVERAGE_PARTIAL");
+      return known(channel.rows.reduce((total, row) => total + row.unitsRetained!, 0), channel.effective);
+    }) : [];
+    const retainedUnits = unitCounts.length && c.owner ? sum(unitCounts, c.owner) : unknown<number>("INPUT_UNKNOWN");
+    const maturityReason = e.evidence?.retention === "immature" ? "RETENTION_IMMATURE" : "INPUT_UNKNOWN";
+    const maturity = (value: AnalyticsFact<number>): AnalyticsFact<number> => value.state === "known" && e.evidence?.retention !== "mature"
+      ? { ...value, provisional: true, reasonCodes: [...value.reasonCodes, maturityReason] } : value;
+    measures.push(measure("costPerRetainedOrder", "minorUnits", numeric(e.spend), maturity(retainedOrders)),
+      measure("costPerRetainedUnit", "minorUnits", numeric(e.spend), maturity(retainedUnits)));
+    return { ...header, ...common, attributedOrders: c.creatorOrders, attributedNetSales: c.creatorNet, platformReports, retainedUnits, weeks,
       attribution, unattributedReview: attributionReview(c), economicEvidence: e.evidence,
       creators: s.facts.creators.map(row => ({ creatorRef: alias("creator", row.creatorRef), roi: fact(row.roi, "economicCosts") })) };
   }
@@ -226,7 +244,11 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
     const standardSpend = combine(channels.map(channel => channel.measures.find(value => value.metricId === `cpc.${channel.platform}`)!.numerator));
     for (const channel of channels) channel.measures.push(measure(`shareSpend.${channel.platform}`, "percent", numeric(channel.spend), numeric(spend), 100));
     const totals = { spend, impressions, clicks, measures: [measure("ctr", "percent", clicks, impressions, 100), measure("cpc", "minorUnits", standardSpend, clicks), measure("cpm", "minorUnits", standardSpend, impressions, 1000)] };
-    body = { ...header, channels, totals, assets, assetTotal: owner && completeAssetSet ? known(assets.length, owner) : unknown<number>("COVERAGE_PARTIAL"), creatorSampleEconomics: fact(snapshot.facts.creatorSampleEconomics, "economicCosts"), selection: filters, pagination: { returned: assets.length, nextCursor: null } };
+    const acquisitionCost = filters.platform === "all" && snapshot.facts.economics
+      ? economics(snapshot.facts.economics).spend : undefined;
+    body = { ...header, channels, totals, assets, assetTotal: owner && completeAssetSet ? known(assets.length, owner) : unknown<number>("COVERAGE_PARTIAL"),
+      creatorSampleEconomics: fact(snapshot.facts.creatorSampleEconomics, "economicCosts"),
+      ...(acquisitionCost ? { acquisitionCost } : {}), selection: filters, pagination: { returned: assets.length, nextCursor: null } };
   } else if (snapshot.viewKey === "launchSnapshot") {
     const f = snapshot.facts;
     body = { ...header, launchDate: fact(f.launchDate, "launchReadiness"), targetWindow: fact(f.targetWindow, "launchReadiness"), stage: fact(f.stage, "launchReadiness"), conversations: fact(f.conversations, "campaignEvents"), readyForNextStep: fact(f.readyForNextStep, "launchReadiness"), firstWaveSamples: fact(f.firstWaveSamples, "sampleCapacity"), budgetCeiling: fact(f.budgetCeiling, "economicCosts"),

@@ -3,7 +3,7 @@ import type { NativeAttribution as Attribution, NativeMetricDictionary } from "@
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
-import { Fact, NativeAnalyticsEvidence, factText, nativeCount, nativeMoney, nativeMultiple, nativePercent } from "./NativeAnalyticsEvidence";
+import { Fact, NativeAnalyticsEvidence, factText, nativeCount, nativeMoney, nativeMultiple, nativePercent, nativePeriod } from "./NativeAnalyticsEvidence";
 import { BarList, Card, DetailRow, KpiCard, KpiGrid, SectionHeading, Table } from "./parts";
 import styles from "./Analytics.module.css";
 
@@ -97,9 +97,97 @@ function NativeUnattributedReview({ data }: { data: Attribution }) {
   </section>;
 }
 
+const costNames = {
+  creatorCommission: "Creator commission", historicalCreatorFee: "Previously accepted creator fee",
+  sample: "Sample landed cost", shipping: "Sample shipping", paidMedia: "Paid media",
+  platformFee: "Applicable platform fee", otherAcquisition: "Other included acquisition cost",
+};
+
 export function NativeEconomicEvidence({ evidence }: { evidence: Attribution["economicEvidence"] }) {
-  return <section data-testid="period-economic-evidence"><h3>Reporting-period evidence</h3>{evidence ? <><p className={styles.small} style={{ overflowWrap: "anywhere" }}>{evidence.period.startAt} to {evidence.period.endAt} exclusive ({evidence.period.timezone}); cohort {evidence.cohortRef}. Coverage {evidence.coverage}; retention {evidence.retention}; landed cost {evidence.landedCost}; allocation {evidence.allocationVersion}.</p><p>Refund revision: <span style={{ overflowWrap: "anywhere" }}>{evidence.refundRevision ?? "None supplied"}</span>.</p><details><summary>Cost observations ({evidence.costs.length})</summary><Table caption="Qualified economic cost observations" columns={[{ label: "Category", width: 170 }, { label: "Basis", width: 130 }, { label: "Economic amount", width: 180 }, { label: "Cash linkage", width: 180 }]} rows={evidence.costs.map((row, index) => ({ key: row.evidenceRef + index, cells: [row.key, row.basis, row.minorUnits === null ? "Unknown" : money(row.minorUnits), row.alsoInCash ? "Linked cash receipt" : "Economic observation"] }))} /></details></> : <p>Source and cost coverage Unknown. Missing cost never becomes zero.</p>}</section>;
+  return <section data-testid="period-economic-evidence">
+    <h3>Reporting-period evidence</h3>
+    {evidence ? <>
+      <p className={styles.small} style={{ overflowWrap: "anywhere" }}>
+        {evidence.period.startAt} to {evidence.period.endAt} exclusive ({evidence.period.timezone}) · cohort {evidence.cohortRef}.
+        Coverage {evidence.coverage} · retention {evidence.retention} · landed cost {evidence.landedCost} · allocation {evidence.allocationVersion}.
+      </p>
+      <p>Refund revision <span style={{ overflowWrap: "anywhere" }}>{evidence.refundRevision ?? "None supplied"}</span>.</p>
+      <details>
+        <summary>Cost observations ({evidence.costs.length})</summary>
+        <Table caption="Qualified economic cost observations"
+          columns={[{ label: "Category", width: 190 }, { label: "Basis", width: 120 }, { label: "Economic amount", width: 175 }, { label: "Cash linkage", width: 180 }]}
+          rows={evidence.costs.map((row, index) => ({ key: row.evidenceRef + index, cells: [
+            costNames[row.key], row.basis, row.minorUnits === null ? "Unknown" : money(row.minorUnits),
+            row.cashRef ? "Linked cash receipt" : "Economic observation",
+          ] }))} />
+      </details>
+    </> : <p>Source and cost coverage Unknown.</p>}
+  </section>;
 }
+
+const metricDetails = {
+  aov: {
+    label: "AOV", formula: "Reconciled net receipts ÷ valid orders",
+    basis: "USD in the selected order cohort. Valid orders with a full refund remain in the denominator with zero net receipts.",
+    sources: ["commerceOrders"], cost: "The calculation uses the reconciled receipts basis.",
+  },
+  blendedCac: {
+    label: "Blended CAC", formula: "Included acquisition cost ÷ new retained customers",
+    basis: "USD per new retained customer in the same mature cohort and reporting period.",
+    sources: ["economicCosts", "retainedCustomers"],
+    cost: "Include approved media, sample shipping, landed sample economics, applicable fees and commission once per obligation. Previously accepted creator fees remain historical.",
+  },
+  mer: {
+    label: "MER", formula: "Reconciled net receipts ÷ total marketing cost",
+    basis: "USD inputs from the same cohort, currency and period. Late refunds revise the original cohort.",
+    sources: ["commerceOrders", "economicCosts"],
+    cost: "Uses the scoped economic cost allocation, with separately linked cash receipts.",
+  },
+  platformRoas: {
+    label: "Platform ROAS", formula: "Platform-reported purchase value ÷ matching platform spend",
+    basis: "One platform's standard campaigns and its reported click and view attribution window. Read the current window in Paid media.",
+    sources: ["adReporting"], cost: "Uses that platform's reported USD spend and refund treatment. GMV Max is tracked separately.",
+  },
+  contributionPerOrder: {
+    label: "Contribution per valid order", formula: "Contribution before marketing ÷ valid orders",
+    basis: "USD per valid order in the same period. Blended CAC uses new retained customers as its denominator.",
+    sources: ["commerceOrders", "economicCosts"], cost: "Requires the scoped product, shipping, transaction and variable fulfillment cost evidence.",
+  },
+};
+const metricSourceNames: Record<string, string> = {
+  commerceOrders: "Orders and refunds", economicCosts: "Economic cost ledger",
+  retainedCustomers: "Retained-customer source", adReporting: "Platform ad reporting",
+};
+
+export function NativeRetainedCosts({ data }: { data: Attribution }) {
+  return <dl className={styles.defs} data-testid="native-retained-costs">
+    {([["costPerRetainedOrder", "Cost per retained order", "retained orders"], ["costPerRetainedUnit", "Cost per retained unit", "retained units"]] as const).map(([key, label, denominator]) => {
+      const metric = data.measures.find(row => row.metricId === key);
+      return <div key={key}><dt>{label}</dt><dd><Fact fact={metric?.result} format={money} />
+        <p className={styles.small}>Included acquisition cost ÷ {factText(metric?.denominator ?? undefined, nativeCount)} {denominator} in the same cohort.</p>
+      </dd></div>;
+    })}
+  </dl>;
+}
+
 export function NativeDictionary({ data }: { data: NativeMetricDictionary }) {
-  return <div data-testid="metric-dictionary"><p className={styles.small} style={{ overflowWrap: "anywhere" }}>Dictionary {data.definitionVersion} · effective {data.effectiveAt} · {data.formulaVersion} · {data.provenance.synthetic ? "Synthetic sandbox evidence" : "Source evidence"}.</p><dl className={styles.defs}>{data.entries.map(row => <div key={row.metricId} data-testid={`definition-${row.metricId}`}><dt>{row.metricId}</dt><dd>{row.numerator} ÷ {row.denominator}; {row.unit}. Same cohort, window, currency and definition. Zero denominator: N/A. Missing input: Unknown. Late refunds revise the original cohort.</dd></div>)}</dl><NativeEconomicEvidence evidence={data.economicEvidence} /></div>;
+  return <div data-testid="metric-dictionary">
+    <p className={styles.small} style={{ overflowWrap: "anywhere" }}>
+      Dictionary {data.definitionVersion} · effective {data.effectiveAt} · {data.formulaVersion} · {data.allocationVersion} · {data.provenance.synthetic ? "Synthetic sandbox evidence" : "Source evidence"}.
+    </p>
+    <p className={styles.small}>{nativePeriod(data)}. Zero denominator shows N/A. Missing input shows Unknown.</p>
+    <dl className={styles.defs}>{data.entries.map(row => {
+      const definition = metricDetails[row.metricId];
+      const owners = data.sources.filter(source => definition.sources.includes(source.owner));
+      return <div key={row.metricId} data-testid={`definition-${row.metricId}`}>
+        <dt>{definition.label}</dt>
+        <dd>
+          <p>{definition.formula}. {definition.basis}</p>
+          <p className={styles.small}>{definition.cost}</p>
+          <p className={styles.small} style={{ overflowWrap: "anywhere" }}>{owners.length ? owners.map(source =>
+            `${metricSourceNames[source.owner] ?? source.owner} · ${source.coverage} · as of ${source.sourceAsOf ?? "Unknown"} · definition ${source.definitionVersion}`).join(" / ") : "Source evidence unavailable."}</p>
+        </dd>
+      </div>;
+    })}</dl>
+  </div>;
 }
