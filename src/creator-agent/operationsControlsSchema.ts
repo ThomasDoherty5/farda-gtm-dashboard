@@ -27,6 +27,8 @@ const timezone=z.string().refine(v=>{try{new Intl.DateTimeFormat("en",{timeZone:
 const amount = z.object({minorUnits:z.number().int().safe(),currency:z.string().regex(/^[A-Z]{3}$/)}).strict();
 const comparison = z.object({id:ref,label:text,grain:z.enum(["order","shipment","inventory","support","finance-summary"]),period:z.object({startAt:instant,endAt:instant,timezone}).strict(),
   currency:z.string().regex(/^[A-Z]{3}$/),sourceCount:n.nullable(),mirrorCount:n.nullable(),sourceAmount:amount.nullable(),mirrorAmount:amount.nullable(),
+  amountField:z.enum(["net-sales","label-cost","refund-total"]).nullable().optional(),
+  sourceWatermark:instant.nullable().optional(),mirrorWatermark:instant.nullable().optional(),
   coverage:z.enum(["complete","partial","failed","unknown"]),cutoff:instant,...proof}).strict().superRefine((v,c)=>{
   if(Date.parse(v.period.startAt)>=Date.parse(v.period.endAt)||Date.parse(v.period.endAt)>Date.parse(v.cutoff)||Date.parse(v.cutoff)>Date.parse(v.observedAt))c.addIssue({code:"custom",message:"Invalid comparison period."});
   for(const a of [v.sourceAmount,v.mirrorAmount])if(a&&a.currency!==v.currency)c.addIssue({code:"custom",message:"Comparison currency mismatch."});
@@ -41,6 +43,7 @@ const safeValue=z.discriminatedUnion("kind",[
 const conflict = z.object({id:ref,comparisonId:ref,category:z.enum(["missing_source","missing_mirror","orphan","duplicate","amount","field"]),
   field:z.enum(["net-sales","label-cost","refund-total","record-key","record-count","record-status"]),ownership:z.enum(["source","local","unknown"]),sourceValue:safeValue.nullable(),mirrorValue:safeValue.nullable(),
   authoritativeVersion:ref.nullable(),mirrorVersion:ref.nullable(),ownershipVersion:ref,repairAllowed:z.boolean(),
+  ownerRef:ref.optional(),
   state:z.enum(["open","proposed","applied","resolved","unknown"]),receiptRef:ref.nullable(),...proof}).strict();
 const report = z.object({id:ref,jobId:ref,title:text,category:z.enum(["daily-acquisition","daily-review","hourly-monitor","report"]),
   cadence:z.enum(["hourly","daily","weekdays","weekly-monday","source-event","unknown"]),timezone,configuration:z.enum(["unconfigured","draft","paused","enabled","unknown"]),ownerRef:ref.nullable(),destination:z.object({kind:z.enum(["registered-channel","registered-report"]),ref}).strict().nullable(),
