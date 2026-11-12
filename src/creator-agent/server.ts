@@ -322,7 +322,8 @@ export function createAgentServer(options: AgentServerOptions) {
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
       source: options.sourcingPlanSource, now: options.operations?.now });
     analytics = createNativeAnalyticsReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
-      source: options.analyticsSource, now: options.operations?.now });
+      source: options.analyticsSource, now: options.operations?.now,
+      attachWeeklyEvidence: (data, definition, alias) => actionFoundation.weeklySnapshots?.attachTrendEvidence(data, definition, alias) });
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -916,6 +917,12 @@ export function createAgentServer(options: AgentServerOptions) {
             activation: options.actionFoundation?.reporting?.dailyDigest ? "source-owned" : "unconfigured",
           },
           delivery: options.actionFoundation?.reporting?.dailyDigest ? "shared-reporting" : "notConnected",
+        },
+        weeklyKpiSnapshots: {
+          sourceAuthority: options.actionFoundation?.reporting?.weeklySnapshots ? "injected" : "notConnected",
+          schedule: { localTime: "08:30", timezone: "America/Los_Angeles", cadence: "monday-after-approved-launch",
+            activation: options.actionFoundation?.reporting?.weeklySnapshots ? "source-owned" : "unconfigured" },
+          delivery: options.actionFoundation?.reporting?.weeklySnapshots ? "shared-reporting" : "notConnected",
         },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createDailyDigestReporting, type DailyDigestConfig } from "./dailyDigest/service.ts";
+import { createWeeklySnapshotReporting, type WeeklySnapshotConfig } from "./weeklySnapshots/service.ts";
 import { bindAutomationFailureReporting, type AutomationFailureReportingBinding } from "./slackReporting/automationFailure.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
@@ -36,7 +37,7 @@ export type ActionFoundationBindings = {
   readinessTargetRef?: string;
   reviewSource?: ActionReviewSource;
   reviewLinkOrigins?: readonly string[];
-  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;
+  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;weeklySnapshots?:WeeklySnapshotConfig;
     assertCurrent(request:{scope:ActionScope;workerRef:string;operation:"accept"|"read"|"work"|"reconcile";reference:string},now:number):void};
   worker?: { token: string; workerRef: string;
     resolve: (scope: ActionScope, runRef: string) => Promise<unknown>;
@@ -87,8 +88,11 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
   const baseReportSource = reportBinding?.dailyDigest
     ? createDailyDigestReporting(db, scope, reportBinding.dailyDigest, reportBinding.source, now)
     : reportBinding?.source;
-  const reportSource = reportBinding?.automationFailures && baseReportSource
-    ? bindAutomationFailureReporting(baseReportSource, scope, secret, reportBinding.automationFailures) : baseReportSource;
+  const weeklySnapshots = reportBinding?.weeklySnapshots && baseReportSource
+    ? createWeeklySnapshotReporting(db, scope, reportBinding.weeklySnapshots, baseReportSource, now) : undefined;
+  const weeklyReportSource = weeklySnapshots?.reportingSource ?? baseReportSource;
+  const reportSource = reportBinding?.automationFailures && weeklyReportSource
+    ? bindAutomationFailureReporting(weeklyReportSource, scope, secret, reportBinding.automationFailures) : weeklyReportSource;
   const reporting = reportBinding ? createSlackReporting({ db, scope, secret, jobs, source: reportSource, now }) : undefined;
   const reportAccept=z.object({locator:reportLocatorSchema,idempotencyKey:reportReference}).strict();
   const reportTarget=z.object({reportRef:reportReference}).strict();
@@ -196,5 +200,5 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     if (!bindings.readinessTargetRef) throw new DispatchError("READINESS_SOURCE_UNCONFIGURED", 503);
     return domains.readReadiness(bindings.readinessTargetRef, { principalRef });
   }
-  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting, reporting };
+  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting, reporting, weeklySnapshots };
 }

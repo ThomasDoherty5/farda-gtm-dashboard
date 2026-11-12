@@ -4,6 +4,7 @@ import type { JobClaim, JobRepository } from "../jobs/repository.ts";
 import type { JobRunView } from "../jobs/schema.ts";
 import { mirrorIncidentPayloadSchema } from "../mirrorFreshness.ts";
 import { dailyDigestContextSchema, digestAllClear } from "../dailyDigest/contract.ts";
+import { weeklyReportContextSchema } from "../weeklySnapshots/comparison.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -49,7 +50,7 @@ export const automationFailureContextSchema = z.object({
   recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
     "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
 }).strict();
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional() }).strict().superRefine((value, ctx) => {
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
   if(value.mirror && (value.identity.kind!=="incident" || value.subject.kind!=="aggregate" || value.subject.category!=="automation" ||
     value.identity.conditionRef!==value.mirror.incident.incidentId || value.identity.generation!==1 || value.identity.sequence!==(value.mirror.incident.event==="cleared"?2:1) ||
@@ -72,6 +73,17 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
     }
   }
   if (value.identity.kind === "window" && !daily && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
+  if (value.eventRef.startsWith("weekly-kpi:") !== Boolean(value.weeklySnapshot)) {
+    ctx.addIssue({ code: "custom", message: "A weekly KPI report requires its frozen snapshot." });
+  }
+  const weekly = value.weeklySnapshot?.snapshot;
+  if (weekly && (value.identity.kind !== "window" || value.identity.cadence !== "mondayWeekly" ||
+      value.identity.start !== weekly.window.start || value.identity.end !== weekly.window.end ||
+      value.identity.windowRef !== value.eventRef || value.eventRef !== "weekly-kpi:" + weekly.window.reportDate ||
+      value.subject.kind !== "aggregate" || value.subject.category !== "finance" || weekly.version !== "v1" ||
+      weekly.correction !== null || value.mirror || value.dailyDigest || value.automationFailure)) {
+    ctx.addIssue({ code: "custom", message: "The weekly pre-read must identify the original completed snapshot." });
+  }
   if (value.identity.kind === "window" && value.identity.cadence === "reconciliationRecovery" &&
       (value.subject.kind !== "aggregate" || value.subject.category !== "automation" || value.nextAction !== "continueMonitoring" ||
         value.eventRef !== "mirror-" + value.identity.windowRef || !value.identity.windowRef.startsWith("reconciliation:") ||
