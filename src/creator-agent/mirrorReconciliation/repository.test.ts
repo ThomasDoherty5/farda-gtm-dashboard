@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { operationsControlSourceSchema } from "../operationsControlsSchema.ts";
+import { reportEventSchema } from "../slackReporting/contract.ts";
 import type { CheckInput, CheckSchedule, ReadCoverage, ReconciliationRow } from "./contract.ts";
+import { reconciliationReport } from "./report.ts";
 import { MirrorReconciliationRepository } from "./repository.ts";
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
 
@@ -41,6 +43,34 @@ function setup(path = ":memory:") {
 const count = (db: InstanceType<typeof DatabaseSync>, table: string) => Number(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get()!.n);
 
 describe("mirror reconciliation repository", () => {
+  it("produces a safe informational summary only for a confirmed clear-only reconciliation", () => {
+    const { db, repo, clock } = setup();
+    try {
+      const timezone = "America/Los_Angeles";
+      const scheduledWindow = { start: "2027-02-11T10:00:00Z", end: "2027-02-12T10:00:00Z", timezone };
+      clock.at = Date.parse("2027-02-12T12:00:00Z");
+      const before = { readAt: "2027-02-12T10:30:00Z" };
+      const after = { readAt: "2027-02-12T11:30:00Z", version: "synthetic-verified-v2" };
+      repo.saveSchedule({ ...schedule, timezone, runAt: "02:00" });
+      repo.recordCheck(input("synthetic-open", { ...twoDifferences, scheduledWindow,
+        coverage: [read("source", "complete", before), read("mirror", "complete", before)] }));
+      const resolved = input("synthetic-resolved", { ...twoDifferences, mirrorRows: twoDifferences.sourceRows, scheduledWindow,
+        coverage: [read("source", "complete", after), read("mirror", "complete", after)] });
+      expect(repo.recordCheck(resolved).cleared).toHaveLength(2);
+      const binding = { producerRef: "synthetic-reconciliation", link: {
+        kind: "linear" as const, workspaceSlug: "synthetic", issueIdentifier: "EXAMPLE-260", authorizationRef: "synthetic-evidence",
+      } };
+      const report = reconciliationReport(repo, resolved.runId, binding);
+      expect(report).toMatchObject({ severity: "info", identity: { cadence: "reconciliationRecovery" }, nextAction: "continueMonitoring",
+        facts: [{ label: "coverage", value: "complete" }, { label: "resolvedFindings", value: 2, unit: "count" }] });
+      expect(reportEventSchema.safeParse({ ...report, facts: [{ label: "coverage", value: "partial" }] }).success).toBe(false);
+      expect(reconciliationReport(repo, "synthetic-open", binding)).toMatchObject({ severity: "orange", identity: { cadence: "orangeDigest" } });
+      expect(repo.recordCheck(resolved).duplicate).toBe(true);
+      repo.recordCheck({ ...resolved, runId: "synthetic-no-change" });
+      expect(reconciliationReport(repo, "synthetic-no-change", binding)).toBeNull();
+    } finally { db.close(); }
+  });
+
   it("keeps a finding open when a later poll presents an older matching snapshot", () => {
     const { repo, clock } = setup();
     repo.saveSchedule(schedule);

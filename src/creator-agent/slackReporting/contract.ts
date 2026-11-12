@@ -15,7 +15,7 @@ export type ReportScope = z.infer<typeof reportScopeSchema>;
 export const reportLocatorSchema = z.object({ eventRef: reportReference, eventVersion: reportReference }).strict();
 export type ReportLocator = z.infer<typeof reportLocatorSchema>;
 
-const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", "failedRuns", "pendingItems", "oldestAge", "elapsed", "amount"]), value: z.number().int().nonnegative().safe().nullable(), unit: z.enum(["count", "minutes", "USD-minor"]), missingReason: z.enum(["notObserved", "partialSource", "notApplicable"]).nullable() }).strict().superRefine((value, ctx) => {
+const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", "resolvedFindings", "failedRuns", "pendingItems", "oldestAge", "elapsed", "amount"]), value: z.number().int().nonnegative().safe().nullable(), unit: z.enum(["count", "minutes", "USD-minor"]), missingReason: z.enum(["notObserved", "partialSource", "notApplicable"]).nullable() }).strict().superRefine((value, ctx) => {
   if ((value.value === null) !== (value.missingReason !== null)) ctx.addIssue({ code: "custom", message: "Unknown values require an explicit reason." });
   const expected = value.label === "amount" ? "USD-minor" : ["oldestAge", "elapsed"].includes(value.label) ? "minutes" : "count";
   if (value.unit !== expected) ctx.addIssue({ code: "custom", message: "Metric units must match the finite label." });
@@ -30,7 +30,7 @@ const subject = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("aggregate"), category: z.enum(["fulfillment", "automation", "creators", "content", "finance", "support", "launch"]) }).strict(),
 ]);
 const incident = z.object({ kind: z.literal("incident"), conditionRef: reportReference, generation: z.number().int().positive().safe(), transition: z.enum(["breach", "clear"]), sequence: z.number().int().positive().safe(), previousClearEventRef: reportReference.nullable() }).strict();
-const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly", "dailyExceptions"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
+const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly", "dailyExceptions", "reconciliationRecovery"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
   if (Date.parse(value.start) >= Date.parse(value.end)) ctx.addIssue({ code: "custom", message: "A source window must have positive duration." });
   if ((value.cadence === "launchHourly") !== (value.launchWindowRef !== null)) ctx.addIssue({ code: "custom", message: "Hourly reporting requires a source-confirmed launch window." });
 });
@@ -72,6 +72,13 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
     }
   }
   if (value.identity.kind === "window" && !daily && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
+  if (value.identity.kind === "window" && value.identity.cadence === "reconciliationRecovery" &&
+      (value.subject.kind !== "aggregate" || value.subject.category !== "automation" || value.nextAction !== "continueMonitoring" ||
+        value.eventRef !== "mirror-" + value.identity.windowRef || !value.identity.windowRef.startsWith("reconciliation:") ||
+        !value.facts.some(fact => fact.label === "coverage" && fact.value === "complete") ||
+        !value.facts.some(fact => fact.label === "resolvedFindings" && fact.value !== null && fact.value > 0))) {
+    ctx.addIssue({ code: "custom", message: "Reconciliation recovery requires complete coverage and a confirmed cleared finding." });
+  }
 });
 export type ReportEvent = z.infer<typeof reportEventSchema>;
 
