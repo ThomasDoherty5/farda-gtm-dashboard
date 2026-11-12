@@ -107,6 +107,18 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
+          name: synthetic-acquisition-metric-evidence
+          path: |
+            test-results/agent/**/analytics-native-performance-1440.png
+            test-results/agent/**/analytics-native-performance-390.png
+            test-results/agent/**/analytics-native-paid-1440.png
+            test-results/agent/**/analytics-native-paid-390.png
+            test-results/agent/**/analytics-native-definitions-*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
           name: synthetic-native-read-review
           path: |
             test-results/agent/**/analytics-native-*.png

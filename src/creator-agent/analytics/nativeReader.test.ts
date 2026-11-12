@@ -135,6 +135,55 @@ describe("source-owned analytics facts and arithmetic", () => {
     expect(data.channels[0]!.spend.value?.minorUnits).toBe(350000);
     expect(data.channels[0]!.measures.find(row => row.metricId === "platformRoas.tiktok")?.result.value).toBe(2.4);
   });
+  it("reconciles the $7,000 acquisition fixture through native AOV, CAC, MER and the distinct retained bases", async () => {
+    const f = nativeAnalyticsFixture({ acquisitionCase: true });
+    const attribution = (await read(f, "attribution")).data;
+    if (attribution.viewKey !== "attribution") throw new Error("wrong view");
+    const measure = (id: string) => attribution.measures.find(row => row.metricId === id)!;
+    expect(attribution.provenance.synthetic).toBe(true);
+    expect(measure("aov").result.value).toBe(3149);
+    expect(measure("blendedCac").result.value).toBe(2500);
+    expect(measure("mer").result.value).toBeCloseTo(1259600 / 700000);
+    expect(measure("costPerRetainedOrder").denominator?.value).toBe(378);
+    expect(measure("costPerRetainedOrder").result.value).toBe(1852);
+    const units = attribution.retainedUnits.value!;
+    expect(units).toBe(379);
+    expect(measure("costPerRetainedUnit").denominator?.value).toBe(units);
+    expect(measure("costPerRetainedUnit").result.value).toBe(1847);
+    expect(attribution.economicEvidence?.costs.filter(row => row.key === "historicalCreatorFee")
+      .map(row => [row.basis, row.cashRef !== null])).toEqual([["accrued", false], ["paid", true]]);
+    const paid = (await read(f, "paidMedia")).data;
+    if (paid.viewKey !== "paidMedia") throw new Error("wrong view");
+    expect(paid.totals.spend.value?.minorUnits).toBe(500_000);
+    expect(paid.creatorSampleEconomics.value?.minorUnits).toBe(200_000);
+    expect(paid.acquisitionCost?.value?.minorUnits).toBe(700_000);
+    const filtered = await f.reader.read({ ...f.request("paidMedia"), filters: { platform: "meta", rights: "all" } }, f.principal);
+    if (filtered.data.viewKey !== "paidMedia") throw new Error("wrong view");
+    expect(filtered.data.acquisitionCost).toBeUndefined();
+  });
+  it("keeps an incomplete landed cost provisional and holds ratios over immature retained cohorts", async () => {
+    const f = nativeAnalyticsFixture({ acquisitionCase: true });
+    f.state.mutate = packet => {
+      if (packet.viewKey !== "attribution" || !packet.facts.economics) return;
+      packet.facts.economics.landedCost = "incomplete";
+      packet.facts.economics.retention = "immature";
+    };
+    const { data } = await read(f, "attribution"); if (data.viewKey !== "attribution") throw new Error("wrong view");
+    expect(data.marketingSpend).toMatchObject({ provisional: true, reasonCodes: ["COST_INCOMPLETE"] });
+    for (const id of ["blendedCac", "mer", "costPerRetainedOrder", "costPerRetainedUnit"]) {
+      expect(data.measures.find(row => row.metricId === id)?.result.value).toBeNull();
+    }
+    expect(data.measures.find(row => row.metricId === "aov")?.result.value).toBe(3149);
+  });
+  it("does not admit an estimated paid-content allowance as an accepted historical creator fee", async () => {
+    const f = nativeAnalyticsFixture({ acquisitionCase: true });
+    f.state.mutate = packet => {
+      if (packet.viewKey !== "attribution") return;
+      const fee = packet.facts.economics?.costs.find(row => row.key === "historicalCreatorFee" && row.basis === "accrued");
+      if (fee) fee.basis = "estimated";
+    };
+    await expect(read(f, "attribution")).rejects.toMatchObject({ code: "ANALYTICS_SOURCE_INVALID", status: 503 });
+  });
   it("keeps GMV Max spend separate from standard paired rates and ranks assets before pagination", async () => {
     const f = nativeAnalyticsFixture();
     const { data } = await read(f, "paidMedia"); if (data.viewKey !== "paidMedia") throw new Error("wrong view");
