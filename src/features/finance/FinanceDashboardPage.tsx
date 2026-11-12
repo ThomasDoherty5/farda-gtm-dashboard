@@ -170,6 +170,7 @@ function Fact({ f, format }: { f: Figure; format: (v: number) => string }) {
 function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
   const { input: ue, margin, perOrder, cac, paybackOrders } = financeEconomicsOf(data);
   const plan = data.forecastPlan;
+  const forecastAssumptions = data.datasetKey === "finance-native" ? "Unavailable in this report view" : plan?.assumptions.join(" · ") || "None stated";
   const why: [string, string][] = [
     ["Gross margin", figureText(margin, ueFormat.percent)],
     ["Pre-marketing contribution / order", figureText(perOrder, ueFormat.money)],
@@ -195,7 +196,7 @@ function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
       {ue
         ? <FactList label="Cohort cost components" rows={[["Cohort", data.datasetKey === "finance-demo" ? `${ue.cohort.label} · the affiliate pilot is excluded and keeps its own ledger` : ue.cohort.label], ...group(ue, "contribution", CONTRIBUTION_COMPONENTS), ...group(ue, "acquisition", ACQUISITION_COMPONENTS)]} />
         : <p>{`N/A · ${REASON_TEXT.UNIT_ECONOMICS_NOT_REPORTED}. No cost component is inferred.`}</p>}
-      <FactList label="Actuals and forecast" rows={[["Actuals", `Source version ${data.version} · management P&L`], ...(plan ? [["Forecast", `${plan.version} · ${plan.basis}`], ["Forecast assumptions", plan.assumptions.length ? plan.assumptions.join(" · ") : "None stated"]] as [string, string][] : [["Forecast", "No forecast plan reported"]] as [string, string][])]} />
+      <FactList label="Actuals and forecast" rows={[["Actuals", `Source version ${data.version} · management P&L`], ...(plan ? [["Forecast", `${plan.version} · ${plan.basis}`], ["Forecast assumptions", forecastAssumptions]] as [string, string][] : [["Forecast", "No forecast plan reported"]] as [string, string][])]} />
     </>
   );
 }

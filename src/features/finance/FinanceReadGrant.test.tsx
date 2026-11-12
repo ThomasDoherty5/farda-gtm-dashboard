@@ -14,7 +14,7 @@ beforeAll(() => {
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const cases = [
   ["/finance", "financeDashboard", "pnl", "View metric definitions"],
-  ["/analytics/finance", "financeDashboard", "trajectory", "Last 30 days"],
+  ["/analytics/finance", "financeDashboard", "trajectory", "Reporting period"],
   ["/finance/close/2026-10", "periodClose", "checklist", "Open QuickBooks"],
   ["/finance/close/2026-10?view=package", "closePackage", "receipts", null],
   ["/finance/close/2026-10?view=months", "monthsHistory", "months", null],
