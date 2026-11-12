@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { postingClockReadSchema, postingClockSourceSchema } from "./postingClock/contract.ts";
 const ref = z.string().trim().min(1).max(500);
 const note = z.string().trim().min(1).max(1200);
 const instant = z.string().datetime({offset:true}).refine(v=>Number.isFinite(Date.parse(v)));
@@ -33,12 +34,22 @@ export const collaborationSnapshotSchema = z.object({
   suppression:z.object({state:z.enum(["clear","suppressed","unknown"]),sourceRef:ref.nullable()}).strict(),
   history:z.array(fact).max(80),deliverables:z.array(workflowDeliverableSchema).max(100),
   assetBindings:z.array(z.object({deliverableRef:ref,assetId:ref}).strict()).max(100).optional(),
+  postingClock:postingClockSourceSchema.optional(),
 }).strict().superRefine((x,c)=>{
   if(x.terms.posting!=="unknown" && (!x.terms.agreementRef || !x.terms.acceptedAt)) c.addIssue({code:"custom",message:"Posting terms lack accepted-source evidence."});
   if(x.terms.posting==="voluntary" && (x.terms.due || x.terms.graceDays!==null)) c.addIssue({code:"custom",message:"Voluntary posting has no due date or grace."});
   if(x.suppression.state!=="unknown" && !x.suppression.sourceRef) c.addIssue({code:"custom",message:"Suppression needs evidence."});
   if(new Set(x.deliverables.map(d=>d.ref)).size!==x.deliverables.length)c.addIssue({code:"custom",message:"Duplicate deliverable identity."});
   if(x.deliverables.some(d=>d.publication.observedAt && Date.parse(d.publication.observedAt)>Date.parse(x.observedAt))) c.addIssue({code:"custom",message:"Future publication observation."});
+  const clock=x.postingClock;
+  if(clock && (clock.collaborationId!==x.id || clock.scope.workspaceId!==x.scope.workspaceId ||
+    clock.scope.accountId!==x.scope.accountId || clock.scope.environment!==x.scope.environment ||
+    Date.parse(clock.observedAt)>Date.parse(x.observedAt) ||
+    clock.terms.state==="accepted" && (clock.terms.agreementRef!==x.terms.agreementRef || clock.terms.version!==x.terms.version ||
+      clock.terms.timezone!==x.terms.timezone ||
+      x.terms.posting==="unknown" || clock.terms.deliverables.every(row=>row.schedule.basis==="voluntary")!==(x.terms.posting==="voluntary")))) {
+    c.addIssue({code:"custom",message:"Posting clock evidence must match the accepted collaboration and scope."});
+  }
 });
 export type CollaborationSourceSnapshot=z.infer<typeof collaborationSnapshotSchema>;
 export const collaborationReadBindingSchema=z.object({scope,principalRef:ref,operation:z.enum(["read","propose"]),
@@ -62,6 +73,7 @@ export const nativeCollaborationSchema=z.object({readAccess:z.object({validUntil
   terms:collaborationSnapshotSchema.innerType().shape.terms,sample:collaborationSnapshotSchema.innerType().shape.sample,suppression:collaborationSnapshotSchema.innerType().shape.suppression,
   history:z.array(fact).max(80),deliverables:z.array(workflowDeliverableSchema).max(100),
   actorRef:ref,proposalReconciliation:proposalReconciliationSchema.nullable(),proposals:z.array(proposal).max(50),proposalTotal:z.number().int().nonnegative(),sourceRevision:ref,stale:z.boolean(),
+  postingClock:postingClockReadSchema.optional(),
 }).strict();
 export type NativeCollaborationData=z.infer<typeof nativeCollaborationSchema>;
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { CollaborationEvidenceData } from "./collaborationEvidence.ts";
@@ -7,6 +7,7 @@ import { boundedSourceRead } from "./actions/readBoundary.ts";
 import { assertSynchronousVoid } from "./sourceFence.ts";
 import type { OperationsScope } from "./operations.ts";
 import { openCollaborationRef } from "./creatorPlatformReferences.ts";
+import { projectPostingClock } from "./postingClock/project.ts";
 import { collaborationReadBindingSchema,collaborationSourceResultSchema, intentHold, nativeCollaborationSchema, workflowIntentSchema, type CollaborationSourceReader, type CollaborationSourceSnapshot, type NativeCollaborationData } from "./collaborationWorkflowSchema.ts";
 
 const observationLeaseMs=15*60_000;
@@ -113,9 +114,9 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
     observed.assertCurrent();return observed;
   }
   function version(source:CollaborationSourceSnapshot,seq:number) {
-    // Authentication observations advance on every read. Pin every source fact except the live check clock.
-    const {observedAt,...facts}=source;
-    void observedAt;
+    // Clock projections are read-only; proposals still bind the existing accepted source terms.
+    const {observedAt,postingClock,...facts}=source;
+    void observedAt;void postingClock;
     return "cw1-"+digest([scope,facts,seq,policyVersion]);
   }
   function head(id:string){return Number(db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM collaboration_review_proposals WHERE collaboration_id=?").get(id)!.seq);}
@@ -138,8 +139,18 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
       const seq=head(id);
       const total=Number(db.prepare("SELECT COUNT(*) AS n FROM collaboration_review_proposals WHERE collaboration_id=?").get(id)!.n);
       const rows=db.prepare("SELECT public_body FROM collaboration_review_proposals WHERE collaboration_id=? ORDER BY seq DESC LIMIT 50").all(id);
-      const {id:internalId,scope:privateScope,assetBindings,...fields}=source;void internalId;void privateScope;void assetBindings;
-      const stale=now()-Date.parse(source.observedAt)>observationLeaseMs;
+      const {id:internalId,scope:privateScope,assetBindings,postingClock,...fields}=source;void internalId;void privateScope;void assetBindings;
+      const observedNow=now(),stale=observedNow-Date.parse(source.observedAt)>observationLeaseMs;
+      const clockExpiry=postingClock ? Math.min(Date.parse(postingClock.validUntil),Date.parse(postingClock.observedAt)+observationLeaseMs) : 0;
+      const clockFresh=clockExpiry>observedNow;
+      const clock=postingClock ? projectPostingClock({...postingClock,validUntil:new Date(clockExpiry).toISOString()},observedNow) : null;
+      const publicClock=clock ? source.coverage==="partial" ? {
+        state:"pending",observedAt:clock.observedAt,timezone:null,deadlines:[],reason:"SOURCE_COVERAGE_PARTIAL",
+      } : {
+        state:clock.state,observedAt:clock.observedAt,timezone:clock.timezone,reason:clock.reason,
+        deadlines:clock.deadlines.map(deadline=>({...deadline,deliverableId:source.deliverables.some(row=>row.ref===deadline.deliverableId)
+          ? deadline.deliverableId : "clock-deliverable:"+createHmac("sha256",secret).update(JSON.stringify([scope,id,deadline.deliverableId])).digest("hex")})),
+      } : undefined;
       let proposalReconciliation=null;
       if(options.requestKey!==undefined){
         if(stale || source.coverage!=="complete")throw new CollaborationWorkflowError(stale?"SOURCE_STALE":"SOURCE_COVERAGE_INCOMPLETE",409);
@@ -149,9 +160,13 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
         proposalReconciliation={requestKey:options.requestKey,actorRef,state:found?"recorded":rejected?"notApplied":"notRecorded",
           reasonCode:rejected?"STALE_VERSION":null,currentVersion:rejected?String(rejected.current_version):null,proposal:found?JSON.parse(String(found.public_body)):null};
       }
-      const data:NativeCollaborationData=nativeCollaborationSchema.parse({...fields,readAccess:observed.readAccess,stale,actorRef,proposalReconciliation,collaborationRef:ref,kind:"source-collaboration",
-        proposals:rows.map(row=>JSON.parse(String(row.public_body))),proposalTotal:total});
-      const assertCurrent=()=>{observed.assertCurrent();assertCurrentAssets(source);if(head(id)!==seq || stale!==(now()-Date.parse(source.observedAt)>observationLeaseMs))throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);};
+      const readAccess=clockFresh && source.coverage==="complete" && clockExpiry<Date.parse(observed.readAccess.validUntil)
+        ? {validUntil:new Date(clockExpiry).toISOString()} : observed.readAccess;
+      const data:NativeCollaborationData=nativeCollaborationSchema.parse({...fields,readAccess,stale,actorRef,proposalReconciliation,collaborationRef:ref,kind:"source-collaboration",
+        ...(publicClock?{postingClock:publicClock}:{}),proposals:rows.map(row=>JSON.parse(String(row.public_body))),proposalTotal:total});
+      const assertCurrent=()=>{observed.assertCurrent();assertCurrentAssets(source);if(head(id)!==seq ||
+        stale!==(now()-Date.parse(source.observedAt)>observationLeaseMs) ||
+        postingClock && clockFresh!==(clockExpiry>now()))throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);};
       assertCurrent();db.exec("COMMIT");return {data,version:version(source,seq),partial:source.coverage==="partial" || rows.length<total,stale,assertCurrent,
         capabilities:[{actionKind:"proposeCollaborationReview",state:source.coverage==="complete" && !stale?"available" as const:"held" as const,reasonCodes:stale?["SOURCE_STALE"]:source.coverage==="complete"?[]:["SOURCE_COVERAGE_PARTIAL"]}]};
     }catch(e){db.exec("ROLLBACK");throw e;}
