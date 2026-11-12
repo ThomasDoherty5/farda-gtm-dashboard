@@ -4,6 +4,24 @@ Recorded 2026-11-04. These answer the open questions in the backend requirements
 
 **Status: decided by Thomas Doherty, who delegated the choices to Claude on 2026-11-04 and asked for best practice for a small direct-to-consumer company.** They are defaults for the build to start from, not a ruling over the backend owner. The backend owner may change any of them; when one changes, edit this file and the register (`docs/adapter-freeze-register.md`) in the same PR. These decisions originally preceded the service. Current native-service evidence is mapped in `docs/adapter-conformance.md`; evidence for one implemented family does not establish all decisions or production authorization.
 
+## Owner acceptance, 2026-11-06
+
+Thomas Doherty reviewed these defaults as they stood on 2026-11-06. He accepted every one that doesn't commit money, data retention or a vendor. The backend owner can still change any of them, using the same rule as above. Where a decision changed on main after that review, the table says so.
+
+| Decision | Status | Note |
+| -- | -- | -- |
+| Q-01 to Q-04 | Accepted | Already implemented in the client contract. |
+| D-1 | Accepted, except the identity provider | HTTPS, same origin, `HttpOnly` cookie session, CSRF header and the four paths are accepted. The identity provider is not chosen; the owner decided on 2026-11-06 to choose it before production. Until then, sandbox keeps the deployed service's separate reader and reviewer credentials. |
+| D-2, D-3, D-4 | Accepted | Who holds each D-3 role is assigned separately. |
+| D-5 | Accepted with a USD 500 threshold; later additions not reviewed | Owner decision on 2026-11-06: a second person approves anything that spends money, messages a creator or changes policy, and the founder-only threshold is USD 500 instead of USD 1,000. Main already records USD 500. After the review, the backend owner added two rules: commission invitation and activation need a distinct founder, and a generic reviewer credential is not a named human or founder grant. The owner hasn't reviewed those additions yet. |
+| D-6, D-8, D-9 | Revised after acceptance | The owner accepted the earlier wording on 2026-11-06. The backend owner then rewrote all three on main on 2026-11-07 (UTC). The owner hasn't reviewed the new wording yet. |
+| D-7, D-10 to D-15 | Accepted | |
+| D-16 | Held | Retention periods need CPA and legal confirmation. Financial record rules and privacy law apply, and the product is health-adjacent. |
+| D-17 | Held | A safe design, but a second deployment and database cost money. No paid infrastructure is approved. |
+| D-18 | Accepted | Build-order guidance. The existing child tickets keep their owners. |
+
+The "Bounded native observation refresh" section was added on main after the review. The owner hasn't reviewed it yet.
+
 Principles behind every choice: the server is the only authority (a hidden button is never authorization); a small team needs fewer moving parts, not more; money and outbound messages get a second person; an unknown outcome is never retried blind; nothing in the browser holds a secret.
 
 ## The four contract gaps
