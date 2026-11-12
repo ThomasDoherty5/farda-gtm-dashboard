@@ -4,33 +4,36 @@ import { useSearchParams } from "react-router-dom";
 import { useView } from "@/adapter/useView";
 import { useScope } from "@/adapter/scope";
 import { useReportingPeriod } from "@/features/analytics/reportingPeriod";
-import { financeHeadlines, type FinanceSummaryContext } from "@/creator-agent/finance/headlines";
+import { financeHeadlines } from "@/creator-agent/finance/headlines";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
 import { Dialog } from "@/components/Dialog";
 import { EmptyState, SkeletonCard } from "@/components/EmptyState";
 import { ReadState } from "@/components/ReadState";
 import { Kpi, KpiRow } from "@/components/Kpi";
-import { formatMoney, formatMoneyExact } from "@/components/MetricValue";
+import { formatMoney } from "@/components/MetricValue";
 import { Divider, FactList, FlatTable, HalfColumns, Meter, Notice, Page, PageHeader, Panel } from "@/components/Panels";
 import { ViewError } from "@/components/ViewError";
 import { SourceDialog } from "@/features/approvals/shared";
 import { figure } from "@/features/operations/format";
 import { runwayOf, type FinanceDashboard as DemoFinanceDashboard } from "@/fixtures/finance";
+import { financeMetricDictionary } from "@/fixtures/financeUnitEconomics";
 import { usd } from "@/fixtures/values";
 import { FinanceNav } from "./FinanceNav";
 import styles from "./Finance.module.css";
+import { ACQUISITION_COMPONENTS, COMPONENT_LABEL, CONTRIBUTION_COMPONENTS, REASON_TEXT, componentTotal, inputProblems, type CostComponent, type Figure, type FinanceDisplayRecord, type UnitEconomicsInput, coverageText, definitionText, explain, financeEconomicsOf, figureText, recurringRevenueOf, recurringText, ueFormat } from "./unitEconomics";
 
 const whole = (minor: number) => formatMoney(usd(minor));
-const exact = (minor: number) => formatMoneyExact(usd(minor));
 const signed = (minor: number) => `${minor < 0 ? "−" : ""}${whole(Math.abs(minor))}`;
 const compact = (minor: number) => `$${(minor / 100000).toFixed(1)}k`;
-type FinanceDashboard = Omit<DemoFinanceDashboard, "datasetKey"> & { datasetKey: "finance-demo" | "finance-native"; summaryContext?: FinanceSummaryContext | null };
+type FinanceDashboard = FinanceDisplayRecord;
 
 /**
  * Finance dashboard (Figma source 7:510, owner THO-303). Read-only management figures from QuickBooks. Net income, gross profit,
  * margin and runway are derived here from the source rows; year-to-date is unknown until its report arrives, never zero; and runway
  * is N/A with a reason when burn has too little history or isn't positive. The historical $70,000 raised is never used as current cash.
+ * Unit economics (`./unitEconomics`) cover the original dashboard cohort only, under proposed definitions: CAC payback is in orders and
+ * is N/A or provisional with its reason, and MRR/ARR need verified subscription access, a product and an adopted definition.
  */
 export function FinanceDashboardPage() {
   const [search] = useSearchParams();
@@ -61,8 +64,9 @@ function FinanceDashboardContent({ query }: { query: FinanceReadQuery<FinanceDas
         {data?.datasetKey === "finance-native" ? <p>{data.summaryContext ? `${data.summaryContext.period.startAt} to ${data.summaryContext.period.endAt} (exclusive) · ${data.summaryContext.period.timezone} · ${data.summaryContext.accountingBasis} basis. Accounting policy ${data.summaryContext.policy.state}.` : "The accounting owner has not supplied a qualified reporting period or adopted definition. Overview comparisons stay unavailable."}</p> : <p>The figures cover the 30 days ending Oct 29, 2026. Calendar-month and year-to-date figures await their source reports, so there is no other period to choose in the demo.</p>}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
-      <Dialog open={dialog === "definitions"} title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
-        <p>Gross margin is gross profit over net revenue. Pre-marketing contribution per order excludes acquisition and fixed spend. Burn is the average net cash out over the last three months, using the approved cash-flow definition. Runway is verified current cash divided by that burn, and reads N/A when there is too little history or no net spend.</p>
+      <Dialog open={dialog === "definitions"} focusHeading title="Metric definitions" badge="Read only" onClose={() => setDialog(null)}>
+        <p>Gross margin is gross profit over net revenue. Pre-marketing contribution per order excludes acquisition and fixed spend. Burn is the average net cash out over the last three months, using the proposed cash-flow definition. Runway is verified current cash divided by that burn, and reads N/A when there is too little history or no net spend.</p>
+        {data && <UnitEconomicsDefinitions data={data} />}
         <Button variant="secondary" onClick={() => setDialog(null)}>Close</Button>
       </Dialog>
       <SourceDialog open={Boolean(dialog && typeof dialog === "object")} title={dialog && typeof dialog === "object" ? dialog.source : ""} url={null} onClose={() => setDialog(null)} />
@@ -76,7 +80,8 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
   const gross = p.revenue - p.cogs;
   const net = gross - p.opex;
   const runway = headline ? { months: headline.runwayMonths, reason: headline.runwayReason } : runwayOf(data as DemoFinanceDashboard);
-  const margin = headline ? headline.grossMargin : p.revenue > 0 ? (100 * gross) / p.revenue : null;
+  const { input: ue, margin, perOrder, paybackOrders } = financeEconomicsOf(data);
+  const recurring = recurringRevenueOf(data.subscriptions);
   const rows: [string, number][] = [["Net revenue", p.revenue], ["Cost of goods sold", -p.cogs], ["Gross profit", gross], ["Operating expenses", -p.opex], ["Net income", net]];
   const actualRevenue = headline ? headline.actualRevenue : p.revenue;
   const forecastRevenue = headline ? headline.forecastRevenue : data.forecastRevenue;
@@ -86,13 +91,13 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
   return (
     <>
       <Notice tone={stale ? "warning" : "violet"} label={stale ? "Behind" : "Source"} title="QuickBooks is the official ledger · Management P&L" role={stale ? "status" : undefined} testId="source-freshness">
-        {`${periodLabel} · ${native ? `Source-owned management figures. Definition ${data.summaryContext?.policy.state ?? "unavailable"}.` : "Illustrative management figures. Calendar-month and YTD figures await source reports."}${stale ? " The mirror is behind its source." : ""}`}
+        {`${periodLabel} · ${native ? `${data.provenance?.evidenceStage === "synthetic" ? "Synthetic source evidence" : "Source-owned management figures"}. Definition ${data.summaryContext?.policy.state ?? "unavailable"}.` : "Illustrative management figures. Calendar-month and YTD figures await source reports."}${stale ? " The mirror is behind its source." : ""}`}
       </Notice>
       <KpiRow>
         <Kpi label="Cash balance" context={native ? `Current cash · as of ${data.summaryContext?.cashAsOf ?? "Unknown"}` : `${whole(data.historicalRaised)} raised · as of ${data.cashAsOf}`} testId="metric-Cash balance">{headline ? headline.cash === null ? "N/A" : whole(headline.cash) : figure(data.cash, (m) => whole(m))}</Kpi>
         <Kpi label="Monthly burn" context={data.burn.state === "known" ? "Average net cash out · last 3 months" : `Needs ${data.burnWindowMonths} months of history`} testId="metric-Monthly burn">{figure(data.burn, (m) => whole(m))}</Kpi>
         <Kpi label="Runway" context={runway.reason ?? "Current cash / average burn"} testId="metric-Runway">{runway.months === null ? "N/A" : `${runway.months.toFixed(1)} months`}</Kpi>
-        <Kpi label="Pre-marketing contribution" context="Per order · creator allocation pending" testId="metric-Pre-marketing contribution">{exact(data.contributionPerOrder)}</Kpi>
+        <Kpi label="Pre-marketing contribution" context={perOrder.state === "notApplicable" ? explain(perOrder) : perOrder.state === "provisional" ? <>Per order · Provisional<span className="visually-hidden">{` · ${explain(perOrder)}`}</span></> : ue?.creatorCosts.state === "complete" ? "Per order · before creator costs" : "Per order · creator allocation pending"} testId="metric-Pre-marketing contribution">{perOrder.value === null ? "N/A" : ueFormat.money(perOrder.value)}</Kpi>
       </KpiRow>
       <HalfColumns>
         <Panel title="Profit & loss" subtitle={`${periodLabel} · ${native ? "management P&L" : "30-day management P&L"}`} testId="pnl">
@@ -100,7 +105,7 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
             caption="Profit and loss"
             testId="pnl-table"
             columns={[{ label: "Account", width: 326 }, { label: native ? "Report period" : "30 days", width: 131 }, { label: "YTD", width: 131 }]}
-            rows={rows.map(([account, minor]) => ({ key: account, cells: [account, signed(minor), figure(p.ytd, whole).replace("N/A", "Awaiting data")] }))}
+            rows={rows.map(([account, minor]) => ({ key: account, cells: [account, signed(minor), p.ytd.state === "known" ? "Awaiting line-item data" : "Awaiting data"] }))}
           />
         </Panel>
         <Panel title="Cash & obligations" subtitle="Do not confuse cash with revenue" testId="cash">
@@ -119,7 +124,7 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
       </HalfColumns>
       <HalfColumns>
         <Panel title="Unit economics" subtitle="Pre-marketing contribution excludes acquisition and fixed spend." testId="unit-economics">
-          <FactList wide label="Unit economics" rows={[["Gross margin", margin === null ? "N/A" : `${margin.toFixed(1)}%`], ["Pre-marketing contribution / order", exact(data.contributionPerOrder)], ["CAC payback", "Awaiting creator allocation"], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
+          <FactList wide label="Unit economics" rows={[["Gross margin", <Fact f={margin} format={ueFormat.percent} />], ["Pre-marketing contribution / order", <Fact f={perOrder} format={ueFormat.money} />], ["CAC payback", <Fact f={paybackOrders} format={ueFormat.orders} />], ["First-wave sample plan", `${data.samplesPlanned} units · planned allocation`]]} />
           <Button variant="secondary" aria-haspopup="dialog" style={{ minWidth: 240, alignSelf: "flex-start" }} onClick={() => setDialog("definitions")}>View metric definitions</Button>
         </Panel>
         <Panel title="Month-end & compliance" subtitle="Review unresolved items before closing" testId="close-summary">
@@ -127,8 +132,8 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
           <FactList wide label="Close summary" rows={[["Payouts to reconcile", close.unmatchedPayouts], ["CPA sign-off", close.cpaSignOff]]} />
           <LinkButton to={`/finance/close/${close.period}`} style={{ minWidth: 236, alignSelf: "flex-start" }}>Open month-end close</LinkButton>
           <Divider />
-          <h3 className={styles.h3}>No subscription revenue</h3>
-          <p className={styles.footnote}>MRR and ARR appear only when subscription orders exist.</p>
+          <h3 className={styles.h3} data-testid="subscription-state" data-state={recurring.kind}>{SUBSCRIPTION_HEADING[recurring.kind](recurringText(recurring))}</h3>
+          <p className={styles.footnote}>{recurring.kind === "none" ? "MRR and ARR appear only when subscription orders exist." : recurring.reason}</p>
         </Panel>
       </HalfColumns>
       <Panel large roomy title="Accrual, cash and provider ownership." subtitle="The original dashboard cohort is unchanged. The separate affiliate pilot has its own commission ledger and cost basis." testId="compensation">
@@ -143,3 +148,55 @@ function Body({ data, stale, setDialog }: { data: FinanceDashboard; stale: boole
   );
 }
 
+const SUBSCRIPTION_HEADING: Record<ReturnType<typeof recurringRevenueOf>["kind"], (t: { mrr: string; arr: string }) => string> = {
+  none: () => "No subscription revenue",
+  unavailable: () => "Subscription revenue unknown",
+  unknown: () => "Subscription revenue unknown",
+  notDefined: () => "MRR and ARR not defined",
+  known: (t) => `MRR ${t.mrr} · ARR ${t.arr}`,
+};
+
+/**
+ * One panel line: the value and its state on one line. A provisional figure's reasons stay in the line for screen readers and are
+ * listed for everyone under "Why provisional" in the definitions dialog. An N/A keeps its reason visible, since it has no value.
+ */
+function Fact({ f, format }: { f: Figure; format: (v: number) => string }) {
+  if (f.state === "notApplicable" || f.value === null) return <>{figureText(f, format)}</>;
+  if (f.state === "known") return <>{format(f.value)}</>;
+  return <>{`${format(f.value)} · Provisional`}<span className="visually-hidden">{` · ${explain(f)}`}</span></>;
+}
+
+/** The proposed dictionary, why each figure is provisional, this cohort's cost components and the forecast's own version. */
+function UnitEconomicsDefinitions({ data }: { data: FinanceDashboard }) {
+  const { input: ue, margin, perOrder, cac, paybackOrders } = financeEconomicsOf(data);
+  const plan = data.forecastPlan;
+  const forecastAssumptions = data.datasetKey === "finance-native" ? "Unavailable in this report view" : plan?.assumptions.join(" · ") || "None stated";
+  const why: [string, string][] = [
+    ["Gross margin", figureText(margin, ueFormat.percent)],
+    ["Pre-marketing contribution / order", figureText(perOrder, ueFormat.money)],
+    ["CAC", figureText(cac, ueFormat.money)],
+    ["CAC payback", figureText(paybackOrders, ueFormat.orders)],
+    ["Creator-cost coverage", ue ? coverageText(ue.creatorCosts, "creators allocated") : "Not reported"],
+    ["Attribution coverage", ue ? coverageText(ue.attribution, "orders attributed") : "Not reported"],
+  ];
+  // Per-component rows use the same whole-input checks as the group totals, so they always sum to them or are refused together.
+  const component = (u: UnitEconomicsInput, c: CostComponent) => {
+    const declared = u.costs.some((r) => r.component === c) ? null : u.declared.find((d) => d.component === c);
+    if (declared?.state === "notApplicable" && inputProblems(u).length === 0) return `N/A · ${declared.reasonCode === "PILOT_COHORT_ONLY" ? "pilot cohort only; see the commission ledger" : "not applicable to this cohort"}`;
+    return figureText(componentTotal(u, [c]), ueFormat.money);
+  };
+  const group = (u: UnitEconomicsInput, name: string, members: readonly CostComponent[]): [string, string][] =>
+    [...members.map((c): [string, string] => [`${COMPONENT_LABEL[c]} · ${name}`, component(u, c)]), [`Total ${name} costs`, figureText(componentTotal(u, members), ueFormat.money)]];
+  return (
+    <>
+      <p className={styles.warnText}>{`${ue ? definitionText(ue.definition) : "Not configured"}. ${financeMetricDictionary.policy}`}</p>
+      <p className={styles.sub}>Why provisional</p>
+      <FactList label="Why provisional" rows={why} />
+      <FactList label="Unit-economics definitions" rows={financeMetricDictionary.entries.map((e) => [e.label, `${e.numerator}${e.denominator === "None" ? "" : ` ÷ ${e.denominator}`}. ${e.costBuckets === "None" || e.costBuckets.startsWith("As ") ? "" : `${e.costBuckets} `}${e.whenUnavailable}`])} />
+      {ue
+        ? <FactList label="Cohort cost components" rows={[["Cohort", data.datasetKey === "finance-demo" ? `${ue.cohort.label} · the affiliate pilot is excluded and keeps its own ledger` : ue.cohort.label], ...group(ue, "contribution", CONTRIBUTION_COMPONENTS), ...group(ue, "acquisition", ACQUISITION_COMPONENTS)]} />
+        : <p>{`N/A · ${REASON_TEXT.UNIT_ECONOMICS_NOT_REPORTED}. No cost component is inferred.`}</p>}
+      <FactList label="Actuals and forecast" rows={[["Actuals", `Source version ${data.version} · management P&L`], ...(plan ? [["Forecast", `${plan.version} · ${plan.basis}`], ["Forecast assumptions", forecastAssumptions]] as [string, string][] : [["Forecast", "No forecast plan reported"]] as [string, string][])]} />
+    </>
+  );
+}

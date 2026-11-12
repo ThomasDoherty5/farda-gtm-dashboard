@@ -5,6 +5,7 @@
  * New acquisition is commission-only; the $150 fee is a historical, accepted obligation. Do not mix with other datasets.
  */
 import type { Money, ProvenanceValue } from "@/adapter/contract";
+import type { CostObservation, SubscriptionSource, UnitEconomicsInput } from "@/features/finance/unitEconomics";
 import type { PeriodStatus } from "./financeClose";
 import { known, unknown, usd } from "./values";
 
@@ -190,13 +191,51 @@ export type FinanceDashboard = {
   cashHistory: { month: string; minor: number }[];
   costBreakdown: { label: string; minor: number }[];
   payouts: { channel: string; matched: number; needsReview: number }[];
+  /** Optional add-on: absent means N/A (UNIT_ECONOMICS_NOT_REPORTED). Unit-economics inputs for the original dashboard cohort only. The commission pilot keeps its own ledger and cost basis and is never mixed in. */
+  unitEconomics?: UnitEconomicsInput;
+  /** Subscription source access. Unread access is unknown, which is not the verified "no subscription revenue". */
+  subscriptions?: SubscriptionSource;
+  /** The forecast's own version and assumptions, kept apart from the actuals' source version. */
+  forecastPlan?: { version: string; basis: "illustrative" | "rebaselined"; assumptions: string[] };
 };
+
+const DASHBOARD_COHORT = "dashboard-original";
+const WINDOW = { start: "2026-09-30", end: "2026-10-29", timezone: "America/Los_Angeles" };
+/** One synthetic cost row of the original dashboard cohort, in USD cents. */
+const cost = (component: CostObservation["component"], basis: CostObservation["basis"], minorUnits: number, cashId: string | null = null): CostObservation =>
+  ({ component, basis, minorUnits, cohortId: DASHBOARD_COHORT, obligationId: `TEST-OBL-${component}`, evidenceId: `TEST-EV-${component}`, cashId, currency: "USD", period: WINDOW });
+
+/**
+ * Synthetic cost rows for the 30-day window. Contribution rows tie to the P&L COGS and the cost breakdown ($12,596 − $6,916 = $5,680,
+ * $14.20 per order over 400 orders). Acquisition rows total $7,000 for 280 new customers. Commission is not applicable here: it belongs
+ * to the separate affiliate pilot and its ledger.
+ */
+function unitEconomicsDemo(scenario?: string): UnitEconomicsInput {
+  const zero = scenario === "zeroorders";
+  const contribution: CostObservation[] = zero ? [] : [cost("landedCogs", "accrued", 441000), cost("shipping", "paid", 116400, "TEST-CASH-shipping"), cost("providerFees", "paid", 81200, "TEST-CASH-fees"), cost("fulfillment", "paid", 53000, "TEST-CASH-fulfillment")];
+  return {
+    definition: { version: "finance-unit-economics@1", state: "proposed", reference: null },
+    cohort: { id: DASHBOARD_COHORT, label: "Original dashboard cohort · 30 Sep–29 Oct 2026", currency: "USD", period: WINDOW },
+    validOrders: known(zero ? 0 : 400),
+    newCustomers: known(zero ? 0 : 280),
+    landedCost: scenario === "landedincomplete" ? { complete: false, missingSkus: ["TEST-SKU-02"] } : { complete: true, missingSkus: [] },
+    // With no orders there is nothing to attribute and no creator activity to allocate: both are a counted zero, not the default 6 of 8.
+    creatorCosts: zero ? { state: "complete", expected: 0, observed: 0, reasonCodes: [] } : { state: "partial", expected: 8, observed: 6, reasonCodes: ["CREATOR_COSTS_UNALLOCATED"] },
+    attribution: zero ? { state: "complete", expected: 0, observed: 0, reasonCodes: [] } : { state: "partial", expected: 400, observed: 352, reasonCodes: ["ORDERS_UNATTRIBUTED"] },
+    // Media was still bought; no samples went out and no historical fee fell in the window.
+    costs: [...contribution, cost("paidMedia", "paid", 500000, "TEST-CASH-media"), ...(zero ? [] : [cost("sampleLanded", "accrued", 84000), cost("sampleShipping", "paid", 26000, "TEST-CASH-sample-shipping"), cost("historicalContentFee", "accrued", 90000)])],
+    declared: [
+      { component: "commission", state: "notApplicable", reasonCode: "PILOT_COHORT_ONLY" },
+      ...(zero ? (["landedCogs", "shipping", "providerFees", "fulfillment", "sampleLanded", "sampleShipping", "historicalContentFee"] as const).map((component) => ({ component, state: "knownZero" as const, reasonCode: "NO_ORDERS" })) : []),
+    ],
+  };
+}
 
 export const financeDashboardDemo = (scenario?: string): FinanceDashboard => ({
   datasetKey: "finance-demo",
   version: "fin1",
   period: { label: "30 Sep–29 Oct 2026", days: 30 },
-  pnl: { revenue: 1259600, cogs: 441000, opex: 990600, ytd: unknown("YTD_REPORT_NOT_RECEIVED") },
+  pnl: scenario === "zeroorders" ? { revenue: 0, cogs: 0, opex: 990600, ytd: unknown("YTD_REPORT_NOT_RECEIVED") } : { revenue: 1259600, cogs: 441000, opex: 990600, ytd: unknown("YTD_REPORT_NOT_RECEIVED") },
   cash: known(4620000),
   cashAsOf: "Oct 29",
   historicalRaised: 7000000,
@@ -209,10 +248,17 @@ export const financeDashboardDemo = (scenario?: string): FinanceDashboard => ({
   forecastRevenue: 1400000,
   contributionPerOrder: 1420,
   samplesPlanned: 46,
-  closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: 2, cpaSignOff: "Pending" },
+  closeSummary: { period: "2026-10", label: "October", unmatchedPayouts: scenario === "zeroorders" ? 0 : 2, cpaSignOff: "Pending" },
   cashHistory: [{ month: "Jul", minor: 6360000 }, { month: "Aug", minor: 5780000 }, { month: "Sep", minor: 5200000 }, { month: "Oct", minor: 4620000 }],
-  costBreakdown: [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
-  payouts: [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
+  // With no orders there is nothing to break down; an empty breakdown is drawn as such, never as the default $5,680 contribution.
+  costBreakdown: scenario === "zeroorders" ? [] : [{ label: "Contribution", minor: 568000 }, { label: "Landed COGS", minor: 441000 }, { label: "Shipping", minor: 116400 }, { label: "Transaction fees", minor: 81200 }, { label: "Fulfillment", minor: 53000 }],
+  // No orders means no payouts in the window: the channels are listed with counted zeros, not the default 18 and 6.
+  payouts: scenario === "zeroorders" ? [{ channel: "Shopify", matched: 0, needsReview: 0 }, { channel: "TikTok Shop", matched: 0, needsReview: 0 }] : [{ channel: "Shopify", matched: 18, needsReview: 1 }, { channel: "TikTok Shop", matched: 6, needsReview: 1 }],
+  unitEconomics: unitEconomicsDemo(scenario),
+  subscriptions: scenario === "subscriptionunread"
+    ? { access: "unknown", reasonCode: "SUBSCRIPTION_SOURCE_NOT_READ", subscriptionProducts: null, definition: { version: "recurring-revenue@0", state: "notConfigured", reference: null }, monthlyRecurring: unknown("SUBSCRIPTION_SOURCE_NOT_READ") }
+    : { access: "verified", reasonCode: null, subscriptionProducts: 0, definition: { version: "recurring-revenue@0", state: "notConfigured", reference: null }, monthlyRecurring: unknown("NO_SUBSCRIPTION_PRODUCT") },
+  forecastPlan: { version: "forecast-illustrative@1", basis: "illustrative", assumptions: ["Revenue $14,000 for the 30-day window", "Not rebaselined against actuals"] },
 });
 
 /** Runway in months from verified cash and average burn. Null with a reason when it can't be computed honestly. */

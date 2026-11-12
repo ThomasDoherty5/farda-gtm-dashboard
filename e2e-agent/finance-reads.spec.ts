@@ -74,7 +74,9 @@ test("a configured source renders validated finance data, and a later source den
   await page.goto("/finance");
   await expect(page.getByTestId("pnl")).toBeVisible();
   await page.getByRole("button", { name: "View metric definitions" }).click();
-  await expect(page.getByRole("dialog", { name: "Metric definitions" })).toBeVisible();
+  const definitions = page.getByRole("dialog", { name: "Metric definitions" });
+  await expect(definitions).toBeVisible();
+  await screenReaderCheckpoint(page, "native-finance-metric-definitions", definitions, ["Metric definitions", "Why provisional", "Creator-cost coverage"]);
   financeClock = fixedNow + 15 * 60_000;
   await page.clock.setSystemTime(financeClock);
   await page.evaluate(() => { window.dispatchEvent(new Event("focus")); });
