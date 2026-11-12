@@ -6,11 +6,13 @@ import {formatReport} from "./slackReporting/format.ts";
 import {reportEventSchema} from "./slackReporting/contract.ts";
 import {MirrorFreshnessRepository} from "./mirrorFreshnessRepository.ts";
 import {MirrorFreshnessRuntime} from "./mirrorFreshnessRuntime.ts";
+import {CapabilityLedger} from "./connections/ledger.ts";
 import {fenceMirrorReporting,mirrorReportEvent,type MirrorReportingConfig} from "./mirrorFreshnessReporting.ts";
 import {mirrorTestApproval,mirrorTestBindings,mirrorTestCompletion,mirrorTestSource} from "./mirrorFreshnessTestFixtures.ts";
 
 function setup(){
  const w=createReportingTestkit(),input=mirrorTestSource();
+ new CapabilityLedger(w.db,w.scope,{now:()=>w.now});
  const approval={...mirrorTestApproval,approvedAt:new Date(w.now-1000).toISOString()};
  const repo=new MirrorFreshnessRepository(w.db,w.scope,{approval,boundMirrors:["orders"],now:()=>w.now});
  const runtime=new MirrorFreshnessRuntime(repo,w.scope,input.source,[mirrorTestBindings[0]!]);
@@ -33,7 +35,7 @@ describe("mirror incidents use the existing reporting owner",()=>{
    x.w.advance(75*60_000);x.runtime.sweep();const breach=x.runtime.events()[0]!;
    const {snapshot,locator}=x.register(breach.eventRef);
    const rendered=formatReport(snapshot).body;
-   for(const text of ["Orders (google-sheets)","Last complete check:","Complete coverage through:","75 minutes","Inspect exact run evidence","Owner: <@USYNTHETIC>","Resume the mirror","Controlled sandbox test"])expect(rendered).toContain(text);
+   for(const text of ["Orders (google-sheets)","Last complete check:","Complete coverage through:","75 minutes",`Run: ${breach.incident.latestRunId}`,"Inspect exact run evidence","Owner: <@USYNTHETIC>","Resume the mirror","Controlled sandbox test"])expect(rendered).toContain(text);
    const admitted=await x.service.accept(locator,"synthetic-mirror-request",x.w.machine);
    expect((await x.service.work(admitted.reportRef,x.w.machine)).executionCertainty).toBe("applied");
    x.w.advance(15*60_000);x.runtime.sweep();expect(x.runtime.events()).toHaveLength(1);

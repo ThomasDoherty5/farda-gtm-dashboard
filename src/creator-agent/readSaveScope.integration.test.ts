@@ -64,11 +64,11 @@ function denied(result: { status: number; body: Record<string, unknown> }, statu
 }
 
 describe("shared read/save granted-scope boundary over actual HTTP", () => {
-  it("denies all 65 registered read keys and all six save variants before source or durable save owners", async () => {
+  it("denies all 67 registered read keys and all six save variants before source or durable save owners", async () => {
     const f = await start(), before = f.savedRows(), canonicalRead = vi.spyOn(f.app.store, "latest");
     const foreign = { ...scope, accountIds: ["fictional-foreign-account"] };
-    expect(Object.keys(viewSchemas)).toHaveLength(65);
-    // 65 reads / 6 writes stay inside the unchanged 120 / 30 admission limits.
+    expect(Object.keys(viewSchemas)).toHaveLength(67);
+    // 67 reads / 6 writes stay inside the unchanged 120 / 30 admission limits.
     for (const key of Object.keys(viewSchemas)) denied(await f.post("/v1/read", readEnvelope(key, foreign)));
     for (const variant of saveVariants) denied(await f.post("/v1/save", saveEnvelope(variant, foreign)));
     expect(f.calls).toEqual([]); expect(canonicalRead).not.toHaveBeenCalled(); expect(f.savedRows()).toEqual(before);

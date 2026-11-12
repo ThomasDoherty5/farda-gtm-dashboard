@@ -28,6 +28,7 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
     `Complete coverage through: ${mirror.incident.coverageWatermark??"unknown"}`,
     `Coverage age: ${mirror.incident.ageMinutes===null?"unknown":`${mirror.incident.ageMinutes} minutes`}`,
     `Threshold: ${mirror.incident.staleAfterMinutes===null?"unconfigured":`${mirror.incident.staleAfterMinutes} minutes`}`,
+    `Run: ${mirror.incident.latestRunId??"unavailable (no run observed)"}`,
     mirror.runEvidenceUrl?`<${mirror.runEvidenceUrl}|Inspect exact run evidence>`:"Run evidence: unavailable (no run observed)",
   ]:[];
   const next=mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
