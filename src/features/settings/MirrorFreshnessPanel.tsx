@@ -40,7 +40,8 @@ export function MirrorFreshnessPanel() {
       <Divider/>
       <Small>Complete source checks establish freshness. A check with no changes still renews coverage. Unconnected sources remain unknown.</Small>
       <Row><Button variant="secondary" loading={query.isFetching} onClick={()=>void query.refetch()}>Refresh freshness</Button>
-        <LinkButton variant="secondary" to="/automations?from=connections">Open sync run history</LinkButton></Row>
+        <LinkButton variant="secondary" to="/automations?from=connections">Open sync run history</LinkButton>
+        <LinkButton variant="secondary" to="/settings/capabilities">Inspect available actions</LinkButton></Row>
       <Dialog open={Boolean(selected)} title={selected?`${selected.label} freshness`:"Source freshness"} onClose={()=>select(null)}>
         <Button variant="secondary" onClick={()=>select(null)}>Close</Button>
         {selected&&<MirrorDetail summary={selected} withheld={withheld} data={data} runId={params.get("mirrorRun")} openRun={run=>select(selected.mirrorId,run)}/>}
