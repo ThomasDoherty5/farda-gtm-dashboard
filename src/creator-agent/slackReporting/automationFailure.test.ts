@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { automationFailureEvent } from "./automationFailure.ts";
+import { automationFailureEvent, inspectAutomationTriggerOverlap } from "./automationFailure.ts";
 import { createReportingTestkit, reportFixture, reportingScope as scope } from "./fixtures.testkit.ts";
 import type { ReportEvent } from "./contract.ts";
 
@@ -60,7 +60,6 @@ describe("automation failure reports", () => {
     ["tasksExhausted", "waitForTasks"],
     ["rateLimited", "waitForRateLimit"],
     ["invalidConfiguration", "fixConfiguration"],
-    ["duplicateTrigger", "reviewDuplicateTrigger"],
     ["executionFailure", "retryVerifiedCheckpoint"],
     ["unknownOutcome", "reconcileOriginal"],
   ])("projects %s as %s from typed evidence", (errorClass, expected) => {
@@ -73,5 +72,21 @@ describe("automation failure reports", () => {
     expect(() => automationFailureEvent({ ...failure, rawError: "synthetic private payload" }, binding, secret)).toThrow();
     expect(() => automationFailureEvent({ ...failure, transition: "clear", recoveryReceipt: "synthetic-recovery",
       replay: { state: "uncertain" } }, binding, secret)).toThrow("AUTOMATION_RECOVERY_UNVERIFIED");
+  });
+
+  it("detects two successful runs of the same adopted migration window and holds unqualified coverage", () => {
+    const old = { ref: "old-trigger", version: "v1" }, replacement = { ref: "new-trigger", version: "v2" };
+    const base = { scope, jobRef: "synthetic-same-job", windowRef: "synthetic-canonical-window" };
+    const previous = { ...base, trigger: old, runRef: "synthetic-old-run", receiptRef: "synthetic-old-receipt", outcome: "succeeded", observedAt };
+    const next = { ...base, trigger: replacement, runRef: "synthetic-new-run", receiptRef: "synthetic-new-receipt", outcome: "succeeded", observedAt };
+    const evidence = { ...base, old, replacement, coverage: "complete", coverageReceipt: "synthetic-coverage", reads: [previous, next, previous] };
+    expect(inspectAutomationTriggerOverlap(evidence)).toMatchObject({ state: "duplicate", original: previous, replacement: next });
+    expect(inspectAutomationTriggerOverlap({ ...evidence, coverage: "partial" })).toEqual({ state: "unknown" });
+    expect(inspectAutomationTriggerOverlap({ ...evidence, reads: [previous, { ...next, windowRef: "different-window" }] })).toEqual({ state: "unknown" });
+    expect(inspectAutomationTriggerOverlap({ ...evidence, reads: [previous, { ...next, runRef: previous.runRef }] })).toEqual({ state: "unknown" });
+    expect(inspectAutomationTriggerOverlap({ ...evidence, reads: [next] })).toEqual({ state: "noOverlap" });
+    const duplicate = { ...failure, jobRef: base.jobRef, runRef: next.runRef, errorClass: "duplicateTrigger", replay: { state: "uncertain" } };
+    expect(() => automationFailureEvent(duplicate, binding, secret)).toThrow("AUTOMATION_DUPLICATE_TRIGGER_UNVERIFIED");
+    expect(automationFailureEvent({ ...duplicate, migration: evidence }, binding, secret).automationFailure?.recovery).toBe("reviewDuplicateTrigger");
   });
 });

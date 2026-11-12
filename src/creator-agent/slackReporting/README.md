@@ -34,6 +34,6 @@ Controlled SQLite tests are software evidence only. Actual authorized producer-t
 
 An authorized Zapier or registered-job source can normalize its terminal failure receipt with `automationFailureEvent` before returning a reporting snapshot. It supplies the exact scoped Zap, job, run, item, original attempt and checkpoint. Retry observations from the same attempt share the incident identity. A confirmed recovery uses the same identity and a separate source receipt.
 
-The report shows aliases for source identifiers, a finite error category, the current recovery instruction, the assigned owner and the authorized Linear evidence link. A possibly completed action always directs the operator to reconcile the original attempt. A verified safe read or source-enforced replay may identify a checkpoint. The report itself grants no execution authority.
+The report shows aliases for source identifiers, a finite error category, the current recovery instruction, the assigned owner and the authorized Linear evidence link. A possibly completed action always directs the operator to reconcile the original attempt. A verified safe read or source-enforced replay may identify a checkpoint. A duplicate-trigger alert requires complete, scoped source receipts for two successful runs of the adopted migration window. The report itself grants no execution authority.
 
 Use the existing reporter admission, current-source check and original-thread receipt path. The source owner must bind actual Zapier error and billing observations. Missing budget evidence remains unknown.

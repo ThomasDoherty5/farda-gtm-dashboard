@@ -20,7 +20,7 @@ const automationRecovery = {
   waitForTasks: "Confirm current task allowance before resuming the checkpoint.",
   waitForRateLimit: "Wait for the verified source limit to clear before resuming.",
   fixConfiguration: "Correct the source binding and verify it before resuming.",
-  reviewDuplicateTrigger: "Review the original and replacement trigger before resuming.",
+  reviewDuplicateTrigger: "Review both triggers and reconcile their original effects before resuming.",
   retryVerifiedCheckpoint: "Review the approved replay and resume the verified checkpoint.",
   reconcileOriginal: "Reconcile the original attempt before any retry.",
   continueMonitoring: "Source recovery confirmed. Continue monitoring.",

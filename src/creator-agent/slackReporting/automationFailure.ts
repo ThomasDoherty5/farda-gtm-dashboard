@@ -4,6 +4,13 @@ import { canonicalJson } from "../config.ts";
 import { automationErrorClass, reportEventSchema, reportInstant, reportReference, reportScopeSchema,
   type ReportEvent } from "./contract.ts";
 
+const triggerVersion = z.object({ ref: reportReference, version: reportReference }).strict();
+const triggerRun = z.object({ scope: reportScopeSchema, jobRef: reportReference, windowRef: reportReference,
+  trigger: triggerVersion, runRef: reportReference, receiptRef: reportReference,
+  outcome: z.enum(["succeeded", "failed", "unknown"]), observedAt: reportInstant }).strict();
+const migrationReads = z.object({ scope: reportScopeSchema, jobRef: reportReference, windowRef: reportReference,
+  old: triggerVersion, replacement: triggerVersion, coverage: z.enum(["complete", "partial", "unknown"]),
+  coverageReceipt: reportReference, reads: z.array(triggerRun).max(100) }).strict();
 const terminal = z.object({
   scope: reportScopeSchema,
   sourceVersion: reportReference,
@@ -15,6 +22,7 @@ const terminal = z.object({
   checkpointRef: reportReference.nullable(),
   observedAt: reportInstant,
   errorClass: automationErrorClass,
+  migration: migrationReads.optional(),
   replay: z.discriminatedUnion("state", [
     z.object({ state: z.literal("safeRead") }).strict(),
     z.object({ state: z.literal("sourceEnforced"), proofRef: reportReference }).strict(),
@@ -30,7 +38,7 @@ type FailureEvidence = z.infer<typeof automationFailureEvidence>;
 type Recovery = NonNullable<ReportEvent["automationFailure"]>["recovery"];
 const recoveryByClass: Partial<Record<FailureEvidence["errorClass"], Recovery>> = {
   permissionLost: "restoreAccess", tasksExhausted: "waitForTasks", rateLimited: "waitForRateLimit",
-  invalidConfiguration: "fixConfiguration", duplicateTrigger: "reviewDuplicateTrigger", unknownOutcome: "reconcileOriginal",
+  invalidConfiguration: "fixConfiguration", unknownOutcome: "reconcileOriginal",
 };
 
 function recoveryFor(evidence: FailureEvidence): Recovery {
@@ -39,6 +47,7 @@ function recoveryFor(evidence: FailureEvidence): Recovery {
       throw new Error("AUTOMATION_RECOVERY_UNVERIFIED");
     return "continueMonitoring";
   }
+  if (evidence.errorClass === "duplicateTrigger") return "reviewDuplicateTrigger";
   if (evidence.replay.state === "uncertain") return "reconcileOriginal";
   const classified = recoveryByClass[evidence.errorClass];
   if (classified) return classified;
@@ -46,10 +55,38 @@ function recoveryFor(evidence: FailureEvidence): Recovery {
     ? "retryVerifiedCheckpoint" : "reviewRun";
 }
 
+/** An adopted migration can detect a duplicate even when both source runs succeeded. */
+export function inspectAutomationTriggerOverlap(raw: unknown) {
+  const input = migrationReads.parse(raw);
+  const unknown = { state: "unknown" as const };
+  const scope = canonicalJson(input.scope), triggerKey = (trigger: z.infer<typeof triggerVersion>) => canonicalJson(trigger);
+  const old = triggerKey(input.old), replacement = triggerKey(input.replacement);
+  if (input.coverage !== "complete" || input.old.ref === input.replacement.ref ||
+      input.reads.some(run => canonicalJson(run.scope) !== scope || run.jobRef !== input.jobRef || run.windowRef !== input.windowRef ||
+        (triggerKey(run.trigger) !== old && triggerKey(run.trigger) !== replacement) || run.outcome === "unknown")) return unknown;
+  const runs = new Map<string, string>();
+  for (const run of input.reads) {
+    const existing = runs.get(run.runRef), canonical = canonicalJson(run);
+    if (existing && existing !== canonical) return unknown;
+    runs.set(run.runRef, canonical);
+  }
+  const previous = input.reads.find(run => triggerKey(run.trigger) === old && run.outcome === "succeeded");
+  const next = input.reads.find(run => triggerKey(run.trigger) === replacement && run.outcome === "succeeded");
+  return previous && next ? { state: "duplicate" as const, original: previous, replacement: next } : { state: "noOverlap" as const };
+}
+
 /** Normalize a terminal source receipt for the shared reporter. The source still owns admission and delivery authority. */
 export function automationFailureEvent(raw: unknown, binding: Pick<ReportEvent, "producerRef" | "link">, secret: string): ReportEvent {
   if (secret.length < 32) throw new Error("AUTOMATION_REPORT_SECRET_INVALID");
   const evidence = automationFailureEvidence.parse(raw);
+  if (evidence.errorClass === "duplicateTrigger" && evidence.transition === "breach") {
+    const overlap = evidence.migration ? inspectAutomationTriggerOverlap(evidence.migration) : null;
+    if (!overlap || overlap.state !== "duplicate" || canonicalJson(overlap.replacement.scope) !== canonicalJson(evidence.scope) ||
+        overlap.replacement.jobRef !== evidence.jobRef || overlap.replacement.runRef !== evidence.runRef ||
+        [overlap.original, overlap.replacement].some(run => Date.parse(run.observedAt) > Date.parse(evidence.observedAt))) {
+      throw new Error("AUTOMATION_DUPLICATE_TRIGGER_UNVERIFIED");
+    }
+  }
   const alias = (label: string, value: unknown) => createHmac("sha256", secret)
     .update(canonicalJson(["automation-failure", evidence.scope, label, value])).digest("hex").slice(0, 20);
   const conditionRef = "automation-" + alias("incident", [evidence.zapRef, evidence.jobRef, evidence.runRef,
