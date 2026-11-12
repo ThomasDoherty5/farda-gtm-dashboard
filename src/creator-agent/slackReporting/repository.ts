@@ -29,6 +29,9 @@ export class ReportMetadata {
   alias(kind: string, value: unknown): string { return `${kind}:${createHmac("sha256", this.secret).update(JSON.stringify([this.scope, kind, value])).digest("hex")}`; }
   identity(snapshot: ReportSnapshot): string {
     const event = snapshot.event, identity = event.identity;
+    if (event.dailyDigest) {
+      return this.alias("report", ["daily-exceptions", snapshot.destination.workspaceId, snapshot.destination.channelId, event.dailyDigest.window.reportDate]);
+    }
     return this.alias("report", [event.producerRef, identity.kind === "incident" ? [identity.conditionRef, identity.generation, identity.transition] : [identity.windowRef, identity.cadence]]);
   }
   get(reportRef: string): StoredReport | null { const row = this.db.prepare("SELECT body FROM report_records WHERE report_ref=?").get(reportRef); return row ? parse<StoredReport>(row.body) : null; }

@@ -892,6 +892,14 @@ export function createAgentServer(options: AgentServerOptions) {
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
+        dailyExceptionsDigest: {
+          sourceAuthority: options.actionFoundation?.reporting?.dailyDigest ? "injected" : "notConnected",
+          schedule: {
+            localTime: "08:30", timezone: "America/Los_Angeles", cadence: "weekdays-and-active-cohort",
+            activation: options.actionFoundation?.reporting?.dailyDigest ? "source-owned" : "unconfigured",
+          },
+          delivery: options.actionFoundation?.reporting?.dailyDigest ? "shared-reporting" : "notConnected",
+        },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });
       const match = /^\/v1\/creators\/([^/]+)$/.exec(path);
