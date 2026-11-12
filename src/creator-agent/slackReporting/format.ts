@@ -60,6 +60,10 @@ function dailyDigestBody(context: DailyDigestContext, owner: string, sourceLink:
       ...result.counts.filter(value => value.value > 0 || value.key === "availableStock")
         .map(value => `${digestCountLabels[value.key]} ${value.value.toLocaleString("en-US")}`),
       ...result.amounts.map(digestAmountText),
+      ...(result.exceptionLastSuccessAt === undefined ? [] : [result.dataset === "content"
+        ? `Oldest affected content observation ${result.exceptionLastSuccessAt}`
+        : result.exceptionLastSuccessAt === null ? "No success recorded for at least one missed ad import"
+          : `Oldest last successful ad import ${result.exceptionLastSuccessAt}`]),
       ...(result.handles.length ? [result.handles.map(handle => "@" + handle).join(", ")] : []),
       ...(result.reason ? [`${digestDatasetLabels[result.dataset]} unavailable (${digestReasons[result.reason]})`] : []),
     ]);

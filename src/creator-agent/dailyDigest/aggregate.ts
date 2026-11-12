@@ -32,6 +32,7 @@ export function aggregateDigestDataset(
   let exceptions = 0;
   let unknown = false;
   let activeStages = 0;
+  let exceptionLastSuccessAt: string | null | undefined;
 
   const add = (key: DigestCount, value = 1) => {
     const total = (counts.get(key) ?? 0) + value;
@@ -43,6 +44,12 @@ export function aggregateDigestDataset(
     }
   };
   const flag = (key: DigestCount) => { add(key); exceptions += 1; };
+  const noteSuccess = (value: string | null) => {
+    if (value === null || exceptionLastSuccessAt === undefined ||
+        (exceptionLastSuccessAt !== null && Date.parse(value) < Date.parse(exceptionLastSuccessAt))) {
+      exceptionLastSuccessAt = value;
+    }
+  };
   const missing = (key: DigestCount) => { missingCounts.add(key); unknown = true; };
   const money = (key: DigestAmount, value: Money | null) => {
     if (!value) { missingAmounts.add(key); unknown = true; return; }
@@ -119,7 +126,10 @@ export function aggregateDigestDataset(
         }
         if (row.state === "live") {
           if (!row.metricsAsOf || Date.parse(row.metricsAsOf) > asOf) missing("staleMetrics");
-          else if (slot - Date.parse(row.metricsAsOf) > week) flag("staleMetrics");
+          else if (slot - Date.parse(row.metricsAsOf) > week) {
+            flag("staleMetrics");
+            noteSuccess(row.metricsAsOf);
+          }
         }
         break;
       }
@@ -183,7 +193,15 @@ export function aggregateDigestDataset(
         break;
       }
       case "freshness": {
-        if (row.state === "unknown" || row.state === "partial") missing("staleSources");
+        if (row.adImport && (row.state === "stale" || row.state === "neverSynced")) {
+          const lastSuccessAt = row.adImport.lastSuccessAt;
+          const inconsistent = (row.state === "neverSynced") !== (lastSuccessAt === null);
+          if (inconsistent || (lastSuccessAt !== null && Date.parse(lastSuccessAt) > asOf)) missing("missedAdImports");
+          else {
+            flag("missedAdImports");
+            noteSuccess(lastSuccessAt);
+          }
+        } else if (row.state === "unknown" || row.state === "partial") missing(row.adImport ? "missedAdImports" : "staleSources");
         else if (["stale", "failed", "revoked", "neverSynced"].includes(row.state)) flag("staleSources");
         break;
       }
@@ -201,6 +219,7 @@ export function aggregateDigestDataset(
   return digestResultSchema.parse({
     dataset, state: unknown ? "partial" : "complete", reason: unknown ? "unknownFields" : null,
     coverage, exceptions, handles,
+    ...(exceptionLastSuccessAt === undefined ? {} : { exceptionLastSuccessAt }),
     counts: [...counts].filter(([key]) => !missingCounts.has(key)).map(([key, value]) => ({ key, value })),
     amounts: comparableAmounts.length > 8 ? [] : comparableAmounts,
   });

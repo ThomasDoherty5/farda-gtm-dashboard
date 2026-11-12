@@ -48,6 +48,7 @@ const sample: DigestRow[] = [
   { dataset: "stock", ref: "position-two", available: 4, low: false },
   { dataset: "freshness", ref: "sync-stale", state: "stale" },
   { dataset: "freshness", ref: "sync-no-change", state: "noChange" },
+  { dataset: "freshness", ref: "synthetic-ad-import", state: "stale", adImport: { lastSuccessAt: "2026-11-10T18:00:00Z" } },
 ];
 
 async function fixture(rows: readonly DigestRow[] = [], clock = initialNow) {
@@ -174,18 +175,36 @@ describe("daily exceptions through the configured reporting machine", () => {
       "Overdue P0 1", "P0 due in 48h 1", "Unassigned due in 7d 1", "Approvals waiting over 24h 1",
       "Follow-ups due today 1", "Past posting deadline 1", "Delivered, awaiting post 1", "Creator data checks 1", "@synthetic_creator",
       "Overdue reviews 1", "Rights expiring in 7d 1", "Stale post metrics 1",
+      "Oldest affected content observation 2026-11-05T16:29:00Z",
       "Orders 2", "Retained units 3", "Net receipts USD 105.50", "Refunds USD 20.00", "Orders needing attention 1",
       "Ad spend USD 25.00", "Stage spent USD 1350.00", "Stage cap USD 1500.00", "Stage cap warnings 1",
       "Open support over 48h 1", "New reviews ≤2 stars 1", "Available stock 7", "Low-stock positions 1", "Stale or failed syncs 1",
+      "Missed ad imports 1", "Oldest last successful ad import 2026-11-10T18:00:00Z",
     ]) expect(body).toContain(fact);
     expect(body.match(/Source evidence>/g)).toHaveLength(5);
     expect(body).not.toContain("🟢 No exceptions");
     expect(body).not.toContain("synthetic_voluntary");
     expect(body).not.toContain("🔴");
     expect(body).not.toContain("order-one");
+    expect(body).not.toContain("synthetic-ad-import");
     expect(f.event().dailyDigest?.results.find(x => x.dataset === "orders")?.coverage)
       .toMatchObject({ rows: 4, pages: 2, sourceAsOf, sourceVersion: "version:orders", exhausted: true, binding: { timezone: "UTC" } });
     expect(f.reads.every(x => x.start === window.start && x.end === window.end)).toBe(true);
+  });
+
+  it("does not turn future or partial import evidence into a confirmed exception or an all-clear", async () => {
+    const f = await fixture([
+      { dataset: "freshness", ref: "import-future", state: "stale", adImport: { lastSuccessAt: "2026-11-12T16:25:00Z" } },
+      { dataset: "freshness", ref: "import-partial", state: "partial", adImport: { lastSuccessAt: null } },
+    ]);
+    const accepted = reportReadSchema.parse((await f.accept()).body);
+    await f.post("work", { reportRef: accepted.reportRef });
+    const result = f.event().dailyDigest?.results.find(value => value.dataset === "freshness");
+    expect(result).toMatchObject({ state: "partial", reason: "unknownFields", exceptions: 0, counts: [] });
+    expect(result?.exceptionLastSuccessAt).toBeUndefined();
+    const message = f.reporting.state.calls[0]!.body;
+    expect(message).toContain("🟠 Daily exceptions");
+    expect(message).not.toContain("Missed ad imports");
   });
 
   it("sends a single all-clear line only after every empty dataset was completely read", async () => {

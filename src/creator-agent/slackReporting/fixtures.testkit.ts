@@ -25,7 +25,7 @@ export function reportFixture(now: number, suffix = "one", scope: ReportScope = 
 /** Source-only synthetic fixture. No database, job repository, server, connection or sender is installed. */
 export function createReportingSourceFixture(scope: ReportScope = reportingScope, initialNow = Date.parse("2026-11-07T12:00:00.000Z")) {
   let now = initialNow;
-  const snapshots = new Map<string, ReportSnapshot>(), grants = new Map<string, ReportGrant>(), outcomes = new Map<string, unknown>();
+  const snapshots = new Map<string, ReportSnapshot>(), grants = new Map<string, ReportGrant>(), outcomes = new Map<string, ReportOutcome>();
   const key = (locator: ReportLocator) => `${locator.eventRef}|${locator.eventVersion}`;
   const state = { actorAllowed: true, readAllowed: true, sendAllowed: true, quotaAllowed: true, calls: [] as ReportCommand[], lookups: [] as ReportCommand[], grantCalls: 0,
     beforeRead: undefined as undefined | (() => void | Promise<void>), afterRead: undefined as undefined | (() => void), beforeGrant: undefined as undefined | (() => void | Promise<void>), beforeDeliver: undefined as undefined | (() => void | Promise<void>), afterDeliver: undefined as undefined | (() => void), beforeLookup: undefined as undefined | (() => void | Promise<void>), afterLookup: undefined as undefined | (() => void),

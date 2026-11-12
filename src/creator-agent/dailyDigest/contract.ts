@@ -99,6 +99,7 @@ const stockRow = row.extend({ dataset: z.literal("stock"), available: count.null
 const freshnessRow = row.extend({
   dataset: z.literal("freshness"),
   state: z.enum(["current", "noChange", "stale", "partial", "failed", "revoked", "unknown", "neverSynced"]),
+  adImport: z.object({ lastSuccessAt: instant.nullable() }).strict().optional(),
 }).strict();
 const digestRowSchema = z.union([launchRow, creatorRow, contentRow, orderRow, refundRow, mediaRow, supportRow, reviewRow, stockRow, freshnessRow]);
 export type DigestRow = z.infer<typeof digestRowSchema>;
@@ -124,6 +125,7 @@ export const digestCountLabels = {
   orders: "Orders", retainedUnits: "Retained units", orderChecks: "Orders needing attention",
   capWarnings: "Stage cap warnings", agedSupport: "Open support over 48h", lowReviews: "New reviews ≤2 stars",
   availableStock: "Available stock", lowStock: "Low-stock positions", staleSources: "Stale or failed syncs",
+  missedAdImports: "Missed ad imports",
 } as const;
 export type DigestCount = keyof typeof digestCountLabels;
 const digestCountKeys = Object.keys(digestCountLabels) as [DigestCount, ...DigestCount[]];
@@ -140,11 +142,18 @@ export const digestResultSchema = z.object({
   counts: z.array(z.object({ key: z.enum(digestCountKeys), value: count }).strict()).max(6),
   amounts: z.array(money.extend({ key: z.enum(amountKeys) }).strict()).max(8),
   handles: z.array(handle).max(3),
+  exceptionLastSuccessAt: instant.nullable().optional(),
 }).strict().superRefine((result, ctx) => {
   if ((result.state === "complete") !== (result.reason === null) ||
       (result.state === "complete" && !result.coverage) ||
       (result.coverage === null && (result.counts.length || result.amounts.length || result.handles.length || result.exceptions))) {
     ctx.addIssue({ code: "custom", message: "Digest results require consistent source coverage." });
+  }
+  if (result.exceptionLastSuccessAt !== undefined &&
+      (!result.coverage || result.exceptions === 0 || !["content", "freshness"].includes(result.dataset) ||
+        (result.dataset === "content" && result.exceptionLastSuccessAt === null) ||
+        (result.exceptionLastSuccessAt !== null && Date.parse(result.exceptionLastSuccessAt) > Date.parse(result.coverage.sourceAsOf)))) {
+    ctx.addIssue({ code: "custom", message: "Exception success times require observed source coverage." });
   }
 });
 export type DigestResult = z.infer<typeof digestResultSchema>;
