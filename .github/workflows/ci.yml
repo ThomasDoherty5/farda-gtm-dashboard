@@ -89,6 +89,7 @@ jobs:
           name: synthetic-agent-browser-evidence
           path: |
             test-results/agent/**/*.png
+            !test-results/agent/**/weekly-kpi-trend-*.png
             test-results/agent/**/monitor-evidence/native-browser-proof.json
             test-results/agent/**/stock-support-evidence/accessibility.json
             test-results/agent/finance-operations/capture-manifest.json
@@ -96,6 +97,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-weekly-kpi-trend
+          path: test-results/agent/**/weekly-kpi-trend-*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: always()
         with:

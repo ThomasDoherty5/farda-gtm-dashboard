@@ -142,8 +142,18 @@ test("two frozen KPI weeks reach the Figma trend chart with keyboard and actual 
     await screenReaderCheckpoint(page, "weekly-kpi-selected-week", week, ["Shopify", "TikTok Shop", "snapshot"]);
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 1000 });
+      await week.scrollIntoViewIfNeeded();
+      const track = page.getByRole("list", { name: /Weekly net receipts by channel/ });
+      const [selectedBox, trackBox] = await Promise.all([week.boundingBox(), track.boundingBox()]);
+      expect(selectedBox).not.toBeNull();
+      expect(trackBox).not.toBeNull();
+      expect(selectedBox!.x).toBeGreaterThanOrEqual(trackBox!.x - 1);
+      expect(selectedBox!.x + selectedBox!.width).toBeLessThanOrEqual(trackBox!.x + trackBox!.width + 1);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await accessible(page);
+      // The full-page capture starts at the top, with the selected week still in view within its horizontal chart.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
       await page.screenshot({ path: info.outputPath(`weekly-kpi-trend-${width}.png`), fullPage: true });
     }
     expect(fixture.reporting.state.calls).toHaveLength(0);
