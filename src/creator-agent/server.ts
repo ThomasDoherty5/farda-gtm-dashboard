@@ -233,7 +233,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let mediaDomain: MediaComposition | undefined;
   let runtime: JobRuntime;
   let runtimeApi: ReturnType<typeof createRuntimeApi>;
-  let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null = null;
+  let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null;
   let commercialProjection: ReturnType<typeof createCommercialProjection>;
   let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
   try {
