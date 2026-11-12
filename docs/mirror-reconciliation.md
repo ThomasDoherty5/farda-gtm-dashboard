@@ -21,7 +21,7 @@ A schedule has a `checkId` and a `version`. It also sets:
 - a daily local `runAt`;
 - `cutoffLagMinutes`;
 - `coverage.lookbackDays`, the number of past due days each run rechecks;
-- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`) and the currencies always compared. A count-only dataset declares a null amount field.
+- `expectedDatasets`, each with a scope, a grain, its amount field (`net-sales`, `label-cost` or `refund-total`) and the currencies always compared. A count-only dataset declares a null amount field. An owner can also declare `record-status` in `mirroredFields`.
 
 A period is one local day. Its cutoff is the end of the day plus the lag. A period cannot be checked before its cutoff. `duePeriods` and `nextRunAt` derive the run plan from the record, including across DST changes. Where a DST change skips local midnight, as in America/Santiago or America/Havana, the day starts at the first instant after the skipped time. Where midnight occurs twice, the day starts at the first one.
 
@@ -48,12 +48,13 @@ For each group, the comparator compares counts, money totals and keys. It classi
 | `orphan` | A mirror row belongs to a scope and grain that no expected source dataset owns. The source side of that group is a known empty set once the mirror read of that scope is complete, so the group can match and its orphans can clear. Without that mirror read it stays `unknown`. |
 | `duplicate` | A key appears more than once on one side. Duplicates are counted within each side. |
 | `amount` | A key appears once on each side, both reads and both rows are complete, and the amounts differ. |
+| `field` | As for `amount`, but the mirrored `record-status` field differs. It is compared only when the dataset declares `record-status` in `mirroredFields` and the source row carries a known status. A mirror with no status column therefore shows no difference. Existing findings and their fingerprints are unchanged. |
 
 A finding is raised only when the reads prove it. A partial source read cannot show that a mirror key is missing from the source. A complete mirror read can still show that a source key is missing from the mirror.
 
 Keys are matched within a group. A key labelled with the wrong currency or period on one side lands in two groups and shows as two findings, one missing on each side, not as a single key-level conflict.
 
-Conflicts carry no record key, and their ids cannot be used to recover one. A record key is guessable, so a plain digest of it and the other public inputs could be reversed by trial. The public comparison and conflict ids are therefore an HMAC under a server-held secret, the operations secret. The plain fingerprint used for suppression stays in the server database and in server-side results; it is never put in a conflict. Rotating the secret changes every public id but not local tracking: open findings are looked up and cleared by their stored group (scope, grain, period and currency) and plain fingerprint. A repeat refreshes a finding's stored ids, and `latestSlice` publishes every comparison and conflict under the current secret. Conflict values are presence, count or money, using the closed shapes in `safeValue`. Ownership is `source` for expected datasets, and `unknown` for `missing_source`, `orphan` and anything in an orphan group. `repairAllowed` is always `false`, because repair is owned elsewhere. The existing repair hold in `operationsControls.ts` therefore stays in force.
+Conflicts carry no record key, and their ids cannot be used to recover one. A record key is guessable, so a plain digest of it and the other public inputs could be reversed by trial. The public comparison and conflict ids are therefore an HMAC under a server-held secret, the operations secret. The plain fingerprint used for suppression stays in the server database and in server-side results; it is never put in a conflict. Rotating the secret changes every public id but not local tracking: open findings are looked up and cleared by their stored group (scope, grain, period and currency) and plain fingerprint. A repeat refreshes a finding's stored ids, and `latestSlice` publishes every comparison and conflict under the current secret. Conflict values are presence, count, money or state, using the closed shapes in `safeValue`. Ownership is `source` for expected datasets, and `unknown` for `missing_source`, `orphan` and anything in an orphan group. `repairAllowed` is always `false`, because repair is owned elsewhere. The existing repair hold in `operationsControls.ts` therefore stays in force.
 
 ## Partial reads are never clean
 
@@ -109,6 +110,6 @@ Native dataset bindings and writer qualification require source-owned evidence. 
 
 All test data is synthetic.
 
-- `comparator.test.ts` covers the schedule record, timezones and DST, including skipped and repeated midnights. It covers the five categories, currency separation, partial, failed and unread datasets, late reads, partial rows, overflow and known zeros. It also covers keyed public ids, orphan and open-group rechecks, input refusals, and parsing with the existing comparison, conflict and source-snapshot schemas, including the 100-item cap.
+- `comparator.test.ts` covers the schedule record, timezones and DST, including skipped and repeated midnights. It covers the six categories, currency separation, partial, failed and unread datasets, late reads, partial rows, overflow and known zeros. It also covers keyed public ids, orphan and open-group rechecks, input refusals, and parsing with the existing comparison, conflict and source-snapshot schemas, including the 100-item cap.
 - `repository.test.ts` covers scope binding, the secret, schedule versions, idempotent replay and id reuse, suppression, clearing and reopening, orphan clearing, out-of-order reads, findings outside the run's periods, the audit trail, the snapshot slice and its coverage, the clock read inside the lock, and rollback.
 - `runtimeIntegration.test.ts` covers scheduled admission, retry after a partial read, missing-row and amount drift through the authenticated read, reporting payload and permission withdrawal.

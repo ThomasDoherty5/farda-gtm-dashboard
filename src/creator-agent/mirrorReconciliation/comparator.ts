@@ -144,7 +144,9 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
     };
     const sourceAmount = amount(sourceState, g.source), mirrorAmount = amount(mirrorState, g.mirror);
     const rowsPartial = [...g.source, ...g.mirror].some(r => r.read === "partial");
-    const coverage = worst(sourceState, mirrorState, rowsPartial || amountIncomplete ? "partial" : "complete");
+    const statusIncomplete = g.dataset?.mirroredFields?.includes("record-status") &&
+      g.source.some(row => !row.status || row.status === "unknown");
+    const coverage = worst(sourceState, mirrorState, rowsPartial || amountIncomplete || statusIncomplete ? "partial" : "complete");
     const comparisonId = publicIds.comparison(schedule.checkId, g);
     const sourceVersion = g.dataset ? sourceRead?.version ?? "source-unread" : ownershipVersion;
     const comparison: ReconciliationComparison = {
@@ -183,12 +185,15 @@ export function compareMirror(schedule: CheckSchedule, raw: CheckInput | unknown
         raise(k, "mirror", "missing_mirror", "record-key", presence("present"), presence("missing"));
       for (const k of mirror.keys()) if (!source.has(k) && sourceState === "complete")
         raise(k, "source", "missing_source", "record-key", presence("missing"), presence("present"));
-      if (amountField && sourceState === "complete" && mirrorState === "complete") {
+      if (sourceState === "complete" && mirrorState === "complete") {
         for (const [k, [s, ...moreSource]] of source) {
           const [m, ...moreMirror] = mirror.get(k) ?? [];
           if (!s || !m || moreSource.length || moreMirror.length || s.read !== "complete" || m.read !== "complete") continue;
-          if (s.amountMinor !== null && m.amountMinor !== null && s.amountMinor !== m.amountMinor) raise(k, "both", "amount", amountField,
+          if (amountField && s.amountMinor !== null && m.amountMinor !== null && s.amountMinor !== m.amountMinor) raise(k, "both", "amount", amountField,
             { kind: "money", minorUnits: s.amountMinor, currency: g.currency }, { kind: "money", minorUnits: m.amountMinor, currency: g.currency });
+          // A mirrored field is compared only when the dataset declares it and the source vouches for its value.
+          if (g.dataset.mirroredFields?.includes("record-status") && s.status !== undefined && s.status !== "unknown" && s.status !== m.status) raise(k, "both", "field", "record-status",
+            { kind: "state", value: s.status }, m.status === undefined ? null : { kind: "state", value: m.status });
         }
       }
     }
