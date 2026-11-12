@@ -4,6 +4,7 @@ import { daysOf, localDay } from "./reader.ts";
 import type { AnalyticsInputFact, AnalyticsOwnerProof, AnalyticsReason, NativeAnalyticsSnapshot } from "./contract.ts";
 import { nativeAnalyticsViewSchema, type AnalyticsFact, type NativeAnalyticsView, type NativeAttribution, type NativePaidMedia } from "./views.ts";
 import { NativeAnalyticsError } from "./nativeSource.ts";
+import { ownedOrderRows } from "./ownedOrderRows.ts";
 import type { OrderRow } from "./sources.ts";
 
 type Alias = (kind: string, raw: string) => string;
@@ -83,16 +84,9 @@ export function projectNativeAnalytics(snapshot: NativeAnalyticsSnapshot, alias:
   }
   function commerce(input: Extract<NativeAnalyticsSnapshot, { viewKey: "overviewSummary" }>["facts"]["orders"]) {
     const owner = input ? proof(input.proofRef, "commerceOrders") : null;
-    let conflict = false;
-    const seen = new Set<string>();
-    const channels = (["shopify", "tiktokShop"] as const).map(channel => {
-      const feeds = input?.snapshot.feeds.filter(feed => feed.channel === channel) ?? [];
-      const feed = feeds.find(value => value.origin === "native") ?? feeds.find(value => value.origin === "mirror");
-      const native = feeds.find(value => value.origin === "native"), mirror = feeds.find(value => value.origin === "mirror");
-      const material = (rows: OrderRow[]) => rows.map(row => [row.canonicalOrderId ?? row.orderRef, row.recordOwner, row.valid, row.currency, row.netReceiptsMinor, row.placedAt, row.attribution, row.codeOwner]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
-      const mismatch = native && mirror && digest(material(native.orders)) !== digest(material(mirror.orders));
-      const rows = feed?.orders.filter(row => row.recordOwner === channel && row.valid) ?? [];
-      for (const row of rows) { if (row.canonicalOrderId === null || seen.has(row.canonicalOrderId)) conflict = true; else seen.add(row.canonicalOrderId); }
+    const owned = ownedOrderRows(input?.snapshot.feeds ?? []);
+    const { conflict } = owned;
+    const channels = owned.channels.map(({ channel, feed, rows, mismatch }) => {
       const usable = owner && feed && feed.syncState !== "error" && feed.lastSuccessAt !== null;
       const effective = owner && feed ? { ...owner, coverage: mismatch || feed.coverage === "partial" ? "partial" as const : owner.coverage, sourceAsOf: feed.lastSuccessAt, maxAgeMs: Math.min(owner.maxAgeMs, 15 * 60_000) } : owner;
       const countRows = (selected: OrderRow[]) => usable && effective ? known(selected.length, effective) : unknown<number>();

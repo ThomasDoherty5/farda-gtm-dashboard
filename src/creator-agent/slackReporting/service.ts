@@ -31,11 +31,19 @@ export function createSlackReporting(options: ReportingOptions) {
       const record = requireRecord(reportRef), snapshot = await loadSnapshot(source, locate(record), scope, "read", now, machine);
       assertReadTarget(record, snapshot);
       const applied = metadata.applied(reportRef), run = jobs.getRun(record.runRef), reasonCodes: string[] = [];
-      try { assertMaterial(record, snapshot); assertSnapshot(source!, snapshot, scope, "send", now(), machine); } catch (error) { if (error instanceof ReportError && error.status !== 401 && error.status !== 403) reasonCodes.push(error.code); else if (snapshot.authority.send === "denied" && snapshot.authority.read === "allowed") reasonCodes.push("REPORT_SEND_DENIED"); else throw error; }
+      // A settled or unresolved original only needs current read authority. A send preflight cannot erase that receipt.
       if (applied) reasonCodes.push("REPORT_ALREADY_DELIVERED");
       else if (run.control !== "active") reasonCodes.push("REPORT_RUN_INACTIVE");
       else if (run.items.some(value => value.state === "leased" || value.state === "reconcile")) reasonCodes.push("REPORT_ORIGINAL_ATTEMPT_UNRESOLVED");
       else if (run.items.some(value => Date.parse(value.dueAt) > now())) reasonCodes.push("REPORT_RETRY_NOT_DUE");
+      else {
+        try { assertMaterial(record, snapshot); assertSnapshot(source!, snapshot, scope, "send", now(), machine); }
+        catch (error) {
+          if (error instanceof ReportError && error.status !== 401 && error.status !== 403) reasonCodes.push(error.code);
+          else if (snapshot.authority.send === "denied" && snapshot.authority.read === "allowed") reasonCodes.push("REPORT_SEND_DENIED");
+          else throw error;
+        }
+      }
       assertSnapshot(source!, snapshot, scope, "read", now(), machine);
       const certainty = metadata.certainty(reportRef);
       const localBasis=()=>digest({record:requireRecord(reportRef),applied:metadata.applied(reportRef),run:jobs.getRun(record.runRef)}),basis=localBasis();

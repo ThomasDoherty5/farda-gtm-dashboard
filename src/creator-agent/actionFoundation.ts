@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createDailyDigestReporting, type DailyDigestConfig } from "./dailyDigest/service.ts";
 import { createWeeklySnapshotReporting, type WeeklySnapshotConfig } from "./weeklySnapshots/service.ts";
+import { createLaunchPulseReporting, type LaunchPulseConfig } from "./launchPulse/service.ts";
 import { bindAutomationFailureReporting, type AutomationFailureReportingBinding } from "./slackReporting/automationFailure.ts";
 import { bindOperationalAlertReporting, type OperationalAlertReportBinding } from "./operationalAlerts/report.ts";
 import type { OperationalAlertRepository } from "./operationalAlerts/repository.ts";
@@ -39,7 +40,7 @@ export type ActionFoundationBindings = {
   readinessTargetRef?: string;
   reviewSource?: ActionReviewSource;
   reviewLinkOrigins?: readonly string[];
-  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;weeklySnapshots?:WeeklySnapshotConfig;
+  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;weeklySnapshots?:WeeklySnapshotConfig;launchPulse?:LaunchPulseConfig;
     assertCurrent(request:{scope:ActionScope;workerRef:string;operation:"accept"|"read"|"work"|"reconcile";reference:string},now:number):void};
   worker?: { token: string; workerRef: string;
     resolve: (scope: ActionScope, runRef: string) => Promise<unknown>;
@@ -99,8 +100,10 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
   const weeklySnapshots = reportBinding?.weeklySnapshots && baseReportSource
     ? createWeeklySnapshotReporting(db, scope, reportBinding.weeklySnapshots, baseReportSource, now) : undefined;
   const weeklyReportSource = weeklySnapshots?.reportingSource ?? baseReportSource;
-  const reportSource = reportBinding?.automationFailures && weeklyReportSource
-    ? bindAutomationFailureReporting(weeklyReportSource, scope, secret, reportBinding.automationFailures) : weeklyReportSource;
+  const pulseReportSource = reportBinding?.launchPulse && weeklyReportSource
+    ? createLaunchPulseReporting(db, scope, reportBinding.launchPulse, weeklyReportSource, now) : weeklyReportSource;
+  const reportSource = reportBinding?.automationFailures && pulseReportSource
+    ? bindAutomationFailureReporting(pulseReportSource, scope, secret, reportBinding.automationFailures) : pulseReportSource;
   const reporting = reportBinding ? createSlackReporting({ db, scope, secret, jobs, source: reportSource, now }) : undefined;
   const reportAccept=z.object({locator:reportLocatorSchema,idempotencyKey:reportReference}).strict();
   const reportTarget=z.object({reportRef:reportReference}).strict();
