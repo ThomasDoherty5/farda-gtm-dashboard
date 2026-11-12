@@ -80,6 +80,8 @@ Request shape sent by `useView`: `requestedScope`, `filters`, `period`, `sort` a
 | `launchReconciliation` | none | ReconciliationData | `analytics/ReconciliationPage` | `demoAnalytics` | proposed | Not a Figma source (`/launch?view=reconciliation`); see `docs/additions-analytics.md`. Matrix cells carry exact values (cents for money). |
 | `launchSnapshot` | none | LaunchSnapshotData | `analytics/LaunchSnapshotPage` | `demoAnalytics` | proposed |  |
 | `lifecycleOverview` | none | LifecycleData / NativeLifecycle | `lifecycle/LifecyclePage`, `NativeLifecycleViews` | `demoLifecycle` | native + historical demo | Source catalog/outcome evidence remains separate from local configuration and provider sends. |
+| `mirrorFreshness` | none | MirrorFreshnessView | `settings/MirrorFreshnessPanel` | native only | complete-run health | Immutable owner adoption, coverage receipts, health schedule and incident state. Unbound is unknown. |
+| `mirrorRunDetail` | `runId` | MirrorRunDetail | `settings/MirrorFreshnessPanel` | native only | scoped receipt read | Exact completed source receipt; missing is unavailable, never zero. |
 | `metricDictionary` | none | MetricDictionaryData | `analytics/AttributionPage` | `demoAnalytics` | proposed | Versioned headline-metric dictionary, cost buckets and hand-checked cases. Read by the definitions dialog. |
 | `offerDraft` | `offerId` | OfferDraftRecord | `scorecards/OfferPage` | `demoAdapter` | proposed |  |
 | `offerRewards` | `offerId`, `scenario` | RewardsRecord | `scorecards/RewardsPage` | `demoScorecards` | proposed + conflict | C-06. Typed `scenario: string`; an unknown scenario is `RECORD_NOT_FOUND`. |

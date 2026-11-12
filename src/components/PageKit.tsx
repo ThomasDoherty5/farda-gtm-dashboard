@@ -57,7 +57,7 @@ export function Notice({ title, kind = "context", badge, actions, actionsGap, de
 }
 
 /** Label and value rows (Figma "Detail" rows such as 7:1017). `gap` and `labelWidth` follow the card the rows sit in (some use 20px and a 165px label). */
-export function DetailRows({ rows, wide = false, gap, labelWidth }: { rows: readonly (readonly [string, string])[]; wide?: boolean; gap?: number; labelWidth?: number }) {
+export function DetailRows({ rows, wide = false, gap, labelWidth }: { rows: readonly (readonly [string, ReactNode])[]; wide?: boolean; gap?: number; labelWidth?: number }) {
   const style = { ...(gap ? { gap } : {}), ...(labelWidth ? { "--detail-label": `${labelWidth}px` } : {}) } as CSSProperties;
   return (
     <dl className={`${styles.details} ${wide ? styles.detailsWide : ""}`} style={style}>

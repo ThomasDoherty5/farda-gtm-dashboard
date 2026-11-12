@@ -79,6 +79,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
+          name: synthetic-mirror-freshness
+          path: test-results/agent/**/mirror-freshness-evidence/*
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
           name: synthetic-agent-browser-evidence
           path: |
             test-results/agent/**/*.png
