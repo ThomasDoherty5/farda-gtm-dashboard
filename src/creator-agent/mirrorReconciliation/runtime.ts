@@ -23,9 +23,9 @@ const snapshotSchema = z.object({
   requestDigest: z.string().regex(/^[a-f0-9]{64}$/),
   observedAt: runtimeInstant,
   validUntil: runtimeInstant,
-  coverage: checkInputSchema.shape.coverage,
-  sourceRows: checkInputSchema.shape.sourceRows,
-  mirrorRows: checkInputSchema.shape.mirrorRows,
+  coverage: checkInputSchema.innerType().shape.coverage,
+  sourceRows: checkInputSchema.innerType().shape.sourceRows,
+  mirrorRows: checkInputSchema.innerType().shape.mirrorRows,
 }).strict();
 type ReadSnapshot = z.infer<typeof snapshotSchema>;
 
@@ -65,6 +65,7 @@ export function bindMirrorReconciliation(repo: MirrorReconciliationRepository, s
   }
   repo.saveSchedule(schedule);
   const registrationHash = digest(registration);
+  const { ownerRef, version: registrationVersion } = registration;
   const scheduleHash = digest(schedule);
   const { source } = config;
   const executor: RuntimeExecutor = {
@@ -125,7 +126,7 @@ export function bindMirrorReconciliation(repo: MirrorReconciliationRepository, s
     return operationsControlSourceSchema.parse({
       ...sourceFields, scope, revision: `reconciliation:${schedule.version}:${slice.sequence}`, observedAt: slice.observedAt,
       coverage: slice.coverage, comparisons: slice.comparisons,
-      conflicts: slice.conflicts.map(conflict => ({ ...conflict, ownerRef: registration.ownerRef })),
+      conflicts: slice.conflicts.map(conflict => ({ ...conflict, ownerRef })),
     });
   }
   const view: OperationsControlSource = {
@@ -133,7 +134,7 @@ export function bindMirrorReconciliation(repo: MirrorReconciliationRepository, s
       assertReadable(binding);
       const snapshot = projection(), now = repo.now();
       return { snapshot, authority: { binding, sourceVersion: snapshot?.revision ?? null,
-        permissionVersion: `reconciliation:${registration.version}`, observedAt: new Date(now).toISOString(),
+        permissionVersion: `reconciliation:${registrationVersion}`, observedAt: new Date(now).toISOString(),
         validUntil: new Date(now + 60_000).toISOString() } };
     },
     assertCurrent(result, binding) {
