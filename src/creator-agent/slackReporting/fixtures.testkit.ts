@@ -68,13 +68,14 @@ export function createReportingSourceFixture(scope: ReportScope = reportingScope
 /** Controlled SQLite + the same source-only fixture; never a native Slack integration. */
 export function createReportingTestkit() {
   const fixture = createReportingSourceFixture(), { scope, source, machine, locator } = fixture;
+  const secret = "synthetic-reporting-private-test-key-000000000000";
   const directory = mkdtempSync(join(tmpdir(), "farda-reporting-test-")), path = join(directory, "agent.sqlite");
   const seed = new AgentStore(path, scope); seed.close(); let db = new DatabaseSync(path);
-  let jobs = new JobRepository(db, { scope, now: () => fixture.now }), service = createSlackReporting({ db, scope, secret: "synthetic-reporting-private-test-key-000000000000", jobs, source, now: () => fixture.now });
-  return { ...fixture, directory, path,
+  let jobs = new JobRepository(db, { scope, now: () => fixture.now }), service = createSlackReporting({ db, scope, secret, jobs, source, now: () => fixture.now });
+  return { ...fixture, directory, path, secret,
     get db() { return db; }, get jobs() { return jobs; }, get service() { return service; }, get now() { return fixture.now; },
     async accept(input = locator, requestKey = "synthetic-request") { return service.accept(input, requestKey, machine); },
-    reopen() { db.close(); db = new DatabaseSync(path); jobs = new JobRepository(db, { scope, now: () => fixture.now }); service = createSlackReporting({ db, scope, secret: "synthetic-reporting-private-test-key-000000000000", jobs, source, now: () => fixture.now }); },
+    reopen() { db.close(); db = new DatabaseSync(path); jobs = new JobRepository(db, { scope, now: () => fixture.now }); service = createSlackReporting({ db, scope, secret, jobs, source, now: () => fixture.now }); },
     close() { db.close(); rmSync(directory, { recursive: true, force: true }); },
   };
 }

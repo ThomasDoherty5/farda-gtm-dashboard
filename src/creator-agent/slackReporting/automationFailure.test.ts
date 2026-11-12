@@ -35,7 +35,7 @@ describe("automation failure reports", () => {
           if (!readable || !evidenceByVersion.has(snapshot.event.eventVersion)) throw new ReportError("REPORT_PERMISSION_DENIED", 403);
         },
       });
-      const service = createSlackReporting({ db: kit.db, scope, secret, jobs: kit.jobs, source, now: () => kit.now });
+      const service = createSlackReporting({ db: kit.db, scope, secret: kit.secret, jobs: kit.jobs, source, now: () => kit.now });
       function add(evidence: unknown) {
         const { event: template, ...delivery } = reportFixture(kit.now);
         expect(template.producerRef).toBe(binding.producerRef);
