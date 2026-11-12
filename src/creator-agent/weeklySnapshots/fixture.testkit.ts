@@ -112,14 +112,17 @@ export async function weeklySnapshotFixture({ controlledSandbox = true, port = 0
       assertCurrent() { reporting.machine.assertCurrent(); },
     } },
   });
-  const close = async () => { await app.close(); rmSync(dir, { recursive: true, force: true }); };
+  const close = async () => {
+    try { await app.close(); }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+  };
   try {
     await new Promise<void>((resolve, reject) => {
       app.server.once("error", reject);
       app.server.listen(port, "127.0.0.1", resolve);
     });
   } catch (error) {
-    await close();
+    await close().catch(() => {});
     throw error;
   }
   const address = app.server.address();

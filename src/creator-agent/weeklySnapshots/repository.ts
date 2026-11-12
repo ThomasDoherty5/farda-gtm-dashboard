@@ -9,16 +9,25 @@ type WeeklySnapshot = { facts: WeeklyFacts; frozenAt: string; sourceDigest: stri
 type StoredWeek = { body: string; frozen_at: string; source_digest: string };
 
 export class WeeklySnapshotError extends Error {
-  constructor(readonly code: string, readonly status: number = 409) {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, status = 409) {
     super(code);
+    this.code = code;
+    this.status = status;
   }
 }
 
 /** Immutable source snapshots. Reporting delivery attempts stay in the existing reporting repository. */
 export class WeeklySnapshotRepository {
   private readonly scopeKey: string;
+  private readonly db: DatabaseSync;
+  private readonly now: () => number;
 
-  constructor(private readonly db: DatabaseSync, scope: DigestScope, private readonly now = Date.now) {
+  constructor(db: DatabaseSync, scope: DigestScope, now = Date.now) {
+    this.db = db;
+    this.now = now;
     this.scopeKey = digest(digestScopeSchema.parse(scope));
     db.exec(`
       CREATE TABLE IF NOT EXISTS weekly_kpi_snapshots (
