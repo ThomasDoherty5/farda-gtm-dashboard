@@ -6,6 +6,8 @@ import { mirrorIncidentPayloadSchema } from "../mirrorFreshness.ts";
 import { dailyDigestContextSchema, digestAllClear } from "../dailyDigest/contract.ts";
 import { weeklyReportContextSchema } from "../weeklySnapshots/comparison.ts";
 import { thresholdReportContextSchema } from "../operationalAlerts/presentation.ts";
+import { launchPulseContextSchema } from "../launchPulse/contract.ts";
+import { launchPulsePrefix, pulseTimeFromRef } from "../launchPulse/schedule.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -51,7 +53,7 @@ export const automationFailureContextSchema = z.object({
   recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
     "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
 }).strict();
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional() }).strict().superRefine((value, ctx) => {
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional(), launchPulse: launchPulseContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
   const threshold = value.thresholdAlert;
   if (/^threshold-[a-f0-9]{32}-[1-9]\d*-(breach|clear)$/.test(value.eventRef) !== Boolean(threshold)) {
@@ -90,6 +92,14 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
   if (value.eventRef.startsWith("weekly-kpi:") !== Boolean(value.weeklySnapshot)) {
     ctx.addIssue({ code: "custom", message: "A weekly KPI report requires its frozen snapshot." });
   }
+  const pulse = value.launchPulse;
+  if (value.eventRef.startsWith(launchPulsePrefix) !== Boolean(pulse) || pulse && (
+    value.identity.kind !== "window" || value.identity.cadence !== "launchHourly" ||
+    value.identity.windowRef !== value.eventRef || value.identity.launchWindowRef !== value.eventVersion ||
+    value.identity.end !== pulse.slot.scheduledAt || pulseTimeFromRef(value.eventRef) !== Date.parse(pulse.slot.scheduledAt) ||
+    value.subject.kind !== "aggregate" || value.subject.category !== "launch" ||
+    value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot || value.thresholdAlert
+  )) ctx.addIssue({ code: "custom", message: "A launch pulse must identify the approved source window and completed hour." });
   const weekly = value.weeklySnapshot?.snapshot;
   if (weekly && (value.identity.kind !== "window" || value.identity.cadence !== "mondayWeekly" ||
       value.identity.start !== weekly.window.start || value.identity.end !== weekly.window.end ||

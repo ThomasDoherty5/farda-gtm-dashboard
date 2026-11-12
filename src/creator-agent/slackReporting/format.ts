@@ -3,6 +3,7 @@ import { reportEventSchema, type ReportFact, type ReportSnapshot } from "./contr
 import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
 import { weeklyReportBody } from "../weeklySnapshots/format.ts";
 import { thresholdText } from "../operationalAlerts/presentation.ts";
+import { launchPulseBody } from "../launchPulse/format.ts";
 import {
   digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
   type DailyDigestContext, type DigestResult,
@@ -122,10 +123,12 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
   ] : [];
   const next=automation ? automationRecovery[automation.recovery]
     : mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
-  const body = event.dailyDigest
-    ? dailyDigestBody(event.dailyDigest, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
-    : event.weeklySnapshot ? weeklyReportBody(event.weeklySnapshot, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
-    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines,
+  const controlled = snapshot.testProvenance?.kind === "controlledSandbox";
+  let body: string;
+  if (event.dailyDigest) body = dailyDigestBody(event.dailyDigest, owner, link, provenance, controlled);
+  else if (event.weeklySnapshot) body = weeklyReportBody(event.weeklySnapshot, owner, link, provenance, controlled);
+  else if (event.launchPulse) body = launchPulseBody(event.launchPulse, owner, link, provenance, controlled);
+  else body = [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines,
       ...(event.thresholdAlert ? [thresholdText(event.thresholdAlert)] : []),
       `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
