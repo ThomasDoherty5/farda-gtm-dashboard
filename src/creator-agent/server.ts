@@ -21,6 +21,9 @@ import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
 import { readOperationsView, operationsViewFiltersSchema, OperationsCursorError } from "./operationsViewReader.ts";
 import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts";
+import { MirrorFreshnessRepository, unconfiguredMirrorFreshness, type MirrorFreshnessOptions } from "./mirrorFreshnessRepository.ts";
+import { toD13SourceFreshness, mirrorRefSchema } from "./mirrorFreshness.ts";
+import { MirrorFreshnessRuntime, type MirrorRuntimeConfig } from "./mirrorFreshnessRuntime.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 import { EvidenceReviewRepository, EvidenceReviewError } from "./evidenceReviewStore.ts";
@@ -160,6 +163,9 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
   runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
+  /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
+   * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
+  mirrorFreshness?: Pick<MirrorFreshnessOptions, "approval" | "policies"> & MirrorRuntimeConfig;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -196,6 +202,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let intake: IntakeRepository;
   let rewards: RewardRedemptionRepository;
   let schedules: ScheduleDraftRepository;
+  let mirrorFreshness: MirrorFreshnessRepository | null = null;
+  let mirrorRuntime: MirrorFreshnessRuntime | null = null;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
@@ -251,6 +259,13 @@ export function createAgentServer(options: AgentServerOptions) {
     recruitment = createRecruitmentSourceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       source: options.recruitmentSource, secret: operationsSecret, now: options.operations?.now });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
+    if (options.mirrorFreshness) {
+      if(options.mirrorFreshness.deploymentRef){mirrorRefSchema.parse(options.mirrorFreshness.deploymentRef);if(!options.mirrorFreshness.approval)throw new Error("MIRROR_POLICY_UNAPPROVED");}
+      const mirrorScope = {workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox" as const};
+      const boundMirrors = options.mirrorFreshness.source && options.mirrorFreshness.approval ? (options.mirrorFreshness.bindings ?? []).map(b=>b.mirrorId) : [];
+      mirrorFreshness = new MirrorFreshnessRepository(store.database, mirrorScope, {boundMirrors, approval:options.mirrorFreshness.approval,policies:options.mirrorFreshness.policies,now:options.operations?.now});
+      mirrorRuntime = new MirrorFreshnessRuntime(mirrorFreshness,mirrorScope,options.mirrorFreshness.source,options.mirrorFreshness.bindings);
+    }
     stockSupport = createStockSupportWorkflow(store.database,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
@@ -512,6 +527,8 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1), ...commercialSelection }).strict() }),
     readBase.extend({ viewKey: z.literal("nightlyReconciliation"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("mirrorRunDetail"), filters: z.object({runId:mirrorRefSchema}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("mirrorFreshness"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -929,6 +946,35 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
             capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
           result.assertCurrent(); return reply(res, 200, envelope);
+        }
+        if (input.viewKey === "mirrorRunDetail") {
+          if(input.page.cursor!==null)return reply(res,400,{code:"INVALID_CURSOR",executionCertainty:"notApplied"});
+          const run=mirrorFreshness?.readRun(input.filters.runId)??null;
+          const completion=mirrorRuntime?.completion(input.filters.runId)??null;
+          const data={kind:"mirror-run",run,completion};
+          return reply(res,200,{schemaVersion:ADAPTER_SCHEMA,requestId:input.requestId,scope:{...input.requestedScope,authorizationScopeVersion:"creator-agent.scope.v1"},
+            dataVersion:versionOfData(data),dataState:run?"ready":"unavailable",data,sourceFreshness:[],coverage:{expectedCount:null,observedCount:run?1:0,missingCount:null,complete:false,reasonCodes:run?[]:["MIRROR_RUN_UNAVAILABLE"]},
+            capabilities:[],page:{nextCursor:null,hasMore:false},refresh:{nextPollAfterMs:null}});
+        }
+        if (input.viewKey === "mirrorFreshness") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          // Read-only classification at the current clock; incidents belong to the sweep, never to a read.
+          const mirrors = mirrorFreshness ? mirrorFreshness.evaluate() : unconfiguredMirrorFreshness((options.operations?.now ?? Date.now)());
+          const bound = mirrors.filter(mirror => mirror.policy.runsBound).length;
+          const data = { kind: "mirror-freshness" as const, configured: bound > 0, mirrors,
+            policy:mirrorFreshness?.approval??null,incidents:mirrorFreshness?.openIncidents()??[],
+            schedule:mirrorRuntime?.scheduleEvidence()??{state:"unconfigured",everyMinutes:15,timezone:"America/Los_Angeles",deploymentRef:null,lastSweepAt:null,nextSweepAt:null} };
+          const observed = mirrors.filter(mirror => mirror.state !== "unknown").length;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: bound === 0 ? "unavailable" : observed < mirrors.length ? "partial" : "ready", data,
+            sourceFreshness: mirrors.flatMap(mirror => { const d13 = toD13SourceFreshness(mirror); return d13 ? [{ sourceRef: { source: "mirror:" + mirror.mirrorId,
+              accountId: options.accountId, sourceId: null, canonicalId: null, url: null, identityState: "unresolved", provenanceRef: "mirror-freshness:" + mirror.mirrorId },
+              observedAt: mirror.checkedAt, mirroredAt: mirror.evidence.lastComplete?.finishedAt ?? null, ...d13 }] : []; }),
+            coverage: { expectedCount: mirrors.length, observedCount: observed, missingCount: mirrors.length - observed, complete: observed === mirrors.length,
+              // Every unknown mirror explains itself: unbound, no owner threshold, or invalid evidence.
+              reasonCodes: [...new Set(mirrors.filter(mirror => mirror.state === "unknown").flatMap(mirror => mirror.reasonCodes))] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -1507,11 +1553,13 @@ export function createAgentServer(options: AgentServerOptions) {
       return reply(res, 500, { code: "AGENT_ERROR", executionCertainty: "uncertain" });
     }
   });
+  server.once("listening",()=>{if(options.mirrorFreshness?.deploymentRef)mirrorRuntime?.start(options.mirrorFreshness.deploymentRef);});
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
+    mirrorRuntime?.stop();
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }
     if (failure) reject(failure); else resolve();

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { scopeKey, useScope } from "@/adapter/scope";
 import { useSearchParams } from "react-router-dom";
 import type { SavedBinding, SavedBindings, SavedRuns } from "@/creator-agent/operationsView";
@@ -35,7 +35,7 @@ function useSelection(key: string) {
   } };
 }
 
-export function SavedBindingPanel({ data, page, tab }: { data: SavedBindings; page: "connections" | "capabilities"; tab?: string }) {
+export function SavedBindingPanel({ data, page, tab, freshnessPanel }: { data: SavedBindings; page: "connections" | "capabilities"; tab?: string; freshnessPanel?:ReactNode }) {
   const selection = useSelection(page === "connections" ? "connection" : "inspect");
   const selected = data.records.find(row => row.id === selection.id);
   const rows = tab === "exceptions" ? data.records.filter(row => row.state !== "Ready") : data.records;
@@ -53,7 +53,7 @@ export function SavedBindingPanel({ data, page, tab }: { data: SavedBindings; pa
         <LinkButton variant="secondary" to={page === "connections" ? "/settings/capabilities" : "/settings/connections"}>{page === "connections" ? "Inspect available actions" : "View connections"}</LinkButton>
       </Panel>;
   return <>
-    {page === "connections" ? <Split>{table}{freshness}</Split> : <>{table}{freshness}</>}
+    {page === "connections" ? <Split>{table}{freshnessPanel??freshness}</Split> : <>{table}{freshness}</>}
     <Dialog open={Boolean(selected)} title="Binding evidence" onClose={() => selection.select(null)}>
       <Button variant="secondary" style={{ position: "sticky", top: 0, zIndex: 1 }} onClick={() => selection.select(null)}>Close</Button>
       {selected && <><DetailRows rows={[

@@ -15,7 +15,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,6 +76,13 @@ jobs:
       - name: Check finance control geometry before the complete browser suite
         run: npm run test:e2e:agent -- e2e-agent/finance-reads.spec.ts --grep 'native ledger header controls remain inside their panels'
       - run: npm run test:e2e:agent
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-mirror-freshness
+          path: test-results/agent/**/mirror-freshness-evidence/*
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: always()
         with:
