@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { digest } from "../config.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
+import type { ThresholdDigest } from "../operationalAlerts/presentation.ts";
 import {
   ReportError, reportEventSchema, reportInstant, reportReference, reportSnapshotSchema, reportSourceLinkSchema,
   type ReportEvent, type ReportLocator, type ReportSnapshot, type ReportSourceRead, type ReportingSource,
@@ -30,6 +31,7 @@ type DigestBinding = z.infer<typeof configSchema>;
 
 export type DailyDigestConfig = DigestBinding & {
   source: DigestSource;
+  thresholds?: (window: DigestWindow) => ThresholdDigest;
   cohort?: {
     read(scope: DigestScope, reportDate: string, context: Pick<ReportSourceRead, "assertCurrent">): Promise<unknown>;
     assertCurrent(value: DigestCohort, now: number): void;
@@ -49,7 +51,7 @@ export function createDailyDigestReporting(
   delegate: ReportingSource, now: () => number = Date.now,
 ): ReportingSource {
   const scope = digestScopeSchema.parse(scopeInput);
-  const { source, cohort, readDelivery, ...bindingInput } = config;
+  const { source, cohort, readDelivery, thresholds, ...bindingInput } = config;
   const binding = configSchema.parse(bindingInput);
   const configHash = digest([scope, binding]);
   db.exec(`
@@ -177,7 +179,8 @@ export function createDailyDigestReporting(
         retryAt = now() + backoff;
         throw new ReportError("DIGEST_SOURCE_RETRY_DUE", 503, "notApplied", backoff);
       }
-      const dailyDigest = { window: run.window, links: binding.sectionLinks, results };
+      const dailyDigest = { window: run.window, links: binding.sectionLinks, results,
+        ...(thresholds ? { thresholdAlerts: thresholds(run.window) } : {}) };
       const clear = digestAllClear(dailyDigest);
       run.event = reportEventSchema.parse({
         ...locator, producerRef: binding.producerRef, occurredAt: new Date(now()).toISOString(),
@@ -225,6 +228,9 @@ export function createDailyDigestReporting(
       if (prior?.config_hash !== configHash || snapshot.programme.version !== binding.policy.version ||
           snapshot.programme.adoptionRef !== binding.policy.adoptionRef) throw new ReportError("DIGEST_POLICY_CHANGED");
       const report = snapshot.event.dailyDigest!;
+      if (digest(report.thresholdAlerts ?? null) !== digest(thresholds?.(report.window) ?? null)) {
+        throw new ReportError("DIGEST_ALERT_COVERAGE_CHANGED");
+      }
       if (report.window.cohort) {
         if (!cohort) throw new ReportError("DIGEST_COHORT_UNCONFIGURED");
         const proof = structuredClone(report.window.cohort);

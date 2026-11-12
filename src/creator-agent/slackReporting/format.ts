@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { reportEventSchema, type ReportFact, type ReportSnapshot } from "./contract.ts";
 import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
 import { weeklyReportBody } from "../weeklySnapshots/format.ts";
+import { thresholdText } from "../operationalAlerts/presentation.ts";
 import {
   digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
   type DailyDigestContext, type DigestResult,
@@ -75,6 +76,16 @@ function dailyDigestBody(context: DailyDigestContext, owner: string, sourceLink:
     return [`• *${digestSectionLabels[section]}* · ${facts.join(" · ")} · ${evidence}${observed ? ` · As of ${observed}` : ""}`];
   });
   const ownership = `Owner ${owner} · <${sourceLink}|Authorized report record> · evidence ${provenance}`;
+  const alerts = context.thresholdAlerts;
+  if (alerts && (alerts.active || alerts.activeRed || alerts.incomplete)) {
+    const summary = `• *Operational thresholds* · ${alerts.active ? `Active orange conditions ${alerts.active} · ` : ""}${
+      alerts.activeRed ? `Open red incidents ${alerts.activeRed} · ` : ""}${
+      alerts.incomplete ? "Coverage incomplete · " : ""}<${alerts.sourceLink}|Source evidence>`;
+    const details = alerts.details.slice(0, 3).map(thresholdText);
+    const base = [title, date, ownership, ...sections, summary].join("\n").length;
+    const detail = details.join(" · ");
+    sections.push(detail && base + detail.length < 2950 ? summary + " · " + detail : summary);
+  }
   if (sections.length === 0) return [title, date, ownership].join(" · ");
   return [
     `${title} · ${date}`,
@@ -114,7 +125,9 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
   const body = event.dailyDigest
     ? dailyDigestBody(event.dailyDigest, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
     : event.weeklySnapshot ? weeklyReportBody(event.weeklySnapshot, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
-    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
+    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines,
+      ...(event.thresholdAlert ? [thresholdText(event.thresholdAlert)] : []),
+      `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
   return { body, bodyHash: createHash("sha256").update(body).digest("hex") };
 }

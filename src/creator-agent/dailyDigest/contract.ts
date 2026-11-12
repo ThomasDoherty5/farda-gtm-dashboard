@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { thresholdDigestSchema } from "../operationalAlerts/presentation.ts";
 
 export const digestTimezone = "America/Los_Angeles";
 export const digestDatasets = [
@@ -159,9 +160,12 @@ export const digestResultSchema = z.object({
 export type DigestResult = z.infer<typeof digestResultSchema>;
 export const dailyDigestContextSchema = z.object({
   window: digestWindowSchema, links: digestLinksSchema, results: z.array(digestResultSchema).length(digestDatasets.length),
+  thresholdAlerts: thresholdDigestSchema.optional(),
 }).strict().refine(value => digestDatasets.every((dataset, index) => value.results[index]?.dataset === dataset));
 export type DailyDigestContext = z.infer<typeof dailyDigestContextSchema>;
 
 export function digestAllClear(context: DailyDigestContext): boolean {
-  return context.results.every(result => result.state === "complete" && result.exceptions === 0);
+  const thresholds = context.thresholdAlerts;
+  return context.results.every(result => result.state === "complete" && result.exceptions === 0) &&
+    (!thresholds || thresholds.state === "complete" && thresholds.active === 0 && thresholds.activeRed === 0 && thresholds.incomplete === 0);
 }
