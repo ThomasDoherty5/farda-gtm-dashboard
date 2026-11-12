@@ -28,6 +28,11 @@ Use source-owned net receipts after the applicable refund rules. Refund events
 are also reported separately by occurrence time. Currency and minor-unit
 precision are preserved. The digest summarizes known media cap evidence. The
 existing incident producer owns real-time alert evaluation and delivery.
+The freshness reader may include the last successful ad import with its
+source-owned freshness verdict. Confirmed missed imports and overdue content
+observations include the oldest affected success time in the digest. An import
+that has never completed is shown explicitly. A partial read or a timestamp
+later than the source observation cannot establish a missed import.
 
 Pass only the locator and idempotency key to `POST /v1/reports/accept`, under the
 existing reporting machine authority. A transient read returns bounded retry

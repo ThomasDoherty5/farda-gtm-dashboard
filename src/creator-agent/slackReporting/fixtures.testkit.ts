@@ -25,7 +25,7 @@ export function reportFixture(now: number, suffix = "one", scope: ReportScope = 
 /** Source-only synthetic fixture. No database, job repository, server, connection or sender is installed. */
 export function createReportingSourceFixture(scope: ReportScope = reportingScope, initialNow = Date.parse("2026-11-07T12:00:00.000Z")) {
   let now = initialNow;
-  const snapshots = new Map<string, ReportSnapshot>(), grants = new Map<string, ReportGrant>(), outcomes = new Map<string, unknown>();
+  const snapshots = new Map<string, ReportSnapshot>(), grants = new Map<string, ReportGrant>(), outcomes = new Map<string, ReportOutcome>();
   const key = (locator: ReportLocator) => `${locator.eventRef}|${locator.eventVersion}`;
   const state = { actorAllowed: true, readAllowed: true, sendAllowed: true, quotaAllowed: true, calls: [] as ReportCommand[], lookups: [] as ReportCommand[], grantCalls: 0,
     beforeRead: undefined as undefined | (() => void | Promise<void>), afterRead: undefined as undefined | (() => void), beforeGrant: undefined as undefined | (() => void | Promise<void>), beforeDeliver: undefined as undefined | (() => void | Promise<void>), afterDeliver: undefined as undefined | (() => void), beforeLookup: undefined as undefined | (() => void | Promise<void>), afterLookup: undefined as undefined | (() => void),
@@ -68,13 +68,14 @@ export function createReportingSourceFixture(scope: ReportScope = reportingScope
 /** Controlled SQLite + the same source-only fixture; never a native Slack integration. */
 export function createReportingTestkit() {
   const fixture = createReportingSourceFixture(), { scope, source, machine, locator } = fixture;
+  const secret = "synthetic-reporting-private-test-key-000000000000";
   const directory = mkdtempSync(join(tmpdir(), "farda-reporting-test-")), path = join(directory, "agent.sqlite");
   const seed = new AgentStore(path, scope); seed.close(); let db = new DatabaseSync(path);
-  let jobs = new JobRepository(db, { scope, now: () => fixture.now }), service = createSlackReporting({ db, scope, secret: "synthetic-reporting-private-test-key-000000000000", jobs, source, now: () => fixture.now });
-  return { ...fixture, directory, path,
+  let jobs = new JobRepository(db, { scope, now: () => fixture.now }), service = createSlackReporting({ db, scope, secret, jobs, source, now: () => fixture.now });
+  return { ...fixture, directory, path, secret,
     get db() { return db; }, get jobs() { return jobs; }, get service() { return service; }, get now() { return fixture.now; },
     async accept(input = locator, requestKey = "synthetic-request") { return service.accept(input, requestKey, machine); },
-    reopen() { db.close(); db = new DatabaseSync(path); jobs = new JobRepository(db, { scope, now: () => fixture.now }); service = createSlackReporting({ db, scope, secret: "synthetic-reporting-private-test-key-000000000000", jobs, source, now: () => fixture.now }); },
+    reopen() { db.close(); db = new DatabaseSync(path); jobs = new JobRepository(db, { scope, now: () => fixture.now }); service = createSlackReporting({ db, scope, secret, jobs, source, now: () => fixture.now }); },
     close() { db.close(); rmSync(directory, { recursive: true, force: true }); },
   };
 }

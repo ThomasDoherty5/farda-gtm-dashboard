@@ -905,6 +905,10 @@ export function createAgentServer(options: AgentServerOptions) {
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
+        automationFailureReporting: {
+          sourceAuthority: options.actionFoundation?.reporting?.automationFailures ? "injected" : "notConnected",
+          delivery: options.actionFoundation?.reporting?.automationFailures ? "shared-reporting" : "notConnected",
+        },
         dailyExceptionsDigest: {
           sourceAuthority: options.actionFoundation?.reporting?.dailyDigest ? "injected" : "notConnected",
           schedule: {
