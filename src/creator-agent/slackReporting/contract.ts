@@ -41,11 +41,25 @@ export const mirrorReportContextSchema = z.object({ incident: mirrorIncidentPayl
   if(v.incident.event==="suppressed" || (v.incident.latestRunId!==null && v.runEvidenceUrl===null) || (v.incident.latestRunId===null && v.runEvidenceUrl!==null))
     c.addIssue({code:"custom",message:"Only original incident transitions with their exact source evidence link may report."});
 });
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional() }).strict().superRefine((value, ctx) => {
+const automationAlias = z.string().regex(/^[a-f0-9]{20}$/);
+export const automationErrorClass = z.enum(["executionFailure", "permissionLost", "tasksExhausted", "rateLimited", "invalidConfiguration", "duplicateTrigger", "unknownOutcome"]);
+export const automationFailureContextSchema = z.object({
+  zap: automationAlias, job: automationAlias, run: automationAlias, item: automationAlias, checkpoint: automationAlias.nullable(),
+  errorClass: automationErrorClass,
+  recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
+    "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
+}).strict();
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
   if(value.mirror && (value.identity.kind!=="incident" || value.subject.kind!=="aggregate" || value.subject.category!=="automation" ||
     value.identity.conditionRef!==value.mirror.incident.incidentId || value.identity.generation!==1 || value.identity.sequence!==(value.mirror.incident.event==="cleared"?2:1) ||
     value.identity.transition!==(value.mirror.incident.event==="cleared"?"clear":"breach"))) ctx.addIssue({code:"custom",message:"Mirror identity must match its immutable incident transition."});
+  if (value.automationFailure && (value.identity.kind !== "incident" || value.subject.kind !== "aggregate" ||
+      value.subject.category !== "automation" || value.mirror || value.dailyDigest ||
+      (value.automationFailure.recovery === "continueMonitoring") !== (value.identity.transition === "clear") ||
+      (value.automationFailure.recovery === "retryVerifiedCheckpoint" && value.automationFailure.checkpoint === null))) {
+    ctx.addIssue({ code: "custom", message: "Automation diagnostics require an exact incident transition and a recorded retry checkpoint." });
+  }
   const daily = value.identity.kind === "window" && value.identity.cadence === "dailyExceptions";
   if (daily !== Boolean(value.dailyDigest)) ctx.addIssue({ code: "custom", message: "Daily digest cadence requires the complete typed digest context." });
   if (value.dailyDigest && value.identity.kind === "window") {

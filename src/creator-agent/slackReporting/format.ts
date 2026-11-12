@@ -9,6 +9,22 @@ import {
 const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
 const statuses = { unavailable: "unavailable", permissionDenied: "permission denied", rateLimited: "rate limited", partial: "partial", complete: "complete", breached: "breached", cleared: "cleared", unknown: "unknown" };
 const actions = { inspectShipment: "Inspect the shipment and its source record.", reviewAutomation: "Review the automation and reconcile its original attempt.", reviewSource: "Review the source and its missing evidence.", reviewCreator: "Review the creator record.", reviewContent: "Review the content record.", reviewFinance: "Review the finance record; this report does not authorize payment.", reviewSupport: "Review the support record.", reviewLaunch: "Review launch readiness; this report does not release media or approve a launch.", continueMonitoring: "Continue monitoring the source." };
+const automationErrors = {
+  executionFailure: "Execution failed", permissionLost: "Permission lost", tasksExhausted: "Task allowance exhausted",
+  rateLimited: "Source rate limit", invalidConfiguration: "Invalid source configuration", duplicateTrigger: "Duplicate trigger",
+  unknownOutcome: "Original outcome uncertain",
+};
+const automationRecovery = {
+  reviewRun: "Inspect the execution record and the current checkpoint.",
+  restoreAccess: "Verify restored source access before resuming the checkpoint.",
+  waitForTasks: "Confirm current task allowance before resuming the checkpoint.",
+  waitForRateLimit: "Wait for the verified source limit to clear before resuming.",
+  fixConfiguration: "Correct the source binding and verify it before resuming.",
+  reviewDuplicateTrigger: "Review the original and replacement trigger before resuming.",
+  retryVerifiedCheckpoint: "Review the approved replay and resume the verified checkpoint.",
+  reconcileOriginal: "Reconcile the original attempt before any retry.",
+  continueMonitoring: "Source recovery confirmed. Continue monitoring.",
+};
 function factText(fact: ReportFact): string {
   if (!("unit" in fact)) return `${labels[fact.label]}: ${statuses[fact.value]}`;
   const value = fact.value === null ? (fact.missingReason === "notApplicable" ? "not applicable" : `unknown (${fact.missingReason === "partialSource" ? "partial source" : "not observed"})`) : fact.unit === "USD-minor" ? `$${Math.floor(fact.value / 100)}.${String(fact.value % 100).padStart(2, "0")}` : `${fact.value.toLocaleString("en-US")}${fact.unit === "minutes" ? " minutes" : ""}`;
@@ -82,10 +98,17 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
     `Run: ${mirror.incident.latestRunId??"unavailable (no run observed)"}`,
     mirror.runEvidenceUrl?`<${mirror.runEvidenceUrl}|Inspect exact run evidence>`:"Run evidence: unavailable (no run observed)",
   ]:[];
-  const next=mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
+  const automation = event.automationFailure;
+  const automationLines = automation ? [
+    automationErrors[automation.errorClass],
+    `Zap ${automation.zap} · job ${automation.job} · run ${automation.run} · item ${automation.item}`,
+    `Checkpoint ${automation.checkpoint ?? "unverified"}`,
+  ] : [];
+  const next=automation ? automationRecovery[automation.recovery]
+    : mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
   const body = event.dailyDigest
     ? dailyDigestBody(event.dailyDigest, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
-    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
+    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
   return { body, bodyHash: createHash("sha256").update(body).digest("hex") };
 }

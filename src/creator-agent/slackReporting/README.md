@@ -30,3 +30,10 @@ An incomplete source cannot generate an all-clear. A report about a missing sour
 ## Remaining activation and acceptance gates
 
 Controlled SQLite tests are software evidence only. Actual authorized producer-to-adapter-to-Slack examples, exact source/programme/target bindings, complete granted-scope evidence, approved recurring windows, quota/usage facts, whole sandbox journey matrix, cutover authorization and production receipt remain separate gates. Existing harmless channel setup receipts do not authorize these operations. No source configuration, recurrence, extra Slack post, provider purchase or production activation is performed by this module.
+## Automation failures
+
+An authorized Zapier or registered-job source can normalize its terminal failure receipt with `automationFailureEvent` before returning a reporting snapshot. It supplies the exact scoped Zap, job, run, item, original attempt and checkpoint. Retry observations from the same attempt share the incident identity. A confirmed recovery uses the same identity and a separate source receipt.
+
+The report shows aliases for source identifiers, a finite error category, the current recovery instruction, the assigned owner and the authorized Linear evidence link. A possibly completed action always directs the operator to reconcile the original attempt. A verified safe read or source-enforced replay may identify a checkpoint. The report itself grants no execution authority.
+
+Use the existing reporter admission, current-source check and original-thread receipt path. The source owner must bind actual Zapier error and billing observations. Missing budget evidence remains unknown.
