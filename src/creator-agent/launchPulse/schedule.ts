@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { analyticsRefSchema } from "../analytics/contract.ts";
 import { instantSchema } from "../analytics/sources.ts";
-import { digest } from "../config.ts";
 import { nextRun } from "../scheduleCadence.ts";
 
 export const launchPulseTimezone = "America/Los_Angeles";
@@ -64,10 +63,6 @@ export function launchPulseSlot(window: ApprovedLaunchWindow, at: number): Pulse
     todayStart: iso(midnight(launchPacificDay(at))), launchStart: iso(start), launchEnd: iso(end),
     interpretation: window.interpretation,
   };
-}
-
-export function launchPulseLocator(window: ApprovedLaunchWindow, slot: PulseSlot) {
-  return { eventRef: launchPulsePrefix + digest(window.version) + ":" + slot.scheduledAt, eventVersion: window.version };
 }
 
 export function pulseTimeFromRef(eventRef: string) {

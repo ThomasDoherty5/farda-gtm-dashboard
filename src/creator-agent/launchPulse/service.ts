@@ -8,7 +8,7 @@ import { ReportError, reportEventSchema, reportInstant, reportReference, reportS
 import { assertSynchronousVoid } from "../sourceFence.ts";
 import { projectLaunchPulse } from "./aggregate.ts";
 import { launchDashboardLinkSchema, launchPulseSourceSchema, type LaunchPulseSourceSnapshot } from "./contract.ts";
-import { approvedLaunchWindowSchema, duringLaunchReportingHours, launchPulseLocator, launchPulsePrefix, launchPulseSlot, pulseTimeFromRef,
+import { approvedLaunchWindowSchema, duringLaunchReportingHours, launchPulsePrefix, launchPulseSlot, pulseTimeFromRef,
   type ApprovedLaunchWindow, type PulseSlot } from "./schedule.ts";
 
 const destination = reportSnapshotSchema.shape.destination.pick({ targetRef: true, workspaceId: true, channelId: true });
@@ -35,6 +35,10 @@ export type LaunchPulseConfig = Binding & {
   };
   readDelivery(event: ReportEvent, destination: Binding["destination"], context: ReportSourceRead): Promise<Omit<ReportSnapshot, "event">>;
 };
+
+export function launchPulseLocator(window: ApprovedLaunchWindow, slot: PulseSlot) {
+  return { eventRef: launchPulsePrefix + digest(window.version) + ":" + slot.scheduledAt, eventVersion: window.version };
+}
 
 /** Existing reporting owns work leases and Slack receipts. Only one scoped, frozen payload is prepared for each launch slot. */
 export function createLaunchPulseReporting(db: DatabaseSync, scope: DigestScope, config: LaunchPulseConfig,

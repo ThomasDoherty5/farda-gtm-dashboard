@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OrderFeed, OrderRow } from "./analytics/sources.ts";
 import { digest } from "./config.ts";
-import type { LaunchPulseConfig } from "./launchPulse/service.ts";
-import { approvedLaunchWindowSchema, launchPacificDay, launchPulseLocator, launchPulseSlot,
+import { launchPulseLocator, type LaunchPulseConfig } from "./launchPulse/service.ts";
+import { approvedLaunchWindowSchema, launchPacificDay, launchPulseSlot,
   type ApprovedLaunchWindow } from "./launchPulse/schedule.ts";
 import { createAgentServer, type AgentServerOptions } from "./server.ts";
 import { ReportError, reportReadSchema, type ReportEvent } from "./slackReporting/contract.ts";
