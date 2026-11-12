@@ -1,8 +1,9 @@
 import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson } from "../config.ts";
-import { automationErrorClass, reportEventSchema, reportInstant, reportReference, reportScopeSchema,
-  type ReportEvent } from "./contract.ts";
+import { assertSynchronousVoid } from "../sourceFence.ts";
+import { ReportError, automationErrorClass, reportEventSchema, reportInstant, reportReference, reportScopeSchema,
+  type ReportEvent, type ReportLocator, type ReportScope, type ReportSnapshot, type ReportSourceRead, type ReportingSource } from "./contract.ts";
 
 const triggerVersion = z.object({ ref: reportReference, version: reportReference }).strict();
 const triggerRun = z.object({ scope: reportScopeSchema, jobRef: reportReference, windowRef: reportReference,
@@ -106,4 +107,47 @@ export function automationFailureEvent(raw: unknown, binding: Pick<ReportEvent, 
       item: alias("item", evidence.itemRef), checkpoint: evidence.checkpointRef ? alias("checkpoint", evidence.checkpointRef) : null,
       errorClass: evidence.errorClass, recovery: recoveryFor(evidence) },
   });
+}
+
+export type AutomationFailureReportingBinding = {
+  event: Pick<ReportEvent, "producerRef" | "link">;
+  read(locator: ReportLocator, context: ReportSourceRead): Promise<{
+    evidence: unknown;
+    delivery: Omit<ReportSnapshot, "event">;
+  }>;
+  assertCurrent(snapshot: ReportSnapshot, purpose: ReportSourceRead["purpose"], now: number): void;
+};
+
+/** Read exact owner-provided evidence through the existing authenticated reporting admission. */
+export function bindAutomationFailureReporting(delegate: ReportingSource, scope: ReportScope, secret: string,
+  binding: AutomationFailureReportingBinding): ReportingSource {
+  const configured = structuredClone(binding.event);
+  const owns = (locator: ReportLocator) => /^automation-[a-f0-9]{20}-(failure|recovery)$/.test(locator.eventRef);
+  return {
+    async readEvent(locator, context) {
+      if (!owns(locator)) return delegate.readEvent(locator, context);
+      if (!context) throw new ReportError("REPORT_PERMISSION_DENIED", 403);
+      context.assertCurrent();
+      const result = await binding.read(structuredClone(locator), context);
+      context.assertCurrent();
+      const evidence = automationFailureEvidence.parse(result.evidence);
+      if (canonicalJson(evidence.scope) !== canonicalJson(scope) || canonicalJson(result.delivery.scope) !== canonicalJson(scope))
+        throw new ReportError("REPORT_SCOPE_MISMATCH", 403);
+      const event = automationFailureEvent(evidence, configured, secret);
+      if (event.eventRef !== locator.eventRef || event.eventVersion !== locator.eventVersion) throw new ReportError("REPORT_EVENT_MISMATCH");
+      return { ...result.delivery, event };
+    },
+    assertCurrent(snapshot, purpose, now) {
+      if (owns(snapshot.event)) {
+        if (!snapshot.event.automationFailure || snapshot.event.producerRef !== configured.producerRef ||
+            canonicalJson(snapshot.event.link) !== canonicalJson(configured.link)) throw new ReportError("REPORT_EVENT_MISMATCH");
+        assertSynchronousVoid(() => binding.assertCurrent(snapshot, purpose, now));
+      }
+      assertSynchronousVoid(() => delegate.assertCurrent(snapshot, purpose, now));
+    },
+    authorizeAttempt: (snapshot, command) => delegate.authorizeAttempt(snapshot, command),
+    assertGrant: (grant, command, now) => delegate.assertGrant(grant, command, now),
+    deliver: (command, context) => delegate.deliver(command, context),
+    lookup: (command, context) => delegate.lookup(command, context),
+  };
 }

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createDailyDigestReporting, type DailyDigestConfig } from "./dailyDigest/service.ts";
+import { bindAutomationFailureReporting, type AutomationFailureReportingBinding } from "./slackReporting/automationFailure.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { ApprovalManifest } from "./approvals/contract.ts";
@@ -35,7 +36,7 @@ export type ActionFoundationBindings = {
   readinessTargetRef?: string;
   reviewSource?: ActionReviewSource;
   reviewLinkOrigins?: readonly string[];
-  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;
+  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;
     assertCurrent(request:{scope:ActionScope;workerRef:string;operation:"accept"|"read"|"work"|"reconcile";reference:string},now:number):void};
   worker?: { token: string; workerRef: string;
     resolve: (scope: ActionScope, runRef: string) => Promise<unknown>;
@@ -83,9 +84,11 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     commercialEligibility: options.commercialEligibility, now });
   const limits = new ApiRequestLimits(db, scope, now);
   const reportBinding = bindings.reporting;
-  const reportSource = reportBinding?.dailyDigest
+  const baseReportSource = reportBinding?.dailyDigest
     ? createDailyDigestReporting(db, scope, reportBinding.dailyDigest, reportBinding.source, now)
     : reportBinding?.source;
+  const reportSource = reportBinding?.automationFailures && baseReportSource
+    ? bindAutomationFailureReporting(baseReportSource, scope, secret, reportBinding.automationFailures) : baseReportSource;
   const reporting = reportBinding ? createSlackReporting({ db, scope, secret, jobs, source: reportSource, now }) : undefined;
   const reportAccept=z.object({locator:reportLocatorSchema,idempotencyKey:reportReference}).strict();
   const reportTarget=z.object({reportRef:reportReference}).strict();

@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { automationFailureEvent, inspectAutomationTriggerOverlap } from "./automationFailure.ts";
+import { automationFailureEvent, bindAutomationFailureReporting, inspectAutomationTriggerOverlap } from "./automationFailure.ts";
 import { createReportingTestkit, reportFixture, reportingScope as scope } from "./fixtures.testkit.ts";
-import type { ReportEvent } from "./contract.ts";
+import { ReportError, type ReportEvent, type ReportSnapshot } from "./contract.ts";
+import { createSlackReporting } from "./service.ts";
 
 const secret = "synthetic-automation-failure-key-000000000000";
 const observedAt = "2026-11-08T10:00:00.000Z";
@@ -21,13 +22,37 @@ describe("automation failure reports", () => {
   it("routes one safe root alert and its recovery through the existing reporter and original thread", async () => {
     const kit = createReportingTestkit();
     try {
+      let readable = true;
+      const evidenceByVersion = new Map<string, { evidence: unknown; delivery: Omit<ReportSnapshot, "event"> }>();
+      const source = bindAutomationFailureReporting(kit.source, scope, secret, {
+        event: binding,
+        async read(locator) {
+          const result = evidenceByVersion.get(locator.eventVersion);
+          if (!result) throw new ReportError("REPORT_EVENT_MISMATCH");
+          return result;
+        },
+        assertCurrent(snapshot) {
+          if (!readable || !evidenceByVersion.has(snapshot.event.eventVersion)) throw new ReportError("REPORT_PERMISSION_DENIED", 403);
+        },
+      });
+      const service = createSlackReporting({ db: kit.db, scope, secret, jobs: kit.jobs, source, now: () => kit.now });
+      function add(evidence: unknown) {
+        const { event: template, ...delivery } = reportFixture(kit.now);
+        expect(template.producerRef).toBe(binding.producerRef);
+        const event = automationFailureEvent(evidence, binding, secret);
+        evidenceByVersion.set(event.eventVersion, { evidence, delivery });
+        return kit.add({ ...delivery, event });
+      }
       const exact = { ...failure, observedAt: new Date(kit.now).toISOString(), replay: { state: "uncertain" } };
-      const event = automationFailureEvent(exact, binding, secret);
-      const locator = kit.add({ ...reportFixture(kit.now), event });
-      const record = await kit.accept(locator, "automation-failure");
+      const locator = add(exact);
+      const record = await service.accept(locator, "automation-failure", kit.machine);
+      readable = false;
+      await expect(service.work(record.reportRef, kit.machine)).rejects.toMatchObject({ code: "REPORT_PERMISSION_DENIED" });
+      expect(kit.state.calls).toHaveLength(0);
+      readable = true;
       kit.state.mode = "lostAck";
-      expect((await kit.service.work(record.reportRef, kit.machine)).executionCertainty).toBe("uncertain");
-      expect((await kit.service.reconcile(record.reportRef, kit.machine)).executionCertainty).toBe("applied");
+      expect((await service.work(record.reportRef, kit.machine)).executionCertainty).toBe("uncertain");
+      expect((await service.reconcile(record.reportRef, kit.machine)).executionCertainty).toBe("applied");
       const call = kit.state.calls[0]!;
       expect(call.body).toContain("Reconcile the original attempt before any retry.");
       expect(call.body).toContain("Execution failed");
@@ -35,16 +60,15 @@ describe("automation failure reports", () => {
       expect(call.body).toMatch(/Zap [a-f0-9]{20} · job [a-f0-9]{20} · run [a-f0-9]{20} · item [a-f0-9]{20}/);
       expect(call.body).not.toContain("synthetic-private");
       expect(kit.state.lookups.map(command => command.requestKey)).toEqual([call.requestKey]);
-      expect((await kit.accept(locator, "automation-failure-repeat")).reportRef).toBe(record.reportRef);
+      expect((await service.accept(locator, "automation-failure-repeat", kit.machine)).reportRef).toBe(record.reportRef);
       expect(kit.state.calls).toHaveLength(1);
 
       kit.advance(1000);
-      const recovery = automationFailureEvent({ ...exact, transition: "clear", sourceVersion: "synthetic-evidence-v2",
-        observedAt: new Date(kit.now).toISOString(), replay: { state: "held" }, recoveryReceipt: "synthetic-native-recovery" }, binding, secret);
-      const recoveryLocator = kit.add({ ...reportFixture(kit.now), event: recovery });
-      const reply = await kit.accept(recoveryLocator, "automation-recovery");
+      const recoveryLocator = add({ ...exact, transition: "clear", sourceVersion: "synthetic-evidence-v2",
+        observedAt: new Date(kit.now).toISOString(), replay: { state: "held" }, recoveryReceipt: "synthetic-native-recovery" });
+      const reply = await service.accept(recoveryLocator, "automation-recovery", kit.machine);
       kit.state.mode = "applied";
-      expect((await kit.service.work(reply.reportRef, kit.machine)).executionCertainty).toBe("applied");
+      expect((await service.work(reply.reportRef, kit.machine)).executionCertainty).toBe("applied");
       expect(kit.state.calls).toHaveLength(2);
       const first = kit.outcomes.get(call.requestKey);
       expect(first?.state).toBe("applied");

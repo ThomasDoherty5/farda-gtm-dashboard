@@ -36,4 +36,4 @@ An authorized Zapier or registered-job source can normalize its terminal failure
 
 The report shows aliases for source identifiers, a finite error category, the current recovery instruction, the assigned owner and the authorized Linear evidence link. A possibly completed action always directs the operator to reconcile the original attempt. A verified safe read or source-enforced replay may identify a checkpoint. A duplicate-trigger alert requires complete, scoped source receipts for two successful runs of the adopted migration window. The report itself grants no execution authority.
 
-Use the existing reporter admission, current-source check and original-thread receipt path. The source owner must bind actual Zapier error and billing observations. Missing budget evidence remains unknown.
+Configure `reporting.automationFailures` with the authorized receipt reader and synchronous current-source fence. Its results go through the existing reporter admission, destination check and original-thread receipt path. The source owner must bind actual Zapier error and billing observations. Missing budget evidence remains unknown.
