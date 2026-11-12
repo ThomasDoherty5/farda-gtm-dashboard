@@ -1,4 +1,5 @@
 import { digest } from "../config.ts";
+import { dailyDigestWindow } from "../dailyDigest/schedule.ts";
 import { ReportError, reportGrantSchema, reportSnapshotSchema, type ReportCommand, type ReportGrant, type ReportLocator, type ReportMachine, type ReportScope, type ReportSnapshot, type ReportingSource } from "./contract.ts";
 
 export function reportMaterial(snapshot: ReportSnapshot) {
@@ -31,6 +32,15 @@ export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot
     const identity = snapshot.event.identity;
     if (identity.kind === "window") {
       if (Date.parse(identity.end) > now || Date.parse(identity.end) > Date.parse(snapshot.evidence.asOf)) throw new ReportError("REPORT_WINDOW_UNOBSERVED");
+      if (identity.cadence === "dailyExceptions") {
+        const period = snapshot.event.dailyDigest?.window;
+        if (!period || digest(dailyDigestWindow(period.reportDate, period.cohort)) !== digest(period) ||
+            (period.cohort && digest(period.cohort.scope) !== digest(scope)) ||
+            snapshot.delivery.notBefore !== period.scheduledAt ||
+            Date.parse(snapshot.event.occurredAt) < Date.parse(period.scheduledAt)) {
+          throw new ReportError("REPORT_SCHEDULE_MISMATCH");
+        }
+      }
       if (identity.cadence === "weekdayDaily" || identity.cadence === "mondayWeekly") {
         const parts = new Intl.DateTimeFormat("en-US", { timeZone: identity.timezone, weekday: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(new Date(snapshot.delivery.notBefore));
         const value = (type: string) => parts.find(part => part.type === type)?.value;
@@ -43,7 +53,8 @@ export function assertSnapshot(source: ReportingSource, snapshot: ReportSnapshot
 }
 export async function loadSnapshot(source: ReportingSource | undefined, locator: ReportLocator, scope: ReportScope, purpose: "admit" | "send" | "read", now: () => number, machine: Pick<ReportMachine, "assertCurrent">): Promise<ReportSnapshot> {
   assertSyncFence(() => machine.assertCurrent()); if (!source) throw new ReportError("REPORT_SOURCE_UNBOUND", 503);
-  const raw = await source.readEvent(locator), parsed = reportSnapshotSchema.safeParse(raw);
+  const raw = await source.readEvent(locator, { purpose, assertCurrent: () => assertSyncFence(() => machine.assertCurrent()) });
+  const parsed = reportSnapshotSchema.safeParse(raw);
   if (!parsed.success) throw new ReportError("REPORT_SOURCE_UNVERIFIED", 503);
   const value = parsed.data;
   if (value.event.eventRef !== locator.eventRef || value.event.eventVersion !== locator.eventVersion) throw new ReportError("REPORT_EVENT_MISMATCH");

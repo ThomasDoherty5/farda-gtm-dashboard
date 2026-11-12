@@ -3,6 +3,7 @@ import { expectedBindingSchema, type ExpectedBinding } from "../connections/sche
 import type { JobClaim, JobRepository } from "../jobs/repository.ts";
 import type { JobRunView } from "../jobs/schema.ts";
 import { mirrorIncidentPayloadSchema } from "../mirrorFreshness.ts";
+import { dailyDigestContextSchema, digestAllClear } from "../dailyDigest/contract.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -22,14 +23,14 @@ const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", 
 const statusFact = z.object({ label: z.enum(["sourceStatus", "coverage", "incidentStatus"]), value: z.enum(["unavailable", "permissionDenied", "rateLimited", "partial", "complete", "breached", "cleared", "unknown"]) }).strict();
 export const reportFactSchema = z.union([numericFact, statusFact]);
 export type ReportFact = z.infer<typeof reportFactSchema>;
-const sourceLink = z.object({ kind: z.literal("linear"), workspaceSlug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/), issueIdentifier: z.string().regex(/^[A-Z]{2,8}-[1-9]\d{0,8}$/), authorizationRef: reportReference }).strict();
+export const reportSourceLinkSchema = z.object({ kind: z.literal("linear"), workspaceSlug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/), issueIdentifier: z.string().regex(/^[A-Z]{2,8}-[1-9]\d{0,8}$/), authorizationRef: reportReference }).strict();
 const subject = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("order"), orderRef: z.string().regex(/^[A-Z0-9][A-Z0-9-]{0,39}$/) }).strict(),
   z.object({ kind: z.literal("creator"), handle: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.]{0,39}$/) }).strict(),
   z.object({ kind: z.literal("aggregate"), category: z.enum(["fulfillment", "automation", "creators", "content", "finance", "support", "launch"]) }).strict(),
 ]);
 const incident = z.object({ kind: z.literal("incident"), conditionRef: reportReference, generation: z.number().int().positive().safe(), transition: z.enum(["breach", "clear"]), sequence: z.number().int().positive().safe(), previousClearEventRef: reportReference.nullable() }).strict();
-const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
+const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly", "dailyExceptions"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
   if (Date.parse(value.start) >= Date.parse(value.end)) ctx.addIssue({ code: "custom", message: "A source window must have positive duration." });
   if ((value.cadence === "launchHourly") !== (value.launchWindowRef !== null)) ctx.addIssue({ code: "custom", message: "Hourly reporting requires a source-confirmed launch window." });
 });
@@ -40,12 +41,23 @@ export const mirrorReportContextSchema = z.object({ incident: mirrorIncidentPayl
   if(v.incident.event==="suppressed" || (v.incident.latestRunId!==null && v.runEvidenceUrl===null) || (v.incident.latestRunId===null && v.runEvidenceUrl!==null))
     c.addIssue({code:"custom",message:"Only original incident transitions with their exact source evidence link may report."});
 });
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: sourceLink, mirror: mirrorReportContextSchema.optional() }).strict().superRefine((value, ctx) => {
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
   if(value.mirror && (value.identity.kind!=="incident" || value.subject.kind!=="aggregate" || value.subject.category!=="automation" ||
     value.identity.conditionRef!==value.mirror.incident.incidentId || value.identity.generation!==1 || value.identity.sequence!==(value.mirror.incident.event==="cleared"?2:1) ||
     value.identity.transition!==(value.mirror.incident.event==="cleared"?"clear":"breach"))) ctx.addIssue({code:"custom",message:"Mirror identity must match its immutable incident transition."});
-  if (value.identity.kind === "window" && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
+  const daily = value.identity.kind === "window" && value.identity.cadence === "dailyExceptions";
+  if (daily !== Boolean(value.dailyDigest)) ctx.addIssue({ code: "custom", message: "Daily digest cadence requires the complete typed digest context." });
+  if (value.dailyDigest && value.identity.kind === "window") {
+    const { window: period } = value.dailyDigest;
+    if (value.identity.start !== period.start || value.identity.end !== period.end ||
+        value.eventRef !== "daily-exceptions:" + period.reportDate || value.mirror ||
+        value.subject.kind !== "aggregate" || value.subject.category !== "launch" ||
+        value.severity !== (digestAllClear(value.dailyDigest) ? "info" : "orange")) {
+      ctx.addIssue({ code: "custom", message: "Daily digest identity and severity must match its source evidence." });
+    }
+  }
+  if (value.identity.kind === "window" && !daily && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
 });
 export type ReportEvent = z.infer<typeof reportEventSchema>;
 
@@ -78,9 +90,10 @@ export const reportReadSchema = z.object({ schemaVersion: z.literal("farda.repor
 });
 export type ReportRead = z.infer<typeof reportReadSchema>;
 
+export type ReportSourceRead = { purpose: "admit" | "send" | "read"; assertCurrent(): void };
 /** All callbacks are trusted, server-only source adapters. Nothing supplies a default sender. */
 export interface ReportingSource {
-  readEvent(locator: ReportLocator): Promise<unknown>;
+  readEvent(locator: ReportLocator, context?: ReportSourceRead): Promise<unknown>;
   assertCurrent(snapshot: ReportSnapshot, purpose: "admit" | "send" | "read", now: number): void;
   authorizeAttempt(snapshot: ReportSnapshot, command: ReportCommand): Promise<unknown>;
   assertGrant(grant: ReportGrant, command: ReportCommand, now: number): void;

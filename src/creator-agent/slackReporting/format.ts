@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { reportEventSchema, type ReportFact, type ReportSnapshot } from "./contract.ts";
 import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
+import {
+  digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
+  type DailyDigestContext, type DigestResult,
+} from "../dailyDigest/contract.ts";
 
 const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
 const statuses = { unavailable: "unavailable", permissionDenied: "permission denied", rateLimited: "rate limited", partial: "partial", complete: "complete", breached: "breached", cleared: "cleared", unknown: "unknown" };
@@ -9,6 +13,53 @@ function factText(fact: ReportFact): string {
   if (!("unit" in fact)) return `${labels[fact.label]}: ${statuses[fact.value]}`;
   const value = fact.value === null ? (fact.missingReason === "notApplicable" ? "not applicable" : `unknown (${fact.missingReason === "partialSource" ? "partial source" : "not observed"})`) : fact.unit === "USD-minor" ? `$${Math.floor(fact.value / 100)}.${String(fact.value % 100).padStart(2, "0")}` : `${fact.value.toLocaleString("en-US")}${fact.unit === "minutes" ? " minutes" : ""}`;
   return `${labels[fact.label]}: ${value}`;
+}
+
+const digestSectionLabels = {
+  launch: "Launch gates", creators: "Creators", content: "Content",
+  commerce: "Commerce", supportStock: "Support and stock",
+};
+const digestDatasetLabels = {
+  launch: "Launch", creators: "Creator records", content: "Content", orders: "Orders", media: "Media",
+  support: "Support", reviews: "Product reviews", stock: "Stock", freshness: "Sync freshness",
+};
+const digestReasons = {
+  unconfigured: "unconfigured", readFailed: "read failed", permissionDenied: "access denied",
+  partialCoverage: "incomplete read", unknownFields: "missing fields",
+};
+
+function digestAmountText(amount: DigestResult["amounts"][number]): string {
+  const digits = Math.abs(amount.minorUnits).toString().padStart(amount.decimals + 1, "0");
+  const number = amount.decimals ? digits.slice(0, -amount.decimals) + "." + digits.slice(-amount.decimals) : digits;
+  return `${digestAmountLabels[amount.key]} ${amount.currency} ${amount.minorUnits < 0 ? "-" : ""}${number}`;
+}
+
+function dailyDigestBody(context: DailyDigestContext, owner: string, sourceLink: string, provenance: string, controlled: boolean): string {
+  const clear = digestAllClear(context);
+  const title = (clear ? "🟢 No exceptions" : "🟠 Daily exceptions") + (controlled ? " · Controlled sandbox test" : "");
+  const date = `${context.window.reportDate} (Pacific)`;
+  const sections = digestSections.flatMap(section => {
+    const results = context.results.filter(result => digestDatasetSection[result.dataset] === section);
+    const facts = results.flatMap(result => [
+      ...result.counts.filter(value => value.value > 0 || value.key === "availableStock")
+        .map(value => `${digestCountLabels[value.key]} ${value.value.toLocaleString("en-US")}`),
+      ...result.amounts.map(digestAmountText),
+      ...(result.handles.length ? [result.handles.map(handle => "@" + handle).join(", ")] : []),
+      ...(result.reason ? [`${digestDatasetLabels[result.dataset]} unavailable (${digestReasons[result.reason]})`] : []),
+    ]);
+    if (facts.length === 0) return [];
+    const observed = results.flatMap(result => result.coverage ? [result.coverage.sourceAsOf] : [])
+      .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+    const evidence = `<${context.links[section]}|Source evidence>`;
+    return [`• *${digestSectionLabels[section]}* · ${facts.join(" · ")} · ${evidence}${observed ? ` · As of ${observed}` : ""}`];
+  });
+  const ownership = `Owner ${owner} · <${sourceLink}|Authorized report record> · evidence ${provenance}`;
+  if (sections.length === 0) return [title, date, ownership].join(" · ");
+  return [
+    `${title} · ${date}`,
+    `Activity window ${context.window.start.slice(0, 10)} (Pacific)`,
+    ...sections, ownership,
+  ].join("\n");
 }
 
 /** Finite labels and typed values only. It never accepts free-form message/error/customer text. */
@@ -32,7 +83,9 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
     mirror.runEvidenceUrl?`<${mirror.runEvidenceUrl}|Inspect exact run evidence>`:"Run evidence: unavailable (no run observed)",
   ]:[];
   const next=mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
-  const body = [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
+  const body = event.dailyDigest
+    ? dailyDigestBody(event.dailyDigest, owner, link, provenance, snapshot.testProvenance?.kind === "controlledSandbox")
+    : [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
   return { body, bodyHash: createHash("sha256").update(body).digest("hex") };
 }
