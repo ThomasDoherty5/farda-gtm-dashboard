@@ -120,7 +120,7 @@ export const reportEventSchema = reportLocatorSchema.extend({ producerRef: repor
         value.eventRef !== creatorHandoffRef(identity.collaborationId, identity.sequence) ||
         identity.previousEventRef !== (identity.sequence === 1 ? null : creatorHandoffRef(identity.collaborationId, identity.sequence - 1)) ||
         (identity.sequence === 1) !== (handoff.kind === "agreement") ||
-        !creatorDashboardPath(handoff.dashboardLink, identity.collaborationId) ||
+        (handoff.dashboardLink !== null && !creatorDashboardPath(handoff.dashboardLink, identity.collaborationId)) ||
         Date.parse(handoff.observedAt) < Date.parse(value.occurredAt)) {
       ctx.addIssue({ code: "custom", message: "A handoff requires an exact collaboration, source event and authorized record link." });
     }

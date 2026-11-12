@@ -26,7 +26,8 @@ export function creatorHandoffBody(event: CreatorHandoff, input: {
   return [
     controlled ? "TEST creator handoff" : "Creator handoff", collaborationId, "@" + handle,
     handoffDetail(event), occurredAt, ...(event.kind === "noPostReview" ? ["Creator desk: " + owner] : []),
-    `<${event.dashboardLink}|Open collaboration>`, `<${sourceLink}|Source evidence> ${provenance}`,
+    ...(event.dashboardLink ? [`<${event.dashboardLink}|Open collaboration>`] : []),
+    `<${sourceLink}|${event.dashboardLink ? "Source evidence" : "Open TEST collaboration evidence"}> ${provenance}`,
     "Read-only report",
   ].join(" · ");
 }

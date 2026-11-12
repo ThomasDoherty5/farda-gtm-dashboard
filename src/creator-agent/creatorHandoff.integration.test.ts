@@ -84,7 +84,7 @@ function weeklySource() {
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); });
-async function fixture(configured = true) {
+async function fixture(configured = true, dashboardOrigin: string | null = origin) {
   const directory = mkdtempSync(join(tmpdir(), "farda-creator-handoff-"));
   const source = createReportingSourceFixture(scope, now), data = weeklySource();
   const options: AgentServerOptions = {
@@ -92,7 +92,7 @@ async function fixture(configured = true) {
     readToken: SYNTHETIC_READ_TOKEN, reviewToken: SYNTHETIC_REVIEW_TOKEN, operations: { now: () => source.now },
     actionFoundation: { reporting: { token: machineToken, workerRef: source.machine.workerRef, source: source.source,
       assertCurrent: () => source.machine.assertCurrent(),
-      ...(configured ? { creatorFeed: { producerRef: producer, destination, controlledSandbox: true, dashboardOrigin: origin,
+      ...(configured ? { creatorFeed: { producerRef: producer, destination, controlledSandbox: true, dashboardOrigin,
         async readWeeklyFacts(request, context) {
           context.assertCurrent();
           expect(request).toEqual({ scope, window: weekly, sourceVersion: data.sourceVersion });
@@ -189,6 +189,15 @@ describe("creator handoff feed through the authenticated reporting route", () =>
     const wrongOrigin = { ...root, event: { ...root.event, creatorHandoff: { ...journey[0]!, dashboardLink: "https://other.example.test/collaborations/" + collaborationId } } };
     expect(await f.accept(f.source.add(wrongOrigin))).toMatchObject({ status: 403, body: { code: "CREATOR_FEED_DESTINATION_MISMATCH" } });
     expect(f.source.state.grantCalls).toBe(0);
+  });
+
+  it("uses an authorized test source record when no dashboard sandbox is hosted", async () => {
+    const f = await fixture(true, null), root = snapshot(1, { ...journey[0]!, dashboardLink: null });
+    expect(await f.accept(f.source.add({ ...root, testProvenance: undefined })))
+      .toMatchObject({ status: 403, body: { code: "CREATOR_FEED_DESTINATION_MISMATCH" } });
+    expect((await f.run(f.source.add(root))).executionCertainty).toBe("applied");
+    expect(f.source.state.calls[0]?.body).toContain("<https://linear.app/synthetic/issue/EXAMPLE-1|Open TEST collaboration evidence>");
+    expect(f.source.state.calls[0]?.body).not.toContain("dashboard.example.test");
   });
 
   it("reconciles a completed Monday cohort, deduplicates attributed orders and keeps incomplete coverage explicit", async () => {

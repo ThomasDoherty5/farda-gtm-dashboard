@@ -23,7 +23,7 @@ const dashboardLink = z.string().url().max(550).refine(value => {
   } catch { return false; }
 });
 const proof = {
-  creatorId: ref, receiptRef: ref, observedAt: instant, dashboardLink,
+  creatorId: ref, receiptRef: ref, observedAt: instant, dashboardLink: dashboardLink.nullable(),
 };
 const withBasis = { ...proof, basisReceiptRef: ref };
 const deliveryClock = z.object({ receiptRef: ref, reviewAfter: instant }).strict();

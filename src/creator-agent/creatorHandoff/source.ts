@@ -18,8 +18,8 @@ const configuration = z.object({
       const url = new URL(value);
       return url.protocol === "https:" && url.origin === value;
     } catch { return false; }
-  }),
-}).strict();
+  }).nullable(),
+}).strict().refine(value => value.controlledSandbox || value.dashboardOrigin !== null);
 type Binding = z.infer<typeof configuration>;
 export type CreatorFeedConfig = Binding & {
   readWeeklyFacts(request: { scope: ReportScope; window: WeeklyWindow; sourceVersion: string }, context: ReportSourceRead): Promise<unknown>;
@@ -48,7 +48,7 @@ export function bindCreatorFeed(delegate: ReportingSource, scope: ReportScope, c
       // Original receipt reads may use the source-owned frozen summary even if fresh aggregation is unavailable.
       if (context.purpose === "read" && reportSnapshotSchema.safeParse(raw).success) return raw;
       const envelope = snapshotEnvelope.safeParse(raw), window = weeklySnapshotWindow(locator.eventRef.slice(creatorWeeklyPrefix.length));
-      if (!envelope.success || !window) throw new ReportError("CREATOR_WEEK_SOURCE_UNVERIFIED");
+      if (!envelope.success || !window || !binding.dashboardOrigin) throw new ReportError("CREATOR_WEEK_SOURCE_UNVERIFIED");
       const facts = await boundedSourceRead(() => config.readWeeklyFacts({
         scope: structuredClone(scope), window: structuredClone(window), sourceVersion: locator.eventVersion,
       }, context));
@@ -65,7 +65,8 @@ export function bindCreatorFeed(delegate: ReportingSource, scope: ReportScope, c
       const { targetRef, version, workspaceId, channelId, botId } = snapshot.destination;
       const target = { targetRef, version, workspaceId, channelId, botId };
       const dashboard = fact?.dashboardLink ?? week?.dashboardLink;
-      if (!dashboard || new URL(dashboard).origin !== binding.dashboardOrigin ||
+      const controlledSourceRecord = binding.controlledSandbox && fact?.dashboardLink === null;
+      if ((!controlledSourceRecord && (!dashboard || new URL(dashboard).origin !== binding.dashboardOrigin)) ||
           digest(target) !== digest(binding.destination) || event.producerRef !== binding.producerRef ||
           binding.controlledSandbox !== (snapshot.testProvenance?.kind === "controlledSandbox")) {
         throw new ReportError("CREATOR_FEED_DESTINATION_MISMATCH", 403);
