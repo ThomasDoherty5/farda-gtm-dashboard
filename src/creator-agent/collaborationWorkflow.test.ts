@@ -19,12 +19,13 @@ describe("current collaboration read authority",()=>{
   it("projects exact clock evidence without disclosing shipment and writer references or changing accepted terms",async()=>{
     const db=opened(),snapshot=collaborationSnapshot(),end=new Date(now()+60_000).toISOString();
     let time=now();
+    snapshot.terms.acceptedAt="2026-10-16T12:00:00-07:00";
     snapshot.postingClock={scope,collaborationId:collabTestId,sourceVersion:"private-shipping-version",targetRevision:"private-notion-row",
       observedAt:collabTestAt,validUntil:end,previous:null,possession:null,terms:{state:"accepted",agreementRef:"synthetic-terms-receipt",
         version:"terms-v2",acceptedAt:"2026-10-16T19:00:00.000Z",timezone:"America/Los_Angeles",
         deliverables:[{deliverableId:"synthetic-deliverable",schedule:{basis:"delivery",daysAfter:9,graceDays:2}},
           {deliverableId:"private-clock-deliverable",schedule:{basis:"fixed",due:"2026-11-12",graceDays:0}}]},
-      shipping:{source:"shippingLog",coverage:"complete",observedAt:collabTestAt,primaryRef:"private-shipment",
+      shipping:{source:"shippingLog",coverage:"complete",observedAt:collabTestAt,validUntil:end,primaryRef:"private-shipment",
         effectiveRef:"private-shipment",replacementDecisionRef:null,shipments:[{shipmentRef:"private-shipment",
           collaborationId:collabTestId,kind:"creatorSample",sourceVersion:"private-ship-revision",observations:[
             {eventRef:"private-delivery-event",state:"delivered",receiptRef:"private-delivery-receipt",occurredAt:"2026-10-18T02:00:00.000Z",
@@ -38,18 +39,30 @@ describe("current collaboration read authority",()=>{
         {state:"dated",deliverableId:"synthetic-deliverable",due:"2026-10-26",reviewAfter:"2026-10-28"},
       ]}});
       expect(JSON.stringify(result.data)).not.toMatch(/private-shipment|private-delivery|private-notion|private-shipping|private-clock/);
+      await expect(service.propose(collaborationAction(result.version!,{kind:"reminder"}),"agent-reviewer"))
+        .rejects.toMatchObject({code:"POSTING_OBLIGATION_UNVERIFIED"});
       time=Date.parse(end);
       expect(()=>result.assertCurrent()).toThrow("SOURCE_VERSION_CHANGED");
       expect((await service.read(collabTestId)).data?.postingClock).toMatchObject({
         state:"pending",reason:"SOURCE_STALE",deadlines:[],
       });
       time=now();
+      snapshot.terms.acceptedAt="2026-10-16T12:01:00-07:00";
+      await expect(service.read(collabTestId)).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
+      snapshot.terms.acceptedAt="2026-10-16";
+      await expect(service.read(collabTestId)).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
+      snapshot.terms.acceptedAt="2026-10-16T12:00:00-07:00";
       snapshot.coverage="partial";
       expect((await service.read(collabTestId)).data?.postingClock).toMatchObject({
         state:"pending",reason:"SOURCE_COVERAGE_PARTIAL",deadlines:[],
       });
       snapshot.postingClock.collaborationId="different-collaboration";
       await expect(service.read(collabTestId)).rejects.toMatchObject({code:"SOURCE_RESPONSE_INVALID"});
+      snapshot.coverage="complete";
+      delete snapshot.postingClock;
+      await expect(service.propose(collaborationAction(result.version!,{kind:"reminder"},"clock-removed"),"agent-reviewer"))
+        .rejects.toMatchObject({code:"STALE_VERSION"});
+      expect((await service.read(collabTestId)).data?.proposals).toHaveLength(0);
     }finally{db.close();}
   });
   it("preserves one original proposal receipt after postcommit revocation",async()=>{

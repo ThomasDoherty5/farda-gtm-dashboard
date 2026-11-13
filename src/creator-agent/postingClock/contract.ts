@@ -29,10 +29,11 @@ const shipment = z.object({
   sourceVersion: ref, observations: z.array(observation).max(500),
 }).strict();
 const shipping = z.object({
-  source: z.literal("shippingLog"), coverage: z.enum(["complete", "partial"]), observedAt: instant,
+  source: z.literal("shippingLog"), coverage: z.enum(["complete", "partial"]), observedAt: instant, validUntil: instant,
   primaryRef: ref, effectiveRef: ref, replacementDecisionRef: ref.nullable(),
   shipments: z.array(shipment).max(50),
-}).strict().refine(source => (source.primaryRef === source.effectiveRef) === (source.replacementDecisionRef === null));
+}).strict().refine(source => (source.primaryRef === source.effectiveRef) === (source.replacementDecisionRef === null) &&
+  Date.parse(source.validUntil) > Date.parse(source.observedAt));
 
 export const clockDeliverySchema = z.object({ shipmentRef: ref, eventRef: ref, receiptRef: ref, at: instant }).strict();
 export const clockDeadlineSchema = z.discriminatedUnion("state", [
@@ -61,9 +62,9 @@ export const postingClockProjectionSchema = z.object({
   delivery: clockDeliverySchema.nullable(), previous: appliedClock.nullable(),
   deadlines: z.array(clockDeadlineSchema).max(100),
   clockKey: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
-  reason: z.enum(["SOURCE_STALE", "SOURCE_COVERAGE_PARTIAL", "TERMS_UNVERIFIED", "SHIPPING_PARTIAL", "SHIPMENT_IDENTITY_UNVERIFIED",
+  reason: z.enum(["SOURCE_STALE", "SOURCE_COVERAGE_PARTIAL", "TERMS_UNVERIFIED", "SHIPPING_PARTIAL", "SHIPPING_STALE", "SHIPMENT_IDENTITY_UNVERIFIED",
     "SHIPMENT_EVENT_CONFLICT", "DELIVERY_EXCEPTION", "DELIVERY_CORRECTION", "DELIVERY_ALREADY_RECORDED", "TERMS_VERSION_REUSED",
-    "ANCHOR_UNVERIFIED", "NO_REQUIRED_POST"]).nullable(),
+    "ANCHOR_UNVERIFIED", "POSSESSION_ALREADY_RECORDED", "NO_REQUIRED_POST"]).nullable(),
 }).strict();
 export type PostingClockProjection = z.infer<typeof postingClockProjectionSchema>;
 export const postingClockReadSchema = postingClockProjectionSchema.pick({

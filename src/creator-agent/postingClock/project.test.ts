@@ -17,7 +17,7 @@ const source = () => postingClockSourceSchema.parse({
     acceptedAt: "2026-10-29T18:00:00.000Z", timezone: "America/Los_Angeles",
     deliverables: [{ deliverableId: "TEST-A", schedule: { basis: "delivery", daysAfter: 2, graceDays: 1 } },
       { deliverableId: "TEST-B", schedule: { basis: "fixed", due: "2026-11-04", graceDays: 0 } }] },
-  shipping: { source: "shippingLog", coverage: "complete", observedAt, primaryRef: "TEST-SHIPMENT",
+  shipping: { source: "shippingLog", coverage: "complete", observedAt, validUntil: "2026-11-06T18:10:00.000Z", primaryRef: "TEST-SHIPMENT",
     effectiveRef: "TEST-SHIPMENT", replacementDecisionRef: null,
     shipments: [{ shipmentRef: "TEST-SHIPMENT", collaborationId: "TEST-COLLAB", kind: "creatorSample",
       sourceVersion: "TEST-SHIP-v2", observations: [delivered, transit, { ...delivered, observedAt: "2026-11-05T18:00:00.000Z" }] }] },
@@ -83,6 +83,19 @@ describe("source-qualified creator posting clock", () => {
     expect(projectPostingClock(input, now)).toMatchObject({ state: "ready", delivery: { shipmentRef: "TEST-REPLACEMENT" } });
   });
 
+  it("holds an independently expired Shipping Log observation even inside a fresh collaboration read", () => {
+    const input = source(), shipping = input.shipping!;
+    shipping.observedAt = "2026-11-06T17:45:00.000Z";
+    shipping.shipments[0]!.observations = shipping.shipments[0]!.observations.map(row => ({
+      ...row, observedAt: shipping.observedAt,
+    }));
+    expect(projectPostingClock(input, now)).toMatchObject({
+      state: "pending", reason: "SHIPPING_STALE", delivery: null, deadlines: [], clockKey: null,
+    });
+    shipping.observedAt = observedAt;
+    expect(projectPostingClock(input, now)).toMatchObject({ state: "ready", delivery: { at: actualDelivery } });
+  });
+
   it("honors fixed and verified-possession terms without making voluntary work due", () => {
     const input = source();
     if (input.terms.state !== "accepted") throw new Error("Fixture terms missing");
@@ -100,6 +113,11 @@ describe("source-qualified creator posting clock", () => {
       { state: "dated", basis: "fixed", due: "2026-11-04", reviewAfter: "2026-11-04" },
       { state: "voluntary", observationUntil: "2026-11-20" },
     ]);
+    input.possession = { ...input.possession, receiptRef: "TEST-DIFFERENT-POSSESSION", confirmedAt: "2026-11-02T06:30:00.000Z" };
+    expect(projectPostingClock(input, now)).toMatchObject({ state: "review", reason: "POSSESSION_ALREADY_RECORDED",
+      previous: { clockKey: ready.clockKey }, deadlines: [], clockKey: null });
+    input.possession = { ...input.possession, receiptRef: "TEST-POSSESSION", confirmedAt: actualDelivery };
+    expect(projectPostingClock(input, now)).toMatchObject({ state: "alreadyApplied", clockKey: ready.clockKey });
     input.terms.deliverables[1]!.schedule = { basis: "fixed", due: "2026-11-05", graceDays: 0 };
     expect(projectPostingClock(input, now)).toMatchObject({ state: "review", reason: "TERMS_VERSION_REUSED" });
     input.terms.version = "TEST-TERMS-v2";

@@ -46,7 +46,8 @@ export const collaborationSnapshotSchema = z.object({
     clock.scope.accountId!==x.scope.accountId || clock.scope.environment!==x.scope.environment ||
     Date.parse(clock.observedAt)>Date.parse(x.observedAt) ||
     clock.terms.state==="accepted" && (clock.terms.agreementRef!==x.terms.agreementRef || clock.terms.version!==x.terms.version ||
-      clock.terms.timezone!==x.terms.timezone ||
+      clock.terms.timezone!==x.terms.timezone || !x.terms.acceptedAt || !instant.safeParse(x.terms.acceptedAt).success ||
+      Date.parse(clock.terms.acceptedAt)!==Date.parse(x.terms.acceptedAt) ||
       x.terms.posting==="unknown" || clock.terms.deliverables.every(row=>row.schedule.basis==="voluntary")!==(x.terms.posting==="voluntary")))) {
     c.addIssue({code:"custom",message:"Posting clock evidence must match the accepted collaboration and scope."});
   }

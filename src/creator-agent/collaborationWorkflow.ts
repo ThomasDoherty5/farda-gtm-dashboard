@@ -7,10 +7,15 @@ import { boundedSourceRead } from "./actions/readBoundary.ts";
 import { assertSynchronousVoid } from "./sourceFence.ts";
 import type { OperationsScope } from "./operations.ts";
 import { openCollaborationRef } from "./creatorPlatformReferences.ts";
-import { projectPostingClock } from "./postingClock/project.ts";
+import type { PostingClockProjection } from "./postingClock/contract.ts";
+import { postingClockExpiresAt, projectPostingClock } from "./postingClock/project.ts";
 import { collaborationReadBindingSchema,collaborationSourceResultSchema, intentHold, nativeCollaborationSchema, workflowIntentSchema, type CollaborationSourceReader, type CollaborationSourceSnapshot, type NativeCollaborationData } from "./collaborationWorkflowSchema.ts";
 
 const observationLeaseMs=15*60_000;
+function limitClockLease(source:NonNullable<CollaborationSourceSnapshot["postingClock"]>){
+  return {...source,validUntil:new Date(Math.min(Date.parse(source.validUntil),
+    Date.parse(source.observedAt)+observationLeaseMs)).toISOString()};
+}
 const policyVersion="collaboration-review-proposal.v1";
 export class CollaborationWorkflowError extends Error {
   readonly code:string; readonly status:number; readonly currentVersion?:string;readonly executionCertainty:"notApplied"|"uncertain";
@@ -113,11 +118,14 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
     }
     observed.assertCurrent();return observed;
   }
-  function version(source:CollaborationSourceSnapshot,seq:number) {
-    // Clock projections are read-only; proposals still bind the existing accepted source terms.
+  function version(source:CollaborationSourceSnapshot,seq:number,clock?:PostingClockProjection|null) {
     const {observedAt,postingClock,...facts}=source;
-    void observedAt;void postingClock;
-    return "cw1-"+digest([scope,facts,seq,policyVersion]);
+    void observedAt;
+    const basis=[scope,facts,seq,policyVersion];
+    if(!postingClock)return "cw1-"+digest(basis);
+    const projected=clock??projectPostingClock(limitClockLease(postingClock),now());
+    return "cw1-"+digest([...basis,postingClock.sourceVersion,postingClock.targetRevision,projected.state,projected.reason,
+      projected.termsHash,projected.clockKey,projected.deadlines,projected.previous]);
   }
   function head(id:string){return Number(db.prepare("SELECT COALESCE(MAX(seq),0) AS seq FROM collaboration_review_proposals WHERE collaboration_id=?").get(id)!.seq);}
   function previous(key:string,requestDigest:string):Ack|null {
@@ -141,9 +149,10 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
       const rows=db.prepare("SELECT public_body FROM collaboration_review_proposals WHERE collaboration_id=? ORDER BY seq DESC LIMIT 50").all(id);
       const {id:internalId,scope:privateScope,assetBindings,postingClock,...fields}=source;void internalId;void privateScope;void assetBindings;
       const observedNow=now(),stale=observedNow-Date.parse(source.observedAt)>observationLeaseMs;
-      const clockExpiry=postingClock ? Math.min(Date.parse(postingClock.validUntil),Date.parse(postingClock.observedAt)+observationLeaseMs) : 0;
+      const clockSource=postingClock ? limitClockLease(postingClock) : null;
+      const clockExpiry=clockSource ? postingClockExpiresAt(clockSource) : 0;
       const clockFresh=clockExpiry>observedNow;
-      const clock=postingClock ? projectPostingClock({...postingClock,validUntil:new Date(clockExpiry).toISOString()},observedNow) : null;
+      const clock=clockSource ? projectPostingClock(clockSource,observedNow) : null;
       const publicClock=clock ? source.coverage==="partial" ? {
         state:"pending",observedAt:clock.observedAt,timezone:null,deadlines:[],reason:"SOURCE_COVERAGE_PARTIAL",
       } : {
@@ -167,7 +176,7 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
       const assertCurrent=()=>{observed.assertCurrent();assertCurrentAssets(source);if(head(id)!==seq ||
         stale!==(now()-Date.parse(source.observedAt)>observationLeaseMs) ||
         postingClock && clockFresh!==(clockExpiry>now()))throw new CollaborationWorkflowError("SOURCE_VERSION_CHANGED",409);};
-      assertCurrent();db.exec("COMMIT");return {data,version:version(source,seq),partial:source.coverage==="partial" || rows.length<total,stale,assertCurrent,
+      assertCurrent();db.exec("COMMIT");return {data,version:version(source,seq,clock),partial:source.coverage==="partial" || rows.length<total,stale,assertCurrent,
         capabilities:[{actionKind:"proposeCollaborationReview",state:source.coverage==="complete" && !stale?"available" as const:"held" as const,reasonCodes:stale?["SOURCE_STALE"]:source.coverage==="complete"?[]:["SOURCE_COVERAGE_PARTIAL"]}]};
     }catch(e){db.exec("ROLLBACK");throw e;}
   }
@@ -207,6 +216,16 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
       if(targeted && (!candidate || !candidate.submissionVersion || candidate.submissionVersion!==intent.submissionVersion)
         || !targeted && (intent.deliverableRef || intent.submissionVersion) || (intent.kind==="close")!==!!intent.outcome)
         throw new CollaborationWorkflowError("INVALID_PROPOSAL_TARGET",422);
+      // A source-supplied clock must be applied and match the legacy reminder's exact date.
+      // The existing reminder has no per-deliverable target, so several required dates need review.
+      const reminderClock=intent.kind==="reminder" && source.postingClock ? limitClockLease(source.postingClock) : null;
+      if(reminderClock){
+        const clock=projectPostingClock(reminderClock,now());
+        const dated=clock.deadlines.filter(d=>d.state==="dated");
+        if(clock.state!=="alreadyApplied" || dated.length!==1 || dated[0]!.due!==source.terms.due ||
+          source.terms.graceDays===null || Date.parse(dated[0]!.reviewAfter)-Date.parse(dated[0]!.due)!==source.terms.graceDays*86_400_000)
+          throw new CollaborationWorkflowError("POSTING_OBLIGATION_UNVERIFIED",409);
+      }
       const hold=intentHold(source,intent.kind,intent.deliverableRef);
       if(hold)throw new CollaborationWorkflowError(hold,409);
       const manifest={scope,collaborationId:id,sourceVersion:current,sourceRevision:source.sourceRevision,actor,policyVersion,action};
@@ -217,7 +236,11 @@ export function createCollaborationWorkflow(db:DatabaseSync,scope:OperationsScop
         .run(proposalId,id,actor,intent.kind,hash,JSON.stringify(manifest),JSON.stringify(body),createdAt);
       const ack:Ack={actionRef:proposalId,payloadVersion:hash,policyVersion,receiptRefs:["proposal:"+proposalId],state:"approvalPending"};
       db.prepare("INSERT INTO collaboration_review_requests VALUES(?,?,?)").run(input.idempotencyKey,requestDigest,JSON.stringify(ack));
-      observed.assertCurrent();if(now()-Date.parse(source.observedAt)>observationLeaseMs)throw new CollaborationWorkflowError("SOURCE_STALE",409);db.exec("COMMIT");committed=true;return publish(ack);
+      observed.assertCurrent();
+      const commitAt=now();
+      if(commitAt-Date.parse(source.observedAt)>observationLeaseMs || (reminderClock && postingClockExpiresAt(reminderClock)<=commitAt))
+        throw new CollaborationWorkflowError("SOURCE_STALE",409);
+      db.exec("COMMIT");committed=true;return publish(ack);
     }catch(e){if(!committed)db.exec("ROLLBACK");throw e;}
   }
   return {read,propose};
