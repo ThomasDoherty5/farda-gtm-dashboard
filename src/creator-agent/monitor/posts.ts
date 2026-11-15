@@ -68,12 +68,15 @@ export function projectPosts(events:FunnelEvent[],snapshot:MonitorSnapshot|null,
   }
   for(const e of native){
     const account=e.sourceAccount.sourceId ?? e.sourceAccount.canonicalId!;
-    const item=posts.get(nativeKey(e.network,account,e.details.postId!)); if(!item)continue;
+    const key=nativeKey(e.network,account,e.details.postId!),item=posts.get(key); if(!item)continue;
     const receipt=alias("receipt",e.evidenceRef.provenanceRef);
     const creator=sourceId(e.creatorRef),campaign=sourceId(e.campaignCohortRef);
     if(!creator || !campaign || item.post.creator!==alias("creator",creator) || item.post.campaign!==alias("campaign",campaign)){
       item.post.conflict=true;continue;
     }
+    // The trusted monitoring source owns an observed post's lifecycle and metrics. Saved ledger events still detect an ownership
+    // conflict, but they never republish publication history or counters into a source-owned post.
+    if(sourcePosts.has(key))continue;
     if(e.eventType==="published" || e.eventType==="removed"){
       const state=e.eventType==="removed"?"deleted":"public";
       item.publicationHistory.push({state,at:e.observedAt,receipt});
@@ -126,18 +129,23 @@ function reconciledSales(posts:Post[],events:FunnelEvent[],asOf:string,alias:Ali
   const linked:FunnelEvent[]=[];
   // An order receipt with no post assignment stays creator/campaign-wide. Never divide it across posts.
   const assigned=new Map<string,Set<string>>();
+  // A refund usually carries no post ID. It inherits its order's single explicit post assignment; differing post IDs stay a conflict.
+  const orderPosts=new Map<string,Set<string>>();
+  for(const e of financial)if(e.details.orderId&&e.details.postId)orderPosts.set(e.details.orderId,(orderPosts.get(e.details.orderId)??new Set<string>()).add(e.details.postId));
+  const postOf=(e:FunnelEvent)=>{const own=e.details.orderId?orderPosts.get(e.details.orderId):undefined;return e.details.postId ?? (e.eventType==="refund"&&own?.size===1?[...own][0]!:undefined);};
   for(const e of financial){
-    if(!e.details.postId || !e.details.orderId || e.evidenceRef.access!=="verified" || !e.maturationAt || Date.parse(e.maturationAt)>Date.parse(asOf) ||
+    const postId=postOf(e);
+    if(!postId || !e.details.orderId || e.evidenceRef.access!=="verified" || !e.maturationAt || Date.parse(e.maturationAt)>Date.parse(asOf) ||
       e.details.attributionWindow!==claims[0]!.window || alias("terms",e.details.attributionVersion??"")!==claims[0]!.version ||
       e.details.currency!==currency || e.details.retainedMinor==null || e.details.blockers.length)return unknown;
     // A checkout account isn't a publishing account. Match the native post only if one campaign/creator owner exists.
-    const matches=postIndex.get(JSON.stringify([e.network,e.details.postId,alias("creator",sourceId(e.creatorRef)??""),
+    const matches=postIndex.get(JSON.stringify([e.network,postId,alias("creator",sourceId(e.creatorRef)??""),
       alias("campaign",sourceId(e.campaignCohortRef)??"")]))??[];
     if(matches.length!==1 || matches[0]!.post.conflict)return unknown;
-    const postId=matches[0]!.post.id;
-    const keys=assigned.get(e.details.orderId)??new Set<string>();keys.add(postId);assigned.set(e.details.orderId,keys);
+    const projectedId=matches[0]!.post.id;
+    const keys=assigned.get(e.details.orderId)??new Set<string>();keys.add(projectedId);assigned.set(e.details.orderId,keys);
     if(keys.size!==1)return unknown;
-    if(selected.has(postId))linked.push(e);
+    if(selected.has(projectedId))linked.push(e);
   }
   const result=projectFunnel(linked,{},asOf);
   const orders=result.outcomes.find(m=>m.name==="Attributed orders")?.value;

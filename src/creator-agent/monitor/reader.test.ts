@@ -140,6 +140,32 @@ describe("source-backed monitoring views",()=>{
     now+=5000;await ingest(order("ambiguous-order","EXAMPLE_A",1000,"two"));
     expect(await read()).toMatchObject({orders:null,net:null});
   });
+  it("lets a trusted source own an observed post's lifecycle: saved ledger metrics never merge into it, but still flag a conflict",async()=>{
+    await ingest(event("ledger-metrics","postMetrics",{details:{postId:"EXAMPLE_A",views:999,engagements:null,blockers:[]}}));
+    const reader=open(),list=nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data);
+    const owned=list.posts.find(p=>p.network==="instagram")!;
+    const detail=nativePostSchema.parse((await reader.read("postPerformance",{postId:owned.id},page)).data);
+    expect(detail.history).toHaveLength(1);
+    expect(detail.history.map(h=>h.views)).toEqual([0]);
+    await ingest(event("ledger-other-campaign","postMetrics",{opportunityId:"other-opportunity",campaignCohortRef:{...fixtureRef("notion","campaign-b"),accountId:scope.accountId},
+      details:{postId:"EXAMPLE_A",views:5,engagements:null,blockers:[]}}));
+    expect(nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data).posts.find(p=>p.id===owned.id)!.conflict).toBe(true);
+  });
+  it("lets a refund without a post ID inherit its order's post in reconciled totals",async()=>{
+    const first=snapshot.posts[0]!;
+    first.attribution!.orders=1;first.attribution!.net!.minorUnits=400;
+    snapshot.posts[1]={...structuredClone(first),postId:"EXAMPLE_B",originalUrl:"https://www.instagram.com/reel/EXAMPLE_B/",publicationReceipt:"publication-b"};
+    snapshot.posts[1].attribution!.net!.minorUnits=1000;
+    const order=(name:string,post:string|null,amount:number,opportunity:string,type:"retainedOrder"|"refund"="retainedOrder")=>event(name,type,{
+      opportunityId:opportunity,sourceAccount:{...fixtureRef("shopify-collabs","checkout-account"),accountId:scope.accountId},
+      details:{orderId:"order-"+opportunity,...(post?{postId:post}:{}),retainedMinor:amount,currency:"USD",attributionVersion:"attr-v1",
+        attributionWindow:"observed checkout window",blockers:[]}});
+    await ingest(order("order-first","EXAMPLE_A",1000,"one"));
+    await ingest(order("order-second","EXAMPLE_B",1000,"two"));
+    now+=5000;snapshot.observedAt=new Date(now).toISOString();
+    await ingest(order("refund-no-post",null,400,"one","refund"));
+    expect(nativeContentSchema.parse((await open().read("contentMonitor",{},page)).data)).toMatchObject({orders:2,net:{minorUnits:1400,currency:"USD"}});
+  });
   it("expires the monitor at the server's 90-minute ceiling despite an extended source lease",async()=>{
     snapshot.validUntil=new Date(now+24*3600_000).toISOString();
     const cutoff=Date.parse(snapshot.observedAt)+90*60_000,reader=open();

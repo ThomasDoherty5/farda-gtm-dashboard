@@ -33,7 +33,9 @@ Search also matches a known handle only when the post's canonical creator, netwo
 
 The view total requires comparable metric definitions, windows, counter basis and organic/paid context. Its DTO retains that exact basis beside the neutral Observed views label. Missing components remain unknown. Same-instant contradictory measurements are quarantined even when their timestamps use different offsets. Counter corrections retain their signed change.
 
-Post-level outcomes require an explicit post attribution claim. Creator- or campaign-level outcomes appear separately. Multi-post sales totals require matching verified order receipts, exact attribution window/version and currency, then reuse the existing funnel projection for order/refund deduplication. Ambiguous assignments remain unknown. Signed money accumulation uses exact integers before safe-number bounds checks. TikTok GMV retains its own definition.
+A trusted monitoring source owns the lifecycle and metrics of every post it observes. Saved ledger `published`/`removed`/`postMetrics` events for such a post still flag a creator or campaign conflict, but are not merged into its history. Saved ledger events still create posts that the source has not observed.
+
+Post-level outcomes require an explicit post attribution claim. Creator- or campaign-level outcomes appear separately. Multi-post sales totals require matching verified order receipts, exact attribution window/version and currency, then reuse the existing funnel projection for order/refund deduplication. A refund without a post ID inherits its order's single explicit post assignment. Ambiguous assignments remain unknown. Signed money accumulation uses exact integers before safe-number bounds checks. TikTok GMV retains its own definition.
 
 ## Protected reads and recovery
 

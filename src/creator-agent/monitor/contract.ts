@@ -15,8 +15,8 @@ const money = z.object({minorUnits:z.number().int().safe(),currency:z.string().r
 const observation = z.object({at:instant,receipt:ref,definition:text,window:text,reportingPeriod:analyticsPeriodSchemaNative.optional(),
   semantics:z.enum(["cumulative","interval","unknown"]),context,views:count.nullable(),likes:count.nullable(),comments:count.nullable(),shares:count.nullable(),
   saves:count.nullable(),reach:count.nullable(),
-  // A J08 post-age checkpoint capture, labeled with its actual age. A late fetch is never a missed earlier checkpoint.
-  checkpoint:z.object({hours:count,actualAgeHours:z.number().finite().nonnegative(),version:ref}).strict().optional()}).strict();
+  // A J08 post-age checkpoint: captured inside its versioned tolerance, or a late observation labeled with its actual age that fills nothing.
+  checkpoint:z.object({hours:count,actualAgeHours:z.number().finite().nonnegative(),version:ref,state:z.enum(["captured","late"])}).strict().optional()}).strict();
 const access = z.enum(["authorized","denied","loginRequired","throttled","unavailable","unknown"]);
 const checkState = z.enum(["changed","unchanged","skipped","inaccessible","failed","deferred","unknown"]);
 const sourceScope=z.object({workspaceId:ref,accountId:ref,environment:z.literal("sandbox")}).strict();

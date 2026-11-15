@@ -264,9 +264,7 @@ export function createAgentServer(options: AgentServerOptions) {
     rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId },
       { ...options.rewardAuthority, commercialPolicy: commercialPolicy ?? options.rewardAuthority?.commercialPolicy },
       () => new Date((options.operations?.now ?? Date.now)()));
-    // The order ledger shares the service clock with the monitor reader that bounds its snapshots.
-    funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority,
-      options.operations?.now ? () => new Date(options.operations!.now!()) : undefined);
+    funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
@@ -280,7 +278,8 @@ export function createAgentServer(options: AgentServerOptions) {
     if (reconciliation) runtimeRegistry = reconciliation.registry;
     contentMonitor = options.contentMonitor
       ? bindContentMonitor(new ContentMonitorRepository(store.database, reconciliationScope, { now: options.operations?.now }), reconciliationScope,
-        runtimeRegistry, options.contentMonitor, { intake, funnel, jobs: operations.jobs, secret: operationsSecret, now: options.operations?.now })
+        runtimeRegistry, options.contentMonitor, { intake, funnel, jobs: operations.jobs, runtime: () => runtime, health: () => providerHealth,
+          secret: operationsSecret, now: options.operations?.now })
       : null;
     if (contentMonitor) runtimeRegistry = contentMonitor.registry;
     operationalAlerts = options.operationalAlerts
@@ -410,7 +409,9 @@ export function createAgentServer(options: AgentServerOptions) {
     runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
       registry: runtimeRegistry,
-      authority: options.runtime?.authority, now: options.operations?.now });
+      // J08 windows are planned from J08's frozen watchlist; the injected source authority signs the lease over exactly those items.
+      authority: contentMonitor && options.runtime?.authority ? contentMonitor.composeAuthority(options.runtime.authority) : options.runtime?.authority,
+      now: options.operations?.now });
     runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
       // Public reads already consume the shared transport admission below. Standalone
@@ -925,7 +926,8 @@ export function createAgentServer(options: AgentServerOptions) {
           // Synthetic J08 evidence is never reported as a connected source.
           sourceExecution: contentMonitor ? contentMonitor.evidenceStage === "synthetic" ? "sandbox" : "registered-runtime" : "notConnected",
           evidenceStage: contentMonitor?.evidenceStage ?? null, scheduleActivation: contentMonitor ? "runtime-authority" : "notConnected",
-          followUpProposals: contentMonitor ? "J09-proposal-only" : "notConnected", outboundActions: "none", retryAuthority: "notConnected" },
+          followUpProposals: contentMonitor ? "recorded-run-output-no-owner" : "notConnected", sourceHealth: contentMonitor ? "routed-to-j14" : "notConnected",
+          outboundActions: "none", retryAuthority: "notConnected" },
         financeReads: { sourceAuthority: options.financeSource ? "injected" : "notConnected", views: "read-only-projections", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" },
         operationsReads: { sourceAuthority: options.operationsReadSource ? "injected" : "notConnected", views: "read-only-projections", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" },
         teamInvitationReads: { sourceAuthority: options.teamInvitationReadSource ? "injected" : "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" },

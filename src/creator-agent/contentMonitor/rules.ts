@@ -24,16 +24,18 @@ export function fardaAssignment(evidence: J08FardaEvidence[], enrolledCampaigns:
 }
 
 /**
- * Comparable post-age checkpoints. An observation captures only the highest configured checkpoint it has reached that is above every
- * checkpoint already captured; it is labeled with its actual age. A later fetch never backfills an earlier checkpoint.
+ * Comparable post-age checkpoints. An observation captures a checkpoint only inside that checkpoint's versioned tolerance. A fetch
+ * past the tolerance is a late observation, labeled with its actual age; it never fills the checkpoint and is labeled once.
  */
-export function checkpointCapture(publishedAt: string | null, observedAt: string, hours: readonly number[], captured: readonly number[]) {
+export function checkpointCapture(publishedAt: string | null, observedAt: string, slots: readonly { hours: number; toleranceHours: number }[],
+  recorded: readonly number[]): { state: "captured" | "late"; hours: number; actualAgeHours: number } | null {
   if (!publishedAt) return null;
-  const age = (Date.parse(observedAt) - Date.parse(publishedAt)) / 3_600_000;
-  const floor = captured.length ? Math.max(...captured) : 0;
-  const reached = hours.filter(h => h <= age && h > floor);
-  if (!reached.length) return null;
-  return { hours: Math.max(...reached), actualAgeHours: Math.round(age * 10) / 10 };
+  const age = (Date.parse(observedAt) - Date.parse(publishedAt)) / 3_600_000, actualAgeHours = Math.round(age * 10) / 10;
+  const open = slots.find(s => s.hours <= age && age <= s.hours + s.toleranceHours && !recorded.includes(s.hours));
+  if (open) return { state: "captured", hours: open.hours, actualAgeHours };
+  const missed = slots.filter(s => s.hours + s.toleranceHours < age).at(-1);
+  if (missed && !recorded.includes(missed.hours)) return { state: "late", hours: missed.hours, actualAgeHours };
+  return null;
 }
 
 const sourceIdOf = (ref: { canonicalId: string | null; sourceId: string | null } | null | undefined) => ref?.canonicalId ?? ref?.sourceId ?? null;
@@ -44,35 +46,44 @@ export type OrderAttribution = {
 
 /**
  * J08-06. Joins the canonical funnel order ledger (retained orders and refunds keyed by canonical order ID, so an order imported from
- * TikTok Shop into Shopify is one order) at the best proven level. Orders without a post assignment are creator-wide: they never
- * prove post-level sales. Missing evidence is unknown, never zero.
+ * TikTok Shop into Shopify is one order) at the best proven level. A refund inherits its order's post assignment; only differing explicit
+ * post IDs conflict. Orders without a post assignment are creator-wide and never prove post-level sales. A post-level result, including a
+ * zero, needs complete evidence and that post's own matured attribution window. Missing evidence is unknown, never zero.
  */
-export function orderAttribution(content: { network: J08Network; postId: string; creatorId: string; campaignId: string },
-  events: FunnelEvent[], asOf: string): { attribution: OrderAttribution | null; reason: string } {
+export function orderAttribution(content: { network: J08Network; postId: string; creatorId: string; campaignId: string; publishedAt: string | null },
+  events: FunnelEvent[], asOf: string, windows: readonly { attributionVersion: string; hours: number }[]): { attribution: OrderAttribution | null; reason: string } {
   const cohort = events.filter(e => (e.eventType === "retainedOrder" || e.eventType === "refund") &&
     sourceIdOf(e.creatorRef) === content.creatorId && sourceIdOf(e.campaignCohortRef) === content.campaignId);
   if (!cohort.length) return { attribution: null, reason: "NO_AUTHORITATIVE_ORDER_EVIDENCE" };
-  const windows = new Set(cohort.map(e => e.details.attributionWindow)), versions = new Set(cohort.map(e => e.details.attributionVersion));
+  const windowsSeen = new Set(cohort.map(e => e.details.attributionWindow)), versions = new Set(cohort.map(e => e.details.attributionVersion));
   const currencies = new Set(cohort.map(e => e.details.currency));
-  if (windows.size !== 1 || versions.size !== 1 || currencies.size !== 1) return { attribution: null, reason: "ATTRIBUTION_BASIS_MIXED" };
-  const postsByOrder = new Map<string, Set<string>>();
+  if (windowsSeen.size !== 1 || versions.size !== 1 || currencies.size !== 1) return { attribution: null, reason: "ATTRIBUTION_BASIS_MIXED" };
+  const assignment = new Map<string, Set<string>>();
   for (const e of cohort) {
-    const posts = postsByOrder.get(e.details.orderId!) ?? new Set<string>();
-    posts.add(e.details.postId ? JSON.stringify([e.network, e.details.postId]) : "creator-wide");
-    postsByOrder.set(e.details.orderId!, posts);
+    const posts = assignment.get(e.details.orderId!) ?? new Set<string>();
+    if (e.details.postId) posts.add(JSON.stringify([e.network, e.details.postId]));
+    assignment.set(e.details.orderId!, posts);
   }
-  if ([...postsByOrder.values()].some(posts => posts.size > 1)) return { attribution: null, reason: "ORDER_ASSIGNMENT_CONFLICT" };
-  const complete = cohort.every(e => e.evidenceRef.access === "verified" && !e.details.blockers.length && e.details.retainedMinor != null &&
+  if ([...assignment.values()].some(posts => posts.size > 1)) return { attribution: null, reason: "ORDER_ASSIGNMENT_CONFLICT" };
+  const evidenceComplete = cohort.every(e => e.evidenceRef.access === "verified" && !e.details.blockers.length && e.details.retainedMinor != null &&
     e.maturationAt !== null && Date.parse(e.maturationAt) <= Date.parse(asOf));
-  const creatorWide = cohort.some(e => !e.details.postId);
-  const linked = creatorWide ? cohort : cohort.filter(e => e.network === content.network && e.details.postId === content.postId);
-  const base = { receipt: `funnel-${digest(cohort.map(e => e.evidenceRef.provenanceRef).sort())}`, window: [...windows][0]!,
-    version: [...versions][0]!, gmv: null, gmvDefinition: null, complete };
-  const currency = [...currencies][0]!;
-  if (!complete) return { attribution: { ...base, level: creatorWide ? "creator" : "post", orders: null, net: null }, reason: "ORDER_EVIDENCE_IMMATURE_OR_BLOCKED" };
-  if (!linked.length) return { attribution: { ...base, level: "post", orders: 0, net: { minorUnits: 0, currency } }, reason: "NO_ORDER_ASSIGNED_TO_POST" };
-  const outcomes = projectFunnel(linked, {}, asOf).outcomes;
-  const orders = outcomes.find(m => m.name === "Attributed orders")?.value ?? null, net = outcomes.find(m => m.name === "Attributed net sales")?.value ?? null;
-  return { attribution: { ...base, level: creatorWide ? "creator" : "post", orders, net: net === null ? null : { minorUnits: net, currency } },
-    reason: creatorWide ? "CREATOR_WIDE_ORDER_EVIDENCE" : "POST_ASSIGNED_ORDER_EVIDENCE" };
+  const version = [...versions][0]!, currency = [...currencies][0]!;
+  const base = { receipt: `funnel-${digest(cohort.map(e => e.evidenceRef.provenanceRef).sort())}`, window: [...windowsSeen][0]!, version, gmv: null, gmvDefinition: null };
+  const totals = (rows: FunnelEvent[]) => {
+    const outcomes = projectFunnel(rows, {}, asOf).outcomes;
+    const net = outcomes.find(m => m.name === "Attributed net sales")?.value ?? null;
+    return { orders: outcomes.find(m => m.name === "Attributed orders")?.value ?? null, net: net === null ? null : { minorUnits: net, currency } };
+  };
+  if ([...assignment.values()].some(posts => posts.size === 0))
+    return { attribution: { ...base, level: "creator", complete: evidenceComplete, ...(evidenceComplete ? totals(cohort) : { orders: null, net: null }) },
+      reason: "CREATOR_WIDE_ORDER_EVIDENCE" };
+  const hours = windows.find(w => w.attributionVersion === version)?.hours;
+  if (hours === undefined) return { attribution: { ...base, level: "post", complete: false, orders: null, net: null }, reason: "ATTRIBUTION_WINDOW_UNCONFIGURED" };
+  const matured = content.publishedAt !== null && Date.parse(content.publishedAt) + hours * 3_600_000 <= Date.parse(asOf);
+  if (!matured || !evidenceComplete) return { attribution: { ...base, level: "post", complete: false, orders: null, net: null },
+    reason: matured ? "ORDER_EVIDENCE_IMMATURE_OR_BLOCKED" : "POST_ATTRIBUTION_WINDOW_OPEN" };
+  const self = JSON.stringify([content.network, content.postId]);
+  const linked = cohort.filter(e => assignment.get(e.details.orderId!)!.has(self));
+  if (!linked.length) return { attribution: { ...base, level: "post", complete: true, orders: 0, net: { minorUnits: 0, currency } }, reason: "MATURED_NO_ORDER_ASSIGNED_TO_POST" };
+  return { attribution: { ...base, level: "post", complete: true, ...totals(linked) }, reason: "POST_ASSIGNED_ORDER_EVIDENCE" };
 }
