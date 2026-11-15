@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "farda-sim",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "sim"],
+      "port": 4400,
+      "url": "http://127.0.0.1:4400"
+    }
+  ]
+}
