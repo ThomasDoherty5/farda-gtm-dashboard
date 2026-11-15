@@ -14,9 +14,11 @@ const context = z.enum(["organic","paid","mixed","unknown"]);
 const money = z.object({minorUnits:z.number().int().safe(),currency:z.string().regex(/^[A-Z]{3}$/)}).strict();
 const observation = z.object({at:instant,receipt:ref,definition:text,window:text,reportingPeriod:analyticsPeriodSchemaNative.optional(),
   semantics:z.enum(["cumulative","interval","unknown"]),context,views:count.nullable(),likes:count.nullable(),comments:count.nullable(),shares:count.nullable(),
-  saves:count.nullable(),reach:count.nullable()}).strict();
+  saves:count.nullable(),reach:count.nullable(),
+  // A J08 post-age checkpoint capture, labeled with its actual age. A late fetch is never a missed earlier checkpoint.
+  checkpoint:z.object({hours:count,actualAgeHours:z.number().finite().nonnegative(),version:ref}).strict().optional()}).strict();
 const access = z.enum(["authorized","denied","loginRequired","throttled","unavailable","unknown"]);
-const checkState = z.enum(["changed","unchanged","skipped","failed","deferred","unknown"]);
+const checkState = z.enum(["changed","unchanged","skipped","inaccessible","failed","deferred","unknown"]);
 const sourceScope=z.object({workspaceId:ref,accountId:ref,environment:z.literal("sandbox")}).strict();
 const historyEntry=z.object({id:ref,at:instant,kind:z.enum(["signup","identity","enrollment","exclusion"]),
   decision:z.enum(["pending","resolved","quarantined","enrolled","excluded"]),receipt:ref,
@@ -148,7 +150,7 @@ export const nativeContentSchema=meta.extend({kind:z.literal("saved-content-moni
 export const nativeWatchlistSchema=meta.extend({kind:z.literal("saved-monitor-watchlist"),profiles:z.array(outputMember),total:count,
   active:count,pending:count,pendingReviewTotal:count.optional(),excluded:count,unverified:count});
 export const nativeRunSchema=meta.extend({kind:z.literal("saved-monitor-run"),runId:ref,runAt:instant,runReceipt:ref,snapshotSize:count,
-  complete:z.boolean(),checks:z.array(outputCheck),counts:z.object({changed:count,unchanged:count,skipped:count,failed:count,deferred:count,unknown:count}).strict(),timezone:ref.nullable(),
+  complete:z.boolean(),checks:z.array(outputCheck),counts:z.object({changed:count,unchanged:count,skipped:count,inaccessible:count,failed:count,deferred:count,unknown:count}).strict(),timezone:ref.nullable(),
   schedule:z.enum(["enabled","paused","disabled","unknown"]),nextRun:instant.nullable(),retryPolicy:text.nullable(),
   observations:z.array(outputMessage)});
 export const nativePostSchema=meta.extend({kind:z.literal("saved-monitor-post"),post:outputPost,history:z.array(outputObservation),publicationHistory:z.array(visibilityHistory)});

@@ -197,7 +197,7 @@ export function createMonitorReader(options:Options){
         const run=s?.runs.find(r=>alias("run",r.id)===id);
         if(!run)data=null;
         else {
-          const counts={changed:0,unchanged:0,skipped:0,failed:0,deferred:0,unknown:0};
+          const counts={changed:0,unchanged:0,skipped:0,inaccessible:0,failed:0,deferred:0,unknown:0};
           for(const c of run.checks)counts[c.state]++;
           const checks=slice(run.checks).map(c=>({profile:alias("profile",JSON.stringify([c.network,c.account,c.profileId])),network:c.network,state:c.state,
             access:c.access,at:c.at,lastSuccessAt:c.lastSuccessAt,receipt:c.receipt?alias("receipt",c.receipt):null,checkpoint:c.checkpoint?alias("checkpoint",c.checkpoint):null,

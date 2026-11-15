@@ -26,6 +26,8 @@ import { toD13SourceFreshness, mirrorRefSchema } from "./mirrorFreshness.ts";
 import { MirrorFreshnessRuntime, type MirrorRuntimeConfig } from "./mirrorFreshnessRuntime.ts";
 import { MirrorReconciliationRepository } from "./mirrorReconciliation/repository.ts";
 import { bindMirrorReconciliation, type MirrorReconciliationBinding } from "./mirrorReconciliation/runtime.ts";
+import { ContentMonitorRepository } from "./contentMonitor/repository.ts";
+import { bindContentMonitor, type ContentMonitorBinding } from "./contentMonitor/runtime.ts";
 import { OperationalAlertRepository } from "./operationalAlerts/repository.ts";
 import { bindOperationalAlertSweep, type OperationalAlertSweepBinding } from "./operationalAlerts/runtime.ts";
 import type { OperationalAlertReportBinding } from "./operationalAlerts/report.ts";
@@ -137,6 +139,9 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority;
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
+  /** J08 hourly content and Inbox monitoring through the existing registered runtime. Its store backs the monitor reads; it is
+   * mutually exclusive with `monitorSource`. This does not activate a schedule: activation stays with the runtime authority. */
+  contentMonitor?: ContentMonitorBinding;
   lifecycleSource?: LifecycleSourceReader;
   shippingHubSource?: ShippingHubSource;
   /** Source-owned fulfillment plans and canonical owners; unset grants no proposal or provider authority. */
@@ -194,6 +199,7 @@ export function createAgentServer(options: AgentServerOptions) {
       options.actionFoundation?.decisionRelay?.token, options.actionFoundation?.reporting?.token].some(other => other !== undefined && safeEqual(token, other)))
       throw new Error("Runtime machine authority requires its own distinct server-only credential.");
   }
+  if (options.monitorSource && options.contentMonitor) throw new Error("One content monitor source owner is required.");
   if (options.commercialPolicy && options.offerAuthority?.commercialPolicy && options.commercialPolicy !== options.offerAuthority.commercialPolicy)
     throw new Error("One shared commercial policy source is required");
   const commercialPolicy = options.commercialPolicy ?? options.offerAuthority?.commercialPolicy;
@@ -238,6 +244,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let runtime: JobRuntime;
   let runtimeApi: ReturnType<typeof createRuntimeApi>;
   let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null;
+  let contentMonitor: ReturnType<typeof bindContentMonitor> | null;
   let operationalAlerts: OperationalAlertRepository | null;
   let commercialProjection: ReturnType<typeof createCommercialProjection>;
   let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
@@ -257,7 +264,9 @@ export function createAgentServer(options: AgentServerOptions) {
     rewards = new RewardRedemptionRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId },
       { ...options.rewardAuthority, commercialPolicy: commercialPolicy ?? options.rewardAuthority?.commercialPolicy },
       () => new Date((options.operations?.now ?? Date.now)()));
-    funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority);
+    // The order ledger shares the service clock with the monitor reader that bounds its snapshots.
+    funnel = new FunnelRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.funnelAuthority,
+      options.operations?.now ? () => new Date(options.operations!.now!()) : undefined);
     portfolio = new PortfolioRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.portfolioAuthority);
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
@@ -269,6 +278,11 @@ export function createAgentServer(options: AgentServerOptions) {
         reconciliationScope, runtimeRegistry, options.mirrorReconciliation)
       : null;
     if (reconciliation) runtimeRegistry = reconciliation.registry;
+    contentMonitor = options.contentMonitor
+      ? bindContentMonitor(new ContentMonitorRepository(store.database, reconciliationScope, { now: options.operations?.now }), reconciliationScope,
+        runtimeRegistry, options.contentMonitor, { intake, funnel, jobs: operations.jobs, secret: operationsSecret, now: options.operations?.now })
+      : null;
+    if (contentMonitor) runtimeRegistry = contentMonitor.registry;
     operationalAlerts = options.operationalAlerts
       ? new OperationalAlertRepository(store.database, reconciliationScope, operationsSecret, options.operations?.now) : null;
     if (operationalAlerts && options.operationalAlerts) {
@@ -293,7 +307,7 @@ export function createAgentServer(options: AgentServerOptions) {
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
-      funnel, intake, source: options.monitorSource, now: options.operations?.now });
+      funnel, intake, source: options.monitorSource ?? contentMonitor?.source, now: options.operations?.now });
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
     shippingHub = createShippingHubReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
@@ -907,7 +921,11 @@ export function createAgentServer(options: AgentServerOptions) {
         reviewerEvidence: { annotations: "immutable-versioned", completionAuthority: "source-j20" },
         collaborationReview: { sourceAuthority: options.collaborationSourceReader ? "injected" : "notConnected", proposals: "durable", dispatch: "notConnected" },
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
-        contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
+        contentMonitor: { sourceAuthority: contentMonitor ? "j08-store" : options.monitorSource ? "injected" : "notConnected", views: "read-only-projections",
+          // Synthetic J08 evidence is never reported as a connected source.
+          sourceExecution: contentMonitor ? contentMonitor.evidenceStage === "synthetic" ? "sandbox" : "registered-runtime" : "notConnected",
+          evidenceStage: contentMonitor?.evidenceStage ?? null, scheduleActivation: contentMonitor ? "runtime-authority" : "notConnected",
+          followUpProposals: contentMonitor ? "J09-proposal-only" : "notConnected", outboundActions: "none", retryAuthority: "notConnected" },
         financeReads: { sourceAuthority: options.financeSource ? "injected" : "notConnected", views: "read-only-projections", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" },
         operationsReads: { sourceAuthority: options.operationsReadSource ? "injected" : "notConnected", views: "read-only-projections", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" },
         teamInvitationReads: { sourceAuthority: options.teamInvitationReadSource ? "injected" : "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" },
@@ -1621,7 +1639,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
   return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime,
-    mirrorReconciliation: reconciliation, operationalAlerts, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+    mirrorReconciliation: reconciliation, contentMonitor, operationalAlerts, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     mirrorRuntime?.stop();
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
