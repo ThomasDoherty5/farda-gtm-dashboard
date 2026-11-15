@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FunnelRepository } from "./funnelStore.ts";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -241,6 +242,9 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     await s.work(runtimeApiAckSchema.parse(next.body).runRefs[0]!);
     expect(s.out().freshnessCoverage).toMatchObject({ snapshotCount: 6, scanned: 5, inaccessible: 1, deferred: 0, complete: false, allClear: null });
     expect(s.out().rows.find(r => r.category === "inaccessible")).toMatchObject({ state: "completed", reason: "SOURCE_DENIED" });
+    // The runtime's own step evidence carries the denial, so runtime views never read it as a plain success.
+    const steps = s.app.store.database.prepare("SELECT body FROM job_runtime_steps").all().map(r => JSON.parse(String(r.body)) as { step: { evidenceRefs?: string[] } });
+    expect(steps.filter(b => b.step.evidenceRefs?.includes("j08-inaccessible:SOURCE_DENIED"))).toHaveLength(1);
     // Before page two is admitted, its rows are deferred and say why.
     const later = await sandbox({ failOnce: false, maxItems: 4 });
     await later.work(await later.fire(1), 2);
@@ -250,11 +254,15 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
   it("N1: J14 routing is a durable outbox that survives a restart before routing and retries a failed call, reaching J14 once", async () => {
     const s = await sandbox({ failOnce: false });
     s.world.access.set("synthetic-tt-account-d", "denied");
+    // J14 cannot be reached while the failure is recorded, and the process then dies before any later pass.
+    const before = s.app, original = before.providerHealth.check;
+    before.providerHealth.check = async () => { throw new Error("synthetic J14 outage"); };
     const run = await s.fire(1);
     await s.rawWork(run);
     expect(s.observations()).toBe(1);
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14")).toEqual([expect.objectContaining({ reason: "SOURCE_DENIED", route: null })]);
-    // Crash before routing: the failure row is already persisted, so the next pass on a fresh process routes it.
+    before.providerHealth.check = original;
+    // Restart: the failure row is already persisted, so the next pass on a fresh process routes it exactly once.
     await s.restart();
     await s.rawWork(run);
     expect(s.observations()).toBe(2);
@@ -264,7 +272,6 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     // A routing call that throws is retried on the next pass instead of being recorded as final.
     const app = s.app, check = app.providerHealth.check;
     s.world.access.set("synthetic-ig-account-e", "denied");
-    await s.rawWork(await s.fire(0));
     app.providerHealth.check = async () => { throw new Error("synthetic J14 outage"); };
     await s.rawWork(await s.fire(0));
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").some(a => "route" in a && a.route === null)).toBe(true);
@@ -272,6 +279,44 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     await s.rawWork(await s.fire(0));
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_OBSERVED", "J14_OBSERVED"]);
     expect(s.observations()).toBe(3);
+  });
+
+  it("N1-a/N1-b: a held J14 answer stays in the outbox, and the outbox drains even while J08 activation is revoked", async () => {
+    const s = await sandbox({ failOnce: false });
+    s.world.access.set("synthetic-tt-account-d", "denied");
+    const app = s.app, check = app.providerHealth.check;
+    app.providerHealth.check = async () => ({ state: "held" as const, runId: "synthetic-held-run", observationId: null, health: null, blockers: ["JOB_NOT_ACTIVATED"] });
+    const run = await s.fire(1);
+    await s.rawWork(run);
+    await s.rawWork(run);
+    expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_HELD"]);
+    expect(s.observations()).toBe(1);
+    app.providerHealth.check = check;
+    // Activation is revoked: J08 admits nothing, yet the trigger's activation step still drains the outbox to J14.
+    s.runtime.kit.state.active = false;
+    expect((await s.rawWork(run)).status).toBeGreaterThanOrEqual(400);
+    expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_OBSERVED"]);
+    expect(s.observations()).toBe(2);
+  });
+
+  it("M1-a: rows denied on their first read and then suppressed still prevent all clear", async () => {
+    const s = await sandbox({ failOnce: false });
+    for (const account of ["synthetic-ig-account-a", "synthetic-tt-account-d", "synthetic-ig-account-e"]) s.world.access.set(account, "denied");
+    await s.work(await s.fire(1));
+    expect(s.out().freshnessCoverage).toMatchObject({ inaccessible: 3 });
+    expect(count(s.app, "content_monitor_content WHERE subject_ref IN (SELECT subject_ref FROM content_monitor_items WHERE failure_at IS NOT NULL)")).toBe(0);
+    for (const key of ["a", "d", "e"]) s.suppressed.add(s.ids.get(key)!);
+    await s.work(await s.fire(0));
+    expect(s.out().freshnessCoverage).toMatchObject({ snapshotCount: 3, complete: true, noNewContent: true, allClear: false });
+  });
+
+  it("reads the funnel ledger once per runtime run, not once per page", async () => {
+    const s = await sandbox({ failOnce: false });
+    const spy = vi.spyOn(FunnelRepository.prototype, "snapshot");
+    try {
+      await s.rawWork(await s.fire(1));
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally { spy.mockRestore(); }
   });
 
   it("n6: a J08 success counts only when the runtime committed its item", async () => {

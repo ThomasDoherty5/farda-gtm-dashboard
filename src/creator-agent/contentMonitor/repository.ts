@@ -148,9 +148,13 @@ export class ContentMonitorRepository {
     return this.db.prepare("SELECT run_ref,item_ref,window_ref,last_success_at FROM content_monitor_items WHERE subject_ref=? AND last_success_at IS NOT NULL").all(subjectRef)
       .filter(r => committed(String(r.run_ref), String(r.item_ref))).map(r => ({ runRef: String(r.run_ref), windowRef: String(r.window_ref), at: String(r.last_success_at) }));
   }
-  /** Durable J14 routing outbox: failures whose source-health route is missing or was unavailable, retried idempotently on every pass. */
+  /** Every row with a recorded failure, whether or not it is still in the watchlist or has any content. */
+  failedSubjects(): string[] {
+    return this.db.prepare("SELECT DISTINCT subject_ref FROM content_monitor_items WHERE failure_at IS NOT NULL").all().map(r => String(r.subject_ref));
+  }
+  /** Durable J14 routing outbox: failures without a J14 observation (no answer, unavailable, held or unconfigured), retried on every drain. */
   unroutedFailures(limit = 200): { runRef: string; itemRef: string; subjectRef: string; windowRef: string; reason: string }[] {
-    return this.db.prepare("SELECT run_ref,item_ref,subject_ref,window_ref,failure_reason FROM content_monitor_items WHERE failure_at IS NOT NULL AND (health_route IS NULL OR health_route IN ('J14_ROUTE_UNAVAILABLE','J14_NOT_COMPOSED')) ORDER BY failure_at LIMIT ?")
+    return this.db.prepare("SELECT run_ref,item_ref,subject_ref,window_ref,failure_reason FROM content_monitor_items WHERE failure_at IS NOT NULL AND (health_route IS NULL OR health_route<>'J14_OBSERVED') ORDER BY failure_at LIMIT ?")
       .all(limit).map(r => ({ runRef: String(r.run_ref), itemRef: String(r.item_ref), subjectRef: String(r.subject_ref), windowRef: String(r.window_ref), reason: String(r.failure_reason) }));
   }
   /** The row's current access from its own source watermarks: a non-transient failure stands until a later complete, healthy read. */

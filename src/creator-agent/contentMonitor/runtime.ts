@@ -147,7 +147,10 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
   /** Server composition: the injected source authority signs each J08 window lease over J08's own frozen membership, never its own list. */
   function composeAuthority(base: RuntimeAuthority): RuntimeAuthority {
     return {
-      resolveActivation: r => base.resolveActivation(r), assertActivation: (p, r, at) => base.assertActivation(p, r, at),
+      // Activation is resolved on every J08 trigger, work call, catch-up and read, even while J08 is disabled, so the J14 outbox drains there
+      // first. A revoked activation therefore still routes recorded failures to J14.
+      async resolveActivation(r) { if (refs.has(r.registrationRef)) await drainRoutes(); return base.resolveActivation(r); },
+      assertActivation: (p, r, at) => base.assertActivation(p, r, at),
       async prepareWindow(input) {
         if (!refs.has(input.registration.registrationRef)) return base.prepareWindow(input);
         await drainRoutes();
@@ -181,9 +184,20 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     try {
       for (const row of repo.unroutedFailures(200)) {
         const route = await routeToJ14(row.windowRef, row.reason);
+        // Every J14 answer is recorded for visibility; only an observation leaves the outbox (`unroutedFailures`), so a held or
+        // unconfigured answer is retried on the next drain.
         if (route !== "J14_ROUTE_UNAVAILABLE" && route !== "J14_NOT_COMPOSED") repo.noteHealthRoute(row.runRef, row.itemRef, row.subjectRef, row.windowRef, route);
       }
     } catch { /* Routing never blocks admission; unrouted rows stay in the outbox for the next pass. */ }
+  }
+  /**
+   * The funnel ledger is read once per runtime run and reused by its pages. Orders or publication records that arrive mid-run are picked up
+   * by the next run; the monitor reader's reconciled totals re-verify against the current ledger in the meantime.
+   */
+  let ledgerCache: { runRef: string; events: FunnelEvent[] } | null = null;
+  function ledgerFor(runRef: string): FunnelEvent[] {
+    if (ledgerCache?.runRef !== runRef) ledgerCache = { runRef, events: effectiveEvents(deps.funnel.snapshot({ asOf: new Date(now()).toISOString() }).events) };
+    return ledgerCache.events;
   }
   /** Whether the runtime committed a run item as completed, cached per call. */
   function committedCheck(): Committed {
@@ -269,11 +283,12 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
         if (transientAccess(page.access)) return { state: "retry", reasonCode: failure.reason, retryAfterMs: page.retryAfterMs ?? 1000 };
         // A row-level denial completes its runtime item with an explicit inaccessible outcome, so it cannot block later pages of the window.
         // The condition stays visible and owned: the J08 outcome, the J14 outbox and all clear all carry it.
-        if (page.access === "denied") return { state: "completed", evidenceRefs: [], recordCount: 0, sourceReceiptRef: page.receiptRef };
+        // The runtime step evidence carries the inaccessible reason, so runtime views never read a denial as a plain success.
+        if (page.access === "denied") return { state: "completed", evidenceRefs: [`j08-inaccessible:${failure.reason}`], recordCount: 1, sourceReceiptRef: page.receiptRef };
         return { state: "takeover", kind: takeoverKinds[page.access], reasonCode: failure.reason, ownerRef: j08Owners.J14,
           handoffRef: `j08-handoff:${digest([apiBindingHash, page.access])}` };
       }
-      const ledger = effectiveEvents(deps.funnel.snapshot({ asOf: new Date(now()).toISOString() }).events);
+      const ledger = ledgerFor(context.runRef);
       repo.recordPage({ ...item, stage, page, campaigns: current.campaigns, policy, creativeOf: creativeResolver(ledger) }, fence);
       if (page.nextCursor !== null || stage === "posts")
         return { state: "checkpoint", evidenceRefs: [], recordCount, sourceReceiptRef: page.receiptRef,
@@ -333,7 +348,7 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     const successes = rows.map(r => r.lastSuccessAt);
     const lastSourceSuccess = successes.some(s => s === null) ? null : successes.reduce<string | null>((oldest, s) => !oldest || Date.parse(s!) < Date.parse(oldest) ? s : oldest, null);
     // All clear counts every open condition, including rows that have since left the watchlist.
-    const allSubjects = new Set([...watch.entries.map(e => e.subjectRef), ...repo.allContent().map(c => c.subjectRef)]);
+    const allSubjects = new Set([...watch.entries.map(e => e.subjectRef), ...repo.allContent().map(c => c.subjectRef), ...repo.failedSubjects()]);
     const health = deps.health?.();
     // Row conditions are evaluated as of this window's own last source observation; a later failure is never back-dated into it.
     const asOf = rows.map(r => r.outcome?.observedAt).filter((v): v is string => !!v).sort().at(-1) ?? null;

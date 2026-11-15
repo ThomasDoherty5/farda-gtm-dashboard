@@ -83,7 +83,7 @@ Rows are ordered by a per-window digest, so a row that keeps failing does not si
 
 The runtime caps a page at the registration's `maxItems`, at most 100. Further pages are admitted with the runtime's `continue` once every item of the prior page has completed.
 
-A row-level denial completes its item with an explicit inaccessible outcome, so it never blocks later pages. A source-session takeover does hold the page, because the whole source is unusable.
+A row-level denial completes its item with an explicit inaccessible outcome, so it never blocks later pages. The runtime step evidence carries `j08-inaccessible:<reason>`, so runtime views never read it as a plain success. A source-session takeover does hold the page, because the whole source is unusable.
 
 Coverage is computed for the whole window across all its pages. Frozen rows on pages not yet admitted are deferred, with `J08_PRIOR_PAGE_INCOMPLETE` or `J08_PAGE_NOT_YET_ADMITTED`.
 
@@ -118,7 +118,15 @@ The same checks and the source's own fence run again inside the store transactio
 | login, MFA, captcha, terms change (source session) | one owned takeover; the account's other rows are held unread | inaccessible | takeover owner and J14 |
 | UI drift | owned takeover | failed | takeover owner and J14 |
 
-J14 routing is a durable outbox. A failure row is persisted with the failure, and its route stays empty until J14 answers. Every J08 window admission and refresh drains the outbox before admitting any more items. A crash before routing, or a J14 call that throws, is therefore retried on the next pass. J14 deduplicates by event ID, so it observes each window and condition once.
+J14 routing is a durable outbox. A failure row is persisted with the failure, and it stays in the outbox until J14 has *observed* the source:
+
+- A held or unconfigured J14 answer is recorded for visibility but retried on the next drain.
+- A J14 call that throws is also retried.
+- J14 deduplicates by event ID, so it observes each window and condition once.
+
+The outbox drains whenever the runtime resolves J08 activation: every hourly trigger, manual recheck, work call, catch-up and runtime read of a J08 run. Activation is resolved before it is checked, so a revoked activation still drains the outbox. The outbox also drains on every window admission and refresh.
+
+**Known limitation:** while the server does not compose the J08 binding at all, no J08 code runs. Unrouted failures stay in the store and drain when the binding is composed again. J14's own owner-run checks keep observing the source independently. Draining from J14's check cycle would mean J14 calling J08, which changes J14's behaviour, so it was not done.
 
 When J14 observes the session as unhealthy, its existing health hold stops the binding for every row. One login wall therefore gives one takeover and one J14 observation.
 
@@ -184,6 +192,12 @@ The projected packet expires at the existing 90-minute monitor ceiling, measured
   - A post with no ledger record is unmapped, with a reason.
   - A social page that supplies a mapping is refused by the strict page schema.
 - **Deliverable and collaboration:** a deliverable comes from the same ledger record. A collaboration stays explicitly unknown (`J01_COLLABORATION_NOT_LINKED`).
+
+### Funnel ledger reads
+
+The funnel ledger is read once per runtime run and reused by that run's pages. Orders or publication records that arrive mid-run are picked up by the next run; the monitor reader's reconciled totals re-verify against the current ledger in the meantime.
+
+**Deployment rule:** a social source adapter (an Instagram, TikTok or Inbox reader that feeds J08 pages) must never also produce funnel-ledger `published` records. J08 reads the creative and deliverable mapping from those records. If the same adapter wrote them, the mapping would come from the social page again, through a circle.
 
 ### Farda attribution and orders
 
