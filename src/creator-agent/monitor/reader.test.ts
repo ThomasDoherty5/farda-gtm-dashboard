@@ -140,7 +140,8 @@ describe("source-backed monitoring views",()=>{
     now+=5000;await ingest(order("ambiguous-order","EXAMPLE_A",1000,"two"));
     expect(await read()).toMatchObject({orders:null,net:null});
   });
-  it("lets a trusted source own an observed post's lifecycle: saved ledger metrics never merge into it, but still flag a conflict",async()=>{
+  it("lets a lifecycle-owning source own an observed post's lifecycle: saved ledger metrics never merge into it, but still flag a conflict",async()=>{
+    snapshot.lifecycleOwnership="source";
     await ingest(event("ledger-metrics","postMetrics",{details:{postId:"EXAMPLE_A",views:999,engagements:null,blockers:[]}}));
     const reader=open(),list=nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data);
     const owned=list.posts.find(p=>p.network==="instagram")!;
@@ -151,7 +152,17 @@ describe("source-backed monitoring views",()=>{
       details:{postId:"EXAMPLE_A",views:5,engagements:null,blockers:[]}}));
     expect(nativeContentSchema.parse((await reader.read("contentMonitor",{},page)).data).posts.find(p=>p.id===owned.id)!.conflict).toBe(true);
   });
-  it("lets a refund without a post ID inherit its order's post in reconciled totals",async()=>{
+  it("raises a conflict when a newer ledger lifecycle event disagrees with a lifecycle-owning source, and keeps the merge for other sources",async()=>{
+    const removal=event("ledger-removal","removed",{occurredAt:new Date(now-1000).toISOString(),observedAt:new Date(now-500).toISOString(),details:{postId:"EXAMPLE_A",blockers:[]}});
+    await ingest(removal);
+    snapshot.lifecycleOwnership="source";
+    const owned=nativeContentSchema.parse((await open().read("contentMonitor",{},page)).data).posts.find(p=>p.network==="instagram")!;
+    expect(owned).toMatchObject({conflict:true});
+    delete snapshot.lifecycleOwnership;
+    const merged=nativeContentSchema.parse((await open().read("contentMonitor",{},page)).data).posts.find(p=>p.network==="instagram")!;
+    expect(merged).toMatchObject({conflict:false,visibility:"deleted"});
+  });
+  it("lets a refund without a post ID inherit its order's post in reconciled totals, but not a duplicate order event without one",async()=>{
     const first=snapshot.posts[0]!;
     first.attribution!.orders=1;first.attribution!.net!.minorUnits=400;
     snapshot.posts[1]={...structuredClone(first),postId:"EXAMPLE_B",originalUrl:"https://www.instagram.com/reel/EXAMPLE_B/",publicationReceipt:"publication-b"};
@@ -165,6 +176,9 @@ describe("source-backed monitoring views",()=>{
     now+=5000;snapshot.observedAt=new Date(now).toISOString();
     await ingest(order("refund-no-post",null,400,"one","refund"));
     expect(nativeContentSchema.parse((await open().read("contentMonitor",{},page)).data)).toMatchObject({orders:2,net:{minorUnits:1400,currency:"USD"}});
+    now+=5000;snapshot.observedAt=new Date(now).toISOString();
+    await ingest(order("duplicate-order-no-post",null,1000,"two"));
+    expect(nativeContentSchema.parse((await open().read("contentMonitor",{},page)).data)).toMatchObject({orders:null,net:null});
   });
   it("expires the monitor at the server's 90-minute ceiling despite an extended source lease",async()=>{
     snapshot.validUntil=new Date(now+24*3600_000).toISOString();

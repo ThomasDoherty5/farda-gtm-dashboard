@@ -6,7 +6,7 @@ import { MonitorError } from "../monitor/reader.ts";
 import type { OperationsScope } from "../operations.ts";
 import { reportEventSchema, type ReportEvent } from "../slackReporting/contract.ts";
 import { j08Owners, j08MetricKeys, type J08Category, type J08Coverage, type J08Ref } from "./contract.ts";
-import type { ContentMonitorRepository, StoredContent, StoredMetric } from "./repository.ts";
+import type { Committed, ContentMonitorRepository, StoredContent, StoredMetric } from "./repository.ts";
 import type { ContentMonitorMembership, WindowRow } from "./runtime.ts";
 
 type Snapshot = MonitorSnapshot;
@@ -15,7 +15,7 @@ type Check = Snapshot["runs"][number]["checks"][number];
 type WindowCoverage = J08Coverage & { rows: WindowRow[]; window: RuntimeWindow | null; watchlistVersion: string };
 type Options = { repo: ContentMonitorRepository; scope: OperationsScope; registration: RuntimeRegistration; evidenceStage: "synthetic" | "source";
   intake: ContentMonitorMembership; coverage(windowRef: string): WindowCoverage; windows(limit?: number): RuntimeWindow[];
-  checkpointsVersion(): string | null; subjectRefOf(network: string, accountId: string, profileId: string): string; now: () => number };
+  checkpointsVersion(): string | null; subjectRefOf(network: string, accountId: string, profileId: string): string; now: () => number; committedCheck(): Committed };
 export type ContentMonitorReportBinding = Pick<ReportEvent, "producerRef" | "link">;
 
 // The server's existing D-13 monitoring age ceiling. The J08 store does not extend it.
@@ -47,16 +47,21 @@ export function createContentMonitorView(options: Options) {
       const latest = (key: StoredMetric["metricKey"]) => metrics.filter(m => m.metricKey === key && Date.parse(m.observedAt) <= Date.parse(at)).at(-1) ?? null;
       const values = Object.fromEntries(j08MetricKeys.map(k => [k, latest(k)])) as Record<StoredMetric["metricKey"], StoredMetric | null>;
       const views = values.views, checkpoint = checkpoints.find(c => c.receiptRef === receipt);
+      // The views value's latest re-confirmation, never later than the next change.
+      const next = views ? metrics.find(m => m.seriesKey === views.seriesKey && m.seq === views.seq + 1) : undefined;
+      const confirmedThrough = views ? next && Date.parse(next.observedAt) <= Date.parse(views.confirmedThrough) ? views.observedAt : views.confirmedThrough : null;
       return { at, receipt, definition: views?.definition ?? "Native views not reported", window: views ? views.semantics === "cumulative" ? "lifetime to source observation" :
         `${iso(views.windowStart)}/${iso(views.windowEnd)}` : "unknown", semantics: views?.semantics ?? "unknown" as const,
         context: (views?.context ?? "unknown") as Post["measurements"][number]["context"],
         views: views?.value ?? null, likes: values.likes?.value ?? null, comments: values.comments?.value ?? null, shares: values.shares?.value ?? null,
         saves: values.saves?.value ?? null, reach: values.reach?.value ?? null,
-        ...(checkpoint ? { checkpoint: { hours: checkpoint.hours, actualAgeHours: checkpoint.actualAgeHours, version: checkpoint.checkpointsVersion, state: checkpoint.state } } : {}) };
+        ...(checkpoint ? { checkpoint: { hours: checkpoint.hours, actualAgeHours: checkpoint.actualAgeHours, version: checkpoint.checkpointsVersion, state: checkpoint.state } } : {}),
+        ...(confirmedThrough ? { confirmedThrough } : {}) };
     });
   }
 
   function project(): Snapshot | null {
+    const committed = options.committedCheck();
     const { membership, bySubject } = owners(), creatorOf = (subjectRef: string) => bySubject.get(subjectRef)?.creatorId ?? subjectRef;
     const checkpointsVersion = options.checkpointsVersion();
     const windows = options.windows(24).map(window => ({ window, coverage: options.coverage(window.windowRef) }));
@@ -75,7 +80,8 @@ export function createContentMonitorView(options: Options) {
           receipt: outcome?.receipts.at(-1) ?? null, checkpoint: row.item?.checkpoint.cursor ?? null, owner,
           reason: row.category === "unchanged" || row.category === "newContent" ? null :
             outcome?.reason ? `${outcome.reason}; recovery owner ${owner === j08Owners.J14 ? `J14 source health (${outcome.healthRoute ?? "routing pending"})` : "runtime retry"}` :
-            held ? `Held: ${held}` : row.item ? "Due but not yet visited in this run." : "Due but its watchlist page was not admitted." });
+            held ? `Held: ${held}` : row.item ? "Due but not yet visited in this run." :
+            row.notAdmitted === "J08_PRIOR_PAGE_INCOMPLETE" ? "Due; its watchlist page waits for an unfinished earlier page." : "Due; its watchlist page was not yet admitted." });
       }
       const runRefs = coverage.rows.flatMap(r => r.runRef ? [r.runRef] : []);
       const checked = new Set(coverage.rows.filter(r => r.category === "newContent" || r.category === "unchanged").map(r => r.subjectRef));
@@ -104,7 +110,7 @@ export function createContentMonitorView(options: Options) {
         profileId: subject.profileId, notionReceipt: notion.receiptRef!, sheetsReceipt: sheets.receiptRef!, cohort: null });
     }
     const posts: Post[] = repo.allContent().filter(c => c.assignment.state === "attributed" && c.assignment.campaignId && !c.conflict).map(c => {
-      const status = repo.status(c.contentKey), last = status.at(-1) ?? null, rowFailure = repo.subjectAccess(c.subjectRef);
+      const status = repo.status(c.contentKey), last = status.at(-1) ?? null, rowFailure = repo.subjectAccess(c.subjectRef, committed);
       const captured = repo.checkpoints(c.contentKey).filter(x => x.checkpointsVersion === checkpointsVersion && x.state === "captured");
       const record = bySubject.get(c.subjectRef);
       return { network: c.network, account: c.accountId, postId: c.postId, creatorId: creatorOf(c.subjectRef), campaign: c.assignment.campaignId!,
@@ -118,11 +124,12 @@ export function createContentMonitorView(options: Options) {
         publicationHistory: status.filter(s => !c.publishedAt || Date.parse(s.observedAt) >= Date.parse(c.publishedAt)).map(s => ({ state: s.state, at: s.observedAt, receipt: s.receiptRef })),
         measurements: measurementRows(c, checkpointsVersion), attribution: c.attribution };
     });
-    const observedAt = maxOf([...projectedRuns.map(r => r.observedAt), ...posts.flatMap(p => [p.publishedAt, p.visibilityAt, ...p.measurements.map(m => m.at),
+    const observedAt = maxOf([...projectedRuns.map(r => r.observedAt), ...posts.flatMap(p => [p.publishedAt, p.visibilityAt, ...p.measurements.flatMap(m => [m.at, m.confirmedThrough]),
       ...(p.publicationHistory ?? []).map(h => h.at)])]);
     if (!observedAt || !projectedRuns.length) return null;
     const current = Boolean(latest?.coverage.complete) && membership.complete;
     const facts = { scope: { ...scope }, observedAt, validUntil: new Date(Date.parse(observedAt) + MONITOR_MAX_AGE_MS).toISOString(), evidenceStage: options.evidenceStage,
+      lifecycleOwnership: "source" as const,
       coverage: current ? "complete" as const : "partial" as const, members, posts, runs: projectedRuns };
     return monitorSnapshotSchema.parse({ ...facts, version: `j08-store-${digest(facts)}` });
   }
@@ -163,17 +170,19 @@ export function createContentMonitorView(options: Options) {
       freshnessCoverage,
       nextActionQueue: [
         ...repo.proposals(windowRef).map(p => ({ itemRef: p.ref, reason: p.reason, owner: "J09" as const })),
-        ...rows.flatMap(r => { const s = repo.subject(r.subjectRef);
-          return r.outcome?.healthRoute && s ? [{ itemRef: { provider: s.network, accountId: s.accountId, sourceId: s.profileId, url: null } as J08Ref, reason: r.outcome.reason ?? "SOURCE_ACCESS",
-            owner: "J14" as const, route: r.outcome.healthRoute }] : []; }),
+        // Every source-access failure is owned by J14 from the moment it is recorded; `route` is null until J14 has answered.
+        ...rows.flatMap(r => { const s = repo.subject(r.subjectRef), o = r.outcome;
+          return s && o?.access && o.access !== "authorized" && o.access !== "throttled" && o.access !== "unavailable" ? [{ itemRef: { provider: s.network,
+            accountId: s.accountId, sourceId: s.profileId, url: null } as J08Ref, reason: o.reason ?? "SOURCE_ACCESS", owner: "J14" as const, route: o.healthRoute }] : []; }),
       ],
       checkpoint: rows.map(r => r.item?.checkpoint.cursor ?? null).find(cursor => cursor !== null) ?? null,
-      // Crossposts keep their own identity. Originals come only from a reviewed creative mapping; anything else is unmapped.
-      creatives: { originals: new Set(attributed.filter(c => c.creative?.role === "original").map(c => c.creative!.creativeRef)).size,
-        derivatives: attributed.filter(c => c.creative?.role === "derivative").length, unmapped: attributed.filter(c => !c.creative).length },
-      provenance: attributed.map(c => ({ contentRef: ref(c), deliverable: c.creative?.deliverableRef ?? null, deliverableUnknownReason: c.creative?.deliverableRef ? null : "NO_REVIEWED_DELIVERABLE_MAPPING",
+      // Crossposts keep their own identity. Contracted creatives are counted once, from the ledger's verified publication mapping only.
+      creatives: { distinct: new Set(attributed.flatMap(c => c.creative?.creativeRef ? [c.creative.creativeRef] : [])).size,
+        mapped: attributed.filter(c => c.creative?.creativeRef).length, unmapped: attributed.filter(c => !c.creative?.creativeRef).length },
+      provenance: attributed.map(c => ({ contentRef: ref(c), creative: c.creative?.creativeRef ?? null, deliverable: c.creative?.deliverableRef ?? null,
+        mappingReceipt: c.creative?.receiptRef ?? null, unmappedReason: c.creative?.unmappedReason ?? "NO_LEDGER_PUBLICATION_RECORD",
         collaboration: null, collaborationUnknownReason: "J01_COLLABORATION_NOT_LINKED" })),
-      rows: rows.map(r => ({ subjectRef: r.subjectRef, state: r.item?.state ?? "notAdmitted", category: r.category, reason: r.outcome?.reason ?? r.item?.reasonCode ?? null,
+      rows: rows.map(r => ({ subjectRef: r.subjectRef, state: r.item?.state ?? "notAdmitted", category: r.category, reason: r.outcome?.reason ?? r.item?.reasonCode ?? r.notAdmitted ?? null,
         lastSuccessAt: r.lastSuccessAt })),
     };
   }
@@ -190,7 +199,8 @@ export function createContentMonitorView(options: Options) {
       statusObservations: out.statusObservations.map(s => ({ ...s, ref: refAlias(s.ref) })),
       nextActionQueue: out.nextActionQueue.map(a => ({ ...a, itemRef: refAlias(a.itemRef) })),
       checkpoint: out.checkpoint ? alias("checkpoint", out.checkpoint) : null, creatives: out.creatives,
-      provenance: out.provenance.map(p => ({ ...p, contentRef: refAlias(p.contentRef), deliverable: p.deliverable ? alias("deliverable", p.deliverable) : null })) };
+      provenance: out.provenance.map(p => ({ ...p, contentRef: refAlias(p.contentRef), creative: p.creative ? alias("creative", p.creative) : null,
+        deliverable: p.deliverable ? alias("deliverable", p.deliverable) : null, mappingReceipt: p.mappingReceipt ? alias("receipt", p.mappingReceipt) : null })) };
   }
   /** A typed aggregate for the existing shared reporter when an hourly window needs review. Delivery keeps the reporter's own policy. */
   function report(windowRef: string, binding: ContentMonitorReportBinding): ReportEvent | null {

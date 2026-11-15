@@ -58,12 +58,16 @@ describe("J08-05 source pages keep unknown distinct from zero", () => {
   const metric = (value: number | null, missingReason: string | null) => ({ metricKey: "shares", value, unit: "count", definition: "Synthetic shares",
     semantics: "cumulative", window: { start: "2026-11-07T00:00:00Z", end: "2026-11-07T11:00:00Z" }, missingReason });
   const post = (metrics: unknown[], access = "authorized", visibility: string | null = "public") => ({ ref: { provider: "instagram", accountId: "synthetic-account", sourceId: "SYNTH", url: null },
-    creative: null, publishedAt: "2026-11-07T00:00:00Z", sourceUpdatedAt: null, access, visibility, context: "organic", fardaEvidence: [], metrics });
+    publishedAt: "2026-11-07T00:00:00Z", sourceUpdatedAt: null, access, visibility, context: "organic", fardaEvidence: [], metrics });
   it("requires a reason for a missing metric and forbids a reason on a known zero", () => {
     expect(j08PageSchema.safeParse({ ...page, posts: [post([metric(null, "SHARES_NOT_EXPOSED")])] }).success).toBe(true);
     expect(j08PageSchema.safeParse({ ...page, posts: [post([metric(0, null)])] }).success).toBe(true);
     expect(j08PageSchema.safeParse({ ...page, posts: [post([metric(null, null)])] }).success).toBe(false);
     expect(j08PageSchema.safeParse({ ...page, posts: [post([metric(0, "SHARES_NOT_EXPOSED")])] }).success).toBe(false);
+  });
+  it("N4: refuses a creative or crosspost mapping supplied by a social source page", () => {
+    const mapped = { ...post([]), creative: { creativeRef: "synthetic-creative", role: "original", deliverableRef: null, receiptRef: "synthetic-mapping" } };
+    expect(j08PageSchema.safeParse({ ...page, posts: [mapped] }).success).toBe(false);
   });
   it("keeps private distinct from inaccessible, and a failed read carries no records", () => {
     expect(j08PageSchema.safeParse({ ...page, posts: [post([], "authorized", "private")] }).success).toBe(true);
@@ -80,7 +84,7 @@ describe("J08-06 order attribution at the best proven level through the canonica
   const order = (name: string, opts: { orderId: string; postId?: string; network?: "instagram" | "tiktok"; checkout?: "website" | "tiktok-shop"; retained?: number;
     maturationAt?: string; window?: string; opportunity?: string; type?: "retainedOrder" | "refund"; day?: number }): FunnelEvent => evt(name, opts.type ?? "retainedOrder", opts.opportunity ?? "opp", opts.day ?? 5, {
     creatorRef: ref("creator-1"), campaignCohortRef: ref("spring"), network: opts.network ?? "instagram", checkout: opts.checkout ?? "website",
-    maturationAt: opts.maturationAt ?? "2026-01-09T00:00:00.000Z", evidenceRef: { provenanceRef: "proof:" + name, version: "1", method: "source read", access: "verified",
+    maturationAt: opts.maturationAt ?? "2026-01-09T12:00:00.000Z", evidenceRef: { provenanceRef: "proof:" + name, version: "1", method: "source read", access: "verified",
       url: null, definition: "order", unit: "order", window: "w" },
     details: { orderId: opts.orderId, ...(opts.postId ? { postId: opts.postId } : {}), retainedMinor: opts.retained ?? 1000, currency: "USD", attributionVersion: "v1",
       attributionWindow: opts.window ?? "7-day click", blockers: [] } });
@@ -99,6 +103,14 @@ describe("J08-06 order attribution at the best proven level through the canonica
     expect(orderAttribution(post, events, asOf, windows)).toMatchObject({ reason: "POST_ASSIGNED_ORDER_EVIDENCE",
       attribution: { level: "post", orders: 1, net: { minorUnits: 1000 }, complete: true } });
     expect(orderAttribution({ ...post, postId: "POST2" }, events, asOf, windows).attribution).toMatchObject({ level: "post", orders: 1, net: { minorUnits: 500 } });
+  });
+  it("n11: a duplicate order event without a post ID is never a post-level figure, matching the reader rule", () => {
+    const events = [order("sale", { orderId: "o11", postId: "POST1" }), order("duplicate", { orderId: "o11" })];
+    expect(orderAttribution(post, events, asOf, windows)).toEqual({ attribution: null, reason: "ORDER_ASSIGNMENT_CONFLICT" });
+  });
+  it("n9: a matured zero also needs the ledger maturity watermark to reach the post's window end", () => {
+    const early = [order("other", { orderId: "o12", postId: "POST2", maturationAt: "2026-01-03T00:00:00.000Z" })];
+    expect(orderAttribution(post, early, asOf, windows)).toMatchObject({ reason: "ORDER_SYNC_NOT_THROUGH_WINDOW", attribution: { orders: null, complete: false } });
   });
   it("keeps a creator-wide code at creator level, never allocated to a post", () => {
     expect(orderAttribution(post, [order("code", { orderId: "o2" })], asOf, windows)).toMatchObject({ reason: "CREATOR_WIDE_ORDER_EVIDENCE", attribution: { level: "creator", orders: 1 } });

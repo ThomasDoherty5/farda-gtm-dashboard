@@ -10,6 +10,8 @@ export class ContentMonitorError extends RuntimeError {
   constructor(code: string, status = 409) { super(code, status); this.name = "ContentMonitorError"; }
 }
 type Row = Record<string, unknown>;
+/** Whether the runtime committed this run item as completed. J08 never treats its own write as a committed success. */
+export type Committed = (runRef: string, itemRef: string) => boolean;
 const json = <T>(value: unknown) => JSON.parse(String(value)) as T;
 const str = (value: unknown) => value === null || value === undefined ? null : String(value);
 export const contentKeyOf = (network: string, accountId: string, postId: string) => JSON.stringify([network, accountId, postId]);
@@ -21,7 +23,8 @@ export type J08ItemOutcome = {
   subjectRef: string; windowRef: string; category: J08Category | null; access: J08Access | null; reason: string | null;
   observedAt: string | null; receipts: string[]; lastSuccessAt: string | null; pages: number; healthRoute: string | null;
 };
-export type Creative = { creativeRef: string; role: "original" | "derivative"; deliverableRef: string | null; receiptRef: string };
+/** The publication-to-creative mapping from the funnel ledger's verified publication record; never taken from a social source page. */
+export type Creative = { creativeRef: string | null; deliverableRef: string | null; receiptRef: string | null; unmappedReason: string | null };
 export type StoredContent = {
   contentKey: string; contentRef: string; subjectRef: string; network: J08Network; accountId: string; postId: string; url: string | null;
   creative: Creative | null; publishedAt: string | null; firstRun: string; firstObservedAt: string; firstReceipt: string; lastObservedAt: string;
@@ -58,7 +61,7 @@ export class ContentMonitorRepository {
       CREATE TABLE IF NOT EXISTS content_monitor_watchlists(watchlist_version TEXT PRIMARY KEY,window_ref TEXT UNIQUE NOT NULL,eligibility_policy_version TEXT NOT NULL,
         subjects TEXT NOT NULL,frozen_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS content_monitor_items(run_ref TEXT NOT NULL,item_ref TEXT NOT NULL,subject_ref TEXT NOT NULL,window_ref TEXT NOT NULL,
-        last_success_at TEXT,failure_at TEXT,failure_access TEXT,body TEXT NOT NULL,PRIMARY KEY(run_ref,item_ref));
+        last_success_at TEXT,failure_at TEXT,failure_access TEXT,failure_reason TEXT,health_route TEXT,body TEXT NOT NULL,PRIMARY KEY(run_ref,item_ref));
       CREATE INDEX IF NOT EXISTS content_monitor_items_subject ON content_monitor_items(subject_ref);
       CREATE TABLE IF NOT EXISTS content_monitor_pages(receipt_ref TEXT PRIMARY KEY,run_ref TEXT NOT NULL,item_ref TEXT NOT NULL,stage TEXT NOT NULL,
         method TEXT NOT NULL,body_hash TEXT NOT NULL,observed_at TEXT NOT NULL);
@@ -89,13 +92,14 @@ export class ContentMonitorRepository {
   }
 
   /** Freezes the window's whole eligible watchlist once, at first admission. Later pages and refreshes read this exact snapshot. */
-  freezeWatchlist(windowRef: string, eligibilityPolicyVersion: string, compute: () => { subject: J08Subject; enrollmentRef: string }[]): FrozenWatchlist {
+  freezeWatchlist(windowRef: string, eligibilityPolicyVersion: string, rows: { subject: J08Subject; enrollmentRef: string }[]): FrozenWatchlist {
     const prior = this.watchlist(windowRef);
     if (prior) {
-      if (prior.eligibilityPolicyVersion !== eligibilityPolicyVersion) throw new ContentMonitorError("J08_ELIGIBILITY_POLICY_CHANGED");
+      if (prior.eligibilityPolicyVersion !== eligibilityPolicyVersion ||
+          digest(prior.entries) !== digest(rows.map(r => ({ subjectRef: r.subject.subjectRef, enrollmentRef: r.enrollmentRef }))))
+        throw new ContentMonitorError("J08_WATCHLIST_ALREADY_FROZEN");
       return prior;
     }
-    const rows = compute();
     this.tx(() => {}, () => {
       if (this.watchlist(windowRef)) return;
       for (const { subject: s } of rows) {
@@ -127,31 +131,36 @@ export class ContentMonitorRepository {
       lastSuccessAt: null, pages: 0, healthRoute: null };
     if (prior.subjectRef !== subjectRef || prior.windowRef !== windowRef) throw new ContentMonitorError("J08_ITEM_SUBJECT_MISMATCH");
     const next = update(prior), failed = next.access !== null && next.access !== "authorized" && !transient(next.access);
-    this.db.prepare(`INSERT INTO content_monitor_items VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(run_ref,item_ref) DO UPDATE SET last_success_at=excluded.last_success_at,
-      failure_at=excluded.failure_at,failure_access=excluded.failure_access,body=excluded.body`)
-      .run(runRef, itemRef, subjectRef, windowRef, next.lastSuccessAt, failed ? next.observedAt : null, failed ? next.access : null, JSON.stringify(next));
+    this.db.prepare(`INSERT INTO content_monitor_items VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_ref,item_ref) DO UPDATE SET last_success_at=excluded.last_success_at,
+      failure_at=excluded.failure_at,failure_access=excluded.failure_access,failure_reason=excluded.failure_reason,health_route=excluded.health_route,body=excluded.body`)
+      .run(runRef, itemRef, subjectRef, windowRef, next.lastSuccessAt, failed ? next.observedAt : null, failed ? next.access : null, failed ? next.reason : null,
+        next.healthRoute, JSON.stringify(next));
   }
   /** Latest complete, healthy source watermark for this row, optionally excluding one run so a retried completion is idempotent. */
-  lastSuccess(subjectRef: string, excludingRun: string | null = null): string | null {
+  lastSuccess(subjectRef: string, committed: Committed, excludingRun: string | null = null): string | null {
     let best: string | null = null;
-    for (const r of this.db.prepare("SELECT last_success_at FROM content_monitor_items WHERE subject_ref=? AND last_success_at IS NOT NULL AND run_ref IS NOT ?").all(subjectRef, excludingRun))
-      if (later(String(r.last_success_at), best)) best = String(r.last_success_at);
+    for (const r of this.successes(subjectRef, committed)) if (r.runRef !== excludingRun && later(r.at, best)) best = r.at;
     return best;
   }
   /** Every complete, healthy source watermark for this row, with the window that produced it. */
-  successes(subjectRef: string): { windowRef: string; at: string }[] {
-    return this.db.prepare("SELECT window_ref,last_success_at FROM content_monitor_items WHERE subject_ref=? AND last_success_at IS NOT NULL").all(subjectRef)
-      .map(r => ({ windowRef: String(r.window_ref), at: String(r.last_success_at) }));
+  /** A J08 success counts only when the runtime committed that item as completed. */
+  successes(subjectRef: string, committed: Committed): { runRef: string; windowRef: string; at: string }[] {
+    return this.db.prepare("SELECT run_ref,item_ref,window_ref,last_success_at FROM content_monitor_items WHERE subject_ref=? AND last_success_at IS NOT NULL").all(subjectRef)
+      .filter(r => committed(String(r.run_ref), String(r.item_ref))).map(r => ({ runRef: String(r.run_ref), windowRef: String(r.window_ref), at: String(r.last_success_at) }));
+  }
+  /** Durable J14 routing outbox: failures whose source-health route is missing or was unavailable, retried idempotently on every pass. */
+  unroutedFailures(limit = 200): { runRef: string; itemRef: string; subjectRef: string; windowRef: string; reason: string }[] {
+    return this.db.prepare("SELECT run_ref,item_ref,subject_ref,window_ref,failure_reason FROM content_monitor_items WHERE failure_at IS NOT NULL AND (health_route IS NULL OR health_route IN ('J14_ROUTE_UNAVAILABLE','J14_NOT_COMPOSED')) ORDER BY failure_at LIMIT ?")
+      .all(limit).map(r => ({ runRef: String(r.run_ref), itemRef: String(r.item_ref), subjectRef: String(r.subject_ref), windowRef: String(r.window_ref), reason: String(r.failure_reason) }));
   }
   /** The row's current access from its own source watermarks: a non-transient failure stands until a later complete, healthy read. */
-  subjectAccess(subjectRef: string, asOf: string | null = null): { access: J08Access; at: string } | null {
+  subjectAccess(subjectRef: string, committed: Committed, asOf: string | null = null): { access: J08Access; at: string } | null {
     const within = (at: string) => asOf === null || Date.parse(at) <= Date.parse(asOf);
     let failure: { access: J08Access; at: string } | null = null;
     for (const r of this.db.prepare("SELECT failure_at,failure_access FROM content_monitor_items WHERE subject_ref=? AND failure_at IS NOT NULL").all(subjectRef))
       if (within(String(r.failure_at)) && later(String(r.failure_at), failure?.at ?? null)) failure = { access: String(r.failure_access) as J08Access, at: String(r.failure_at) };
     let success: string | null = null;
-    for (const r of this.db.prepare("SELECT last_success_at FROM content_monitor_items WHERE subject_ref=? AND last_success_at IS NOT NULL").all(subjectRef))
-      if (within(String(r.last_success_at)) && later(String(r.last_success_at), success)) success = String(r.last_success_at);
+    for (const r of this.successes(subjectRef, committed)) if (within(r.at) && later(r.at, success)) success = r.at;
     return failure && (success === null || Date.parse(failure.at) > Date.parse(success)) ? failure : null;
   }
   private propose(windowRef: string, itemKind: StoredProposal["itemKind"], itemKey: string, ref: J08Ref, reason: string, at: string) {
@@ -159,7 +168,8 @@ export class ContentMonitorRepository {
   }
 
   /** Persists one authorized page. Repeated observations reuse canonical identity and observation keys. */
-  recordPage(input: { runRef: string; itemRef: string; windowRef: string; subject: J08Subject; stage: J08Stage; page: J08Page; campaigns: readonly string[]; policy: J08Policy },
+  recordPage(input: { runRef: string; itemRef: string; windowRef: string; subject: J08Subject; stage: J08Stage; page: J08Page; campaigns: readonly string[]; policy: J08Policy;
+    creativeOf: (network: string, accountId: string, postId: string) => Creative },
     fence: () => void) {
     const { runRef, itemRef, subject, page } = input;
     if (page.access !== "authorized") throw new ContentMonitorError("J08_PAGE_NOT_AUTHORIZED", 500);
@@ -180,15 +190,17 @@ export class ContentMonitorRepository {
         observedAt: later(page.observedAt, o.observedAt) ? page.observedAt : o.observedAt, receipts: [...new Set([...o.receipts, page.receiptRef])].slice(-100), pages: o.pages + 1 }));
     });
   }
-  private recordPost(input: { runRef: string; windowRef: string; subject: J08Subject; page: J08Page; campaigns: readonly string[]; policy: J08Policy },
+  private recordPost(input: { runRef: string; windowRef: string; subject: J08Subject; page: J08Page; campaigns: readonly string[]; policy: J08Policy;
+    creativeOf: (network: string, accountId: string, postId: string) => Creative },
     post: J08Page["posts"][number]) {
     const { runRef, subject, page, policy } = input, at = page.observedAt;
     const key = contentKeyOf(post.ref.provider, post.ref.accountId, post.ref.sourceId);
     const assignment = fardaAssignment(post.fardaEvidence, input.campaigns), existing = this.content(key);
+    const creative = JSON.stringify(input.creativeOf(post.ref.provider, post.ref.accountId, post.ref.sourceId));
     if (!existing) {
       const sequence = Number(this.db.prepare("SELECT COALESCE(MAX(sequence),0)+1 AS n FROM content_monitor_content").get()!.n);
       this.db.prepare("INSERT INTO content_monitor_content VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,0,?)").run(key, `content-${digest(key).slice(0, 32)}`,
-        subject.subjectRef, post.ref.provider, post.ref.accountId, post.ref.sourceId, post.ref.url, post.creative ? JSON.stringify(post.creative) : null,
+        subject.subjectRef, post.ref.provider, post.ref.accountId, post.ref.sourceId, post.ref.url, creative,
         post.publishedAt, runRef, at, page.receiptRef, at, JSON.stringify(assignment), sequence);
       if (assignment.state === "review") this.propose(input.windowRef, "content", key, post.ref, `ATTRIBUTION_${assignment.reason}`, at);
     } else if (existing.subjectRef !== subject.subjectRef) {
@@ -199,8 +211,8 @@ export class ContentMonitorRepository {
     } else if (later(at, existing.lastObservedAt)) {
       // Identity is the native network/account/post. Only a newer page updates mutable facts; an older page never overwrites them.
       const changed = existing.assignment.state !== assignment.state || existing.assignment.campaignId !== assignment.campaignId;
-      this.db.prepare("UPDATE content_monitor_content SET url=COALESCE(?,url),creative=COALESCE(?,creative),published_at=COALESCE(published_at,?),assignment=?,last_observed_at=? WHERE content_key=?")
-        .run(post.ref.url, post.creative ? JSON.stringify(post.creative) : null, post.publishedAt, JSON.stringify(assignment), at, key);
+      this.db.prepare("UPDATE content_monitor_content SET url=COALESCE(?,url),creative=?,published_at=COALESCE(published_at,?),assignment=?,last_observed_at=? WHERE content_key=?")
+        .run(post.ref.url, creative, post.publishedAt, JSON.stringify(assignment), at, key);
       if (changed && assignment.state === "review") this.propose(input.windowRef, "content", key, post.ref, `ATTRIBUTION_${assignment.reason}`, at);
     } else return;
     if (assignment.state === "unrelated") return;
@@ -243,6 +255,7 @@ export class ContentMonitorRepository {
     return { reason, category };
   }
   noteHealthRoute(runRef: string, itemRef: string, subjectRef: string, windowRef: string, route: string) {
+    // Recorded after J14 answered; the failure itself was already persisted, so a crash before this point is replayed by the outbox.
     this.tx(() => {}, () => this.putOutcome(runRef, itemRef, subjectRef, windowRef, o => ({ ...o, healthRoute: route })));
   }
 
@@ -250,7 +263,7 @@ export class ContentMonitorRepository {
    * Completes a row after both stages read completely. New content is anything first observed after the row's previous complete
    * success, so content seen during a failed run is never swallowed. Retrying the same completion gives the same result.
    */
-  finishItem(input: { runRef: string; itemRef: string; windowRef: string; subject: J08Subject;
+  finishItem(input: { runRef: string; itemRef: string; windowRef: string; subject: J08Subject; committed: Committed;
     attributions: Map<string, { attribution: OrderAttribution | null; reason: string }> }, fence: () => void) {
     const { runRef, itemRef, subject } = input;
     return this.tx(fence, () => {
@@ -258,7 +271,7 @@ export class ContentMonitorRepository {
       if (!outcome?.observedAt || outcome.access !== "authorized") throw new ContentMonitorError("J08_ITEM_INCOMPLETE", 500);
       for (const [key, result] of input.attributions)
         this.db.prepare("UPDATE content_monitor_content SET attribution=?,attribution_reason=? WHERE content_key=?").run(result.attribution ? JSON.stringify(result.attribution) : null, result.reason, key);
-      const baseline = this.lastSuccess(subject.subjectRef, runRef), after = baseline ?? "";
+      const baseline = this.lastSuccess(subject.subjectRef, input.committed, runRef), after = baseline ?? "";
       const fresh = Number(this.db.prepare("SELECT COUNT(*) AS n FROM content_monitor_content WHERE subject_ref=? AND (?='' OR first_observed_at>?)").get(subject.subjectRef, after, after)!.n) +
         Number(this.db.prepare("SELECT COUNT(*) AS n FROM content_monitor_inbox WHERE subject_ref=? AND (?='' OR page_observed_at>?)").get(subject.subjectRef, after, after)!.n);
       const category: J08Category = fresh ? "newContent" : "unchanged";
@@ -289,7 +302,9 @@ export class ContentMonitorRepository {
       context: String(r.context), missingReason: str(r.missing_reason), observedAt: String(r.observed_at), confirmedThrough: String(r.confirmed_through),
       receiptRef: String(r.receipt_ref), runRef: String(r.run_ref) }));
   }
-  latestStatus(contentKey: string): StoredStatus | null { return this.status(contentKey).at(-1) ?? null; }
+  latestStatus(contentKey: string, asOf: string | null = null): StoredStatus | null {
+    return this.status(contentKey).filter(s => asOf === null || Date.parse(s.observedAt) <= Date.parse(asOf)).at(-1) ?? null;
+  }
   status(contentKey: string): StoredStatus[] {
     return this.db.prepare("SELECT * FROM content_monitor_status WHERE content_key=? ORDER BY seq").all(contentKey).map(r => ({ contentKey, seq: Number(r.seq),
       state: String(r.state) as StoredStatus["state"], access: String(r.access), observedAt: String(r.observed_at), sourceUpdatedAt: str(r.source_updated_at),

@@ -16,7 +16,9 @@ const observation = z.object({at:instant,receipt:ref,definition:text,window:text
   semantics:z.enum(["cumulative","interval","unknown"]),context,views:count.nullable(),likes:count.nullable(),comments:count.nullable(),shares:count.nullable(),
   saves:count.nullable(),reach:count.nullable(),
   // A J08 post-age checkpoint: captured inside its versioned tolerance, or a late observation labeled with its actual age that fills nothing.
-  checkpoint:z.object({hours:count,actualAgeHours:z.number().finite().nonnegative(),version:ref,state:z.enum(["captured","late"])}).strict().optional()}).strict();
+  checkpoint:z.object({hours:count,actualAgeHours:z.number().finite().nonnegative(),version:ref,state:z.enum(["captured","late"])}).strict().optional(),
+  // The latest source observation that re-confirmed these unchanged counters (data only).
+  confirmedThrough:instant.optional()}).strict();
 const access = z.enum(["authorized","denied","loginRequired","throttled","unavailable","unknown"]);
 const checkState = z.enum(["changed","unchanged","skipped","inaccessible","failed","deferred","unknown"]);
 const sourceScope=z.object({workspaceId:ref,accountId:ref,environment:z.literal("sandbox")}).strict();
@@ -78,6 +80,8 @@ export function originalPostUrl(network:"instagram"|"tiktok",postId:string,input
 }
 /** Only a trusted server-side J08/Sheets reader supplies this packet; there is no browser write or ingestion endpoint. */
 export const monitorSnapshotSchema=z.object({scope:sourceScope,version:ref,observedAt:instant,validUntil:instant,evidenceStage:z.enum(["synthetic","source"]).optional(),
+  // "source": the trusted source owns its posts' lifecycle and metrics; saved ledger lifecycle events only raise conflicts for them.
+  lifecycleOwnership:z.enum(["merged","source"]).optional(),
   coverage:z.enum(["complete","partial"]),reviewEvidence:z.array(reviewEvidence).max(2000).optional(),members:z.array(member).max(2000),posts:z.array(post).max(2000),runs:z.array(run).max(100)}).strict().superRefine((s,ctx)=>{
     const unique=(rows:string[])=>new Set(rows).size===rows.length;
     const reviewKey=(r:{creatorId:string;revision:number;network:string;account:string;profileId:string})=>JSON.stringify([r.creatorId,r.revision,r.network,r.account,r.profileId]);

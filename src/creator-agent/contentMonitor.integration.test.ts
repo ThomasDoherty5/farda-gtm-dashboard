@@ -34,12 +34,17 @@ async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) 
   const runtime = createJ08SandboxRuntime(store.database, { now: Date.now, maxItems: options.maxItems });
   await runtime.initialize();
   // No test holder: the server composes the J08 plan into the injected authority itself.
-  const app = createAgentServer(j08SandboxServerOptions({ databasePath, scope, readToken: reader, reviewToken: reviewer, machineToken, runtime, world, suppressed, proofs,
-    policy: () => policy }));
-  await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(0, "127.0.0.1", resolve); });
-  const address = app.server.address(); if (!address || typeof address === "string") throw new Error("Missing local test address");
-  const origin = `http://127.0.0.1:${address.port}`;
+  const start = async () => {
+    const server = createAgentServer(j08SandboxServerOptions({ databasePath, scope, readToken: reader, reviewToken: reviewer, machineToken, runtime, world, suppressed, proofs,
+      policy: () => policy }));
+    await new Promise<void>((resolve, reject) => { server.server.once("error", reject); server.server.listen(0, "127.0.0.1", resolve); });
+    const address = server.server.address(); if (!address || typeof address === "string") throw new Error("Missing local test address");
+    return { server, origin: `http://127.0.0.1:${address.port}` };
+  };
+  let { server: app, origin } = await start();
   closes.push(async () => { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); });
+  /** A process restart: the in-memory binding is discarded; only the shared SQLite file survives. */
+  const restart = async () => { await app.close(); ({ server: app, origin } = await start()); };
   async function post(path: string, body: unknown, token = machineToken, headers: Record<string, string> = {}) {
     const response = await fetch(origin + path, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
@@ -48,6 +53,7 @@ async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) 
   await ingestJ08Orders(post, proofs, j08SandboxOrders(ids, scope, Date.now()), Date.now(), reviewer);
   // J14 owns source health: its configured target must observe the J08 source before the runtime treats the binding as ready.
   const healthCheck = (eventId: string) => app.providerHealth.check({ capabilityId: app.contentMonitor!.capabilityId, eventId }, eventId);
+  const observations = () => count(app, "health_observations");
   expect((await healthCheck("synthetic-initial-health")).health).toMatchObject({ state: "ready" });
   const machine = (operation: string, input: unknown) => post("/v1/runtime/machine", { operation, input });
   const fire = async (hoursAgo: number, trigger = `synthetic-hourly-${hoursAgo}`) => {
@@ -60,13 +66,16 @@ async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) 
     expect(answer.status, JSON.stringify(answer.body)).toBe(200);
     return runtimeApiAckSchema.parse(answer.body).runRefs[0]!;
   };
-  const work = async (runRef: string, maxItems = 10) => { const answer = await machine("work", { runRef, maxItems }); await app.contentMonitor!.whenRouted(); return answer; };
+  // The hourly driver's next pass drains the durable J14 outbox; `rawWork` omits it to model a crash or an unanswered pass.
+  const rawWork = (runRef: string, maxItems = 10) => machine("work", { runRef, maxItems });
+  const work = async (runRef: string, maxItems = 10) => { const answer = await rawWork(runRef, maxItems); await app.contentMonitor!.drainRoutes(); return answer; };
   const read = (viewKey: string, filters: Record<string, unknown> = {}) => post("/v1/read", { schemaVersion: SCHEMA_VERSION, operation: "readView", requestId: "synthetic-j08-read",
     requestedScope: { workspaceId: scope.workspaceId, accountIds: [scope.accountId], environment: "sandbox" }, viewKey, filters, period: null, sort: [],
     page: { limit: 100, cursor: null } }, reader);
   const latest = () => app.contentMonitor!.windows()[0]!.windowRef;
   const out = (windowRef = latest()) => app.contentMonitor!.output(windowRef);
-  return { app, world, runtime, ids, suppressed, origin, post, fire, recheck, work, read, latest, out, machine, healthCheck, setPolicy: (next: J08Policy) => { policy = next; } };
+  return { get app() { return app; }, get origin() { return origin; }, world, runtime, ids, suppressed, post, fire, recheck, work, rawWork, read, latest, out, machine, healthCheck,
+    observations, restart, setPolicy: (next: J08Policy) => { policy = next; } };
 }
 type Sandbox = Awaited<ReturnType<typeof sandbox>>;
 const content = async (s: Sandbox, filters: Record<string, unknown> = {}) => {
@@ -129,7 +138,9 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     const crosspost = all.posts.find(p => p.originalUrl?.includes("SYNTHB1"))!;
     expect(crosspost.creative).toBe(b1.creative);
     expect(crosspost.id).not.toBe(b1.id);
-    expect(s.out().creatives).toEqual({ originals: 4, derivatives: 1, unmapped: 1 });
+    // Contracted creatives come from the ledger's verified publication records, counted once across the crosspost; D1 has none.
+    expect(s.out().creatives).toEqual({ distinct: 4, mapped: 5, unmapped: 1 });
+    expect(s.out().provenance.find(p => p.contentRef.sourceId === "7300000000000000004")).toMatchObject({ creative: null, unmappedReason: "NO_LEDGER_PUBLICATION_RECORD" });
     expect(all.posts.find(p => p.originalUrl?.includes("SYNTHE1"))!.attribution).toMatchObject({ level: "creator", orders: 1, net: { minorUnits: 1800, currency: "USD" } });
     // The ambiguous brand-only match and the unrelated post never enter Farda activity metrics.
     expect(all.posts.some(p => p.originalUrl?.includes("SYNTHC1"))).toBe(false);
@@ -172,6 +183,9 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     const dDetail = nativePostSchema.parse((await s.read("postPerformance", { postId: dAfter.id })).body.data);
     expect(dDetail.publicationHistory.some(h => h.state === "public")).toBe(true);
     expect(after.posts.find(p => p.originalUrl?.includes("SYNTHA2"))).toMatchObject({ visibility: "private", access: "authorized", measurement: { views: 0, likes: 0 } });
+    // n8: unchanged counters advance their confirmation time, visible as data on the post's latest measurement.
+    const a1After = after.posts.find(p => p.originalUrl?.includes("SYNTHA1"))!.measurement!;
+    expect(Date.parse(a1After.confirmedThrough!)).toBeGreaterThan(Date.parse(a1After.at));
     const trace = s.app.contentMonitor!.trace(s.latest(), "synthetic-j08-trace-key-000000000000"), text = JSON.stringify(trace);
     for (const raw of ["synthetic-tt-account-d", "7300000000000000004", "SYNTHA2", s.ids.get("d")!]) expect(text).not.toContain(raw);
     expect(trace).toMatchObject({ evidenceStage: "synthetic", freshnessCoverage: { snapshotCount: 6, inaccessible: 1 } });
@@ -193,6 +207,12 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     const answer = await s.machine("fire", { registrationRef: s.runtime.registration.registrationRef, registrationVersion: 1, intendedAt: slot(0), triggerEventRef: "synthetic-substitute" });
     expect(answer.status).toBeGreaterThanOrEqual(400);
     expect(s.app.store.database.prepare("SELECT COUNT(*) AS n FROM job_runtime_pages WHERE json_extract(plan,'$.window.intendedAt')=?").get(slot(0))!.n).toBe(0);
+    // n7: a refused admission freezes nothing, so a later suppression is honoured when the window is finally admitted.
+    expect(count(s.app, "content_monitor_watchlists")).toBe(1);
+    s.suppressed.add(s.ids.get("a")!);
+    s.runtime.state.ignoreMembership = false;
+    await s.work(await s.fire(0, "synthetic-after-refusal"));
+    expect(s.out().freshnessCoverage).toMatchObject({ snapshotCount: 5, complete: true });
   });
 
   it("B2: a multi-page window freezes one watchlist, defers unadmitted rows and completes across pages", async () => {
@@ -208,6 +228,62 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     coverage = s.out().freshnessCoverage;
     expect(coverage).toMatchObject({ snapshotCount: 6, scanned: 6, newContent: 6, complete: true, allClear: true });
     expect((await hourly(s))).toMatchObject({ snapshotSize: 6, complete: true, counts: { changed: 6 } });
+  });
+
+  it("N3: a denied row completes with an explicit inaccessible outcome, so later pages of the window are still read", async () => {
+    const s = await sandbox({ failOnce: false, maxItems: 4 });
+    const first = await s.fire(1);
+    const pageOne = s.app.contentMonitor!.coverage(s.latest()).rows.filter(r => r.runRef);
+    s.world.access.set(s.app.contentMonitor!.subject(pageOne[0]!.subjectRef)!.accountId, "denied");
+    await s.work(first);
+    const next = await s.machine("continue", { runRef: first });
+    expect(next.status, JSON.stringify(next.body)).toBe(200);
+    await s.work(runtimeApiAckSchema.parse(next.body).runRefs[0]!);
+    expect(s.out().freshnessCoverage).toMatchObject({ snapshotCount: 6, scanned: 5, inaccessible: 1, deferred: 0, complete: false, allClear: null });
+    expect(s.out().rows.find(r => r.category === "inaccessible")).toMatchObject({ state: "completed", reason: "SOURCE_DENIED" });
+    // Before page two is admitted, its rows are deferred and say why.
+    const later = await sandbox({ failOnce: false, maxItems: 4 });
+    await later.work(await later.fire(1), 2);
+    expect(later.out().rows.filter(r => r.state === "notAdmitted").every(r => r.reason === "J08_PRIOR_PAGE_INCOMPLETE")).toBe(true);
+  });
+
+  it("N1: J14 routing is a durable outbox that survives a restart before routing and retries a failed call, reaching J14 once", async () => {
+    const s = await sandbox({ failOnce: false });
+    s.world.access.set("synthetic-tt-account-d", "denied");
+    const run = await s.fire(1);
+    await s.rawWork(run);
+    expect(s.observations()).toBe(1);
+    expect(s.out().nextActionQueue.filter(a => a.owner === "J14")).toEqual([expect.objectContaining({ reason: "SOURCE_DENIED", route: null })]);
+    // Crash before routing: the failure row is already persisted, so the next pass on a fresh process routes it.
+    await s.restart();
+    await s.rawWork(run);
+    expect(s.observations()).toBe(2);
+    expect(s.out().nextActionQueue).toEqual(expect.arrayContaining([expect.objectContaining({ owner: "J14", reason: "SOURCE_DENIED", route: "J14_OBSERVED" })]));
+    await s.rawWork(run);
+    expect(s.observations()).toBe(2);
+    // A routing call that throws is retried on the next pass instead of being recorded as final.
+    const app = s.app, check = app.providerHealth.check;
+    s.world.access.set("synthetic-ig-account-e", "denied");
+    await s.rawWork(await s.fire(0));
+    app.providerHealth.check = async () => { throw new Error("synthetic J14 outage"); };
+    await s.rawWork(await s.fire(0));
+    expect(s.out().nextActionQueue.filter(a => a.owner === "J14").some(a => "route" in a && a.route === null)).toBe(true);
+    app.providerHealth.check = check;
+    await s.rawWork(await s.fire(0));
+    expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_OBSERVED", "J14_OBSERVED"]);
+    expect(s.observations()).toBe(3);
+  });
+
+  it("n6: a J08 success counts only when the runtime committed its item", async () => {
+    const s = await sandbox({ failOnce: false });
+    // Activation is revoked after J08's completion write commits but before the runtime commits the item.
+    s.world.onInboxFence = () => { s.runtime.kit.state.active = false; };
+    const run = await s.fire(1);
+    expect((await s.work(run)).status).toBeGreaterThanOrEqual(400);
+    const held = s.out().rows.filter(r => r.state !== "queued" && r.state !== "notAdmitted");
+    expect(held).toHaveLength(1);
+    expect(held[0]).toMatchObject({ category: "deferred", lastSuccessAt: null });
+    expect(s.out().freshnessCoverage).toMatchObject({ scanned: 0, lastSourceSuccess: null, complete: false });
   });
 
   it("J08-02: a budget-limited pass leaves due rows deferred and cannot claim no new content or all clear", async () => {
@@ -340,11 +416,14 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     await s.work(await s.fire(2));
     const id = (await content(s)).posts.find(p => p.originalUrl?.includes("SYNTHA1"))!.id;
     expect(nativePostSchema.parse((await s.read("postPerformance", { postId: id })).body.data).post).toMatchObject({ visibility: "inaccessible" });
+    // N2: the profile read completed, but an inaccessible post still prevents all clear.
+    expect(s.out().freshnessCoverage).toMatchObject({ complete: true, noNewContent: true, allClear: false });
     // It returns with a source edit time older than the denial: the page's newer observation still clears it; the edit time stays data.
     s.world.postDenied.clear();
     s.world.sourceUpdatedAt.set("SYNTHA1", new Date(Date.now() - 30 * 86_400_000).toISOString());
     await s.work(await s.fire(1));
     expect(nativePostSchema.parse((await s.read("postPerformance", { postId: id })).body.data).post).toMatchObject({ visibility: "public", access: "authorized" });
+    expect(s.out().freshnessCoverage).toMatchObject({ complete: true, allClear: true });
     expect(s.out().statusObservations.find(o => o.ref.sourceId === "SYNTHA1")).toMatchObject({ method: "native-api", value: { visibility: "public" },
       sourceUpdatedAt: s.world.sourceUpdatedAt.get("SYNTHA1") });
     // An older replayed page inside the lease cannot change the URL or status that a newer page recorded.

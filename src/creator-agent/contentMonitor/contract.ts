@@ -75,10 +75,9 @@ export type J08Metric = z.infer<typeof metricSchema>;
 export const j08EvidenceKinds = ["collaborationTag", "brandMention", "productLink", "discountCode", "reviewedLink"] as const;
 const fardaEvidenceSchema = z.object({ kind: z.enum(j08EvidenceKinds), campaignId: sourceId.nullable(), reviewed: z.boolean(), receiptRef: runtimeRef }).strict();
 export type J08FardaEvidence = z.infer<typeof fardaEvidenceSchema>;
-/** A reviewed creative/deliverable mapping from the asset owner. Without one a crosspost relation is unmapped, never guessed. */
-const creativeSchema = z.object({ creativeRef: sourceId, role: z.enum(["original", "derivative"]), deliverableRef: sourceId.nullable(), receiptRef: runtimeRef }).strict();
 const postSchema = z.object({
-  ref: j08RefSchema, creative: creativeSchema.nullable(), publishedAt: runtimeInstant.nullable(), sourceUpdatedAt: runtimeInstant.nullable(),
+  // A social page never supplies a creative or deliverable mapping; the strict schema refuses one. The mapping comes from the ledger.
+  ref: j08RefSchema, publishedAt: runtimeInstant.nullable(), sourceUpdatedAt: runtimeInstant.nullable(),
   access: z.enum(["authorized", "denied", "unavailable"]), visibility: z.enum(["public", "private", "deleted", "expired"]).nullable(),
   context: z.enum(["organic", "paid", "mixed", "unknown"]), fardaEvidence: z.array(fardaEvidenceSchema).max(10), metrics: z.array(metricSchema).max(12),
 }).strict().superRefine((p, ctx) => {

@@ -1,6 +1,7 @@
 import { digest } from "../config.ts";
 import type { FunnelEvent } from "../funnelContract.ts";
 import { projectFunnel } from "../funnelProjection.ts";
+import { orderAssignments } from "../monitor/posts.ts";
 import type { J08FardaEvidence, J08Network } from "./contract.ts";
 
 export type FardaAssignment = { state: "attributed" | "review" | "unrelated"; campaignId: string | null; reason: string; receipts: string[] };
@@ -45,10 +46,11 @@ export type OrderAttribution = {
 };
 
 /**
- * J08-06. Joins the canonical funnel order ledger (retained orders and refunds keyed by canonical order ID, so an order imported from
- * TikTok Shop into Shopify is one order) at the best proven level. A refund inherits its order's post assignment; only differing explicit
- * post IDs conflict. Orders without a post assignment are creator-wide and never prove post-level sales. A post-level result, including a
- * zero, needs complete evidence and that post's own matured attribution window. Missing evidence is unknown, never zero.
+ * J08-06. Joins the funnel order ledger. Its retained orders and refunds carry the canonical order ID that the order owner resolves across
+ * checkout systems (a TikTok Shop order imported into Shopify is one order), so J08 needs no second order crosswalk. Assignment uses the
+ * reader's one rule (`orderAssignments`): only a refund without a post ID inherits its order's post; a post-less order is creator-wide;
+ * mixed assignments are a conflict. A post-level result, including a zero, needs complete evidence, that post's own matured attribution
+ * window, and a ledger maturity watermark at or after the window's end. Missing evidence is unknown, never zero.
  */
 export function orderAttribution(content: { network: J08Network; postId: string; creatorId: string; campaignId: string; publishedAt: string | null },
   events: FunnelEvent[], asOf: string, windows: readonly { attributionVersion: string; hours: number }[]): { attribution: OrderAttribution | null; reason: string } {
@@ -58,13 +60,9 @@ export function orderAttribution(content: { network: J08Network; postId: string;
   const windowsSeen = new Set(cohort.map(e => e.details.attributionWindow)), versions = new Set(cohort.map(e => e.details.attributionVersion));
   const currencies = new Set(cohort.map(e => e.details.currency));
   if (windowsSeen.size !== 1 || versions.size !== 1 || currencies.size !== 1) return { attribution: null, reason: "ATTRIBUTION_BASIS_MIXED" };
-  const assignment = new Map<string, Set<string>>();
-  for (const e of cohort) {
-    const posts = assignment.get(e.details.orderId!) ?? new Set<string>();
-    if (e.details.postId) posts.add(JSON.stringify([e.network, e.details.postId]));
-    assignment.set(e.details.orderId!, posts);
-  }
-  if ([...assignment.values()].some(posts => posts.size > 1)) return { attribution: null, reason: "ORDER_ASSIGNMENT_CONFLICT" };
+  const { orders, assignedPost } = orderAssignments(cohort);
+  if ([...orders.values()].some(o => o.posts.size > 1 || o.posts.size === 1 && o.creatorWide || o.posts.size === 0 && !o.creatorWide))
+    return { attribution: null, reason: "ORDER_ASSIGNMENT_CONFLICT" };
   const evidenceComplete = cohort.every(e => e.evidenceRef.access === "verified" && !e.details.blockers.length && e.details.retainedMinor != null &&
     e.maturationAt !== null && Date.parse(e.maturationAt) <= Date.parse(asOf));
   const version = [...versions][0]!, currency = [...currencies][0]!;
@@ -74,16 +72,19 @@ export function orderAttribution(content: { network: J08Network; postId: string;
     const net = outcomes.find(m => m.name === "Attributed net sales")?.value ?? null;
     return { orders: outcomes.find(m => m.name === "Attributed orders")?.value ?? null, net: net === null ? null : { minorUnits: net, currency } };
   };
-  if ([...assignment.values()].some(posts => posts.size === 0))
+  if ([...orders.values()].some(o => o.creatorWide))
     return { attribution: { ...base, level: "creator", complete: evidenceComplete, ...(evidenceComplete ? totals(cohort) : { orders: null, net: null }) },
       reason: "CREATOR_WIDE_ORDER_EVIDENCE" };
   const hours = windows.find(w => w.attributionVersion === version)?.hours;
   if (hours === undefined) return { attribution: { ...base, level: "post", complete: false, orders: null, net: null }, reason: "ATTRIBUTION_WINDOW_UNCONFIGURED" };
-  const matured = content.publishedAt !== null && Date.parse(content.publishedAt) + hours * 3_600_000 <= Date.parse(asOf);
-  if (!matured || !evidenceComplete) return { attribution: { ...base, level: "post", complete: false, orders: null, net: null },
-    reason: matured ? "ORDER_EVIDENCE_IMMATURE_OR_BLOCKED" : "POST_ATTRIBUTION_WINDOW_OPEN" };
-  const self = JSON.stringify([content.network, content.postId]);
-  const linked = cohort.filter(e => assignment.get(e.details.orderId!)!.has(self));
+  const windowEnd = content.publishedAt === null ? Infinity : Date.parse(content.publishedAt) + hours * 3_600_000;
+  const unknown = (reason: string) => ({ attribution: { ...base, level: "post" as const, complete: false, orders: null, net: null }, reason });
+  if (windowEnd > Date.parse(asOf)) return unknown("POST_ATTRIBUTION_WINDOW_OPEN");
+  if (!evidenceComplete) return unknown("ORDER_EVIDENCE_IMMATURE_OR_BLOCKED");
+  // The ledger's own maturity watermark must reach the end of this post's window; an earlier maturity does not cover later orders.
+  const watermark = Math.max(...cohort.map(e => Date.parse(e.maturationAt!)));
+  if (watermark < windowEnd) return unknown("ORDER_SYNC_NOT_THROUGH_WINDOW");
+  const linked = cohort.filter(e => assignedPost(e) === content.postId && e.network === content.network);
   if (!linked.length) return { attribution: { ...base, level: "post", complete: true, orders: 0, net: { minorUnits: 0, currency } }, reason: "MATURED_NO_ORDER_ASSIGNED_TO_POST" };
   return { attribution: { ...base, level: "post", complete: true, ...totals(linked) }, reason: "POST_ASSIGNED_ORDER_EVIDENCE" };
 }

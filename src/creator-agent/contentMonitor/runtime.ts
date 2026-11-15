@@ -9,6 +9,7 @@ import type { JobRuntime } from "../jobs/runtime.ts";
 import { RuntimeError, runtimeWindowPlanSchema, type RuntimeAuthority, type RuntimeExecutor, type RuntimeMembership, type RuntimeRegistration, type RuntimeRegistry,
   type RuntimeStep, type RuntimeWindow } from "../jobs/runtimeSchema.ts";
 import { effectiveEvents } from "../monitor/posts.ts";
+import type { FunnelEvent } from "../funnelContract.ts";
 import type { MonitorSourceReader } from "../monitor/contract.ts";
 import type { OperationsScope } from "../operations.ts";
 import type { createProviderHealth } from "../providerHealth.ts";
@@ -16,7 +17,7 @@ import { assertSynchronousVoid } from "../sourceFence.ts";
 import { j08Owners, j08PageSchema, j08PolicySchema, type J08Category, type J08Coverage, type J08Policy, type J08ReadRequest, type J08SourceReader,
   type J08Stage, type J08Subject } from "./contract.ts";
 import { createContentMonitorView } from "./projection.ts";
-import type { ContentMonitorRepository, J08ItemOutcome } from "./repository.ts";
+import type { Committed, ContentMonitorRepository, Creative, J08ItemOutcome } from "./repository.ts";
 import { orderAttribution } from "./rules.ts";
 
 export type ContentMonitorBinding = {
@@ -42,7 +43,8 @@ type Health = Pick<ReturnType<typeof createProviderHealth>, "check" | "get" | "e
 export type ContentMonitorDeps = { intake: ContentMonitorMembership; funnel: Pick<FunnelRepository, "snapshot">; jobs: Pick<JobRepository, "getRun">;
   runtime: () => Pick<JobRuntime, "windowPages" | "takeovers"> | undefined; health?: () => Health | undefined; secret: string; now?: () => number };
 type Eligible = J08Subject & { creatorId: string; revision: number; campaigns: string[]; notionReceipt: string; sheetsReceipt: string };
-export type WindowRow = { subjectRef: string; runRef: string | null; item: JobItemView | null; outcome: J08ItemOutcome | null; category: J08Category; lastSuccessAt: string | null };
+export type WindowRow = { subjectRef: string; runRef: string | null; item: JobItemView | null; outcome: J08ItemOutcome | null; category: J08Category; lastSuccessAt: string | null;
+  notAdmitted?: "J08_PRIOR_PAGE_INCOMPLETE" | "J08_PAGE_NOT_YET_ADMITTED" };
 
 // The runtime's own source lease ceiling. A page older than that is not a current observation.
 const SOURCE_LEASE_MS = 15 * 60_000;
@@ -112,24 +114,35 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
   }
   const eligibleSubject = (subjectRef: string) => eligibleRows().rows.find(r => r.subjectRef === subjectRef) ?? null;
 
-  /** The frozen watchlist page for a window. The whole watchlist is frozen once; every page is a slice of that snapshot. */
-  function plan(window: RuntimeWindow, continuation: string | null): RuntimeMembership {
+  /**
+   * The whole eligible watchlist of a window: the frozen snapshot once admitted, otherwise a candidate. Candidates are ordered by a
+   * per-window digest, so a persistently held row cannot sit on the same page and starve the same later rows every hour.
+   */
+  function watchlistFor(window: RuntimeWindow) {
     if (!refs.has(window.registrationRef)) throw new RuntimeError("J08_WINDOW_MISMATCH", 409);
-    // A refresh returns the frozen snapshot unchanged; a changed policy then holds each item. A new window needs the pinned policy.
-    const policy = repo.watchlist(window.windowRef) ? null : currentPolicy();
-    if (!repo.watchlist(window.windowRef) && !policy) throw new RuntimeError("J08_POLICY_VERSION_CHANGED", 409);
-    const frozen = repo.watchlist(window.windowRef) ?? repo.freezeWatchlist(window.windowRef, policy!.eligibilityPolicyVersion, () => {
-      const { rows, complete } = eligibleRows();
-      if (!complete) throw new RuntimeError("J08_MEMBERSHIP_INCOMPLETE", 503);
-      return rows.map(r => ({ subject: { subjectRef: r.subjectRef, network: r.network, accountId: r.accountId, profileId: r.profileId },
-        enrollmentRef: `j01-enrollment:${digest([r.creatorId, r.revision, r.notionReceipt, r.sheetsReceipt])}` }));
-    });
+    const frozen = repo.watchlist(window.windowRef);
+    if (frozen) return { frozen, entries: frozen.entries, eligibilityPolicyVersion: frozen.eligibilityPolicyVersion, rows: null };
+    // A new window needs the pinned policy; a refresh of a frozen window does not (the next item then holds instead).
+    const policy = currentPolicy();
+    if (!policy) throw new RuntimeError("J08_POLICY_VERSION_CHANGED", 409);
+    const { rows, complete } = eligibleRows();
+    if (!complete) throw new RuntimeError("J08_MEMBERSHIP_INCOMPLETE", 503);
+    const ordered = rows.map(r => ({ subject: { subjectRef: r.subjectRef, network: r.network, accountId: r.accountId, profileId: r.profileId },
+      enrollmentRef: `j01-enrollment:${digest([r.creatorId, r.revision, r.notionReceipt, r.sheetsReceipt])}`, order: digest([window.windowRef, r.subjectRef]) }))
+      .sort((a, b) => a.order.localeCompare(b.order)).map(({ subject, enrollmentRef }) => ({ subject, enrollmentRef }));
+    return { frozen: null, entries: ordered.map(r => ({ subjectRef: r.subject.subjectRef, enrollmentRef: r.enrollmentRef })),
+      eligibilityPolicyVersion: policy.eligibilityPolicyVersion, rows: ordered };
+  }
+  /** The watchlist page for a window. Continuation pages exist only after the first page's snapshot was admitted and frozen. */
+  function plan(window: RuntimeWindow, continuation: string | null): RuntimeMembership {
+    const watch = watchlistFor(window);
+    if (continuation !== null && !watch.frozen) throw new RuntimeError("J08_WATCHLIST_NOT_ADMITTED", 409);
     const offset = continuation === null ? 0 : Number(/^j08-page:(\d{1,6})$/.exec(continuation)?.[1] ?? NaN);
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > frozen.entries.length) throw new RuntimeError("J08_CONTINUATION_INVALID", 422);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > watch.entries.length) throw new RuntimeError("J08_CONTINUATION_INVALID", 422);
     const max = registrations.find(r => r.registrationRef === window.registrationRef)!.definition.budgets.maxItems;
-    const page = frozen.entries.slice(offset, offset + max), more = offset + max < frozen.entries.length;
+    const page = watch.entries.slice(offset, offset + max), more = offset + max < watch.entries.length;
     return { items: page.map(e => ({ itemKey: e.subjectRef, subjectRef: e.subjectRef, evidenceRef: null, enrollmentRef: e.enrollmentRef })),
-      coverage: more ? "partial" : "complete", continuation: more ? `j08-page:${offset + max}` : null, total: frozen.entries.length - offset };
+      coverage: more ? "partial" : "complete", continuation: more ? `j08-page:${offset + max}` : null, total: watch.entries.length - offset };
   }
   /** Server composition: the injected source authority signs each J08 window lease over J08's own frozen membership, never its own list. */
   function composeAuthority(base: RuntimeAuthority): RuntimeAuthority {
@@ -137,11 +150,14 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
       resolveActivation: r => base.resolveActivation(r), assertActivation: (p, r, at) => base.assertActivation(p, r, at),
       async prepareWindow(input) {
         if (!refs.has(input.registration.registrationRef)) return base.prepareWindow(input);
-        const membership = plan(input.window, input.continuation);
+        await drainRoutes();
+        const watch = watchlistFor(input.window), membership = plan(input.window, input.continuation);
         const proof = await base.prepareWindow({ ...input, membership: structuredClone(membership) });
         const parsed = runtimeWindowPlanSchema.safeParse(proof);
         if (!parsed.success || parsed.data.kind !== "source" || digest({ items: parsed.data.items, coverage: parsed.data.coverage, continuation: parsed.data.continuation,
           total: parsed.data.total }) !== digest(membership)) throw new RuntimeError("J08_WINDOW_PLAN_MISMATCH", 502);
+        // The watchlist freezes only once the source authority has signed this exact membership; a refused attempt freezes nothing.
+        if (!watch.frozen && watch.rows) repo.freezeWatchlist(input.window.windowRef, watch.eligibilityPolicyVersion, watch.rows);
         return proof;
       },
       assertWindow: (p, r, at) => base.assertWindow(p, r, at), resolvePreflight: request => base.resolvePreflight(request),
@@ -156,15 +172,40 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     const eventId = `j08-${digest([windowRef, condition]).slice(0, 40)}`;
     try { return `J14_${(await health.check({ capabilityId, eventId }, eventId)).state.toUpperCase()}`; } catch { return "J14_ROUTE_UNAVAILABLE"; }
   }
-  // J14 may hold the binding after it observes the source, so routing runs after the runtime commits this item's hold or takeover.
-  const pendingRoutes = new Set<Promise<void>>();
-  function scheduleRoute(windowRef: string, condition: string, note?: { runRef: string; itemRef: string; subjectRef: string }) {
-    const routed = new Promise<void>(resolve => setImmediate(() => {
-      void routeToJ14(windowRef, condition).then(route => { if (note) repo.noteHealthRoute(note.runRef, note.itemRef, note.subjectRef, windowRef, route); })
-        .catch(() => {}).finally(resolve);
-    }));
-    pendingRoutes.add(routed);
-    void routed.finally(() => pendingRoutes.delete(routed));
+  /**
+   * Durable J14 routing. A failure row is persisted with its failure and acts as an outbox entry until J14 has answered. Every J08 window
+   * admission or refresh drains it, so a crash or a failed call is retried; J14 deduplicates by event ID, so its probe runs once per
+   * window and condition. Routing runs before the runtime's next items, never inside an item that is still being committed.
+   */
+  async function drainRoutes() {
+    try {
+      for (const row of repo.unroutedFailures(200)) {
+        const route = await routeToJ14(row.windowRef, row.reason);
+        if (route !== "J14_ROUTE_UNAVAILABLE" && route !== "J14_NOT_COMPOSED") repo.noteHealthRoute(row.runRef, row.itemRef, row.subjectRef, row.windowRef, route);
+      }
+    } catch { /* Routing never blocks admission; unrouted rows stay in the outbox for the next pass. */ }
+  }
+  /** Whether the runtime committed a run item as completed, cached per call. */
+  function committedCheck(): Committed {
+    const runs = new Map<string, Map<string, string>>();
+    return (runRef, itemRef) => {
+      let items = runs.get(runRef);
+      if (!items) { try { items = new Map(deps.jobs.getRun(runRef).items.map(i => [i.itemId, i.state])); } catch { items = new Map(); } runs.set(runRef, items); }
+      return items.get(itemRef) === "completed";
+    };
+  }
+  /** The ledger's verified publication record maps a native post to its creative and deliverable; a social page never does. */
+  function creativeResolver(events: FunnelEvent[]) {
+    return (network: string, accountId: string, postId: string): Creative => {
+      const records = events.filter(e => e.eventType === "published" && e.evidenceRef.access === "verified" && e.network === network && e.details.postId === postId &&
+        (e.sourceAccount.sourceId ?? e.sourceAccount.canonicalId) === accountId);
+      const facts = new Set(records.map(e => JSON.stringify([e.details.creativeId ?? null, e.details.deliverableId ?? null])));
+      if (!records.length) return { creativeRef: null, deliverableRef: null, receiptRef: null, unmappedReason: "NO_LEDGER_PUBLICATION_RECORD" };
+      if (facts.size !== 1) return { creativeRef: null, deliverableRef: null, receiptRef: null, unmappedReason: "LEDGER_MAPPING_CONFLICT" };
+      const [creativeRef, deliverableRef] = JSON.parse([...facts][0]!) as [string | null, string | null];
+      return { creativeRef, deliverableRef, receiptRef: records.map(e => e.evidenceRef.provenanceRef).sort()[0]!,
+        unmappedReason: creativeRef ? null : "LEDGER_PUBLICATION_WITHOUT_CREATIVE" };
+    };
   }
   const openTakeover = () => windowRuns().some(w => deps.runtime()?.takeovers(w.runRef).some(t => !t.resolved && t.bindingHash === apiBindingHash));
 
@@ -226,24 +267,23 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
       if (page.access !== "authorized") {
         const failure = repo.recordAccessFailure({ ...item, page }, fence);
         if (transientAccess(page.access)) return { state: "retry", reasonCode: failure.reason, retryAfterMs: page.retryAfterMs ?? 1000 };
-        scheduleRoute(context.window.windowRef, failure.reason, { runRef: context.runRef, itemRef: context.itemRef, subjectRef: subject.subjectRef });
-        if (page.access === "denied") return { state: "held", reasonCode: failure.reason };
+        // A row-level denial completes its runtime item with an explicit inaccessible outcome, so it cannot block later pages of the window.
+        // The condition stays visible and owned: the J08 outcome, the J14 outbox and all clear all carry it.
+        if (page.access === "denied") return { state: "completed", evidenceRefs: [], recordCount: 0, sourceReceiptRef: page.receiptRef };
         return { state: "takeover", kind: takeoverKinds[page.access], reasonCode: failure.reason, ownerRef: j08Owners.J14,
           handoffRef: `j08-handoff:${digest([apiBindingHash, page.access])}` };
       }
-      repo.recordPage({ ...item, stage, page, campaigns: current.campaigns, policy }, fence);
+      const ledger = effectiveEvents(deps.funnel.snapshot({ asOf: new Date(now()).toISOString() }).events);
+      repo.recordPage({ ...item, stage, page, campaigns: current.campaigns, policy, creativeOf: creativeResolver(ledger) }, fence);
       if (page.nextCursor !== null || stage === "posts")
         return { state: "checkpoint", evidenceRefs: [], recordCount, sourceReceiptRef: page.receiptRef,
           nextCursor: page.nextCursor !== null ? encodeCursor(stage, page.nextCursor) : encodeCursor("inbox", null) };
       // Both stages are complete: join the canonical order ledger for this row's Farda content.
-      const asOf = new Date(now()).toISOString(), events = effectiveEvents(deps.funnel.snapshot({ asOf }).events);
+      const asOf = new Date(now()).toISOString(), events = ledger;
       const attributions = new Map(repo.subjectContent(subject.subjectRef).filter(c => c.assignment.state === "attributed" && c.assignment.campaignId && !c.conflict)
         .map(c => [c.contentKey, orderAttribution({ network: c.network, postId: c.postId, creatorId: current.creatorId, campaignId: c.assignment.campaignId!,
           publishedAt: c.publishedAt }, events, asOf, policy.attributionWindows)] as const));
-      repo.finishItem({ ...item, attributions }, fence);
-      // A complete, healthy read asks J14 to re-observe an open exception; only J14's own observation resolves it.
-      const health = deps.health?.();
-      if (health?.exceptions(capabilityId, 100).records.some(e => e.state === "open")) scheduleRoute(context.window.windowRef, "HEALTHY_READ_OBSERVED");
+      repo.finishItem({ ...item, attributions, committed: committedCheck() }, fence);
       return { state: "completed", evidenceRefs: [], recordCount, sourceReceiptRef: page.receiptRef };
     },
   };
@@ -261,7 +301,7 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     return [...seen.values()].slice(0, limit);
   }
   function categorize(item: JobItemView, outcome: J08ItemOutcome | null): J08Category {
-    if (item.state === "completed") return outcome?.category === "newContent" || outcome?.category === "unchanged" ? outcome.category : "failed";
+    if (item.state === "completed") return outcome?.category === "newContent" || outcome?.category === "unchanged" || outcome?.category === "inaccessible" ? outcome.category : "failed";
     if (item.state === "failed" || item.state === "reconcile") return "failed";
     if (item.state === "held" && (outcome?.category === "inaccessible" || outcome?.category === "failed")) return outcome.category;
     return "deferred";
@@ -274,12 +314,16 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     const pages = runs.filter(r => r.window.windowRef === windowRef), at = intended.get(windowRef) ?? Infinity;
     const items = new Map<string, { runRef: string; item: JobItemView }>();
     for (const p of pages) for (const item of deps.jobs.getRun(p.runRef).items) items.set(item.input.subjectRef, { runRef: p.runRef, item });
+    // Rows on an unadmitted page are deferred; say whether an unfinished earlier page is what keeps them out.
+    const priorPageBlocked = [...items.values()].some(({ item }) => item.state !== "completed");
     // Last success as of this window: never a success from a later window.
-    const successAsOf = (subjectRef: string) => repo.successes(subjectRef).filter(s => (intended.get(s.windowRef) ?? Infinity) <= at)
+    const committed = committedCheck();
+    const successAsOf = (subjectRef: string) => repo.successes(subjectRef, committed).filter(s => (intended.get(s.windowRef) ?? Infinity) <= at)
       .reduce<string | null>((best, s) => !best || Date.parse(s.at) > Date.parse(best) ? s.at : best, null);
     const rows: WindowRow[] = watch.entries.map(({ subjectRef }) => {
       const hit = items.get(subjectRef);
-      if (!hit) return { subjectRef, runRef: null, item: null, outcome: null, category: "deferred" as const, lastSuccessAt: successAsOf(subjectRef) };
+      if (!hit) return { subjectRef, runRef: null, item: null, outcome: null, category: "deferred" as const, lastSuccessAt: successAsOf(subjectRef), notAdmitted: priorPageBlocked
+        ? "J08_PRIOR_PAGE_INCOMPLETE" : "J08_PAGE_NOT_YET_ADMITTED" };
       const outcome = repo.outcome(hit.runRef, hit.item.itemId);
       return { subjectRef, runRef: hit.runRef, item: hit.item, outcome, category: categorize(hit.item, outcome), lastSuccessAt: successAsOf(subjectRef) };
     });
@@ -293,19 +337,23 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     const health = deps.health?.();
     // Row conditions are evaluated as of this window's own last source observation; a later failure is never back-dated into it.
     const asOf = rows.map(r => r.outcome?.observedAt).filter((v): v is string => !!v).sort().at(-1) ?? null;
-    const open = [...allSubjects].some(s => repo.subjectAccess(s, asOf) !== null) || openTakeover() || (health?.exceptions(capabilityId, 100).records.some(e => e.state === "open") ?? false);
+    // Content-level inaccessibility counts too, including content of rows that have since left the watchlist.
+    const contentOpen = repo.allContent().filter(c => c.assignment.state !== "unrelated" && allSubjects.has(c.subjectRef))
+      .some(c => repo.latestStatus(c.contentKey, asOf)?.state === "inaccessible");
+    const open = [...allSubjects].some(s => repo.subjectAccess(s, committed, asOf) !== null) || contentOpen || openTakeover() ||
+      (health?.exceptions(capabilityId, 100).records.some(e => e.state === "open") ?? false);
     return { snapshotCount: rows.length, scanned: counts.unchanged + counts.newContent, ...counts, lastSourceSuccess, complete,
       noNewContent: complete ? counts.newContent === 0 : null, allClear: complete ? !open : null, rows,
       window: pages[0]?.window ?? null, watchlistVersion: watch.watchlistVersion };
   }
-  const view = createContentMonitorView({ repo, scope, registration: hourly, evidenceStage: binding.evidenceStage, intake: deps.intake, coverage, windows, now,
+  const view = createContentMonitorView({ repo, scope, registration: hourly, evidenceStage: binding.evidenceStage, intake: deps.intake, coverage, windows, now, committedCheck,
     checkpointsVersion: () => currentPolicy()?.checkpoints.version ?? null, subjectRefOf });
   const source: MonitorSourceReader = view.reader;
   const executors = new Map(registry.executors);
   for (const r of registrations) executors.set(r.executorRef, executor);
   return { registry: { registrations: registry.registrations, executors } as RuntimeRegistry, source, plan, composeAuthority, coverage, windows,
     trace: view.trace, output: view.output, report: view.report, proposals: () => repo.proposals(),
-    /** Resolves when every scheduled J14 routing call has finished. */
-    whenRouted: async () => { while (pendingRoutes.size) await Promise.all([...pendingRoutes]); }, registrationRef: hourly.registrationRef,
+    /** Drains the durable J14 routing outbox now; window admission and refresh also drain it. */
+    drainRoutes, subject: (subjectRef: string) => repo.subject(subjectRef), registrationRef: hourly.registrationRef,
     manualRecheckRef: manual?.registrationRef ?? null, evidenceStage: binding.evidenceStage, capabilityId };
 }

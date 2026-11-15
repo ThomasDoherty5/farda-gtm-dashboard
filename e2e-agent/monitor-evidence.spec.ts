@@ -233,7 +233,9 @@ test("J08 sandbox run feeds the monitor reads through the registered runtime, wi
   const post=async(path:string,body:unknown,bearer=token,headers:Record<string,string>={})=>{const r=await fetch(origin+path,{method:"POST",headers:{authorization:"Bearer "+bearer,"content-type":"application/json",...headers},body:JSON.stringify(body)});return {status:r.status,body:await r.json() as Record<string,unknown>};};
   const fire=async(registrationRef:string,intendedAt:string,trigger:string)=>{const fired=await post("/v1/runtime/machine",{operation:"fire",input:{registrationRef,registrationVersion:1,intendedAt,triggerEventRef:trigger}});
     expect(fired.status,JSON.stringify(fired.body)).toBe(200);return runtimeApiAckSchema.parse(fired.body).runRefs[0]!;};
-  const work=async(runRef:string)=>{const answer=await post("/v1/runtime/machine",{operation:"work",input:{runRef,maxItems:10}});expect(answer.status,JSON.stringify(answer.body)).toBe(200);await app.contentMonitor!.whenRouted();};
+  const work=async(runRef:string)=>{const answer=await post("/v1/runtime/machine",{operation:"work",input:{runRef,maxItems:10}});expect(answer.status,JSON.stringify(answer.body)).toBe(200);
+    // The hourly driver's next pass drains the durable J14 routing outbox.
+    await app.contentMonitor!.drainRoutes();};
   const latest=()=>app.contentMonitor!.windows()[0]!.windowRef;
   try{
     const ids=await seedJ08Intake(post,scope,SYNTHETIC_REVIEW_TOKEN);

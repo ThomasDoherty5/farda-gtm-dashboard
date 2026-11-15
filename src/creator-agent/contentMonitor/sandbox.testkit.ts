@@ -63,33 +63,34 @@ export const j08SandboxCreators: Creator[] = [
     profiles: [{ network: "instagram", accountId: "synthetic-ig-account-e", sourceId: "synthetic-ig-profile-e", handle: "synthetic.maker.e" }] },
 ];
 
-type PostSpec = { id: string; account: string; network: "instagram" | "tiktok"; ageHours: number; creative: J08Page["posts"][number]["creative"]; url: string | null;
+/** `creative` seeds the funnel ledger's verified publication record; the social source page never carries it. */
+type PostSpec = { id: string; account: string; network: "instagram" | "tiktok"; ageHours: number; creative: { creativeRef: string; deliverableRef: string | null } | null; url: string | null;
   evidence: J08Page["posts"][number]["fardaEvidence"]; counts: Partial<Record<J08Metric["metricKey"], number | null>> };
 const ig = (id: string) => `https://www.instagram.com/reel/${id}/`, tt = (handle: string, id: string) => `https://www.tiktok.com/@${handle}/video/${id}`;
 const reviewed = (kind: J08Page["posts"][number]["fardaEvidence"][number]["kind"], campaignId: string | null, receipt: string) => [{ kind, campaignId, reviewed: true, receiptRef: receipt }];
-const creative = (creativeRef: string, role: "original" | "derivative", deliverableRef: string | null) => ({ creativeRef, role, deliverableRef, receiptRef: `synthetic-mapping-${creativeRef}-${role}` });
+const creative = (creativeRef: string, deliverableRef: string | null) => ({ creativeRef, deliverableRef });
 /** Native post fixtures. Instagram and TikTok views have different definitions, so a cross-network total is not comparable. */
 export const j08SandboxPosts: PostSpec[] = [
   // Late for the 168h checkpoint (outside its 12h tolerance) and matured for the 168h attribution window.
-  { id: "SYNTHA1", account: "synthetic-ig-account-a", network: "instagram", ageHours: 200, creative: creative("synthetic-creative-a1", "original", "synthetic-deliverable-a1"),
+  { id: "SYNTHA1", account: "synthetic-ig-account-a", network: "instagram", ageHours: 200, creative: creative("synthetic-creative-a1", "synthetic-deliverable-a1"),
     url: ig("SYNTHA1"), evidence: reviewed("productLink", "campaign-spring", "synthetic-link-review-a1"), counts: { views: 1200, likes: 90, comments: 12, shares: 6 } },
   // Zero engagement, inside the 168h checkpoint tolerance, matured with no order assigned.
-  { id: "SYNTHA2", account: "synthetic-ig-account-a", network: "instagram", ageHours: 170, creative: creative("synthetic-creative-a2", "original", "synthetic-deliverable-a2"),
+  { id: "SYNTHA2", account: "synthetic-ig-account-a", network: "instagram", ageHours: 170, creative: creative("synthetic-creative-a2", "synthetic-deliverable-a2"),
     url: ig("SYNTHA2"), evidence: reviewed("reviewedLink", "campaign-spring", "synthetic-link-review-a2"), counts: { views: 0, likes: 0, comments: 0, shares: 0 } },
-  { id: "7300000000000000001", account: "synthetic-tt-account-b", network: "tiktok", ageHours: 192, creative: creative("synthetic-creative-b1", "original", "synthetic-deliverable-b1"),
+  { id: "7300000000000000001", account: "synthetic-tt-account-b", network: "tiktok", ageHours: 192, creative: creative("synthetic-creative-b1", "synthetic-deliverable-b1"),
     url: tt("synthetic.maker.b", "7300000000000000001"), evidence: reviewed("discountCode", "campaign-spring", "synthetic-code-review-b1"),
     counts: { views: 5000, likes: 300, comments: 20, shares: null } },
   { id: "7300000000000000002", account: "synthetic-tt-account-b", network: "tiktok", ageHours: 40, creative: null, url: null, evidence: [], counts: { views: 70 } },
-  // A crosspost of the same creative, mapped as a derivative by the asset owner.
-  { id: "SYNTHB1", account: "synthetic-ig-account-b", network: "instagram", ageHours: 175, creative: creative("synthetic-creative-b1", "derivative", "synthetic-deliverable-b1"),
+  // A crosspost of the same creative; the ledger maps both native posts to one contracted creative.
+  { id: "SYNTHB1", account: "synthetic-ig-account-b", network: "instagram", ageHours: 175, creative: creative("synthetic-creative-b1", "synthetic-deliverable-b1"),
     url: ig("SYNTHB1"), evidence: reviewed("reviewedLink", "campaign-spring", "synthetic-link-review-b1-ig"), counts: { views: 800, likes: 40, comments: 4, shares: 2 } },
   { id: "SYNTHC1", account: "synthetic-ig-account-c", network: "instagram", ageHours: 5, creative: null, url: ig("SYNTHC1"),
     evidence: reviewed("brandMention", null, "synthetic-brand-review-c1"), counts: { views: 400, likes: 20, comments: 2, shares: 1 } },
-  // No creative mapping: unmapped, never guessed as an original.
+  // No ledger publication record: unmapped, never guessed from the page.
   { id: "7300000000000000004", account: "synthetic-tt-account-d", network: "tiktok", ageHours: 24.5, creative: null,
     url: tt("synthetic.maker.d", "7300000000000000004"), evidence: reviewed("reviewedLink", "campaign-spring", "synthetic-link-review-d1"),
     counts: { views: 300, likes: 10, comments: 1, shares: 0 } },
-  { id: "SYNTHE1", account: "synthetic-ig-account-e", network: "instagram", ageHours: 2, creative: creative("synthetic-creative-e1", "original", null), url: ig("SYNTHE1"),
+  { id: "SYNTHE1", account: "synthetic-ig-account-e", network: "instagram", ageHours: 2, creative: creative("synthetic-creative-e1", null), url: ig("SYNTHE1"),
     evidence: reviewed("productLink", "campaign-autumn", "synthetic-link-review-e1"), counts: { views: 50, likes: 5, comments: 0, shares: 0 } },
 ];
 const definitions = { instagram: "Synthetic Instagram plays (native lifetime counter)", tiktok: "Synthetic TikTok video views (native lifetime counter)" };
@@ -106,11 +107,13 @@ export type J08SandboxWorld = { now: () => number; t0: number; reads: J08ReadReq
   /** Post IDs whose own read is denied while the profile stays readable, and source edit times reported per post. */
   postDenied: Set<string>; sourceUpdatedAt: Map<string, string>;
   /** Shifts the next pages' source observation time, to replay an older page inside the lease. */
-  observedShiftMs: number };
+  observedShiftMs: number;
+  /** Runs once, as a microtask, after the next Inbox-stage source fence: after J08's write commits, before the runtime commits the item. */
+  onInboxFence: (() => void) | null };
 export function createJ08SandboxWorld(now: () => number, t0: number): J08SandboxWorld {
   return { now, t0, reads: [], failOnce: new Set(["synthetic-tt-account-b:page-2"]), failed: new Set(), session: "ok", access: new Map(), privatePosts: new Set(),
     urlOverride: new Map(), extraPosts: new Map(), crossAccount: false, stage: "synthetic", fixedReceipt: null, throwStatus: null, inboxDenied: null, postDenied: new Set(),
-    sourceUpdatedAt: new Map(), observedShiftMs: 0 };
+    sourceUpdatedAt: new Map(), observedShiftMs: 0, onInboxFence: null };
 }
 /** Read-only synthetic source: it has no send, like, follow, accept, rate or approval capability. */
 export function createJ08SandboxSource(world: J08SandboxWorld): J08SourceReader {
@@ -142,7 +145,7 @@ export function createJ08SandboxSource(world: J08SandboxWorld): J08SourceReader 
       const posts = chosen.map(p => {
         const publishedAt = new Date(world.t0 - p.ageHours * 3600_000).toISOString(), hidden = world.privatePosts.has(p.id), denied = world.postDenied.has(p.id);
         return { ref: { provider: p.network, accountId: world.crossAccount ? "synthetic-other-account" : account, sourceId: p.id, url: world.urlOverride.get(p.id) ?? p.url },
-          creative: p.creative, publishedAt, sourceUpdatedAt: world.sourceUpdatedAt.get(p.id) ?? null, access: denied ? "denied" : "authorized",
+          publishedAt, sourceUpdatedAt: world.sourceUpdatedAt.get(p.id) ?? null, access: denied ? "denied" : "authorized",
           visibility: denied ? null : hidden ? "private" : "public", context: "organic", fardaEvidence: p.evidence, metrics: hidden || denied ? [] : (["views", "likes", "comments", "shares", "saves", "reach"] as const).map(metricKey => {
             const value = p.counts[metricKey] ?? null;
             return { metricKey, value, unit: "count", definition: metricKey === "views" ? definitions[p.network] : `Synthetic native ${metricKey}`, semantics: "cumulative",
@@ -151,7 +154,10 @@ export function createJ08SandboxSource(world: J08SandboxWorld): J08SourceReader 
       });
       return { ...base, receiptRef: receipt(pageKey), access: "authorized", posts, nextCursor: split && request.cursor === null ? "synthetic-page-2" : null };
     },
-    assertCurrent(page, request) { if (page.requestDigest !== digest(request)) throw new RuntimeError("SYNTHETIC_SOURCE_CHANGED"); },
+    assertCurrent(page, request) {
+      if (page.requestDigest !== digest(request)) throw new RuntimeError("SYNTHETIC_SOURCE_CHANGED");
+      if (request.stage === "inbox" && world.onInboxFence) { const hook = world.onInboxFence; world.onInboxFence = null; queueMicrotask(hook); }
+    },
   };
 }
 
@@ -274,12 +280,27 @@ export function j08SandboxOrders(ids: Map<string, string>, scope: { accountId: s
   const day = 86_400_000, order = (name: string, creator: string, campaign: string, opportunity: string, network: "instagram" | "tiktok", checkout: "website" | "tiktok-shop",
     orderId: string, postId: string | null, retainedMinor: number, type: "retainedOrder" | "refund" = "retainedOrder", late = 0) => evt(name, type, opportunity, 5, {
     creatorRef: ref("notion", ids.get(creator)!), campaignCohortRef: ref("notion", campaign), sourceAccount: ref(checkout === "website" ? "shopify" : "tiktok-shop", "synthetic-checkout"),
-    acquisitionRef: ref("social-cat", "synthetic-recruit-account"), network, checkout, cohortStart: new Date(now - 10 * day).toISOString(), maturationAt: new Date(now - day).toISOString(),
+    acquisitionRef: ref("social-cat", "synthetic-recruit-account"), network, checkout, cohortStart: new Date(now - 10 * day).toISOString(), maturationAt: new Date(now - 60_000).toISOString(),
     occurredAt: new Date(now - 2 * day + late).toISOString(), observedAt: new Date(now - 2 * day + late + 60_000).toISOString(),
     evidenceRef: { provenanceRef: `synthetic-order-proof-${name}`, version: "1", method: "source read", access: "verified", url: null, definition: "synthetic retained order", unit: "order", window: "synthetic 7-day click window" },
     ingestIdentity: { nativeId: `synthetic-native-${name}`, fingerprint: null, sourceVersion: "1" },
     details: { orderId, ...(postId ? { postId } : {}), retainedMinor, currency: "USD", attributionVersion: "synthetic-attribution-v1", attributionWindow: "synthetic 7-day click window", blockers: [] } });
+  // The ledger's verified publication records: they own the post-to-creative and deliverable mapping that J08 reads.
+  const owners: Record<string, [string, string, string]> = { "synthetic-ig-account-a": ["a", "campaign-spring", "synthetic-opportunity-a"],
+    "synthetic-ig-account-b": ["b", "campaign-spring", "synthetic-opportunity-b"], "synthetic-tt-account-b": ["b", "campaign-spring", "synthetic-opportunity-b"],
+    "synthetic-ig-account-e": ["e", "campaign-autumn", "synthetic-opportunity-e"] };
+  const publications = j08SandboxPosts.filter(p => p.creative && owners[p.account]).map(p => {
+    const [creator, campaign, opportunity] = owners[p.account]!, publishedAt = now - p.ageHours * 3_600_000;
+    return evt(`publication-${p.id}`, "published", opportunity, 5, { creatorRef: ref("notion", ids.get(creator)!), campaignCohortRef: ref("notion", campaign),
+      sourceAccount: ref(p.network, p.account), acquisitionRef: ref("social-cat", "synthetic-recruit-account"), network: p.network, checkout: "website",
+      cohortStart: new Date(now - 10 * day).toISOString(), maturationAt: new Date(now - 60_000).toISOString(), occurredAt: new Date(publishedAt).toISOString(),
+      observedAt: new Date(publishedAt + 60_000).toISOString(),
+      evidenceRef: { provenanceRef: `synthetic-publication-proof-${p.id}`, version: "1", method: "native read", access: "verified", url: null, definition: "synthetic verified publication", unit: "post", window: null },
+      ingestIdentity: { nativeId: `synthetic-native-publication-${p.id}`, fingerprint: null, sourceVersion: "1" },
+      details: { postId: p.id, creativeId: p.creative!.creativeRef, ...(p.creative!.deliverableRef ? { deliverableId: p.creative!.deliverableRef } : {}), blockers: [] } });
+  });
   return [
+    ...publications,
     order("order-a1", "a", "campaign-spring", "synthetic-opportunity-a", "instagram", "website", "synthetic-order-a1", "SYNTHA1", 4000),
     order("order-b1-tiktok", "b", "campaign-spring", "synthetic-opportunity-b", "tiktok", "tiktok-shop", "synthetic-order-b1", "7300000000000000001", 2500),
     order("order-b1-shopify-import", "b", "campaign-spring", "synthetic-opportunity-b", "tiktok", "website", "synthetic-order-b1", "7300000000000000001", 2500),
