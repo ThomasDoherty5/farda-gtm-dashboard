@@ -1,6 +1,7 @@
 import { screenReaderCheckpoint } from "./support/screen-reader";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync,writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect,test,type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { digest } from "../src/creator-agent/config.ts";
@@ -9,6 +10,13 @@ import { MonitorError } from "../src/creator-agent/monitor/reader.ts";
 import { intakeInputSchema,type SinkBinding,type SinkReceipt } from "../src/creator-agent/intake/contract.ts";
 import type { CanonicalRecord } from "../src/creator-agent/intake/repository.ts";
 import { SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
+import { AgentStore } from "../src/creator-agent/store.ts";
+import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
+import { nativeContentSchema } from "../src/creator-agent/monitor/contract.ts";
+import { runtimeSyntheticScope } from "../src/creator-agent/jobs/runtime.testkit.ts";
+import { runtimeApiAckSchema } from "../src/creator-agent/jobs/runtimeViews.ts";
+import { createJ08SandboxRuntime,createJ08SandboxSource,createJ08SandboxWorld,ingestJ08Orders,j08SandboxIntakeAuthority,j08SandboxOrders,j08SandboxPolicy,
+  seedJ08Intake } from "../src/creator-agent/contentMonitor/sandbox.testkit.ts";
 
 function sink(name:string){
   const records=new Map<string,SinkReceipt>();
@@ -206,4 +214,105 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     await expect(page.getByText("No matching saved campaign posts. Provider-wide post count is unknown.")).toBeVisible();
     writeFileSync(dir+"/native-browser-proof.json",JSON.stringify({audit,source:"Actual local agent service and SQLite with scoped synthetic J01/J08 authority",externalActions:0},null,2));
   }finally{await app.close();}
+});
+
+test("J08 sandbox run feeds the monitor reads through the registered runtime, with resume and truthful coverage",async({page},testInfo)=>{
+  test.setTimeout(180_000);
+  const dir=testInfo.outputPath("j08-sandbox-evidence");mkdirSync(dir,{recursive:true});
+  const scope=runtimeSyntheticScope,databasePath=join(dir,"agent.sqlite"),store=new AgentStore(databasePath,scope);
+  const slot=Math.floor(Date.now()/3600_000)*3600_000,first=new Date(slot-3600_000).toISOString(),second=new Date(slot).toISOString();
+  const world=createJ08SandboxWorld(Date.now,Date.now()),suppressed=new Set<string>(),proofs=new Map<string,string>(),holder:{app?:ReturnType<typeof createAgentServer>}={};
+  const runtime=createJ08SandboxRuntime(store.database,{now:Date.now,plan:()=>holder.app!.contentMonitor!.plan});
+  await runtime.kit.initialize();
+  const token="synthetic-j08-runtime-worker-credential-e2e0";
+  const app=createAgentServer({databasePath,workspaceId:scope.workspaceId,accountId:scope.accountId,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,
+    intakeAuthority:j08SandboxIntakeAuthority(suppressed),funnelAuthority:{resolve:async(s,_r,ref)=>proofs.has(ref)?{...s,eventHash:proofs.get(ref)!}:null},
+    runtime:{registry:{registrations:runtime.kit.registry.registrations,executors:new Map()},authority:runtime.authority,machine:{token,workerRef:runtime.kit.machine.workerRef,
+      resolve:async(s,operation,input)=>({scope:s,workerRef:runtime.kit.machine.workerRef,operation,inputHash:digest(input),proofRef:"synthetic-machine-proof",
+        observedAt:new Date().toISOString(),validUntil:new Date(Date.now()+60_000).toISOString()}),assertCurrent:()=>{}}},
+    contentMonitor:{registrationRef:runtime.registration.registrationRef,policy:()=>j08SandboxPolicy,source:createJ08SandboxSource(world),evidenceStage:"synthetic"}});
+  holder.app=app;
+  await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});
+  const origin=`http://127.0.0.1:${process.env.E2E_AGENT_SERVER_PORT}`;
+  const post=async(path:string,body:unknown,bearer=token,headers:Record<string,string>={})=>{const r=await fetch(origin+path,{method:"POST",headers:{authorization:"Bearer "+bearer,"content-type":"application/json",...headers},body:JSON.stringify(body)});return {status:r.status,body:await r.json() as Record<string,unknown>};};
+  const run=async(intendedAt:string,trigger:string)=>{await runtime.kit.verify("api");const fired=await post("/v1/runtime/machine",{operation:"fire",input:{registrationRef:runtime.registration.registrationRef,registrationVersion:1,intendedAt,triggerEventRef:trigger}});
+    expect(fired.status,JSON.stringify(fired.body)).toBe(200);return runtimeApiAckSchema.parse(fired.body).runRefs[0]!;};
+  const work=async(runRef:string)=>{await runtime.kit.verify("api");const answer=await post("/v1/runtime/machine",{operation:"work",input:{runRef,maxItems:10}});expect(answer.status,JSON.stringify(answer.body)).toBe(200);};
+  try{
+    const ids=await seedJ08Intake(post,scope,SYNTHETIC_REVIEW_TOKEN);
+    await ingestJ08Orders(post,proofs,j08SandboxOrders(ids,scope,Date.now()),Date.now(),SYNTHETIC_REVIEW_TOKEN);
+    const run1=await run(first,"synthetic-hourly-trigger");
+    await work(run1);
+    const raw1=app.contentMonitor!.runs()[0]!;
+    expect(app.contentMonitor!.output(raw1).freshnessCoverage).toMatchObject({snapshotCount:6,deferred:1,complete:false,noNewContent:null,allClear:null});
+    // A manual recheck of the same hour shares the frozen snapshot and resumes the interrupted row from its checkpoint.
+    await page.waitForTimeout(1500);
+    await work(await run(first,"synthetic-manual-recheck"));
+    expect(app.contentMonitor!.runs()).toEqual([raw1]);
+    expect(app.contentMonitor!.output(raw1).freshnessCoverage).toMatchObject({snapshotCount:6,scanned:6,newContent:6,complete:true,allClear:true});
+    // Reproducible four-metric output from the complete run. Cross-network views are not comparable, so their total stays unknown.
+    const metrics=async(filters:Record<string,unknown>)=>{
+      const read=await post("/v1/read",{schemaVersion:SCHEMA_VERSION,operation:"readView",requestId:"synthetic-j08-metrics",requestedScope:{workspaceId:scope.workspaceId,accountIds:[scope.accountId],environment:"sandbox"},
+        viewKey:"contentMonitor",filters,period:null,sort:[],page:{limit:100,cursor:null}},SYNTHETIC_READ_TOKEN);
+      const data=nativeContentSchema.parse(read.body.data);
+      return {data,summary:{views:data.views,rate:data.rate,orders:data.orders,net:data.net,basis:data.metricBasis,posts:data.total,sourceState:data.sourceState}};
+    };
+    const spring=(await metrics({})).data.posts.find(p=>p.originalUrl?.includes("SYNTHA1"))!.campaign;
+    const fourMetrics={all:(await metrics({})).summary,instagram:(await metrics({network:"instagram"})).summary,tiktok:(await metrics({network:"tiktok"})).summary,
+      springInstagram:(await metrics({network:"instagram",campaign:spring})).summary};
+    expect(fourMetrics.all).toMatchObject({sourceState:"current",views:null,rate:null,orders:null,net:null,posts:6});
+    expect(fourMetrics.springInstagram).toMatchObject({views:2000,orders:1,net:{minorUnits:4000,currency:"USD"},posts:3});
+    expect(fourMetrics.springInstagram.rate).toBeCloseTo(7.7,5);
+    expect(fourMetrics.tiktok).toMatchObject({views:5300,rate:null,posts:2});
+    world.login.add("synthetic-tt-account-d");world.privatePosts.add("SYNTHA2");
+    await work(await run(second,"synthetic-hourly-trigger-next"));
+    const raw2=app.contentMonitor!.runs()[0]!;
+    const coverage=app.contentMonitor!.output(raw2).freshnessCoverage;
+    expect(coverage).toMatchObject({snapshotCount:6,unchanged:5,inaccessible:1,newContent:0,complete:false,noNewContent:null,allClear:null});
+
+    expect((await page.request.get("/v1/session",{headers:{authorization:"Bearer "+SYNTHETIC_READ_TOKEN}})).ok()).toBe(true);
+    await page.goto("/content");
+    const posts=page.getByRole("region",{name:"Saved campaign posts"});
+    await expect(posts).toContainText("inaccessible");await expect(posts).toContainText("private");
+    await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
+    // An incomplete run withholds totals instead of claiming them.
+    const fourMetricsAfter={all:(await metrics({})).summary};
+    expect(fourMetricsAfter.all).toMatchObject({sourceState:"partial",views:null,rate:null,orders:null,net:null,posts:6});
+    await page.getByRole("link",{name:"View hourly runs"}).click();
+    await expect(page.getByRole("heading",{name:"Every hourly check leaves evidence.",level:1})).toBeVisible();
+    await expect(page.getByText("0 failed, 1 inaccessible and 0 deferred profile checks.",{exact:false})).toBeVisible();
+    await expect(page.getByText("0 failed · 1 inaccessible · 0 deferred",{exact:true})).toBeVisible();
+    await page.getByText("Inspect profile check receipts",{exact:true}).click();
+    const trace=page.getByRole("region",{name:"Read-only run trace"});
+    await expect(trace).toContainText("inaccessible · loginRequired");await expect(trace).toContainText("SOURCE_LOGIN_REQUIRED; recovery owner J14 source health");
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+      const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
+      expect(result.violations.map(v=>v.id)).toEqual([]);
+      await page.evaluate(async()=>{window.scrollTo(0,0);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));});
+      await page.screenshot({path:`${dir}/j08-hourly-run-${width}.png`,fullPage:true});
+    }
+    await page.setViewportSize({width:1440,height:900});
+    await page.goto("/content?network=tiktok");
+    await page.getByRole("region",{name:"Saved campaign posts"}).getByRole("link").filter({hasText:/post-/}).first().click();
+    await expect(page.getByRole("heading",{name:"One post. Its evidence and impact.",level:1})).toBeVisible();
+    await page.getByText("Inspect source metric observations",{exact:true}).click();
+    const observations=page.getByRole("region",{name:"Post metric observations"});
+    // A late fetch is labeled with its actual age, never as a missed earlier checkpoint.
+    await expect(observations).toContainText(/(24|168)h checkpoint, observed at actual age \d+(\.\d)?h/);
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+      const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
+      expect(result.violations.map(v=>v.id)).toEqual([]);
+      await page.evaluate(async()=>{window.scrollTo(0,0);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));});
+      await page.screenshot({path:`${dir}/j08-post-checkpoint-${width}.png`,fullPage:true});
+    }
+    const redacted=app.contentMonitor!.trace(raw2,"synthetic-j08-e2e-trace-key-00000000000");
+    const saved=JSON.stringify({stage:"fixture",evidence:"synthetic only; no provider contacted; no live hourly schedule activated",fourMetrics,fourMetricsAfter,
+      runs:[app.contentMonitor!.trace(raw1,"synthetic-j08-e2e-trace-key-00000000000"),redacted]},null,2);
+    for(const raw of ["synthetic-tt-account-d","synthetic-ig-account-a","7300000000000000004",...ids.values()])expect(saved).not.toContain(raw);
+    writeFileSync(join(dir,"j08-sandbox-run.json"),saved);
+  }finally{await app.close();store.close();}
 });
