@@ -130,6 +130,9 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
       context.assertCurrent();
       if (!response.ok) {
         if (response.error instanceof RuntimeError && ![429, 503, 504].includes(response.error.status)) throw response.error;
+        // A denied source read is a protected-state denial, never a transient retry.
+        const status = response.error instanceof Error && "status" in response.error ? response.error.status : null;
+        if (status === 401 || status === 403) throw new RuntimeError("SOURCE_SCOPE_DENIED", 403);
         return { state: "retry", reasonCode: "J08_SOURCE_READ_UNAVAILABLE", retryAfterMs: 1000 };
       }
       const parsed = j08PageSchema.safeParse(response.value);

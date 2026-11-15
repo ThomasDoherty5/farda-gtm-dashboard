@@ -315,6 +315,14 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     await s.work(await s.fire(13));
     expect(s.app.store.database.prepare("SELECT COUNT(*) AS n FROM content_monitor_pages WHERE receipt_ref='synthetic-reused-receipt'").get()!.n).toBe(1);
     expect(s.app.contentMonitor!.output(s.latestRun()).rows.filter(r => r.reason === "J08_SOURCE_RECEIPT_REUSED").length).toBeGreaterThan(0);
+    // A thrown source denial is a protected-state denial, not a retry, and writes nothing.
+    s.world.fixedReceipt = null;
+    s.world.throwStatus = 403;
+    await s.advanceTo("2026-11-07T14:05:00Z");
+    const pagesBefore = s.app.store.database.prepare("SELECT COUNT(*) AS n FROM content_monitor_pages").get()!.n;
+    expect((await s.work(await s.fire(14))).body).toMatchObject({ code: "SOURCE_SCOPE_DENIED" });
+    expect(s.app.store.database.prepare("SELECT COUNT(*) AS n FROM content_monitor_pages").get()!.n).toBe(pagesBefore);
+    expect(s.app.contentMonitor!.output(s.latestRun()).rows.filter(r => r.reason === "SOURCE_SCOPE_DENIED")).toHaveLength(1);
     // J08 makes read requests only: no request carries a send, like, follow, term, rate or approval instruction.
     for (const r of s.world.reads) expect(Object.keys(r).sort()).toEqual(["cursor", "maxRecords", "policyVersion", "priorObservationRefs", "registrationRef",
       "registrationVersion", "scope", "stage", "subject", "watchlistVersion", "window"]);

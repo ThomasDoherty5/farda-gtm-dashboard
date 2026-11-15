@@ -78,16 +78,17 @@ const missing = { shares: "SHARES_NOT_EXPOSED", saves: "SAVES_NOT_EXPOSED", reac
 
 /** Mutable synthetic world. Tests change it between hourly runs; the source reads only from it. */
 export type J08SandboxWorld = { now: () => number; t0: number; reads: J08ReadRequest[]; failOnce: Set<string>; failed: Set<string>;
-  login: Set<string>; access: Map<string, "denied" | "uiDrift" | "throttled" | "mfaRequired">; privatePosts: Set<string>; urlOverride: Map<string, string>; extraPosts: Map<string, PostSpec[]>; crossAccount: boolean; stage: "synthetic" | "source"; fixedReceipt: string | null };
+  login: Set<string>; access: Map<string, "denied" | "uiDrift" | "throttled" | "mfaRequired">; privatePosts: Set<string>; urlOverride: Map<string, string>; extraPosts: Map<string, PostSpec[]>; crossAccount: boolean; stage: "synthetic" | "source"; fixedReceipt: string | null; throwStatus: number | null };
 export function createJ08SandboxWorld(now: () => number, t0: number): J08SandboxWorld {
   return { now, t0, reads: [], failOnce: new Set(["synthetic-tt-account-b:page-2"]), failed: new Set(), login: new Set(), access: new Map(), privatePosts: new Set(),
-    urlOverride: new Map(), extraPosts: new Map(), crossAccount: false, stage: "synthetic", fixedReceipt: null };
+    urlOverride: new Map(), extraPosts: new Map(), crossAccount: false, stage: "synthetic", fixedReceipt: null, throwStatus: null };
 }
 /** Read-only synthetic source: it has no send, like, follow, accept, rate or approval capability. */
 export function createJ08SandboxSource(world: J08SandboxWorld): J08SourceReader {
   return {
     async read(request) {
       world.reads.push(structuredClone(request));
+      if (world.throwStatus !== null) throw Object.assign(new Error("Synthetic source rejection"), { status: world.throwStatus });
       const at = world.now(), observedAt = new Date(at).toISOString(), account = request.subject.profile.accountId;
       const base = { requestDigest: digest(request), evidenceStage: world.stage, method: "native-api" as const, observedAt, retryAfterMs: null, posts: [], inbox: [], nextCursor: null };
       const receipt = (suffix: string) => world.fixedReceipt ?? `synthetic-receipt:${digest([request, at, suffix]).slice(0, 32)}`;

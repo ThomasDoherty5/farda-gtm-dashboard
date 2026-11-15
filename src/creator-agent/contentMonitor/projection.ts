@@ -98,7 +98,6 @@ export function createContentMonitorView(options: Options) {
     }
     const posts: Post[] = repo.allContent().filter(c => c.assignment.state === "attributed" && c.assignment.campaignId && !c.conflict).map(c => {
       const status = repo.status(c.contentKey), last = status.at(-1) ?? null, incident = openSubjects.get(c.subjectRef);
-      const confirmed = status.filter(s => s.state !== "inaccessible");
       const visibility: Post["visibility"] = incident ? "inaccessible" : last?.state ?? "unverified";
       const captured = repo.checkpoints(c.contentKey).filter(x => x.checkpointsVersion === checkpointsVersion);
       const record = records.get(c.creatorId);
@@ -109,8 +108,9 @@ export function createContentMonitorView(options: Options) {
         access: incident ? accessOf(incident.reason === "SOURCE_DENIED" ? "denied" : incident.reason === "SOURCE_UI_DRIFT" ? "unavailable" : "loginRequired") :
           last ? accessOf(last.access) : "unknown",
         checkpointHours: captured.length ? Math.max(...captured.map(x => x.hours)) : null,
-        publicationHistory: confirmed.concat(status.filter(s => s.state === "inaccessible")).filter(s => !c.publishedAt || Date.parse(s.sourceAt) >= Date.parse(c.publishedAt))
-          .sort((a, b) => a.seq - b.seq).map(s => ({ state: s.state, at: s.sourceAt, receipt: s.receiptRef })),
+        // Every confirmed receipt stays in the history, including the last one before the row became inaccessible.
+        publicationHistory: status.filter(s => !c.publishedAt || Date.parse(s.sourceAt) >= Date.parse(c.publishedAt))
+          .map(s => ({ state: s.state, at: s.sourceAt, receipt: s.receiptRef })),
         measurements: measurementRows(c, checkpointsVersion), attribution: c.attribution };
     });
     const latestRun = projectedRuns[0];
