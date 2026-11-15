@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { canonicalJson, digest } from "./config.ts";
-import { nativePostIdentity, type ClaimDisposition, type PostEvidence } from "./evidence.ts";
+import { nativePostIdentity, personClaims, type ClaimDisposition, type EvidencePacket, type PostEvidence } from "./evidence.ts";
 import { reviewInputSchema, type EvidenceAnnotation, type SourceReview } from "./evidenceReviewContract.ts";
 import type { AgentStore, StoredAssessment } from "./store.ts";
-import { videoEvidenceQuality, type ClaimDispositions } from "./videoEvidence/quality.ts";
+import { CLAIM_DIGEST_TARGET, claimDigestTarget, videoEvidenceQuality, type ClaimDispositions } from "./videoEvidence/quality.ts";
 /** Disagree/override dispositions for one run, read through the (runId, kind) expression index rather than a body scan. */
 export const DISPOSITION_QUERY = `SELECT json_extract(body,'$.postId') AS post_id,json_extract(body,'$.original.id') AS target_id,
   json_extract(body,'$.input.kind') AS kind FROM evidence_review_annotations
@@ -33,12 +33,15 @@ function coversInterval(spans: Interval[], start: number, end: number) {
   return intervalUnion(spans).some(span => span.startSec <= start && span.endSec >= end);
 }
 
-function sourceTargets(post: PostEvidence): SourceReview["targets"] {
+function sourceTargets(post: PostEvidence, packet?: EvidencePacket): SourceReview["targets"] {
   return [
     { id: "review", label: `Source review: ${post.review.status}, visual ${post.review.visualMethod}, audio ${post.review.audioMethod}` },
     ...post.review.observedActions.map((a, i) => ({ id: `action-${i}`, label: `${a.atSec}s · Visual action · ${a.action}` })),
     ...post.review.claims.map((c, i) => ({ id: `claim-${i}`, label: `${c.atSec}s · ${c.method} claim · ${c.text}` })),
     ...post.review.inferences.map((text, i) => ({ id: `inference-${i}`, label: `Reviewer inference · ${text}` })),
+    // J20 claims that need a person, current or carried, get their own claim-digest targets on the current run.
+    ...(packet?.collection ? personClaims(packet).all.filter(entry => entry.postId === post.postId).map(entry => ({ id: claimDigestTarget(entry.postId, entry.claim),
+      label: `${entry.claim.atSec}s · ${entry.claim.method} ${entry.claim.topic} claim needing a person · ${entry.claim.text}` })) : []),
   ];
 }
 function reviewBasis(scope: Scope, stored: StoredAssessment, post: PostEvidence) {
@@ -112,6 +115,9 @@ export class EvidenceReviewRepository {
       AND a.revision<=?`).iterate(record.packet.creatorId,record.revision);
     for (const row of rows) {
       const annotation = JSON.parse(String(row.annotation)) as EvidenceAnnotation;
+      // Scoped to the claim-digest targets J20 introduced: a person's ruling on that exact claim is its resolution. Every
+      // pre-existing target keeps the dispute rule below unchanged.
+      if (annotation.original && CLAIM_DIGEST_TARGET.test(annotation.original.id)) continue;
       const original = JSON.parse(String(row.source)) as StoredAssessment;
       const prior = original.packet.posts.find(p => annotation.postId ? p.postId === annotation.postId : reviewBasis(this.scope,original,p) === annotation.input.basisHash);
       if (!prior) return true;
@@ -130,11 +136,14 @@ export class EvidenceReviewRepository {
     const runs = new Map<string, StoredAssessment | null>();
     return rows.flatMap(row => {
       const annotation = JSON.parse(String(row.body)) as EvidenceAnnotation;
-      const match = annotation.original ? /^claim-(\d+)$/.exec(annotation.original.id) : null;
-      if (!match || !annotation.postId || annotation.input.kind === "observation") return [];
+      const target = annotation.original?.id ?? "";
+      const match = /^claim-(\d+)$/.exec(target);
+      if ((!match && !CLAIM_DIGEST_TARGET.test(target)) || !annotation.postId || annotation.input.kind === "observation") return [];
       const runId = annotation.input.runId;
       if (!runs.has(runId)) runs.set(runId, this.store.findRun(creatorId, runId));
-      const claim = runs.get(runId)?.packet.posts.find(post => post.postId === annotation.postId)?.review.claims[Number(match[1])];
+      const run = runs.get(runId);
+      const claim = match ? run?.packet.posts.find(post => post.postId === annotation.postId)?.review.claims[Number(match[1])]
+        : run ? personClaims(run.packet).all.find(entry => entry.postId === annotation.postId && claimDigestTarget(entry.postId, entry.claim) === target)?.claim : undefined;
       if (!claim?.topic) return [];
       return [{ postId: annotation.postId, claim: { atSec: claim.atSec, text: claim.text, method: claim.method, topic: claim.topic },
         annotationRef: annotation.id, kind: annotation.input.kind, reviewerRef: annotation.reviewer, recordedAt: annotation.recordedAt }];
@@ -163,7 +172,7 @@ export class EvidenceReviewRepository {
       policyVersion: stored.assessment.policyVersion, modelId: stored.assessment.modelId, configHash: stored.assessment.config.hash,
       access: post.accessObservation ?? null, recordedAt: stored.recordedAt, superseded, stale: record.stale, contested: this.contested(stored),
       olderRunId: this.adjacent(creatorId,evidenceId,stored.revision,false), newerRunId: this.adjacent(creatorId,evidenceId,stored.revision,true),
-      targets: sourceTargets(post), annotations };
+      targets: sourceTargets(post, stored.packet), annotations };
     const version = `er-${basisHash}-${annotations.length}`;
     const effective = sourceReview.contested ? { ...record, assessment: { ...record.assessment, state: "reviewNeeded" as const,
       reasonCodes: [...new Set([...record.assessment.reasonCodes,"EVIDENCE_DISPUTED"])] } } : record;

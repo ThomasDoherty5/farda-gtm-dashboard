@@ -30,10 +30,10 @@ export const videoEvidenceQualitySchema = z.object({
     narration: count, outcomeCausality: z.literal("unresolved"),
     /**
      * Claims a person must review (medical, compatibility, outcome, uncategorized or explicitly medical wording), including
-     * carried claims a later read no longer shows, with their current reviewer target (`claim-N`, or null once no longer shown)
-     * and the disposition recorded on the disagree/override path. The agent never resolves one.
+     * carried claims a later read no longer shows, with their claim-digest reviewer target on the current run and the
+     * disposition recorded on the disagree/override path. The agent never resolves one.
      */
-    claimsReview: z.array(z.object({ targetId: z.string().regex(/^claim-\d+$/).nullable(), atSec: z.number().nonnegative(), text: z.string().min(1).max(1_000),
+    claimsReview: z.array(z.object({ targetId: z.string().regex(/^claim-digest-[0-9a-f]{32}$/), atSec: z.number().nonnegative(), text: z.string().min(1).max(1_000),
       topic: z.enum(["compatibility", "medical", "productFunction", "outcome", "other"]), disposition: z.enum(["pending", "disagreed", "overridden"]) }).strict()).max(500),
     quarantinedFields: count,
     nextAction: j20NextActionSchema,

@@ -154,6 +154,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
     metadata: { sampleSize: baseline.selected.length, coverage: baseline.coverage, reasonCodes: baseline.coverageReasons, postIds: baseline.selected.map((p) => p.postId), medianViews: baseline.viewStats.median, minViews: baseline.viewStats.min, maxViews: baseline.viewStats.max, comparableViewCount: baseline.viewStats.knownCount },
     comments, reviews: packet.posts.map((p) => ({ postId: p.postId, status: p.review.status, visualMethod: p.review.visualMethod, audioMethod: p.review.audioMethod, sampledPointCount: p.review.sampledPoints.length, continuousSeconds: secondsOf(p.review.watchedIntervals), likeGate: likeGate(p) })),
     routeEvidence,
-    reasonCodes: gates.filter((g) => g.state !== "pass").map((g) => g.id),
+    // A reviewer's audited detach from J20 collection stays visible on every assessment of the detached packet.
+    reasonCodes: [...gates.filter((g) => g.state !== "pass").map((g) => g.id), ...(packet.detachedCollection ? ["J20_DETACHED"] : [])],
   });
 }

@@ -1,7 +1,8 @@
 import { boundedSourceRead } from "../actions/readBoundary.ts";
 import { digest, type ConfigBinding } from "../config.ts";
 import type { CreatorEvidenceWriter } from "../creatorEvidenceWriter.ts";
-import { J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, type ClaimDisposition, type EvidencePacket } from "../evidence.ts";
+import { J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, type EvidencePacket } from "../evidence.ts";
+import { assessCreator } from "../policy.ts";
 import type { IntakeRepository } from "../intake/repository.ts";
 import { RuntimeError, type RuntimeExecutor, type RuntimeRegistration, type RuntimeRegistry, type RuntimeStep } from "../jobs/runtimeSchema.ts";
 import type { OperationsScope } from "../operations.ts";
@@ -31,9 +32,7 @@ function assertRegistration(registration: RuntimeRegistration | undefined, regis
  * resolves claims, sends or bypasses source access; login and MFA become the runtime's owned takeover.
  */
 export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: VideoEvidenceBinding; intake: IntakeRepository; store: AgentStore;
-  writer: CreatorEvidenceWriter; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null; scope: OperationsScope; now?: () => number;
-  /** Reviewer-path dispositions for this creator's collected claims, read from saved human annotations by the server. */
-  claimDispositions?: (creatorId: string) => ClaimDisposition[] }) {
+  writer: CreatorEvidenceWriter; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null; scope: OperationsScope; now?: () => number }) {
   const { binding, intake, store, writer } = deps;
   const { source } = binding;
   const stage = source.stage;
@@ -96,16 +95,23 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
       assertSnapshot();
       const prior = store.latest(work.creatorId);
       let built: ReturnType<typeof buildCollectedPacket>;
-      try { built = buildCollectedPacket({ creatorId: work.creatorId, prior: prior?.packet ?? null, snapshot, collector, protect: writer.protect,
-        dispositions: deps.claimDispositions?.(work.creatorId) ?? [] }); }
+      try { built = buildCollectedPacket({ creatorId: work.creatorId, prior: prior?.packet ?? null, snapshot, collector, protect: writer.protect }); }
       catch (error) {
         // Only source content is reported as a source error; an internal merge problem is held for an owner.
         if (error instanceof J20SourceDataError) throw new RuntimeError("J20_SOURCE_RESPONSE_INVALID", 502);
         return { state: "held", reasonCode: error instanceof J20MergeError ? "J20_PACKET_MERGE_INVALID" : "J20_PACKET_BUILD_FAILED" };
       }
       // Reviewer-entered evidence is replaced only by J20 footage J20 can actually show: at least one accessible, sourced post.
-      if (prior && !prior.packet.collection && !built.packet.posts.some(post => post.source && (post.accessObservation?.state ?? "permitted") === "permitted"))
-        return { state: "held", reasonCode: "J20_AWAITING_ACCESSIBLE_EVIDENCE" };
+      if (prior && !prior.packet.collection) {
+        if (!built.packet.posts.some(post => post.source && (post.accessObservation?.state ?? "permitted") === "permitted"))
+          return { state: "held", reasonCode: "J20_AWAITING_ACCESSIBLE_EVIDENCE" };
+        // ...and only when it is at least as complete: as many qualifying posts, or J20's own packet gates passing.
+        // NEEDS-OWNER: the exact completeness rule for replacing reviewer-entered evidence.
+        const packetGates = (packet: EvidencePacket) => assessCreator(packet, null).gates.filter(gate => ["QUALIFYING_POSTS", "PUBLICATION_DATES", "MEANINGFUL_USE"].includes(gate.id));
+        const qualifying = (packet: EvidencePacket) => assessCreator(packet, null).packet.qualifyingPosts;
+        if (qualifying(built.packet) < qualifying(prior.packet) && !packetGates(built.packet).every(gate => gate.state === "pass"))
+          return { state: "held", reasonCode: "J20_LESS_COMPLETE_THAN_REVIEWER_EVIDENCE" };
+      }
       let runId = prior?.runId ?? null;
       if (built.changed && (prior || snapshot.posts.length)) {
         const expectedVersion = prior?.revision ?? 0;

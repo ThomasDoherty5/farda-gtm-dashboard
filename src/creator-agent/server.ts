@@ -269,7 +269,8 @@ export function createAgentServer(options: AgentServerOptions) {
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
     evidenceWriter = createCreatorEvidenceWriter({ store, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
-      secret: operationsSecret, scorecardAuthority: options.scorecardAuthority, modelBinding: route => modelBinding(route), acceptedTerms: id => offers.acceptedTerms(id) });
+      secret: operationsSecret, scorecardAuthority: options.scorecardAuthority, modelBinding: route => modelBinding(route), acceptedTerms: id => offers.acceptedTerms(id),
+      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId) });
     let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
     const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
     reconciliation = options.mirrorReconciliation
@@ -284,8 +285,7 @@ export function createAgentServer(options: AgentServerOptions) {
         options.operationalAlerts.sweep, options.operations?.now);
     }
     videoEvidence = options.videoEvidence ? bindVideoEvidence({ registry: runtimeRegistry, binding: options.videoEvidence, intake, store,
-      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now,
-      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId) }) : null;
+      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now }) : null;
     if (videoEvidence) runtimeRegistry = videoEvidence.registry;
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
@@ -476,6 +476,21 @@ export function createAgentServer(options: AgentServerOptions) {
     return { ...record, packet: protectCommentAuthors(record.packet,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret),
       stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
+  };
+  /**
+   * Trigger `reviewerDisposition`: right after a person rules on a collected claim, append a re-assessed revision of the latest
+   * collected packet through the shared writer, so the stored assessment reflects the ruling without waiting for J20. A
+   * replayed save whose ruling is already stored appends nothing. A concurrent write leaves the merge to the next write.
+   */
+  const reassessAfterClaimRuling = async (annotation: { id: string; input: { kind: string; creatorId: string }; original: { id: string } | null }) => {
+    if (annotation.input.kind === "observation" || !annotation.original || !/^(?:claim-\d+|claim-digest-[0-9a-f]{32})$/.test(annotation.original.id)) return;
+    const latest = store.latest(annotation.input.creatorId);
+    if (!latest?.packet.collection || latest.packet.collection.claimDispositions?.some(entry => entry.annotationRef === annotation.id)) return;
+    if (!evidenceReviews.claimDispositions(annotation.input.creatorId).some(entry => entry.annotationRef === annotation.id)) return;
+    try {
+      await evidenceWriter.write({ packet: latest.packet, expectedVersion: latest.revision, configHash: modelBinding(latest.packet.checkoutRoute)?.hash ?? null },
+        `reviewer-disposition:${annotation.id}`, { origin: "reviewerDisposition" });
+    } catch (error) { if (!(error instanceof AgentConflict)) throw error; }
   };
   const commercialBasis = (stored: StoredAssessment): AssessmentBasis => {
     const record = current(stored, store.latest(stored.packet.creatorId)?.runId !== stored.runId);
@@ -849,6 +864,7 @@ export function createAgentServer(options: AgentServerOptions) {
           if ((kind === "observation") !== (input.resourceKind === "evidenceDraft"))
             return reply(res, 422, { code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
           const saved = evidenceReviews.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey, "agent-reviewer", input.resourceKind);
+          await reassessAfterClaimRuling(saved.resource);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
             resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: saved.persistedByRef, record: saved.resource,
@@ -982,7 +998,7 @@ export function createAgentServer(options: AgentServerOptions) {
         if (input.packet.creatorId !== decodeURIComponent(match[1]!)) return reply(res, 400, { code: "IDENTITY_MISMATCH" });
         const key = req.headers["idempotency-key"];
         if (typeof key !== "string" || !key.trim() || key.length > 240) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED" });
-        const saved = await evidenceWriter.write(input, key);
+        const saved = await evidenceWriter.write(input, key, { origin: "reviewer", principal: "agent-reviewer" });
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {

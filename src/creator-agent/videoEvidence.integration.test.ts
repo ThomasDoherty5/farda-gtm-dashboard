@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { digest } from "./config.ts";
-import { evidencePacketSchema, type EvidencePacket } from "./evidence.ts";
+import { evidencePacketSchema, type EvidencePacket, type EvidenceReview } from "./evidence.ts";
 import type { CanonicalRecord, IdentitySink } from "./intake/repository.ts";
 import type { IntakeInput, SinkBinding, SinkReceipt } from "./intake/contract.ts";
 import { createRuntimeTestkit, syntheticRuntimeRegistration, runtimeSyntheticScope as scope } from "./jobs/runtime.testkit.ts";
@@ -298,7 +298,7 @@ describe("J20 collector through the registered runtime, intake queue and shared 
       packet: { qualifyingPosts: 2, status: "needsEvidence" }, audience: { verified: 0, unverified: 0 } });
     expect(quality.limitations).toEqual(expect.arrayContaining(["SYNTHETIC_FIXTURE_COLLECTOR", "PARTIAL_SOURCE_LISTING", "NO_VERIFIED_AUDIENCE_REPORT", "INFERENCE_TEXT_QUARANTINED"]));
     expect(quality.footage.find(f => f.postId === claimedPost.postId)).toMatchObject({ viewingStatus: "completeAudioVisual", audioCoverage: "heard", narration: 1,
-      claimsReview: [{ targetId: "claim-0", atSec: 9, text: "Says the case keeps her medication cool all day.", topic: "medical", disposition: "pending" }],
+      claimsReview: [{ targetId: expect.stringMatching(/^claim-digest-[0-9a-f]{32}$/), atSec: 9, text: "Says the case keeps her medication cool all day.", topic: "medical", disposition: "pending" }],
       reviewer: "agent", quarantinedFields: 1, outcomeCausality: "unresolved", nextAction: "needsClaimReview",
       features: { hook: "observed", handlingOperationUse: "observed", explanation: "notObserved", visibleOutcome: "notObserved", cta: "notObserved" } });
     expect(quality.metadataOnly).toEqual([expect.objectContaining({ pinned: true, paid: "yes", likeGate: "fail", rawLikeLabel: "150", ageDays: expect.any(Number), reasons: ["LIKES_NOT_ABOVE_200"] })]);
@@ -313,7 +313,7 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     const after = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: claimedPost.postId })).body.data) as
       { videoEvidenceQuality: VideoEvidenceQuality; qualification: { state: string; reasonCodes: string[] } };
     expect(after.videoEvidenceQuality.footage.find(f => f.postId === claimedPost.postId)!.claimsReview).toEqual([
-      expect.objectContaining({ targetId: "claim-0", disposition: "disagreed" })]);
+      expect.objectContaining({ targetId: expect.stringMatching(/^claim-digest-[0-9a-f]{32}$/), disposition: "disagreed" })]);
     expect(stored.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
     expect(after.qualification).toMatchObject({ state: "reviewNeeded", reasonCodes: expect.arrayContaining(["EVIDENCE_DISPUTED"]) });
     expect(h.app.store.latest(creatorId)!.assessment.state).not.toBe("activationReady");
@@ -422,7 +422,8 @@ describe("J20 review findings", () => {
     const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, termsRevision: "terms-human" };
     const saved = await h.call("PUT", `/v1/creators/${creatorId}`, { packet: human, expectedVersion: 0, policyVersion: "2026-11-04", configHash: syntheticBinding().hash }, reviewer, "f4-human");
     expect(saved.status).toBe(200);
-    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })]));
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" }),
+      fixtureSourcePost(3, { publishedAt: "2026-10-03T12:00:00.000Z" })]));
     expect((await (await h.runDay()).work()).run.state).toBe("completed");
     const latest = h.app.store.latest(creatorId)!;
     expect(latest.revision).toBe(2);
@@ -495,7 +496,8 @@ describe("J20 re-review findings", () => {
 
   it("N1: a reviewer can move a collected creator to another brief, or detach collection with an audited reason", async () => {
     const { h, creatorId, human, put } = await reviewerFirst("n1b");
-    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })]));
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" }),
+      fixtureSourcePost(3, { publishedAt: "2026-10-03T12:00:00.000Z" })]));
     await (await h.runDay()).work();
     const collected = h.app.store.latest(creatorId)!;
     expect(collected.packet.collection).toBeDefined();
@@ -507,7 +509,7 @@ describe("J20 re-review findings", () => {
       .toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
     expect((await put(detached, "n1b-detach", collected.revision)).status).toBe(200);
     const restored = h.app.store.latest(creatorId)!;
-    expect(restored.packet.detachedCollection).toEqual(detached.detachedCollection);
+    expect(restored.packet.detachedCollection).toEqual({ ...detached.detachedCollection, reviewerRef: "agent-reviewer" });
     expect(restored.packet.posts.map(p => p.postId)).toEqual(human.posts.map(p => p.postId));
     expect(restored.packet.collection).toBeUndefined();
     expect(h.app.store.history(creatorId)[1]).toEqual(collected);
@@ -515,7 +517,7 @@ describe("J20 re-review findings", () => {
     const read = await (await h.runDay()).work();
     expect(read.run.items.map(item => item.reasonCode)).toEqual(["J20_COLLECTION_DETACHED"]);
     expect(h.app.store.history(creatorId)).toHaveLength(3);
-    // Moving the creator to another brief is a plain reviewer write.
+    // After the audited detach, moving the creator to another brief with the reviewer's own posts is a plain reviewer write.
     expect((await put({ ...back, briefId: "synthetic-other-brief", evidenceRevision: "reviewer-other-brief" }, "n1b-brief", restored.revision)).status).toBe(200);
   });
 
@@ -574,6 +576,147 @@ describe("J20 re-review findings", () => {
       configHash: syntheticBinding().hash }, reviewer, "n2b-forge")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
     h.collector.on(null, { kind: "read", read: { state: "observed", snapshot: { dispositions: [] } } as never });
     await expect((await h.runDay()).work()).rejects.toMatchObject({ code: "J20_SOURCE_RESPONSE_INVALID" });
+  });
+});
+
+/** Third review round. Each test reproduces the reviewer's probe and failed on 1ec0ac4 before its fix. */
+describe("J20 third-pass findings", () => {
+  const three = () => [fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" }), fixtureSourcePost(3, { publishedAt: "2026-10-03T12:00:00.000Z" })];
+  async function collectedCreator(eventId: string, review: EvidenceReview = structuredClone(fixtureReviews.complete)) {
+    const h = await harness();
+    const { creatorId } = await h.discover(eventId);
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review }), ...three().slice(1)]));
+    await (await h.runDay()).work();
+    const put = (packet: unknown, key: string, expectedVersion: number) => h.call("PUT", `/v1/creators/${creatorId}`, { packet, expectedVersion,
+      policyVersion: "2026-11-04", configHash: syntheticBinding().hash }, reviewer, key);
+    return { h, creatorId, put, collected: h.app.store.latest(creatorId)! };
+  }
+  const stripJ20 = (packet: EvidencePacket) => {
+    const copy = structuredClone(packet) as EvidencePacket & Record<string, unknown>;
+    delete copy.collection;
+    for (const post of copy.posts) { delete post.source; delete post.context; delete post.metrics; delete post.productionChoices; delete post.shoppableContext; }
+    return copy;
+  };
+
+  it("P1: the two-step brief hop cannot launder forged facts back onto the collected brief", async () => {
+    const { h, creatorId, put, collected } = await collectedCreator("p1");
+    const hop = { ...stripJ20(collected.packet), briefId: "synthetic-other-brief", evidenceRevision: "reviewer-hop" };
+    expect(await put(hop, "p1-hop", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    // Even with fresh identities, a write from an uncollected base cannot put uncollected facts on the collected brief.
+    const human = { ...syntheticPacket(), creatorId, briefId: "synthetic-other-brief", evidenceRevision: "reviewer-other" };
+    expect(await put(human, "p1-other", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    const forged = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, evidenceRevision: "reviewer-forged", ratings: { routine: 5, demo: 5 },
+      posts: syntheticPacket().posts.map(post => ({ ...post, nativeLikes: { status: "known" as const, value: 99999, exact: true, sourceRef: "reviewer:claim" } })) };
+    expect(await put(forged, "p1-forged", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    expect(h.app.store.history(creatorId)).toHaveLength(1);
+  });
+
+  it("P5: a detach records its reviewer, refuses J20 posts or identities, and J02 reports J20_DETACHED", async () => {
+    const { h, creatorId, put, collected } = await collectedCreator("p5");
+    const exit = { fromRevision: collected.revision, fromEvidenceRevision: collected.packet.evidenceRevision, reason: "Restoring the reviewer's own hand-entered evidence." };
+    const reused = { ...stripJ20(collected.packet), evidenceRevision: "reviewer-reused", detachedCollection: exit };
+    expect(await put(reused, "p5-reuse", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    const renamed = { ...reused, posts: reused.posts.map((post, i) => ({ ...post, postId: `reviewer-post-${i}`, canonicalMediaId: `reviewer-media-${i}` })) };
+    expect(await put(renamed, "p5-renamed", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    const forgedBy = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, evidenceRevision: "reviewer-own", detachedCollection: { ...exit, reviewerRef: "someone-else" } };
+    expect(await put(forgedBy, "p5-forged-by", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    const own = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, evidenceRevision: "reviewer-own", detachedCollection: exit };
+    expect((await put(own, "p5-own", collected.revision)).status).toBe(200);
+    const detached = h.app.store.latest(creatorId)!;
+    expect(detached.packet.detachedCollection).toEqual({ ...exit, reviewerRef: "agent-reviewer" });
+    expect(detached.assessment.reasonCodes).toContain("J20_DETACHED");
+    // Later reviewer writes on the detached brief keep refusing J20 identities, and can move to another brief.
+    expect(await put({ ...renamed, detachedCollection: detached.packet.detachedCollection, evidenceRevision: "reviewer-later" }, "p5-later", detached.revision))
+      .toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    expect((await put({ ...own, briefId: "synthetic-other-brief", evidenceRevision: "reviewer-moved", detachedCollection: undefined }, "p5-move", detached.revision)).status).toBe(200);
+  });
+
+  it("P4: one accessible post never replaces a fuller reviewer packet; an equally complete page does", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("p4");
+    const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref };
+    expect((await h.call("PUT", `/v1/creators/${creatorId}`, { packet: human, expectedVersion: 0, policyVersion: "2026-11-04", configHash: syntheticBinding().hash },
+      reviewer, "p4-human")).status).toBe(200);
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1)]));
+    expect((await (await h.runDay()).work()).run.items.map(item => item.reasonCode)).toEqual(["J20_LESS_COMPLETE_THAN_REVIEWER_EVIDENCE"]);
+    expect(h.app.store.history(creatorId)).toHaveLength(1);
+    h.collector.on(null, h.collector.page(three()));
+    expect((await (await h.runDay()).work()).run.state).toBe("completed");
+    expect(h.app.store.latest(creatorId)!.packet.collection).toBeDefined();
+  });
+
+  it("P2/P3: a person can dispose of a carried claim on the current run, and J02 reflects it at once with no J20 run", async () => {
+    const medical = { atSec: 9, text: "Says the case keeps her medication cool all day.", method: "heard" as const, topic: "medical" as const };
+    const { h, creatorId } = await collectedCreator("p2", { ...structuredClone(fixtureReviews.complete), claims: [medical] });
+    // The next read rewords nothing but drops the claim from the review (for example after an ASR re-run), so it is carried.
+    h.collector.on(null, h.collector.page(three()));
+    await (await h.runDay()).work();
+    const current = h.app.store.latest(creatorId)!;
+    const post = current.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!;
+    expect(post.review.claims).toEqual([]);
+    expect(current.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
+    const view = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: post.postId })).body.data) as
+      { version: string; sourceReview: { basisHash: string; targets: { id: string; label: string }[] }; videoEvidenceQuality: VideoEvidenceQuality };
+    const target = view.sourceReview.targets.find(t => t.id.startsWith("claim-digest-"))!;
+    expect(target.label).toContain(medical.text);
+    expect(view.videoEvidenceQuality.footage.find(f => f.postId === post.postId)!.claimsReview).toEqual([expect.objectContaining({ targetId: target.id, disposition: "pending" })]);
+    const saved = await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "p2-carried", resourceKind: "reviewerAssessment",
+      resourceRef: post.postId, expectedVersion: view.version, idempotencyKey: "p2-carried", payload: { kind: "override", creatorId, runId: current.runId,
+        basisHash: view.sourceReview.basisHash, targetId: target.id, reason: "The medication claim is outside Farda's supported claims.", replacement: "No supported claim." } });
+    expect(saved.status).toBe(200);
+    // No J20 run: the stored assessment already reflects the person's disposition.
+    const runsBefore = h.collector.requests.length;
+    const fresh = await h.call("GET", `/v1/creators/${creatorId}`, undefined, reader);
+    const stored = h.app.store.latest(creatorId)!;
+    expect(stored.revision).toBe(current.revision + 1);
+    expect(stored.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
+    expect(stored.packet.collection!.claimDispositions).toEqual([expect.objectContaining({ postId: post.postId, kind: "override", claim: medical })]);
+    expect(fresh.body).toMatchObject({ runId: stored.runId, assessment: { gates: expect.arrayContaining([expect.objectContaining({ id: "CLAIMS_REVIEWED", state: "pass" })]) } });
+    expect(h.collector.requests.length).toBe(runsBefore);
+    // Replaying the same save does not append another revision.
+    await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "p2-carried", resourceKind: "reviewerAssessment",
+      resourceRef: post.postId, expectedVersion: view.version, idempotencyKey: "p2-carried", payload: { kind: "override", creatorId, runId: current.runId,
+        basisHash: view.sourceReview.basisHash, targetId: target.id, reason: "The medication claim is outside Farda's supported claims.", replacement: "No supported claim." } });
+    expect(h.app.store.history(creatorId)).toHaveLength(stored.revision);
+  });
+
+  it("P7: a person's ruling on a J20 claim-digest target resolves that claim's dispute and survives re-collection; it never resolves another claim", async () => {
+    const medical = { atSec: 9, text: "Says the case keeps her medication cool all day.", method: "heard" as const, topic: "medical" as const };
+    const outcome = { atSec: 12, text: "Says it guarantees a calmer morning routine.", method: "heard" as const, topic: "outcome" as const };
+    const claimed = { ...structuredClone(fixtureReviews.complete), claims: [medical, outcome] };
+    const { h, creatorId } = await collectedCreator("p7", claimed);
+    const current = h.app.store.latest(creatorId)!;
+    const post = current.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!;
+    const read = async () => evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: post.postId })).body.data) as
+      { version: string; sourceReview: { basisHash: string; runId: string; targets: { id: string; label: string }[] } };
+    const view = await read();
+    const digestTarget = (text: string) => view.sourceReview.targets.find(t => t.id.startsWith("claim-digest-") && t.label.includes(text))!.id;
+    const save = (targetId: string, key: string, version: string, runId: string, basisHash: string) => h.call("POST", "/v1/save", { ...readFields, operation: "saveResource",
+      requestId: key, resourceKind: "reviewerAssessment", resourceRef: post.postId, expectedVersion: version, idempotencyKey: key,
+      payload: { kind: "override", creatorId, runId, basisHash, targetId, reason: "A person ruled on this collected claim for Farda.", replacement: "No supported claim." } });
+    expect((await save(digestTarget(medical.text), "p7-medical", view.version, view.sourceReview.runId, view.sourceReview.basisHash)).status).toBe(200);
+    // claim-0 is ruled on; claim-1 is still pending, so the gate stays unknown, but the ruling raises no open dispute.
+    let latest = h.app.store.latest(creatorId)!;
+    expect(latest.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown", reason: expect.stringContaining("1/2") });
+    let effective = (await h.call("GET", `/v1/creators/${creatorId}`, undefined, reader)).body as { assessment: { reasonCodes: string[] } };
+    expect(effective.assessment.reasonCodes).not.toContain("EVIDENCE_DISPUTED");
+    const next = await read();
+    expect((await save(next.sourceReview.targets.find(t => t.id.startsWith("claim-digest-") && t.label.includes(outcome.text))!.id, "p7-outcome",
+      next.version, next.sourceReview.runId, next.sourceReview.basisHash)).status).toBe(200);
+    latest = h.app.store.latest(creatorId)!;
+    expect(latest.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
+    // Re-collecting the identical footage re-observes both claims; the rulings still hold and no dispute reopens.
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: claimed }), ...three().slice(1)]));
+    await (await h.runDay()).work();
+    latest = h.app.store.latest(creatorId)!;
+    expect(latest.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
+    effective = (await h.call("GET", `/v1/creators/${creatorId}`, undefined, reader)).body as { assessment: { reasonCodes: string[] } };
+    expect(effective.assessment.reasonCodes).not.toEqual(expect.arrayContaining(["EVIDENCE_DISPUTED"]));
+    expect(effective.assessment.reasonCodes).not.toContain("CLAIMS_REVIEWED");
+    // A reworded claim is a new pending target.
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: { ...claimed, claims: [{ ...medical, text: "Says the case keeps her insulin cold." }, outcome] } }), ...three().slice(1)]));
+    await (await h.runDay()).work();
+    expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
   });
 });
 

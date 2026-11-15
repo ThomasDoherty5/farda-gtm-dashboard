@@ -117,9 +117,7 @@ export type CollectedPacket = { packet: EvidencePacket; changed: boolean; quaran
  */
 export function buildCollectedPacket(input: { creatorId: string; prior: EvidencePacket | null; snapshot: VideoEvidenceSnapshot;
   collector: { version: string; stage: "synthetic-fixture" | "source"; qualification: { ref: string; version: string } | null };
-  protect(packet: EvidencePacket): EvidencePacket;
-  /** Server-copied dispositions from saved reviewer annotations. A collector never supplies these. */
-  dispositions?: readonly ClaimDisposition[] }): CollectedPacket {
+  protect(packet: EvidencePacket): EvidencePacket }): CollectedPacket {
   const { creatorId, snapshot } = input;
   // Brief, brief version and checkout route define the evidence basis. A different basis carries nothing.
   const sameBasis = !!input.prior && input.prior.briefId === snapshot.brief.ref && input.prior.checkoutRoute === snapshot.brief.checkoutRoute &&
@@ -220,7 +218,8 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
   for (const entry of input.prior?.collection?.claims ?? []) ledger.set(claimKey(entry.postId, entry.claim), entry);
   for (const entry of personClaims({ ...draft, collection: undefined } as unknown as EvidencePacket).all) ledger.set(claimKey(entry.postId, entry.claim), entry);
   const disposed = new Map<string, ClaimDisposition>();
-  for (const entry of [...input.prior?.collection?.claimDispositions ?? [], ...input.dispositions ?? []])
+  // Earlier dispositions are carried; new ones are merged by the shared writer from saved reviewer annotations.
+  for (const entry of input.prior?.collection?.claimDispositions ?? [])
     if (ledger.has(claimKey(entry.postId, entry.claim)) && ![...disposed.values()].some(seen => seen.annotationRef === entry.annotationRef)) disposed.set(entry.annotationRef, entry);
   collection.claims = [...ledger.values()].slice(0, 200);
   collection.claimDispositions = [...disposed.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.annotationRef.localeCompare(b.annotationRef)).slice(0, 200);

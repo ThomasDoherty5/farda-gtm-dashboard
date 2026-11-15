@@ -165,7 +165,7 @@ describe("J20 review findings (pure rules)", () => {
       const { packet } = collect([dated(1, 1, { review: claim(text, topic) }), dated(2, 2), dated(3, 3)]);
       const quality = qualityOf(packet);
       expect(quality.nextAction, text).toBe("needsClaimReview");
-      expect(quality.footage.flatMap(f => f.claimsReview)).toEqual([expect.objectContaining({ targetId: "claim-0", topic, text, disposition: "pending" })]);
+      expect(quality.footage.flatMap(f => f.claimsReview)).toEqual([expect.objectContaining({ targetId: expect.stringMatching(/^claim-digest-[0-9a-f]{32}$/), topic, text, disposition: "pending" })]);
     }
     const plain = collect([dated(1, 1, { review: claim("Says the zipper is sturdy.", "productFunction") }), dated(2, 2), dated(3, 3)]).packet;
     expect(qualityOf(plain).footage.flatMap(f => f.claimsReview)).toEqual([]);
@@ -266,7 +266,7 @@ describe("J20 re-review findings (pure rules)", () => {
     expect(dropped.posts[0]!.review.claims).toEqual([]);
     expect(claimsGate(dropped)).toBe("unknown");
     expect(qualityOf(dropped)).toMatchObject({ nextAction: "needsClaimReview",
-      footage: [{ claimsReview: [{ targetId: null, topic: "medical", disposition: "pending" }] }] });
+      footage: [{ claimsReview: [{ targetId: expect.stringMatching(/^claim-digest-[0-9a-f]{32}$/), topic: "medical", disposition: "pending" }] }] });
     const reset = collect([dated(1, 1, { contentFingerprint: null, review: null })], first).packet;
     expect(claimsGate(reset)).toBe("unknown");
   });
@@ -285,6 +285,16 @@ describe("J20 re-review findings (pure rules)", () => {
     expect(() => buildCollectedPacket({ creatorId: "synthetic-creator", prior: null, snapshot: snapshot([dated(1, 1)]),
       collector: { version: "unqualified.v1", stage: "source", qualification: null }, protect })).toThrow();
     expect(collect([dated(1, 1)]).packet.collection!.collectorQualification).toBeNull();
+  });
+});
+
+describe("J20 third-pass findings (pure rules)", () => {
+  it("P6: a mis-tagged treatment claim still needs a person; everyday phrasing does not", () => {
+    const gate = (text: string) => assess(collect([dated(1, 1, { review: { ...structuredClone(fixtureReviews.complete),
+      claims: [{ atSec: 9, text, method: "heard" as const, topic: "productFunction" as const }] } })]).packet).gates.find(g => g.id === "CLAIMS_REVIEWED")?.state ?? "absent";
+    for (const text of ["Says it treats her eczema.", "Says it heals acne.", "Says it relieves her migraines.", "Says it helps her anxiety."]) expect(gate(text), text).toBe("unknown");
+    for (const text of ["Says to treat yourself to the fictional bag.", "Calls it retail therapy.", "Says it helps her stay organized.", "Says it heals the frustration of a messy bag."])
+      expect(gate(text), text).toBe("absent");
   });
 });
 

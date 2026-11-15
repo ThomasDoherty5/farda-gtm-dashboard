@@ -1,11 +1,17 @@
 import { claimKey, personClaims, reviewCoverage, type ClaimRecord, type EvidencePacket, type PostEvidence } from "../evidence.ts";
 import type { CreatorAssessment } from "../assessmentSchema.ts";
+import { digest } from "../config.ts";
 import { likeGate } from "../policy.ts";
 import { videoEvidenceQualitySchema, type VideoEvidenceQuality } from "./qualityContract.ts";
 
 type NextAction = VideoEvidenceQuality["nextAction"];
 const FEATURES = ["hook", "handlingOperationUse", "explanation", "visibleOutcome", "cta"] as const;
 const DAY_MS = 86_400_000;
+
+/** The reviewer target J20 adds for a claim that needs a person, bound to the exact post and claim (`claim-digest-<hex>`). */
+export const CLAIM_DIGEST_TARGET = /^claim-digest-[0-9a-f]{32}$/;
+export const claimDigestTarget = (postId: string, claim: { atSec: number; method: string; topic?: string; text: string }) =>
+  `claim-digest-${digest(claimKey(postId, claim)).slice(0, 32)}`;
 
 /** Disposition kind recorded on the existing reviewer path, by post and target. */
 export type ClaimDispositions = ReadonlyMap<string, ReadonlyMap<string, "disagree" | "override">>;
@@ -22,8 +28,8 @@ function footage(post: PostEvidence, quarantined: number, claims: readonly Claim
   // Carried claims stay listed after a later read drops them; a current target appears only while the current review shows the claim.
   const claimsReview = claims.map(entry => {
     const index = post.review.claims.findIndex(claim => claimKey(post.postId, claim) === claimKey(entry.postId, entry.claim));
-    const targetId = index < 0 ? null : `claim-${index}`;
-    const kind = stored.get(claimKey(entry.postId, entry.claim)) ?? (targetId ? live.get(targetId) : undefined);
+    const targetId = claimDigestTarget(entry.postId, entry.claim);
+    const kind = stored.get(claimKey(entry.postId, entry.claim)) ?? live.get(targetId) ?? (index < 0 ? undefined : live.get(`claim-${index}`));
     return { targetId, atSec: entry.claim.atSec, text: entry.claim.text, topic: entry.claim.topic,
       disposition: kind === "disagree" ? "disagreed" as const : kind === "override" ? "overridden" as const : "pending" as const };
   });

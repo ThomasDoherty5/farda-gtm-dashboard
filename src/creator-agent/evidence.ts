@@ -104,8 +104,10 @@ const MEDICAL_WORDING = /\b(?:cur(?:e|ed|es|ing)\s+(?:my|her|his|their|your|the)
  * A claim a person must review. The required topic decides first: compatibility, medical, outcome and uncategorized topics
  * always need a person. Explicit medical wording also does, whatever the topic. The agent never resolves these.
  */
+/** A treatment verb aimed at a condition ("treats her eczema", "heals acne", "relieves her migraines", "helps her anxiety"). */
+const TREATMENT_CLAIM = /\b(?:treat(?:s|ed|ing)?|heal(?:s|ed|ing)?|reliev(?:e|es|ed|ing)|cur(?:e|es|ed|ing)|help(?:s|ed|ing)?(?:\s+with)?|eas(?:e|es|ed|ing)|soothe(?:s|d)?)\s+(?:(?:my|her|his|their|your|the|of)\s+)?(?:\w+\s+)?(?:eczema|acne|migraines?|headaches?|anxiety|depression|psoriasis|rosacea|arthritis|insomnia|asthma|allerg(?:y|ies)|nausea|cramps|inflammation|infections?|rash(?:es)?|adhd|ptsd|ibs|menopause|hot flashes|chronic pain|joint pain|back pain|period pain)\b/i;
 export const claimNeedsPerson = (claim: { text: string; topic?: z.infer<typeof claimTopicSchema> }) =>
-  (claim.topic !== undefined && HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic)) || MEDICAL_WORDING.test(claim.text);
+  (claim.topic !== undefined && HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic)) || MEDICAL_WORDING.test(claim.text) || TREATMENT_CLAIM.test(claim.text);
 const spokenMethod = z.enum(["heard", "asr", "nativeCaptions"]);
 /**
  * Descriptive only: the edge allowance `reviewCoverage` uses to call a continuous review full. It gates nothing.
@@ -490,7 +492,9 @@ const packetShapeSchema = z.object({
    * A reviewer's audited exit from a collected revision on the same brief. It names the exact collected revision it leaves and
    * why; history keeps that revision unchanged, and J20 does not re-attach to the detached brief.
    */
-  detachedCollection: z.object({ fromRevision: z.number().int().positive().safe(), fromEvidenceRevision: id, reason: z.string().trim().min(12).max(500) }).strict().optional(),
+  detachedCollection: z.object({ fromRevision: z.number().int().positive().safe(), fromEvidenceRevision: id, reason: z.string().trim().min(12).max(500),
+    /** The authenticated reviewer principal, stamped by the server on the write that detaches. */
+    reviewerRef: id.optional() }).strict().optional(),
 }).strict().superRefine((packet, ctx) => {
   for (const key of ["posts", "recentPosts"] as const)
     if (new Set(packet[key].map((post) => post.postId)).size !== packet[key].length)
