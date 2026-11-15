@@ -15,7 +15,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,9 +79,17 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
+          name: synthetic-mirror-freshness
+          path: test-results/agent/**/mirror-freshness-evidence/*
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
           name: synthetic-agent-browser-evidence
           path: |
             test-results/agent/**/*.png
+            !test-results/agent/**/weekly-kpi-trend-*.png
             test-results/agent/**/monitor-evidence/native-browser-proof.json
             test-results/agent/**/stock-support-evidence/accessibility.json
             test-results/agent/finance-operations/capture-manifest.json
@@ -89,6 +97,25 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-weekly-kpi-trend
+          path: test-results/agent/**/weekly-kpi-trend-*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: synthetic-acquisition-metric-evidence
+          path: |
+            test-results/agent/**/analytics-native-performance-1440.png
+            test-results/agent/**/analytics-native-performance-390.png
+            test-results/agent/**/analytics-native-paid-1440.png
+            test-results/agent/**/analytics-native-paid-390.png
+            test-results/agent/**/analytics-native-definitions-*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: always()
         with:

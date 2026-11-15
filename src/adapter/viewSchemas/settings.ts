@@ -12,6 +12,7 @@
  * - These views hold no money, so the minor-unit rules do not apply; counts reject negatives and fractions.
  */
 import { z } from "zod";
+import { mirrorFreshnessViewSchema, mirrorRunDetailSchema } from "../../creator-agent/mirrorFreshnessContract.ts";
 import { nativeOperationsControlSchema, operationsReviewPayload, operationsHealthPayload } from "../../creator-agent/operationsControlsSchema.ts";
 import { nativeScheduleDetailSchema } from "../../creator-agent/scheduleCadence.ts";
 import { savedBindingsSchema, savedRunsSchema } from "../../creator-agent/operationsView.ts";
@@ -162,6 +163,8 @@ export const nightlyReconciliationSchema = z.object({
 /** View key to the schema of `ReadResponse.data` for that view. */
 export const settingsViewSchemas: Record<string, z.ZodTypeAny> = {
   operationsControl: nativeOperationsControlSchema,
+  mirrorFreshness: mirrorFreshnessViewSchema,
+  mirrorRunDetail: mirrorRunDetailSchema,
   connectionsOverview: z.union([savedBindingsSchema, connectionsOverviewSchema]),
   teamPermissions: teamPermissionsSchema,
   automationRuns: z.union([savedRunsSchema, automationRunsSchema]),

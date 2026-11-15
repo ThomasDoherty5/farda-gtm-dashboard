@@ -29,6 +29,8 @@ const typeChecks: [
 
 // Settings reads ignore the Overview fixture switch, so every fixture key must give the same parseable answer.
 const variants: { viewKey: string; filters: object; throws?: string }[] = [
+  {viewKey:"mirrorFreshness",filters:{},throws:"INTEGRATION_PENDING"},
+  {viewKey:"mirrorRunDetail",filters:{runId:"synthetic-no-demo-run"},throws:"INTEGRATION_PENDING"},
   ...controlSections.map(section=>({viewKey:"operationsControl",filters:{section}})),
   {viewKey:"operationsControl",filters:{},throws:"VALIDATION_FAILED"},
   {viewKey:"operationsControl",filters:{section:"team",targetRef:"not-a-demo-record"},throws:"RECORD_NOT_FOUND"},

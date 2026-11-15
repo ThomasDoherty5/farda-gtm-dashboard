@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
@@ -5,6 +6,8 @@ const ROUTES = [
   "/finance",
   "/finance?scenario=insufficient",
   "/finance?scenario=zeroburn",
+  "/finance?scenario=zeroorders",
+  "/finance?scenario=subscriptionunread",
   "/finance/close/2026-10",
   "/finance/close/2026-10?scenario=exportfailed",
   "/analytics/finance",
@@ -18,13 +21,20 @@ test.describe("finance dashboard, close and analytics against Figma at 1440", ()
     ["7:683", "/finance/close/2026-10", 1471],
     ["12:1006", "/analytics/finance", 1313],
   ] as const) {
-    test(`${url} is ${height}px tall like ${node}`, async ({ page }) => {
+    test(`${url} is ${height}px tall like ${node}`, async ({ page }, testInfo) => {
       await page.setViewportSize({ width: 1440, height: 400 });
       await page.goto(url);
       await page.evaluate(() => document.fonts.ready);
       await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
       await expect(page.getByRole("status").filter({ hasText: "Loading" })).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(height);
+      await page.setViewportSize({ width: 1440, height });
+      await page.evaluate(async () => { await document.fonts.ready; window.scrollTo(0, 0); });
+      const name = `finance-original-layout-demo-${node.replace(":", "-")}`;
+      const path = testInfo.outputPath(`${name}.png`);
+      await page.screenshot({ path, fullPage: true, animations: "disabled" });
+      await writeFile(testInfo.outputPath(`${name}.json`), JSON.stringify({ nodeId: node, evidenceStage: "demo", viewport: { width: 1440, height }, fullPage: true, contentHeight: await page.evaluate(() => document.documentElement.scrollHeight), providerAuthority: false }));
+      await testInfo.attach(name, { path, contentType: "image/png" });
     });
   }
 
@@ -85,6 +95,26 @@ test("the section navigation moves between the finance screens and keeps Back wo
   await expect(page.getByTestId("metric-Close progress")).toHaveText("4 / 7");
   await page.goBack();
   await expect(page.getByTestId("metric-Cash balance")).toBeVisible();
+});
+
+test("unit economics explain CAC payback, and the definitions dialog states them as proposed with no axe violations", async ({ page }) => {
+  await page.goto("/finance");
+  await expect(page.getByTestId("unit-economics")).toContainText("1.76 orders · Provisional · Creator costs partly allocated · Attribution coverage incomplete");
+  await expect(page.getByTestId("subscription-state")).toHaveText("No subscription revenue");
+  const trigger = page.getByRole("button", { name: "View metric definitions" });
+  await trigger.click();
+  const dialog = page.getByRole("dialog", { name: "Metric definitions" });
+  // The dialog opens at its title, so the "proposed, not adopted" warning is on screen without scrolling.
+  const heading = dialog.getByRole("heading", { name: "Metric definitions" });
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport();
+  await expect(dialog.getByText(/^Proposed · finance-unit-economics@1 · not adopted\./)).toBeInViewport();
+  await expect(dialog).toContainText("Proposed · finance-unit-economics@1 · not adopted");
+  await expect(dialog).toContainText("N/A · pilot cohort only; see the commission ledger");
+  const results = await new AxeBuilder({ page: page as never }).include("dialog[open]").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(trigger).toBeFocused();
 });
 
 test("opening the reconciliation is read only and returns focus", async ({ page }) => {

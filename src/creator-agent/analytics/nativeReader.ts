@@ -7,11 +7,12 @@ import { analyticsPrincipalSchema, analyticsScopeSchema, nativeAnalyticsBindingS
 import { ANALYTICS_ACCESS_MAX_AGE_MS, NativeAnalyticsError, type NativeAnalyticsSource } from "./nativeSource.ts";
 import { projectNativeAnalytics } from "./nativeProjection.ts";
 import { localDay } from "./reader.ts";
-import type { NativeAnalyticsView } from "./views.ts";
+import type { NativeAnalyticsView, NativeAttribution } from "./views.ts";
 import type { OperationsScope } from "../operations.ts";
 
 export { NativeAnalyticsError } from "./nativeSource.ts";
-export type NativeAnalyticsReaderOptions = { scope: OperationsScope; referenceKey: string; source?: NativeAnalyticsSource; now?: () => number; timeoutMs?: number };
+export type NativeAnalyticsReaderOptions = { scope: OperationsScope; referenceKey: string; source?: NativeAnalyticsSource; now?: () => number; timeoutMs?: number;
+  attachWeeklyEvidence?: (data: NativeAttribution, definition: string, alias: (kind: string, raw: string) => string) => (() => void) | undefined };
 export type NativeAnalyticsReadResult = { data: NativeAnalyticsView; version: string; dataState: "ready" | "partial" | "stale"; coverage: { expectedCount: number; observedCount: number; missingCount: number; complete: boolean; reasonCodes: string[] }; page: { nextCursor: string | null; hasMore: boolean }; assertCurrent(): void;
   /** Internal composition address. Never included in the adapter response. */
   sourceContext: { cohortRef: string | null; portfolio?: { reviewKey: string; reviewHash: string; validUntil: string; sourceCurrent: boolean } } };
@@ -143,7 +144,15 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     if (!snapshotResult.success) return fail("ANALYTICS_SOURCE_INVALID");
     const snapshot = freeze(structuredClone(snapshotResult.data));
     let publicationDeadline = Infinity;
-    const assertCurrent = () => { fence(snapshot, binding, signal); if (now() >= publicationDeadline) return fail("ANALYTICS_PUBLICATION_EXPIRED", 409); };
+    let assertWeeklyEvidence: (() => void) | undefined;
+    const assertCurrent = () => {
+      fence(snapshot, binding, signal);
+      if (now() >= publicationDeadline) return fail("ANALYTICS_PUBLICATION_EXPIRED", 409);
+      if (assertWeeklyEvidence) {
+        try { assertSynchronousVoid(assertWeeklyEvidence); }
+        catch { return fail("ANALYTICS_PUBLICATION_EXPIRED", 409); }
+      }
+    };
     assertCurrent();
     const projectedAt = now();
     const detailDeadlines: number[] = [];
@@ -177,6 +186,11 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     }
     const data = projectNativeAnalytics(snapshot, alias, projectedAt);
     data.provenance.validUntil = new Date(publicationDeadline).toISOString();
+    if (data.viewKey === "attribution" && snapshot.viewKey === "attribution" && snapshot.facts.orders) {
+      const proofRef = snapshot.facts.orders.proofRef;
+      const owner = snapshot.owners.find(value => value.proofRef === proofRef);
+      if (owner?.owner === "commerceOrders") assertWeeklyEvidence = options.attachWeeklyEvidence?.(data, owner.definitionVersion, alias);
+    }
     let nextCursor: string | null = null;
     if (data.viewKey === "paidMedia" && binding.request.viewKey === "paidMedia") {
       const request = binding.request, { cursor, limit } = request.page;
@@ -210,7 +224,8 @@ export function createNativeAnalyticsReader(options: NativeAnalyticsReaderOption
     const stale = data.freshness.state !== "current", complete = !stale && data.coverage.state === "complete";
     const observedSources = data.sources.filter(owner => owner.coverage === "complete" && (!owner.sync || ["changed", "unchanged"].includes(owner.sync.state)) && owner.sourceAsOf !== null && now() - Date.parse(owner.sourceAsOf) < owner.maxAgeMs).length;
     const expectedCount = data.sources.length + factCount, observedCount = observedSources + resolvedFacts;
-    const result: NativeAnalyticsReadResult = { data, version: `analytics-v1-${digest([binding, snapshot])}`, dataState: stale ? "stale" : complete ? "ready" : "partial", coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete, reasonCodes: [...data.coverage.reasonCodes, ...(stale ? ["SOURCE_STALE"] : [])] }, page: { nextCursor, hasMore: nextCursor !== null }, assertCurrent, sourceContext: { cohortRef: snapshot.cohortRef } };
+    const version = digest(assertWeeklyEvidence && data.viewKey === "attribution" ? [binding, snapshot, data.weeks] : [binding, snapshot]);
+    const result: NativeAnalyticsReadResult = { data, version: `analytics-v1-${version}`, dataState: stale ? "stale" : complete ? "ready" : "partial", coverage: { expectedCount, observedCount, missingCount: expectedCount - observedCount, complete, reasonCodes: [...data.coverage.reasonCodes, ...(stale ? ["SOURCE_STALE"] : [])] }, page: { nextCursor, hasMore: nextCursor !== null }, assertCurrent, sourceContext: { cohortRef: snapshot.cohortRef } };
     if (snapshot.viewKey === "overviewSummary" && snapshot.facts.portfolio) {
       const p = snapshot.facts.portfolio, owner = snapshot.owners.find(row => row.proofRef === p.proofRef)!;
       result.sourceContext.portfolio = { reviewKey: p.reviewKey, reviewHash: p.reviewHash, validUntil: owner.validUntil,

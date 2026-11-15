@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { financeViewKeys, type FinanceViewKey } from "./contract";
 import { createFinanceReader, FinanceError } from "./reader";
 import type { FinanceSourceReader } from "./source";
-import { financeTestSource, financeSnapshot, financeTestFilters, financeTestScope, financeTestTime } from "./fixtures.testkit";
-import { financeViewSchemas } from "../../adapter/viewSchemas/finance";
+import { financeTestSource, financeSnapshot, financeTestFilters, financeTestScope, financeTestSummaryContext, financeTestTime } from "./fixtures.testkit";
+import { financeDashboardSchema, financeViewSchemas } from "../../adapter/viewSchemas/finance";
 
 const secret = "synthetic-finance-reference-key-not-a-secret-0001";
 const now = () => Date.parse(financeTestTime);
@@ -41,6 +41,73 @@ describe("finance reader", () => {
   it("keeps unknown provenance values unknown instead of zero", async () => {
     const result = await reader(async () => financeSnapshot("financeDashboard")).read("financeDashboard", {}, "reader");
     expect((result.data as { pnl: { ytd: unknown } }).pnl.ytd).toMatchObject({ state: "unknown", value: null, reasonCode: "YTD_REPORT_NOT_RECEIVED" });
+  });
+
+  it("serves unread unit-economics and subscription inputs as unknown, and refuses a record that turns them into a verified fact", async () => {
+    const record = { ...financeSnapshot("financeDashboard").record, summaryContext: financeTestSummaryContext } as Record<string, unknown>;
+    const result = await reader(async () => financeSnapshot("financeDashboard", { record })).read("financeDashboard", {}, "reader");
+    const data = result.data as { subscriptions: { access: string; subscriptionProducts: number | null }; unitEconomics: { creatorCosts: { state: string; observed: number | null } } };
+    expect(data.subscriptions).toMatchObject({ access: "unknown", subscriptionProducts: null });
+    expect(data.unitEconomics.creatorCosts).toMatchObject({ state: "unknown", observed: null });
+    const unread = record.subscriptions as { monthlyRecurring: object };
+    for (const subscriptions of [{ ...unread, subscriptionProducts: 0 }, { ...unread, access: "verified" },
+      { ...unread, monthlyRecurring: { ...unread.monthlyRecurring, state: "known", value: 1200, reasonCode: null } }]) {
+      const error = await failure(reader(async () => financeSnapshot("financeDashboard", { record: { ...record, subscriptions } })).read("financeDashboard", {}, "reader"));
+      expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["FINANCE_RECORD_INVALID"] });
+    }
+    const adopted = { ...(record.unitEconomics as object), definition: { version: "finance-unit-economics@1", state: "adopted", reference: null } };
+    const error = await failure(reader(async () => financeSnapshot("financeDashboard", { record: { ...record, unitEconomics: adopted } })).read("financeDashboard", {}, "reader"));
+    expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["FINANCE_RECORD_INVALID"] });
+  });
+
+  it("qualifies only the exact report cohort and projects opaque cost references without private forecast text", async () => {
+    const source = financeSnapshot("financeDashboard").record as unknown as ReturnType<typeof financeDashboardSchema.parse>;
+    const economics = source.unitEconomics!;
+    const record = { ...source, summaryContext: financeTestSummaryContext, unitEconomics: {
+      ...economics, cohort: { ...economics.cohort, label: "synthetic-private-cohort-label" },
+      validOrders: { ...economics.validOrders, evidenceRefs: ["synthetic-private-order-evidence"] },
+      landedCost: { complete: false, missingSkus: ["synthetic-private-sku"] },
+      costs: economics.costs.map(row => ({ ...row, obligationId: "synthetic-private-obligation",
+        evidenceId: "synthetic-private-evidence", cashId: "synthetic-private-cash" })),
+    }, forecastPlan: { version: "synthetic-private-plan-version", basis: "illustrative", assumptions: ["synthetic-private-assumption"] } };
+    const read = (summaryContext: typeof record.summaryContext) =>
+      reader(async () => financeSnapshot("financeDashboard", { record: { ...record, summaryContext } })).read("financeDashboard", {}, "reader");
+    const good = (await read(financeTestSummaryContext)).data as ReturnType<typeof financeDashboardSchema.parse>;
+    expect(good.unitEconomics?.cohort.id).toMatch(/^finance-cohort-/);
+    expect(good.unitEconomics?.costs[0]?.cohortId).toBe(good.unitEconomics?.cohort.id);
+    expect(good.summaryContext?.cohortRef).toBe(good.unitEconomics?.cohort.id);
+    expect(good.forecastPlan?.assumptions).toEqual([]);
+    expect(JSON.stringify(good)).not.toContain("synthetic-private");
+    for (const context of [
+      { ...financeTestSummaryContext, cohortRef: "synthetic-pilot-cohort" },
+      { ...financeTestSummaryContext, period: { ...financeTestSummaryContext.period, startAt: "2026-10-01T12:00:00Z" } },
+    ]) {
+      const held = await read(context);
+      expect(held.dataState).toBe("ready");
+      expect(held.data).toMatchObject({ pnl: { revenue: 10000 } });
+      expect(held.data).not.toHaveProperty("unitEconomics");
+    }
+  });
+
+  it("accepts a dashboard record without the optional unit-economics, subscription and forecast add-ons", async () => {
+    const frozen = { ...financeSnapshot("financeDashboard").record as Record<string, unknown> };
+    for (const key of ["unitEconomics", "subscriptions", "forecastPlan"]) delete frozen[key];
+    const result = await reader(async () => financeSnapshot("financeDashboard", { record: frozen })).read("financeDashboard", {}, "reader");
+    const data = result.data as Record<string, unknown> & { pnl: { revenue: number; cogs: number } };
+    expect(result.dataState).toBe("ready");
+    expect(data.pnl).toMatchObject({ revenue: 10000, cogs: 1000 });
+    expect(data).not.toHaveProperty("unitEconomics");
+    expect(data).not.toHaveProperty("subscriptions");
+    expect(data).not.toHaveProperty("forecastPlan");
+  });
+
+  it("refuses a dashboard record whose cost obligation sits under two components", async () => {
+    const record = financeSnapshot("financeDashboard").record as Record<string, unknown> & { unitEconomics: { costs: Record<string, unknown>[]; declared: { component: string }[] } };
+    const [cogs] = record.unitEconomics.costs;
+    const unitEconomics = { ...record.unitEconomics, costs: [cogs, { ...cogs, component: "sampleLanded", evidenceId: "synthetic-sample-evidence" }],
+      declared: record.unitEconomics.declared.filter(d => d.component !== "sampleLanded") };
+    const error = await failure(reader(async () => financeSnapshot("financeDashboard", { record: { ...record, unitEconomics } })).read("financeDashboard", {}, "reader"));
+    expect(error).toMatchObject({ code: "SOURCE_RESPONSE_INVALID", reasonCodes: ["FINANCE_RECORD_INVALID"] });
   });
 
   it("denies every intent to a reader and holds them for a reviewer; nothing is executable", async () => {

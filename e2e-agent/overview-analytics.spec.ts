@@ -5,6 +5,7 @@ import { analyticsTestScope } from "../src/creator-agent/analytics/fixtures.test
 import { nativeAnalyticsFixture } from "../src/creator-agent/analytics/nativeFixtures.testkit.ts";
 import type { NativeAnalyticsSnapshot } from "../src/creator-agent/analytics/contract.ts";
 import { SYNTHETIC_READ_TOKEN, SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
+import { first, second, weeklySnapshotFixture } from "../src/creator-agent/weeklySnapshots/fixture.testkit.ts";
 import { screenReaderCheckpoint } from "./support/screen-reader.ts";
 
 /** Actual HTTP/SQLite with fictional, source-qualified permissions, never live provider proof. */
@@ -18,8 +19,8 @@ async function accessible(page: Page) {
   const axe = await new AxeBuilder({ page: page as never }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
   expect(axe.violations.map(v => ({ id: v.id, nodes: v.nodes.map(n => n.target) }))).toEqual([]);
 }
-function configured(mutate?: (snapshot: NativeAnalyticsSnapshot) => void) {
-  const fixture = nativeAnalyticsFixture({ now: Date.now, principalRef: "agent-reader" });
+function configured(mutate?: (snapshot: NativeAnalyticsSnapshot) => void, acquisitionCase = false) {
+  const fixture = nativeAnalyticsFixture({ now: Date.now, principalRef: "agent-reader", acquisitionCase });
   fixture.state.mutate = packet => { packet.validUntil = new Date(Date.parse(packet.observedAt) + 600_001).toISOString(); for (const owner of packet.owners) owner.validUntil = packet.validUntil; mutate?.(packet); };
   return { fixture, app: createAgentServer({ ...options, analyticsSource: fixture.source }) };
 }
@@ -122,13 +123,55 @@ test("a native cohort deep link reaches the source unchanged and cannot fall bac
   } finally { await app.close(); }
 });
 
+test("two frozen KPI weeks reach the Figma trend chart with keyboard and actual speech evidence", async ({ page }, info) => {
+  const fixture = await weeklySnapshotFixture({ port: Number(process.env.E2E_AGENT_SERVER_PORT) });
+  try {
+    fixture.reporting.advance(Date.now() - fixture.reporting.now);
+    expect((await fixture.accept(first.reportDate, "synthetic-trend-week-one")).status).toBe(200);
+    expect((await fixture.accept(second.reportDate, "synthetic-trend-week-two")).status).toBe(200);
+    await login(page);
+    const query = new URLSearchParams({ "report-start": first.start, "report-end": second.end, "report-zone": first.timezone });
+    await page.goto("/analytics/attribution?" + query.toString());
+    const week = page.getByRole("button", { name: /2026-11-02 to 2026-11-09 exclusive.*snapshot v1/i });
+    await expect(week).toBeVisible();
+    await week.focus();
+    await page.keyboard.press("Enter");
+    await expect(week).toHaveAttribute("aria-pressed", "true");
+    const summary = page.getByRole("status").filter({ hasText: "Snapshot v1" });
+    await expect(summary).toContainText("Shopify $75.00 · TikTok Shop $25.00");
+    await screenReaderCheckpoint(page, "weekly-kpi-selected-week", week, ["Shopify", "TikTok Shop", "snapshot"]);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await week.scrollIntoViewIfNeeded();
+      const track = page.getByRole("list", { name: /Weekly net receipts by channel/ });
+      const [selectedBox, trackBox] = await Promise.all([week.boundingBox(), track.boundingBox()]);
+      expect(selectedBox).not.toBeNull();
+      expect(trackBox).not.toBeNull();
+      expect(selectedBox!.x).toBeGreaterThanOrEqual(trackBox!.x - 1);
+      expect(selectedBox!.x + selectedBox!.width).toBeLessThanOrEqual(trackBox!.x + trackBox!.width + 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await accessible(page);
+      // The full-page capture starts at the top, with the selected week still in view within its horizontal chart.
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+      await page.screenshot({ path: info.outputPath(`weekly-kpi-trend-${width}.png`), fullPage: true });
+    }
+    expect(fixture.reporting.state.calls).toHaveLength(0);
+  } finally { await fixture.close(); }
+});
+
 test("all reporting families preserve complete responsive content and actual assistive speech", async ({ page }, info) => {
-  test.setTimeout(240_000); const { app } = configured(); await listen(app);
+  test.setTimeout(240_000); const { app } = configured(undefined, true); await listen(app);
   const routes = [["overview", "/overview", "Overview"], ["performance", "/analytics/attribution", "Every dollar, in perspective."], ["paid", "/analytics/paid-media", "See what earns the click."], ["launch", "/launch", "Your launch, in focus."], ["campaign", "/campaigns/campaign-current?tab=funnel", "Turn a plan into a checked cohort."], ["reconciliation", "/launch?view=reconciliation", "Do the pages agree?"]];
   try {
     await login(page);
     for (const [key, route, heading] of routes) {
       await page.goto(route!); await expect(page.getByRole("heading", { name: heading!, exact: true })).toBeVisible(); await expect(page.getByRole("button", { name: "Source evidence", exact: true })).toBeVisible();
+      if (key === "performance") {
+        await expect(page.getByTestId("metric-cac")).toContainText("$25.00");
+        await expect(page.getByTestId("metric-mer")).toContainText("1.80×");
+      }
+      if (key === "paid") await expect(page.getByText("Acquisition-cost total", { exact: true }).locator("..")).toContainText("$7,000.00");
       for (const width of [1440, 1024, 390]) {
         await page.setViewportSize({ width, height: 1000 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         if (key === "performance" || key === "paid") {
@@ -163,8 +206,26 @@ test("all reporting families preserve complete responsive content and actual ass
       if (key === "performance") {
         const trigger = page.getByRole("button", { name: "Metric definitions", exact: true }); await trigger.focus(); await page.keyboard.press("Enter"); const dialog = page.getByRole("dialog", { name: "Metric definitions" });
         await expect(dialog.getByTestId("metric-dictionary")).toBeVisible(); await expect(dialog.getByTestId("static-definitions")).toBeVisible();
+        await expect(dialog.getByTestId("definition-blendedCac")).toContainText("new retained customers");
+        await expect(dialog.getByTestId("definition-platformRoas")).toContainText("click and view attribution window");
+        const retained = dialog.getByTestId("native-retained-costs");
+        await expect(retained).toContainText("Cost per retained order");
+        await expect(retained).toContainText("$18.52");
+        await expect(retained).toContainText("378 retained orders");
+        await expect(retained).toContainText("Cost per retained unit");
+        await expect(retained).toContainText("$18.47");
+        await expect(retained).toContainText("379 retained units");
         for (const width of [1440, 390]) { await page.setViewportSize({ width, height: 1000 }); expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true); await page.screenshot({ path: info.outputPath(`analytics-native-definitions-${width}.png`), fullPage: true }); }
-        await page.setViewportSize({ width: 1440, height: 1000 }); await page.keyboard.press("Escape"); await expect(trigger).toBeFocused(); await screenReaderCheckpoint(page, "analytics-definitions-focus-return", trigger, ["Metric definitions", "button"]);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        const costEvidence = dialog.getByTestId("period-economic-evidence").first();
+        const disclosure = costEvidence.locator("summary");
+        await disclosure.focus(); await page.keyboard.press("Enter");
+        const costTable = costEvidence.getByRole("region", { name: "Qualified economic cost observations" });
+        await expect(costTable.getByText("Previously accepted creator fee", { exact: true })).toHaveCount(2);
+        await expect(costTable.getByText("Linked cash receipt", { exact: true })).toHaveCount(3);
+        await screenReaderCheckpoint(page, "analytics-acquisition-cost-table", costTable,
+          ["Qualified economic cost observations", "Category", "Basis", "Cash linkage"], "KP_Enter");
+        await page.keyboard.press("Escape"); await expect(trigger).toBeFocused(); await screenReaderCheckpoint(page, "analytics-definitions-focus-return", trigger, ["Metric definitions", "button"]);
       }
       if (key === "paid") await screenReaderCheckpoint(page, "analytics-paid-table-headers", page.getByRole("region", { name: "Paid channel metrics" }), ["Paid channel metrics", "Channel", "Media spend", "Platform ROAS"], "KP_Enter");
       if (key === "campaign") { await expect(page.getByTestId("metric-no-post")).toHaveText("Unknown"); await screenReaderCheckpoint(page, "analytics-campaign-table-headers", page.getByRole("region", { name: "Campaign progression" }), ["Campaign progression", "Campaign", "Contacted", "Posted"], "KP_Enter"); }

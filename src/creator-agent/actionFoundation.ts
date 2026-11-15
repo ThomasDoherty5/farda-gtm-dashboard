@@ -1,4 +1,11 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { createDailyDigestReporting, type DailyDigestConfig } from "./dailyDigest/service.ts";
+import { createWeeklySnapshotReporting, type WeeklySnapshotConfig } from "./weeklySnapshots/service.ts";
+import { createLaunchPulseReporting, type LaunchPulseConfig } from "./launchPulse/service.ts";
+import { bindCreatorFeed, type CreatorFeedConfig } from "./creatorHandoff/source.ts";
+import { bindAutomationFailureReporting, type AutomationFailureReportingBinding } from "./slackReporting/automationFailure.ts";
+import { bindOperationalAlertReporting, type OperationalAlertReportBinding } from "./operationalAlerts/report.ts";
+import type { OperationalAlertRepository } from "./operationalAlerts/repository.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { ApprovalManifest } from "./approvals/contract.ts";
@@ -34,7 +41,7 @@ export type ActionFoundationBindings = {
   readinessTargetRef?: string;
   reviewSource?: ActionReviewSource;
   reviewLinkOrigins?: readonly string[];
-  reporting?: {token:string;workerRef:string;source:ReportingSource;
+  reporting?: {token:string;workerRef:string;source:ReportingSource;dailyDigest?:DailyDigestConfig;automationFailures?:AutomationFailureReportingBinding;weeklySnapshots?:WeeklySnapshotConfig;launchPulse?:LaunchPulseConfig;creatorFeed?:CreatorFeedConfig;
     assertCurrent(request:{scope:ActionScope;workerRef:string;operation:"accept"|"read"|"work"|"reconcile";reference:string},now:number):void};
   worker?: { token: string; workerRef: string;
     resolve: (scope: ActionScope, runRef: string) => Promise<unknown>;
@@ -65,6 +72,7 @@ export function assertMachineTokens(bindings: ActionFoundationBindings | undefin
 /** One composition of J04, existing jobs, action contracts and domain owners, on the same scoped database. */
 export function createActionFoundation(options: { db: DatabaseSync; scope: ActionScope; secret: string;
   jobs: JobRepository; ledger: CapabilityLedger; bindings?: ActionFoundationBindings;
+  operationalAlerts?: { repository: OperationalAlertRepository; report: OperationalAlertReportBinding };
   commercialEligibility?: (manifest: ApprovalManifest) => ReadonlyMap<string, CommercialProjection>; now?: () => number }) {
   const { db, scope, secret, jobs, ledger } = options, bindings = options.bindings ?? {}, now = options.now ?? Date.now;
   const approvals: ApprovalRepository = new ApprovalRepository(db, { ...bindings.approvals, scope, now,
@@ -81,18 +89,32 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     review: createActionReviewService({scope,referenceKey:secret,source:bindings.reviewSource,permittedLinkOrigins:bindings.reviewLinkOrigins,now}),
     commercialEligibility: options.commercialEligibility, now });
   const limits = new ApiRequestLimits(db, scope, now);
-  const reporting=bindings.reporting ? createSlackReporting({db,scope,secret,jobs,source:bindings.reporting.source,now}) : undefined;
+  const reportBinding = bindings.reporting;
+  const alertConfig = options.operationalAlerts;
+  const alertReports = reportBinding && alertConfig
+    ? bindOperationalAlertReporting(alertConfig.repository, scope, alertConfig.report, reportBinding.source, now) : undefined;
+  const baseSource = alertReports?.reportingSource ?? reportBinding?.source;
+  const baseReportSource = reportBinding?.dailyDigest
+    ? createDailyDigestReporting(db, scope, { ...reportBinding.dailyDigest,
+      ...(alertReports ? { thresholds: alertReports.digestFor } : {}) }, baseSource!, now)
+    : baseSource;
+  const weeklySnapshots = reportBinding?.weeklySnapshots && baseReportSource
+    ? createWeeklySnapshotReporting(db, scope, reportBinding.weeklySnapshots, baseReportSource, now) : undefined;
+  const weeklyReportSource = weeklySnapshots?.reportingSource ?? baseReportSource;
+  const pulseReportSource = reportBinding?.launchPulse && weeklyReportSource
+    ? createLaunchPulseReporting(db, scope, reportBinding.launchPulse, weeklyReportSource, now) : weeklyReportSource;
+  const creatorReportSource = pulseReportSource ? bindCreatorFeed(pulseReportSource, scope, reportBinding?.creatorFeed, now) : undefined;
+  const reportSource = reportBinding?.automationFailures && creatorReportSource
+    ? bindAutomationFailureReporting(creatorReportSource, scope, secret, reportBinding.automationFailures) : creatorReportSource;
+  const reporting = reportBinding ? createSlackReporting({ db, scope, secret, jobs, source: reportSource, now }) : undefined;
   const reportAccept=z.object({locator:reportLocatorSchema,idempotencyKey:reportReference}).strict();
   const reportTarget=z.object({reportRef:reportReference}).strict();
   function authenticateReporting(authorization:string|undefined) {
     if(!bindings.reporting || !reporting) throw new ReportError("REPORTING_MACHINE_UNCONFIGURED",503,"uncertain");
     if(!authorization?.startsWith("Bearer ") || !equal(authorization.slice(7),bindings.reporting.token)) throw new ReportError("UNAUTHENTICATED",401,"uncertain");
   }
-  async function executeReporting(operation:"accept"|"read"|"work"|"reconcile", raw:unknown, authorization:string|undefined) {
-    authenticateReporting(authorization);
+  function reportMachine(operation:"accept"|"read"|"work"|"reconcile", reference:string) {
     const configured=bindings.reporting!;
-    const target=operation==="accept" ? reportAccept.parse(raw) : reportTarget.parse(raw);
-    const reference="locator" in target ? "report-event-"+createHash("sha256").update(JSON.stringify(target.locator)).digest("hex") : target.reportRef;
     const assertCurrent=()=>{try{
       // A void callback can still be async at runtime. A final authority fence
       // must finish synchronously before the same-database effect transaction.
@@ -101,11 +123,27 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
       catch{throw new ReportError("REPORT_MACHINE_AUTHORITY_INVALID",403,"uncertain");}};
     assertCurrent();const admission=limits.admit("report-machine:"+configured.workerRef,operation==="read"?"read":"write");
     if(!admission.admitted)throw new ReportError("RATE_LIMITED",429,"uncertain",admission.retryAfterMs);
-    const machine={workerRef:configured.workerRef,assertCurrent};
+    return {workerRef:configured.workerRef,assertCurrent};
+  }
+  function readOperationalAlertDeliveries(rawRef: string, authorization: string | undefined) {
+    authenticateReporting(authorization);
+    const runRef = reportReference.parse(rawRef);
+    const reference = "threshold-run-" + createHash("sha256").update(runRef).digest("hex");
+    const machine = reportMachine("read", reference);
+    if (!alertReports) throw new ReportError("ALERT_REPORTING_UNCONFIGURED", 503);
+    const deliveries = alertReports.deliveriesFor(runRef);
+    machine.assertCurrent();
+    return { deliveries };
+  }
+  async function executeReporting(operation:"accept"|"read"|"work"|"reconcile", raw:unknown, authorization:string|undefined) {
+    authenticateReporting(authorization);
+    const target=operation==="accept" ? reportAccept.parse(raw) : reportTarget.parse(raw);
+    const reference="locator" in target ? "report-event-"+createHash("sha256").update(JSON.stringify(target.locator)).digest("hex") : target.reportRef;
+    const machine=reportMachine(operation,reference);
     let result:ReportRead;
     if("locator" in target) result=await reporting!.accept(target.locator,target.idempotencyKey,machine);
     else result=operation==="read" ? await reporting!.read(target.reportRef,machine) : operation==="work" ? await reporting!.work(target.reportRef,machine) : await reporting!.reconcile(target.reportRef,machine);
-    try{assertCurrent();}catch{throw new ReportError("REPORT_MACHINE_AUTHORITY_INVALID",403,result.executionCertainty);}
+    try{machine.assertCurrent();}catch{throw new ReportError("REPORT_MACHINE_AUTHORITY_INVALID",403,result.executionCertainty);}
     return reportReadSchema.parse(result);
   }
 
@@ -188,5 +226,6 @@ export function createActionFoundation(options: { db: DatabaseSync; scope: Actio
     if (!bindings.readinessTargetRef) throw new DispatchError("READINESS_SOURCE_UNCONFIGURED", 503);
     return domains.readReadiness(bindings.readinessTargetRef, { principalRef });
   }
-  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision, authenticateReporting, executeReporting, reporting };
+  return { approvals, dispatch, service, domains, limits, execute, readReadiness, authenticateMachine, executeWorker, observeDecision,
+    authenticateReporting, executeReporting, readOperationalAlertDeliveries, reporting, weeklySnapshots };
 }

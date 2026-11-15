@@ -20,6 +20,7 @@ export function NativePaidMedia({ data, filters, setFilter, clear, next, first, 
   const [asOf, setAsOf] = useState(false);
   const aggregate = (id: string) => data.totals.measures.find(row => row.metricId === id)?.result;
   const ranked = data.assets.slice(0, 4), chartMax = Math.max(3, ...ranked.map(row => row.ctr.state === "known" ? row.ctr.value ?? 0 : 0));
+  const fullAcquisitionScope = filters.platform === "all" && data.selection.platform === "all";
   return <>
     <NativeAnalyticsEvidence data={data} refresh={refresh} refreshing={refreshing} />
     <KpiGrid>
@@ -37,7 +38,9 @@ export function NativePaidMedia({ data, filters, setFilter, clear, next, first, 
         <hr className={styles.divider} />
         <DetailRow label="Media total" value={<Fact fact={data.totals.spend} format={nativeMoney} />} />
         <DetailRow label="Creator / sample economics" value={<Fact fact={data.creatorSampleEconomics} format={nativeMoney} />} />
-        <DetailRow label="Acquisition-cost total" value="Unknown · no combined qualified cost basis" />
+        <DetailRow label="Acquisition-cost total" value={fullAcquisitionScope
+          ? <Fact fact={data.acquisitionCost} format={nativeMoney} />
+          : "N/A · full acquisition cohort"} />
         <p className={styles.small}>Gifted-product economic cost is counted once; it is not added again to inventory-purchase cash outflow.</p>
       </Card>
       <Card labelledBy="native-ctr-title" className={styles.card20}><SectionHeading id="native-ctr-title" title="Click-through by asset" note="Source-computed CTR · up to four assets from the current filtered page" />

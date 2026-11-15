@@ -26,6 +26,13 @@ const realDay = (v: string) => {
 export const instantSchema = z.string().datetime({ offset: true }).refine(v => Number.isFinite(Date.parse(v)) && realDay(v.slice(0, 10)), "A finite, real timestamp is required.");
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(realDay, "A real calendar date is required.");
 export const timezoneSchema = z.string().min(1).max(100).refine(v => { try { new Intl.DateTimeFormat("en", { timeZone: v }); return true; } catch { return false; } }, "Unknown timezone.");
+const dayFormats = new Map<string, Intl.DateTimeFormat>();
+/** The calendar day of an instant in a reporting timezone (YYYY-MM-DD). */
+export function localDay(instant: number, timezone: string) {
+  let format = dayFormats.get(timezone);
+  if (!format) dayFormats.set(timezone, format = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }));
+  return format.format(new Date(instant));
+}
 /** Inclusive calendar window in one reporting timezone. */
 export const windowSchema = z.object({ start: day, end: day, timezone: timezoneSchema }).strict().refine(w => w.start <= w.end, "Reversed reporting window.");
 export type ReportingWindow = z.infer<typeof windowSchema>;

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { analyticsCountSchema, analyticsDaySchema, analyticsMetricIds, analyticsMoneySchema, analyticsOwnerKinds, analyticsPeriodSchemaNative, analyticsReasonSchema, analyticsSyncSchema, nativeAnalyticsFilters, nativeAnalyticsViewKeys } from "./contract.ts";
+import { analyticsCostKindSchema, analyticsCountSchema, analyticsDaySchema, analyticsMetricIds, analyticsMoneySchema, analyticsOwnerKinds, analyticsPeriodSchemaNative, analyticsReasonSchema, analyticsSyncSchema, nativeAnalyticsFilters, nativeAnalyticsViewKeys } from "./contract.ts";
 import { adAssetUsageScopes, attributionReviewReasons, instantSchema } from "./sources.ts";
 import { financeSummaryContextSchema } from "../finance/headlines.ts";
 import { nativeContentSchema } from "../monitor/contract.ts";
@@ -61,7 +61,7 @@ export const nativeOverviewSummarySchema = z.object({ ...header, viewKey: z.lite
   postsTotal: analyticsCountViewSchema,
 }).strict();
 const economicEvidence = z.object({ allocationVersion: z.literal("economic-events@1"), cohortRef: analyticsPublicRefSchema, period: analyticsPeriodSchemaNative, currency: z.literal("USD"), coverage: z.enum(["complete", "partial", "missing"]), retention: z.enum(["mature", "immature", "unknown"]), landedCost: z.enum(["complete", "incomplete", "unknown"]), refundRevision: analyticsPublicRefSchema.nullable(),
-  costs: z.array(z.object({ key: z.enum(["creatorCommission", "sample", "shipping", "paidMedia", "platformFee", "otherAcquisition"]), basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative().safe().nullable(), alsoInCash: z.boolean(), obligationRef: analyticsPublicRefSchema, evidenceRef: analyticsPublicRefSchema, cashRef: analyticsPublicRefSchema.nullable() }).strict()).max(2000),
+  costs: z.array(z.object({ key: analyticsCostKindSchema, basis: z.enum(["paid", "accrued", "estimated"]), minorUnits: z.number().int().nonnegative().safe().nullable(), alsoInCash: z.boolean(), obligationRef: analyticsPublicRefSchema, evidenceRef: analyticsPublicRefSchema, cashRef: analyticsPublicRefSchema.nullable() }).strict()).max(2000),
 }).strict();
 export const nativeAttributionReviewSchema = z.object({
   state: z.enum(["ready", "partial", "stale", "unavailable"]), reasonCodes: z.array(analyticsReasonSchema).max(20),
@@ -80,7 +80,8 @@ export const nativeAttributionReviewSchema = z.object({
   }).strict().refine(row => (row.sourceReason === null) === (row.reasonObservedAt === null) && (row.sourceReason === null ? row.evidenceRefs.length === 0 : row.evidenceRefs.length > 0), "Source reasons require their own observation and evidence.")).max(100),
 }).strict();
 export const nativeAttributionSchema = z.object({ ...header, viewKey: z.literal("attribution"), ...commonCommerce, attributedOrders: analyticsCountViewSchema, attributedNetSales: analyticsMoneyViewSchema, platformReports: z.array(z.object({ platform: z.enum(["meta", "tiktok"]), attributionWindow: z.object({ clickDays: z.number().int().nonnegative(), viewDays: z.number().int().nonnegative() }).strict().nullable() }).strict()).max(2), retainedUnits: analyticsCountViewSchema,
-  weeks: z.array(z.object({ startDay: analyticsDaySchema, endDayExclusive: analyticsDaySchema, channels: z.array(channel).max(2) }).strict()).max(53),
+  weeks: z.array(z.object({ startDay: analyticsDaySchema, endDayExclusive: analyticsDaySchema,
+    channels: z.array(channel).max(2), snapshotVersion: z.string().regex(/^v[1-9]\d{0,6}$/).optional() }).strict()).max(53),
   attribution: z.array(z.object({ method: z.enum(["creatorCode", "sitewideCode", "unknownCode", "utm", "platform", "unattributed"]), orders: analyticsCountViewSchema }).strict()).max(6), economicEvidence: economicEvidence.nullable(),
   unattributedReview: nativeAttributionReviewSchema.nullable().default(null),
   creators: z.array(z.object({ creatorRef: analyticsPublicRefSchema, roi: analyticsNumberViewSchema }).strict()).max(100),
@@ -99,6 +100,7 @@ export const nativeAssetRightsEvidenceSchema = z.object({
 }).strict().refine(value => (value.state === "missing") === (value.grant === null) && (value.state === "available" ? value.reasonCodes.length === 0 : value.reasonCodes.length > 0), "Grant availability requires exact evidence; other states require a reason.");
 export const nativePaidMediaSchema = z.object({ ...header, viewKey: z.literal("paidMedia"), channels: z.array(z.object({ platform, spend: analyticsMoneyViewSchema, impressions: analyticsCountViewSchema, clicks: analyticsCountViewSchema, platformPurchaseValue: analyticsMoneyViewSchema,
   attributionWindow: z.object({ clickDays: z.number().int().nonnegative(), viewDays: z.number().int().nonnegative() }).strict().nullable(), measures: z.array(analyticsMeasureSchema).max(10) }).strict()).max(2), totals: z.object({ spend: analyticsMoneyViewSchema, impressions: analyticsCountViewSchema, clicks: analyticsCountViewSchema, measures: z.array(analyticsMeasureSchema).max(10) }).strict(), creatorSampleEconomics: analyticsMoneyViewSchema,
+  acquisitionCost: analyticsMoneyViewSchema.optional(),
   assets: z.array(z.object({ assetRef: analyticsPublicRefSchema, platform, label: z.string().regex(/^(?:[A-Z]{2,6}-\d{1,6}|Asset [a-f0-9]{8})$/), clicks: analyticsCountViewSchema, impressions: analyticsCountViewSchema, ctr: analyticsNumberViewSchema, rights, expiresOn: analyticsDaySchema.nullable(),
     rightsEvidence: nativeAssetRightsEvidenceSchema.default({ state: "missing", reasonCodes: ["RIGHTS_UNKNOWN", "SOURCE_MISSING"], grant: null }),
   }).strict()).max(1000), assetTotal: analyticsCountViewSchema,

@@ -1,13 +1,99 @@
 import { createHash } from "node:crypto";
 import { reportEventSchema, type ReportFact, type ReportSnapshot } from "./contract.ts";
+import { PROPOSED_DEFAULT_MIRROR_POLICIES } from "../mirrorFreshness.ts";
+import { weeklyReportBody } from "../weeklySnapshots/format.ts";
+import { thresholdText } from "../operationalAlerts/presentation.ts";
+import { launchPulseBody } from "../launchPulse/format.ts";
+import { creatorHandoffBody, creatorWeeklyBody } from "../creatorHandoff/format.ts";
+import {
+  digestAllClear, digestAmountLabels, digestCountLabels, digestDatasetSection, digestSections,
+  type DailyDigestContext, type DigestResult,
+} from "../dailyDigest/contract.ts";
 
-const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
+const labels = { orders: "Orders affected", shipments: "Shipments affected", records: "Records affected", resolvedFindings: "Findings resolved", failedRuns: "Failed runs", pendingItems: "Pending items", oldestAge: "Oldest age", elapsed: "Elapsed time", amount: "Amount", sourceStatus: "Source status", coverage: "Coverage", incidentStatus: "Incident status" } as const;
 const statuses = { unavailable: "unavailable", permissionDenied: "permission denied", rateLimited: "rate limited", partial: "partial", complete: "complete", breached: "breached", cleared: "cleared", unknown: "unknown" };
 const actions = { inspectShipment: "Inspect the shipment and its source record.", reviewAutomation: "Review the automation and reconcile its original attempt.", reviewSource: "Review the source and its missing evidence.", reviewCreator: "Review the creator record.", reviewContent: "Review the content record.", reviewFinance: "Review the finance record; this report does not authorize payment.", reviewSupport: "Review the support record.", reviewLaunch: "Review launch readiness; this report does not release media or approve a launch.", continueMonitoring: "Continue monitoring the source." };
+const automationErrors = {
+  executionFailure: "Execution failed", permissionLost: "Permission lost", tasksExhausted: "Task allowance exhausted",
+  rateLimited: "Source rate limit", invalidConfiguration: "Invalid source configuration", duplicateTrigger: "Duplicate trigger",
+  unknownOutcome: "Original outcome uncertain",
+};
+const automationRecovery = {
+  reviewRun: "Inspect the execution record and the current checkpoint.",
+  restoreAccess: "Verify restored source access before resuming the checkpoint.",
+  waitForTasks: "Confirm current task allowance before resuming the checkpoint.",
+  waitForRateLimit: "Wait for the verified source limit to clear before resuming.",
+  fixConfiguration: "Correct the source binding and verify it before resuming.",
+  reviewDuplicateTrigger: "Review both triggers and reconcile their original effects before resuming.",
+  retryVerifiedCheckpoint: "Review the approved replay and resume the verified checkpoint.",
+  reconcileOriginal: "Reconcile the original attempt before any retry.",
+  continueMonitoring: "Source recovery confirmed. Continue monitoring.",
+};
 function factText(fact: ReportFact): string {
   if (!("unit" in fact)) return `${labels[fact.label]}: ${statuses[fact.value]}`;
   const value = fact.value === null ? (fact.missingReason === "notApplicable" ? "not applicable" : `unknown (${fact.missingReason === "partialSource" ? "partial source" : "not observed"})`) : fact.unit === "USD-minor" ? `$${Math.floor(fact.value / 100)}.${String(fact.value % 100).padStart(2, "0")}` : `${fact.value.toLocaleString("en-US")}${fact.unit === "minutes" ? " minutes" : ""}`;
   return `${labels[fact.label]}: ${value}`;
+}
+
+const digestSectionLabels = {
+  launch: "Launch gates", creators: "Creators", content: "Content",
+  commerce: "Commerce", supportStock: "Support and stock",
+};
+const digestDatasetLabels = {
+  launch: "Launch", creators: "Creator records", content: "Content", orders: "Orders", media: "Media",
+  support: "Support", reviews: "Product reviews", stock: "Stock", freshness: "Sync freshness",
+};
+const digestReasons = {
+  unconfigured: "unconfigured", readFailed: "read failed", permissionDenied: "access denied",
+  partialCoverage: "incomplete read", unknownFields: "missing fields",
+};
+
+function digestAmountText(amount: DigestResult["amounts"][number]): string {
+  const digits = Math.abs(amount.minorUnits).toString().padStart(amount.decimals + 1, "0");
+  const number = amount.decimals ? digits.slice(0, -amount.decimals) + "." + digits.slice(-amount.decimals) : digits;
+  return `${digestAmountLabels[amount.key]} ${amount.currency} ${amount.minorUnits < 0 ? "-" : ""}${number}`;
+}
+
+function dailyDigestBody(context: DailyDigestContext, owner: string, sourceLink: string, provenance: string, controlled: boolean): string {
+  const clear = digestAllClear(context);
+  const title = (clear ? "🟢 No exceptions" : "🟠 Daily exceptions") + (controlled ? " · Controlled sandbox test" : "");
+  const date = `${context.window.reportDate} (Pacific)`;
+  const sections = digestSections.flatMap(section => {
+    const results = context.results.filter(result => digestDatasetSection[result.dataset] === section);
+    const facts = results.flatMap(result => [
+      ...result.counts.filter(value => value.value > 0 || value.key === "availableStock")
+        .map(value => `${digestCountLabels[value.key]} ${value.value.toLocaleString("en-US")}`),
+      ...result.amounts.map(digestAmountText),
+      ...(result.exceptionLastSuccessAt === undefined ? [] : [result.dataset === "content"
+        ? `Oldest affected content observation ${result.exceptionLastSuccessAt}`
+        : result.exceptionLastSuccessAt === null ? "No success recorded for at least one missed ad import"
+          : `Oldest last successful ad import ${result.exceptionLastSuccessAt}`]),
+      ...(result.handles.length ? [result.handles.map(handle => "@" + handle).join(", ")] : []),
+      ...(result.reason ? [`${digestDatasetLabels[result.dataset]} unavailable (${digestReasons[result.reason]})`] : []),
+    ]);
+    if (facts.length === 0) return [];
+    const observed = results.flatMap(result => result.coverage ? [result.coverage.sourceAsOf] : [])
+      .sort((a, b) => Date.parse(a) - Date.parse(b))[0];
+    const evidence = `<${context.links[section]}|Source evidence>`;
+    return [`• *${digestSectionLabels[section]}* · ${facts.join(" · ")} · ${evidence}${observed ? ` · As of ${observed}` : ""}`];
+  });
+  const ownership = `Owner ${owner} · <${sourceLink}|Authorized report record> · evidence ${provenance}`;
+  const alerts = context.thresholdAlerts;
+  if (alerts && (alerts.active || alerts.activeRed || alerts.incomplete)) {
+    const summary = `• *Operational thresholds* · ${alerts.active ? `Active orange conditions ${alerts.active} · ` : ""}${
+      alerts.activeRed ? `Open red incidents ${alerts.activeRed} · ` : ""}${
+      alerts.incomplete ? "Coverage incomplete · " : ""}<${alerts.sourceLink}|Source evidence>`;
+    const details = alerts.details.slice(0, 3).map(thresholdText);
+    const base = [title, date, ownership, ...sections, summary].join("\n").length;
+    const detail = details.join(" · ");
+    sections.push(detail && base + detail.length < 2950 ? summary + " · " + detail : summary);
+  }
+  if (sections.length === 0) return [title, date, ownership].join(" · ");
+  return [
+    `${title} · ${date}`,
+    `Activity window ${context.window.start.slice(0, 10)} (Pacific)`,
+    ...sections, ownership,
+  ].join("\n");
 }
 
 /** Finite labels and typed values only. It never accepts free-form message/error/customer text. */
@@ -15,11 +101,43 @@ export function formatReport(snapshot: ReportSnapshot): { body: string; bodyHash
   const event = reportEventSchema.parse(snapshot.event);
   const verdict = (event.severity === "red" ? "🔴 Act now" : event.severity === "orange" ? "🟠 Act today" : "🟢 Info") + (snapshot.testProvenance?.kind === "controlledSandbox" ? " · Controlled sandbox test" : "");
   const subject = event.subject.kind === "order" ? `Order ${event.subject.orderRef}` : event.subject.kind === "creator" ? `Creator @${event.subject.handle}` : `${event.subject.category[0]!.toUpperCase()}${event.subject.category.slice(1)} aggregate`;
-  const context = event.identity.kind === "window" ? `${subject} · ${event.identity.start}–${event.identity.end} (${event.identity.timezone})` : `${subject} · ${event.identity.transition === "clear" ? "Source-confirmed recovery" : "Source-confirmed incident"}`;
+  const context = event.identity.kind === "window"
+    ? `${subject} · ${event.identity.start}–${event.identity.end} (${event.identity.timezone})`
+    : `${subject} · ${event.identity.kind === "incident" && event.identity.transition === "clear" ? "Source-confirmed recovery" : "Source-confirmed incident"}`;
   const owner = snapshot.destination.owner.state === "active" ? `<@${snapshot.destination.owner.memberId}>` : snapshot.destination.owner.state === "deactivated" ? "unassigned (previous owner deactivated; no backup configured)" : "unassigned (no backup configured)";
   const provenance = createHash("sha256").update(JSON.stringify([event.eventRef, event.eventVersion, snapshot.programme.version])).digest("hex").slice(0, 12);
   const link = `https://linear.app/${event.link.workspaceSlug}/issue/${event.link.issueIdentifier}`;
-  const body = [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), `Next: ${actions[event.nextAction]}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
+  const mirror = event.mirror;
+  const recovery = {restoreAccessAndCompleteCheck:"Restore source access and run a complete check.",reviewPartialCoverage:"Review missing coverage and run a complete check.",resumeAndCompleteCheck:"Resume the mirror and verify a complete successful check.",configureSourceCheck:"Configure the source check; no successful run has been observed."};
+  const mirrorLines=mirror?[
+    `Source: ${PROPOSED_DEFAULT_MIRROR_POLICIES[mirror.incident.mirrorId].label} (${mirror.incident.provider})`,
+    `Last complete check: ${mirror.incident.lastCompleteCheckAt??"unknown"}`,
+    `Complete coverage through: ${mirror.incident.coverageWatermark??"unknown"}`,
+    `Coverage age: ${mirror.incident.ageMinutes===null?"unknown":`${mirror.incident.ageMinutes} minutes`}`,
+    `Threshold: ${mirror.incident.staleAfterMinutes===null?"unconfigured":`${mirror.incident.staleAfterMinutes} minutes`}`,
+    `Run: ${mirror.incident.latestRunId??"unavailable (no run observed)"}`,
+    mirror.runEvidenceUrl?`<${mirror.runEvidenceUrl}|Inspect exact run evidence>`:"Run evidence: unavailable (no run observed)",
+  ]:[];
+  const automation = event.automationFailure;
+  const automationLines = automation ? [
+    automationErrors[automation.errorClass],
+    `Zap ${automation.zap} · job ${automation.job} · run ${automation.run} · item ${automation.item}`,
+    `Checkpoint ${automation.checkpoint ?? "unverified"}`,
+  ] : [];
+  const next=automation ? automationRecovery[automation.recovery]
+    : mirror?(mirror.incident.event==="cleared"?"Complete recovery verified. Continue monitoring the source.":recovery[mirror.incident.recoveryAction]):actions[event.nextAction];
+  const controlled = snapshot.testProvenance?.kind === "controlledSandbox";
+  let body: string;
+  if (event.dailyDigest) body = dailyDigestBody(event.dailyDigest, owner, link, provenance, controlled);
+  else if (event.weeklySnapshot) body = weeklyReportBody(event.weeklySnapshot, owner, link, provenance, controlled);
+  else if (event.launchPulse) body = launchPulseBody(event.launchPulse, owner, link, provenance, controlled);
+  else if (event.creatorHandoff && event.identity.kind === "creatorHandoff" && event.subject.kind === "creator") {
+    body = creatorHandoffBody(event.creatorHandoff, { collaborationId: event.identity.collaborationId,
+      handle: event.subject.handle, occurredAt: event.occurredAt, owner, sourceLink: link, provenance, controlled: !!controlled });
+  } else if (event.creatorWeekly) body = creatorWeeklyBody(event.creatorWeekly, link, provenance, !!controlled);
+  else body = [verdict, context, ...event.facts.map(value => `• ${factText(value)}`), ...mirrorLines, ...automationLines,
+      ...(event.thresholdAlert ? [thresholdText(event.thresholdAlert)] : []),
+      `Next: ${next}`, `Owner: ${owner}`, `<${link}|Authorized source record> · evidence ${provenance}`, "Reporting only; no business action is approved."].join("\n");
   if (body.length > 3000 || /<!|<@(?:channel|here|everyone)>|\b(?:Bearer|Authorization:)\b/i.test(body)) throw new Error("REPORT_FORMAT_UNSAFE");
   return { body, bodyHash: createHash("sha256").update(body).digest("hex") };
 }

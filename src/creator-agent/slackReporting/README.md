@@ -21,6 +21,8 @@ The existing jobs tables own all queued/leased/held/completed/reconcile states, 
 
 One source incident generation has one root report and one recovery in its original thread. A later generation requires the exact preceding source-confirmed clear and its delivered recovery receipt. New transport keys or updated facts cannot duplicate the original breach. An uncertain attempt uses only its original key until exact positive terminal proof closes that attempt. A bounded fresh claim may retry after that closure and the source Retry-After time, under fresh authority; absence is never terminal proof. Late older attempts cannot overwrite a newer receipt.
 
+The optional creator feed uses the same reporting machine and native receipts. Its source supplies ordered collaboration event references and exact agreement, reservation, tracking, clock or public-post evidence. Each reply requires the original root and preceding event receipts; missing predecessors remain pending. The feed is read-only and uses a pinned internal destination and dashboard origin. The Monday summary reads a completed Pacific week, with source-owned maturity clocks and deduplicated retained orders. The source binding must be provided explicitly before any delivery or schedule is available.
+
 ## Privacy and truthful evidence
 
 The strict formatter accepts finite operational labels, numeric values with explicit units/unknown reasons, safe order references or creator handles, finite next steps, a verified owner mention (or explicit unassigned state), and a source-authorized Linear issue link. It accepts no free-form errors, conversation/review bodies, customer names, email, addresses, health fields, arbitrary URLs, mass mentions or arbitrary message text. Exact private native IDs remain only in the scoped server database. The public projection distinguishes historical applied proof from current permission, and 401/403 never release protected response data.
@@ -30,3 +32,10 @@ An incomplete source cannot generate an all-clear. A report about a missing sour
 ## Remaining activation and acceptance gates
 
 Controlled SQLite tests are software evidence only. Actual authorized producer-to-adapter-to-Slack examples, exact source/programme/target bindings, complete granted-scope evidence, approved recurring windows, quota/usage facts, whole sandbox journey matrix, cutover authorization and production receipt remain separate gates. Existing harmless channel setup receipts do not authorize these operations. No source configuration, recurrence, extra Slack post, provider purchase or production activation is performed by this module.
+## Automation failures
+
+An authorized Zapier or registered-job source can normalize its terminal failure receipt with `automationFailureEvent` before returning a reporting snapshot. It supplies the exact scoped Zap, job, run, item, original attempt and checkpoint. Retry observations from the same attempt share the incident identity. A confirmed recovery uses the same identity and a separate source receipt.
+
+The report shows aliases for source identifiers, a finite error category, the current recovery instruction, the assigned owner and the authorized Linear evidence link. A possibly completed action always directs the operator to reconcile the original attempt. A verified safe read or source-enforced replay may identify a checkpoint. A duplicate-trigger alert requires complete, scoped source receipts for two successful runs of the adopted migration window. The report itself grants no execution authority.
+
+Configure `reporting.automationFailures` with the authorized receipt reader and synchronous current-source fence. Its results go through the existing reporter admission, destination check and original-thread receipt path. The source owner must bind actual Zapier error and billing observations. Missing budget evidence remains unknown.

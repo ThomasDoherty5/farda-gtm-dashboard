@@ -6,6 +6,7 @@ import { useScope } from "@/adapter/scope";
 import type { SavedBindings } from "@/creator-agent/operationsView";
 import type { NativeOperationsControl } from "@/creator-agent/operationsControlsSchema";
 import { SavedBindingPanel } from "./SavedOperations";
+import { MirrorFreshnessPanel } from "./MirrorFreshnessPanel";
 import { useOperationsPages, useSavedDisplayFilters } from "./useOperationsPages";
 import { Badge } from "@/components/Badge";
 import { Button, LinkButton } from "@/components/Button";
@@ -65,7 +66,7 @@ export function ConnectionsPage() {
       <ReadState res={query.data} subject="Connections" only={["stale", "partial"]} />
       {query.isPending && <SkeletonCard label="Loading connections…" />}
       {query.isError && <ViewError error={query.error} subject="Connections" hasPriorData={Boolean(query.data)} onRetry={() => void query.refetch()} />}
-      {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="connections" /> : data && demo ? <Body res={query.data as ReadResponse<ConnectionsData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="Connection observations unavailable"><p>The account-scoped connection ledger has no displayable response.</p></EmptyState>)}
+      {query.data && (data && "kind" in data ? <SavedBindingPanel data={data} page="connections" freshnessPanel={<MirrorFreshnessPanel/>} /> : data && demo ? <Body res={query.data as ReadResponse<ConnectionsData>} data={data} demo={demo} /> : <EmptyState state="Empty" title="Connection observations unavailable"><p>The account-scoped connection ledger has no displayable response.</p></EmptyState>)}
       {query.paging}
       {!demo && <NativeOperationsControls section="connections" onReady={setControlsReady} onRefreshReady={registerControlsRefresh} healthOpen={healthOpen} onHealthClose={()=>setHealthOpen(false)}/>}
     </Page>

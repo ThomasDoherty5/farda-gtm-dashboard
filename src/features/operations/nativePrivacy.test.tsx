@@ -1,9 +1,11 @@
-import { cleanup, screen, within } from "@testing-library/react";
+import { act, cleanup, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createLiveAdapter } from "@/adapter/liveAdapter";
 import { respondWith } from "@/adapter/demoViews";
+import { AdapterError } from "@/adapter/errors";
+import type { OpsHealth } from "@/adapter/opsHealth";
 import { operationsRecord, syntheticCustomer, syntheticAuditReason } from "@/creator-agent/operationsReads/fixtures.testkit";
-import { renderRoute } from "@/test/renderWithAdapter";
+import { renderRoute, testClient } from "@/test/renderWithAdapter";
 
 beforeAll(() => {
   HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
@@ -107,7 +109,8 @@ it("binds a native health read to the requested cohort and preserves it on sourc
   const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
     if (request.kind !== "read") throw new Error("Read-only health");
     reads.push(request.envelope.filters);
-    return respondWith(request.envelope, data, { dataVersion: "native-v1" });
+    return { ...respondWith(request.envelope, data, { dataVersion: "native-v1" }),
+      coverage: { expectedCount: 1, observedCount: 1, missingCount: 0, complete: true, reasonCodes: [] } };
   } } });
   renderRoute(`/analytics/fulfillment?view=health&${new URLSearchParams(filters)}`, adapter);
   const link = await screen.findByRole("link", { name: "source-order" });
@@ -115,6 +118,68 @@ it("binds a native health read to the requested cohort and preserves it on sourc
   const target = new URL(link.getAttribute("href")!, "https://example.test");
   expect(target.pathname).toBe("/orders/source-order");
   for (const [key, value] of Object.entries(filters)) expect(target.searchParams.get(key)).toBe(value);
+  expect(screen.getByRole("link", { name: "Open the all-time handoff queue" })).toHaveAttribute("href", "/support/cases/queue");
+  expect(screen.getByTestId("metric-Refunds")).toHaveTextContent(/^\$0$/);
+  expect(screen.getByTestId("fin-usage")).toHaveTextContent("0 resolutions · $0 of $10 cap");
+});
+
+it.each(["partial", "stale", "ready"] as const)("holds unqualified native health totals for a %s read", async (dataState) => {
+  const data = operationsRecord("opsHealth");
+  data.provenance = { ...(data.provenance as object), validUntil: "2099-01-01T00:00:00Z", version: "native-v1" };
+  data.issues = { tags: [{ tag: "Unqualified issue count", thisWeek: 2, lastWeek: 1 }],
+    refunds: { total: { minorUnits: 2500, currency: "USD" }, orders: 1, pending: [] },
+    fin: { periodLabel: "Synthetic fortnight", resolutions: 0, cost: { minorUnits: 0, currency: "USD" }, cap: { minorUnits: 1000, currency: "USD" } } };
+  const health = (data.fulfillment as OpsHealth["fulfillment"]).all;
+  health.orderToShipped = { sample: 1, days: { ...health.orderToShipped.days, state: "known", value: 1.5, reasonCode: null } };
+  health.shippedToDelivered = { sample: 1, days: { ...health.shippedToDelivered.days, state: "known", value: 0, reasonCode: null } };
+  const coverage = dataState === "partial"
+    ? { expectedCount: 2, observedCount: 1, missingCount: 1, complete: false, reasonCodes: ["SYNTHETIC_PARTIAL"] }
+    : { expectedCount: dataState === "stale" ? 1 : null, observedCount: dataState === "stale" ? 1 : null, missingCount: null, complete: true, reasonCodes: [] };
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read" || request.envelope.viewKey !== "opsHealth") throw new Error("Read-only health");
+    return { ...respondWith(request.envelope, data, { dataVersion: "native-v1", dataState }), coverage };
+  } } });
+  renderRoute("/analytics/fulfillment?view=health", adapter);
+  expect(await screen.findByTestId("metric-Order to shipped")).toHaveTextContent("1.5 days");
+  expect(screen.getByTestId("health-notice")).toHaveTextContent("Fulfillment figures cover observed samples only");
+  expect(screen.getByTestId("metric-Shipped to delivered")).toHaveTextContent("Unknown");
+  expect(screen.getByTestId("metric-Shipping cost per order")).toHaveTextContent("Unknown");
+  expect(screen.getByTestId("metric-Refunds")).toHaveTextContent("Unknown");
+  expect(screen.getByTestId("fin-usage")).toHaveTextContent("Fin resolutions and spend unavailable");
+  expect(screen.queryByText("Unqualified issue count")).not.toBeInTheDocument();
+  expect(screen.queryByText("No health data yet")).not.toBeInTheDocument();
+});
+
+it.each([0, null])("qualifies an empty native health read only with a counted zero (%s)", async (count) => {
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read" || request.envelope.viewKey !== "opsHealth") throw new Error("Read-only health");
+    return { ...respondWith(request.envelope, null, { dataVersion: "native-v1", dataState: "empty" }),
+      coverage: { expectedCount: count, observedCount: count, missingCount: count, complete: true, reasonCodes: [] } };
+  } } });
+  renderRoute("/analytics/fulfillment?view=health", adapter);
+  expect(await screen.findByText(count === 0 ? "No health data yet" : "Health evidence unavailable")).toBeVisible();
+  expect(screen.queryByTestId("metric-Refunds")).not.toBeInTheDocument();
+});
+
+it("removes prior native health details after a failed background read", async () => {
+  const client = testClient();
+  const data = operationsRecord("opsHealth");
+  data.provenance = { ...(data.provenance as object), validUntil: "2099-01-01T00:00:00Z", version: "native-v1" };
+  data.orders = [{ orderRef: "cached-source-order", state: "Lost", reservationRef: "source-reservation", shipmentRef: "source-shipment", home: "H1", unitsOrdered: 1, unitsShipped: 0, note: "Source receipt pending" }];
+  let unavailable = false;
+  const adapter = createLiveAdapter("sandbox", { transport: { async send(request) {
+    if (request.kind !== "read" || request.envelope.viewKey !== "opsHealth") throw new Error("Read-only health");
+    if (unavailable) throw new AdapterError({ code: "INTEGRATION_PENDING", message: "The source could not be read.", requestId: request.envelope.requestId,
+      correlationId: null, retryable: false, retryAfterMs: null });
+    return respondWith(request.envelope, data, { dataVersion: "native-v1" });
+  } } });
+  renderRoute("/analytics/fulfillment?view=health", adapter, client);
+  expect(await screen.findByRole("link", { name: "cached-source-order" })).toBeVisible();
+  unavailable = true;
+  await act(async () => { await client.refetchQueries({ predicate: query => query.queryKey.includes("opsHealth") }); });
+  expect(await screen.findByText("Data unavailable")).toBeVisible();
+  expect(screen.queryByRole("link", { name: "cached-source-order" })).not.toBeInTheDocument();
+  expect(screen.queryByTestId("health-notice")).not.toBeInTheDocument();
 });
 
 it("keeps each held source action with its visible explanation and preserves horizontal independent refund events", async () => {

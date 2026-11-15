@@ -4,7 +4,7 @@ import { digest } from "../config.ts";
 import type { OperationsScope } from "../operations.ts";
 import { freshnessOf, observed, operand, ratio, sumOperands, worstFreshness, type FreshnessState, type Measure, type Operand } from "./metrics.ts";
 import {
-  AnalyticsError, CLOCK_SKEW_MS, FRESHNESS_LIMIT_MS, adPlatformsSnapshotSchema, orderChannels, ordersSnapshotSchema, sessionsSnapshotSchema, supportSnapshotSchema, timezoneSchema,
+  AnalyticsError, CLOCK_SKEW_MS, FRESHNESS_LIMIT_MS, adPlatformsSnapshotSchema, localDay, orderChannels, ordersSnapshotSchema, sessionsSnapshotSchema, supportSnapshotSchema, timezoneSchema,
   type AdFeed, type AdPlatformsSnapshot, type AnalyticsSourceKey, type AnalyticsSources, type AttributionWindow, type OrderChannel, type OrderFeed, type OrderRow,
   type OrdersSnapshot, type ReportingWindow,
 } from "./sources.ts";
@@ -35,13 +35,7 @@ const MAX_WINDOW_DAYS = 366;
 
 const DAY_MS = 86_400_000;
 const addDays = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
-const dayFormats = new Map<string, Intl.DateTimeFormat>();
-/** The calendar day of an instant in a reporting timezone (YYYY-MM-DD). */
-export function localDay(instant: number, timezone: string) {
-  let format = dayFormats.get(timezone);
-  if (!format) dayFormats.set(timezone, format = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }));
-  return format.format(new Date(instant));
-}
+export { localDay } from "./sources.ts";
 export function daysOf(window: ReportingWindow): string[] {
   const days: string[] = [];
   for (let d = window.start; d <= window.end; d = addDays(d, 1)) days.push(d);

@@ -2,6 +2,14 @@ import { z } from "zod";
 import { expectedBindingSchema, type ExpectedBinding } from "../connections/schema.ts";
 import type { JobClaim, JobRepository } from "../jobs/repository.ts";
 import type { JobRunView } from "../jobs/schema.ts";
+import { mirrorIncidentPayloadSchema } from "../mirrorFreshness.ts";
+import { dailyDigestContextSchema, digestAllClear } from "../dailyDigest/contract.ts";
+import { weeklyReportContextSchema } from "../weeklySnapshots/comparison.ts";
+import { thresholdReportContextSchema } from "../operationalAlerts/presentation.ts";
+import { launchPulseContextSchema } from "../launchPulse/contract.ts";
+import { launchPulsePrefix, pulseTimeFromRef } from "../launchPulse/schedule.ts";
+import { creatorDashboardPath, creatorHandoffIdentitySchema, creatorHandoffPrefix, creatorHandoffRef,
+  creatorHandoffSchema, creatorWeeklyContextSchema, creatorWeeklyPrefix } from "../creatorHandoff/contract.ts";
 
 export const reportReference = z.string().min(1).max(180).regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/).refine(value => !/^https?:/i.test(value));
 export const reportInstant = z.string().datetime({ offset: true }).refine(value => Number.isFinite(Date.parse(value)));
@@ -13,7 +21,7 @@ export type ReportScope = z.infer<typeof reportScopeSchema>;
 export const reportLocatorSchema = z.object({ eventRef: reportReference, eventVersion: reportReference }).strict();
 export type ReportLocator = z.infer<typeof reportLocatorSchema>;
 
-const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", "failedRuns", "pendingItems", "oldestAge", "elapsed", "amount"]), value: z.number().int().nonnegative().safe().nullable(), unit: z.enum(["count", "minutes", "USD-minor"]), missingReason: z.enum(["notObserved", "partialSource", "notApplicable"]).nullable() }).strict().superRefine((value, ctx) => {
+const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", "resolvedFindings", "failedRuns", "pendingItems", "oldestAge", "elapsed", "amount"]), value: z.number().int().nonnegative().safe().nullable(), unit: z.enum(["count", "minutes", "USD-minor"]), missingReason: z.enum(["notObserved", "partialSource", "notApplicable"]).nullable() }).strict().superRefine((value, ctx) => {
   if ((value.value === null) !== (value.missingReason !== null)) ctx.addIssue({ code: "custom", message: "Unknown values require an explicit reason." });
   const expected = value.label === "amount" ? "USD-minor" : ["oldestAge", "elapsed"].includes(value.label) ? "minutes" : "count";
   if (value.unit !== expected) ctx.addIssue({ code: "custom", message: "Metric units must match the finite label." });
@@ -21,20 +29,120 @@ const numericFact = z.object({ label: z.enum(["orders", "shipments", "records", 
 const statusFact = z.object({ label: z.enum(["sourceStatus", "coverage", "incidentStatus"]), value: z.enum(["unavailable", "permissionDenied", "rateLimited", "partial", "complete", "breached", "cleared", "unknown"]) }).strict();
 export const reportFactSchema = z.union([numericFact, statusFact]);
 export type ReportFact = z.infer<typeof reportFactSchema>;
-const sourceLink = z.object({ kind: z.literal("linear"), workspaceSlug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/), issueIdentifier: z.string().regex(/^[A-Z]{2,8}-[1-9]\d{0,8}$/), authorizationRef: reportReference }).strict();
+export const reportSourceLinkSchema = z.object({ kind: z.literal("linear"), workspaceSlug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,59}$/), issueIdentifier: z.string().regex(/^[A-Z]{2,8}-[1-9]\d{0,8}$/), authorizationRef: reportReference }).strict();
 const subject = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("order"), orderRef: z.string().regex(/^[A-Z0-9][A-Z0-9-]{0,39}$/) }).strict(),
   z.object({ kind: z.literal("creator"), handle: z.string().regex(/^[a-zA-Z0-9_][a-zA-Z0-9_.]{0,39}$/) }).strict(),
   z.object({ kind: z.literal("aggregate"), category: z.enum(["fulfillment", "automation", "creators", "content", "finance", "support", "launch"]) }).strict(),
 ]);
 const incident = z.object({ kind: z.literal("incident"), conditionRef: reportReference, generation: z.number().int().positive().safe(), transition: z.enum(["breach", "clear"]), sequence: z.number().int().positive().safe(), previousClearEventRef: reportReference.nullable() }).strict();
-const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
+const window = z.object({ kind: z.literal("window"), windowRef: reportReference, start: reportInstant, end: reportInstant, cadence: z.enum(["orangeDigest", "weekdayDaily", "mondayWeekly", "launchHourly", "dailyExceptions", "reconciliationRecovery"]), timezone: z.literal("America/Los_Angeles"), launchWindowRef: reportReference.nullable() }).strict().superRefine((value, ctx) => {
   if (Date.parse(value.start) >= Date.parse(value.end)) ctx.addIssue({ code: "custom", message: "A source window must have positive duration." });
   if ((value.cadence === "launchHourly") !== (value.launchWindowRef !== null)) ctx.addIssue({ code: "custom", message: "Hourly reporting requires a source-confirmed launch window." });
 });
-export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: sourceLink }).strict().superRefine((value, ctx) => {
+/** Source-authorized evidence URL, never a browser-supplied redirect or free-form Slack markup. */
+export const mirrorReportContextSchema = z.object({ incident: mirrorIncidentPayloadSchema,
+  runEvidenceUrl: z.string().url().max(700).refine(value=>{try{const u=new URL(value);return u.protocol==="https:"&&!u.username&&!u.password&&!/[<>|\s]/.test(value);}catch{return false;}}).nullable(),
+}).strict().superRefine((v,c)=>{
+  if(v.incident.event==="suppressed" || (v.incident.latestRunId!==null && v.runEvidenceUrl===null) || (v.incident.latestRunId===null && v.runEvidenceUrl!==null))
+    c.addIssue({code:"custom",message:"Only original incident transitions with their exact source evidence link may report."});
+});
+const automationAlias = z.string().regex(/^[a-f0-9]{20}$/);
+export const automationErrorClass = z.enum(["executionFailure", "permissionLost", "tasksExhausted", "rateLimited", "invalidConfiguration", "duplicateTrigger", "unknownOutcome"]);
+export const automationFailureContextSchema = z.object({
+  zap: automationAlias, job: automationAlias, run: automationAlias, item: automationAlias, checkpoint: automationAlias.nullable(),
+  errorClass: automationErrorClass,
+  recovery: z.enum(["reviewRun", "restoreAccess", "waitForTasks", "waitForRateLimit", "fixConfiguration", "reviewDuplicateTrigger",
+    "retryVerifiedCheckpoint", "reconcileOriginal", "continueMonitoring"]),
+}).strict();
+export const reportEventSchema = reportLocatorSchema.extend({ producerRef: reportReference, occurredAt: reportInstant, severity: z.enum(["red", "orange", "info"]), identity: z.union([incident, window, creatorHandoffIdentitySchema]), subject, facts: z.array(reportFactSchema).min(1).max(3), nextAction: z.enum(["inspectShipment", "reviewAutomation", "reviewSource", "reviewCreator", "reviewContent", "reviewFinance", "reviewSupport", "reviewLaunch", "continueMonitoring"]), link: reportSourceLinkSchema, mirror: mirrorReportContextSchema.optional(), dailyDigest: dailyDigestContextSchema.optional(), automationFailure: automationFailureContextSchema.optional(), weeklySnapshot: weeklyReportContextSchema.optional(), thresholdAlert: thresholdReportContextSchema.optional(), thresholdDigestRecovery: z.literal(true).optional(), launchPulse: launchPulseContextSchema.optional(), creatorHandoff: creatorHandoffSchema.optional(), creatorWeekly: creatorWeeklyContextSchema.optional() }).strict().superRefine((value, ctx) => {
   if (value.identity.kind === "incident" && ((value.identity.transition === "breach" && value.severity !== "red") || (value.identity.transition === "clear" && value.severity !== "info"))) ctx.addIssue({ code: "custom", message: "Only red breaches dispatch immediately; clear is an original-thread recovery." });
-  if (value.identity.kind === "window" && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
+  const threshold = value.thresholdAlert;
+  if (/^threshold-[a-f0-9]{32}-[1-9]\d*-(breach|clear)$/.test(value.eventRef) !== Boolean(threshold)) {
+    ctx.addIssue({ code: "custom", message: "Threshold event identity requires its typed source evidence." });
+  }
+  if (threshold && (value.identity.kind !== "incident" || value.subject.kind !== "aggregate" ||
+      value.subject.category !== "automation" || value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot ||
+      value.eventRef !== `${value.identity.conditionRef}-${value.identity.generation}-${value.identity.transition}` ||
+      threshold.state !== (value.identity.transition === "clear" ? "clear" : "breached"))) {
+    ctx.addIssue({ code: "custom", message: "Threshold reports require a source-confirmed incident transition." });
+  }
+  if (value.thresholdDigestRecovery && (!threshold || value.identity.kind !== "incident" || value.identity.transition !== "clear")) {
+    ctx.addIssue({ code: "custom", message: "Digest recovery requires a source-confirmed threshold clear." });
+  }
+  if(value.mirror && (value.identity.kind!=="incident" || value.subject.kind!=="aggregate" || value.subject.category!=="automation" ||
+    value.identity.conditionRef!==value.mirror.incident.incidentId || value.identity.generation!==1 || value.identity.sequence!==(value.mirror.incident.event==="cleared"?2:1) ||
+    value.identity.transition!==(value.mirror.incident.event==="cleared"?"clear":"breach"))) ctx.addIssue({code:"custom",message:"Mirror identity must match its immutable incident transition."});
+  if (value.automationFailure && (value.identity.kind !== "incident" || value.subject.kind !== "aggregate" ||
+      value.subject.category !== "automation" || value.mirror || value.dailyDigest ||
+      (value.automationFailure.recovery === "continueMonitoring") !== (value.identity.transition === "clear") ||
+      (value.automationFailure.recovery === "retryVerifiedCheckpoint" && value.automationFailure.checkpoint === null))) {
+    ctx.addIssue({ code: "custom", message: "Automation diagnostics require an exact incident transition and a recorded retry checkpoint." });
+  }
+  const daily = value.identity.kind === "window" && value.identity.cadence === "dailyExceptions";
+  if (daily !== Boolean(value.dailyDigest)) ctx.addIssue({ code: "custom", message: "Daily digest cadence requires the complete typed digest context." });
+  if (value.dailyDigest && value.identity.kind === "window") {
+    const { window: period } = value.dailyDigest;
+    if (value.identity.start !== period.start || value.identity.end !== period.end ||
+        value.eventRef !== "daily-exceptions:" + period.reportDate || value.mirror ||
+        value.subject.kind !== "aggregate" || value.subject.category !== "launch" ||
+        value.severity !== (digestAllClear(value.dailyDigest) ? "info" : "orange")) {
+      ctx.addIssue({ code: "custom", message: "Daily digest identity and severity must match its source evidence." });
+    }
+  }
+  if (value.identity.kind === "window" && !daily && ((value.severity === "orange") !== (value.identity.cadence === "orangeDigest") || value.severity === "red")) ctx.addIssue({ code: "custom", message: "Digest severity and source cadence must match." });
+  if (value.eventRef.startsWith("weekly-kpi:") !== Boolean(value.weeklySnapshot)) {
+    ctx.addIssue({ code: "custom", message: "A weekly KPI report requires its frozen snapshot." });
+  }
+  const pulse = value.launchPulse;
+  if (value.eventRef.startsWith(launchPulsePrefix) !== Boolean(pulse) || pulse && (
+    value.identity.kind !== "window" || value.identity.cadence !== "launchHourly" ||
+    value.identity.windowRef !== value.eventRef || value.identity.launchWindowRef !== value.eventVersion ||
+    value.identity.end !== pulse.slot.scheduledAt || pulseTimeFromRef(value.eventRef) !== Date.parse(pulse.slot.scheduledAt) ||
+    value.subject.kind !== "aggregate" || value.subject.category !== "launch" ||
+    value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot || value.thresholdAlert
+  )) ctx.addIssue({ code: "custom", message: "A launch pulse must identify the approved source window and completed hour." });
+  const weekly = value.weeklySnapshot?.snapshot;
+  if (weekly && (value.identity.kind !== "window" || value.identity.cadence !== "mondayWeekly" ||
+      value.identity.start !== weekly.window.start || value.identity.end !== weekly.window.end ||
+      value.identity.windowRef !== value.eventRef || value.eventRef !== "weekly-kpi:" + weekly.window.reportDate ||
+      value.subject.kind !== "aggregate" || value.subject.category !== "finance" || weekly.version !== "v1" ||
+      weekly.correction !== null || value.mirror || value.dailyDigest || value.automationFailure)) {
+    ctx.addIssue({ code: "custom", message: "The weekly pre-read must identify the original completed snapshot." });
+  }
+  const handoff = value.creatorHandoff, creatorWeek = value.creatorWeekly;
+  const unrelated = value.mirror || value.dailyDigest || value.automationFailure || value.weeklySnapshot ||
+    value.thresholdAlert || value.thresholdDigestRecovery || value.launchPulse;
+  if (value.eventRef.startsWith(creatorHandoffPrefix) || value.identity.kind === "creatorHandoff" || handoff) {
+    const identity = value.identity;
+    if (!handoff || identity.kind !== "creatorHandoff" || value.subject.kind !== "creator" ||
+        value.severity !== "info" || value.nextAction !== "reviewCreator" || unrelated || creatorWeek ||
+        value.eventRef !== creatorHandoffRef(identity.collaborationId, identity.sequence) ||
+        identity.previousEventRef !== (identity.sequence === 1 ? null : creatorHandoffRef(identity.collaborationId, identity.sequence - 1)) ||
+        (identity.sequence === 1) !== (handoff.kind === "agreement") ||
+        (handoff.dashboardLink !== null && !creatorDashboardPath(handoff.dashboardLink, identity.collaborationId)) ||
+        Date.parse(handoff.observedAt) < Date.parse(value.occurredAt)) {
+      ctx.addIssue({ code: "custom", message: "A handoff requires an exact collaboration, source event and authorized record link." });
+    }
+  }
+  if (value.eventRef.startsWith(creatorWeeklyPrefix) || creatorWeek) {
+    const identity = value.identity;
+    if (!creatorWeek || identity.kind !== "window" || identity.cadence !== "mondayWeekly" ||
+        value.subject.kind !== "aggregate" || value.subject.category !== "creators" || value.severity !== "info" ||
+        value.nextAction !== "reviewCreator" || unrelated || handoff ||
+        value.eventRef !== creatorWeeklyPrefix + creatorWeek.window.reportDate || identity.windowRef !== value.eventRef ||
+        identity.start !== creatorWeek.window.start || identity.end !== creatorWeek.window.end ||
+        value.eventVersion !== creatorWeek.sourceVersion || !creatorDashboardPath(creatorWeek.dashboardLink)) {
+      ctx.addIssue({ code: "custom", message: "A creator summary requires its exact source-owned Monday window." });
+    }
+  }
+  if (value.identity.kind === "window" && value.identity.cadence === "reconciliationRecovery" &&
+      (value.subject.kind !== "aggregate" || value.subject.category !== "automation" || value.nextAction !== "continueMonitoring" ||
+        value.eventRef !== "mirror-" + value.identity.windowRef || !value.identity.windowRef.startsWith("reconciliation:") ||
+        !value.facts.some(fact => fact.label === "coverage" && fact.value === "complete") ||
+        !value.facts.some(fact => fact.label === "resolvedFindings" && fact.value !== null && fact.value > 0))) {
+    ctx.addIssue({ code: "custom", message: "Reconciliation recovery requires complete coverage and a confirmed cleared finding." });
+  }
 });
 export type ReportEvent = z.infer<typeof reportEventSchema>;
 
@@ -67,9 +175,10 @@ export const reportReadSchema = z.object({ schemaVersion: z.literal("farda.repor
 });
 export type ReportRead = z.infer<typeof reportReadSchema>;
 
+export type ReportSourceRead = { purpose: "admit" | "send" | "read"; assertCurrent(): void };
 /** All callbacks are trusted, server-only source adapters. Nothing supplies a default sender. */
 export interface ReportingSource {
-  readEvent(locator: ReportLocator): Promise<unknown>;
+  readEvent(locator: ReportLocator, context?: ReportSourceRead): Promise<unknown>;
   assertCurrent(snapshot: ReportSnapshot, purpose: "admit" | "send" | "read", now: number): void;
   authorizeAttempt(snapshot: ReportSnapshot, command: ReportCommand): Promise<unknown>;
   assertGrant(grant: ReportGrant, command: ReportCommand, now: number): void;

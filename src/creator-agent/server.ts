@@ -21,6 +21,14 @@ import { createCollaborationEvidenceReader } from "./collaborationEvidenceReader
 import { AssetRegistryReadError, type NotionDriveAssetConfig, type AssetRegistryQuery, type AssetRegistryPage } from "./notionDriveAssetSource.ts";
 import { readOperationsView, operationsViewFiltersSchema, OperationsCursorError } from "./operationsViewReader.ts";
 import { ScheduleDraftRepository, ScheduleDraftError } from "./scheduleDrafts.ts";
+import { MirrorFreshnessRepository, unconfiguredMirrorFreshness, type MirrorFreshnessOptions } from "./mirrorFreshnessRepository.ts";
+import { toD13SourceFreshness, mirrorRefSchema } from "./mirrorFreshness.ts";
+import { MirrorFreshnessRuntime, type MirrorRuntimeConfig } from "./mirrorFreshnessRuntime.ts";
+import { MirrorReconciliationRepository } from "./mirrorReconciliation/repository.ts";
+import { bindMirrorReconciliation, type MirrorReconciliationBinding } from "./mirrorReconciliation/runtime.ts";
+import { OperationalAlertRepository } from "./operationalAlerts/repository.ts";
+import { bindOperationalAlertSweep, type OperationalAlertSweepBinding } from "./operationalAlerts/runtime.ts";
+import type { OperationalAlertReportBinding } from "./operationalAlerts/report.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { createProviderHealth, type HealthOptions } from "./providerHealth.ts";
 import { EvidenceReviewRepository, EvidenceReviewError } from "./evidenceReviewStore.ts";
@@ -160,6 +168,12 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   mediaDomain?: MediaDomainBindings;
   actionFoundation?: ActionFoundationBindings;
   runtime?: { registry: RuntimeRegistry; authority?: RuntimeAuthority; machine?: RuntimeMachineBinding };
+  /** Trusted source and existing daily observe registration. This does not activate a job or bind a repair writer. */
+  mirrorReconciliation?: MirrorReconciliationBinding;
+  operationalAlerts?: { sweep: OperationalAlertSweepBinding; report?: OperationalAlertReportBinding };
+  /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
+   * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
+  mirrorFreshness?: Pick<MirrorFreshnessOptions, "approval" | "policies"> & MirrorRuntimeConfig;
   assetRegistryReader?: (scope: NotionDriveAssetConfig["scope"], query: AssetRegistryQuery) => Promise<AssetRegistryPage> };
 const writeSchema = z.object({ expectedVersion: z.number().int().nonnegative(), policyVersion: z.literal(POLICY_VERSION), configHash: z.string().nullable(), packet: evidencePacketSchema }).strict();
 
@@ -196,6 +210,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let intake: IntakeRepository;
   let rewards: RewardRedemptionRepository;
   let schedules: ScheduleDraftRepository;
+  let mirrorFreshness: MirrorFreshnessRepository | null = null;
+  let mirrorRuntime: MirrorFreshnessRuntime | null = null;
   let operationsSecret: string;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
@@ -221,6 +237,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let mediaDomain: MediaComposition | undefined;
   let runtime: JobRuntime;
   let runtimeApi: ReturnType<typeof createRuntimeApi>;
+  let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null;
+  let operationalAlerts: OperationalAlertRepository | null;
   let commercialProjection: ReturnType<typeof createCommercialProjection>;
   let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
   try {
@@ -244,6 +262,19 @@ export function createAgentServer(options: AgentServerOptions) {
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
+    const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
+    reconciliation = options.mirrorReconciliation
+      ? bindMirrorReconciliation(new MirrorReconciliationRepository(store.database, reconciliationScope, { secret: operationsSecret, now: options.operations?.now }),
+        reconciliationScope, runtimeRegistry, options.mirrorReconciliation)
+      : null;
+    if (reconciliation) runtimeRegistry = reconciliation.registry;
+    operationalAlerts = options.operationalAlerts
+      ? new OperationalAlertRepository(store.database, reconciliationScope, operationsSecret, options.operations?.now) : null;
+    if (operationalAlerts && options.operationalAlerts) {
+      runtimeRegistry = bindOperationalAlertSweep(operationalAlerts, reconciliationScope, runtimeRegistry,
+        options.operationalAlerts.sweep, options.operations?.now);
+    }
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
     commercialProjection = createCommercialProjection({ offers, db: store.database,
@@ -251,6 +282,13 @@ export function createAgentServer(options: AgentServerOptions) {
     recruitment = createRecruitmentSourceReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       source: options.recruitmentSource, secret: operationsSecret, now: options.operations?.now });
     schedules = new ScheduleDraftRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret, options.operations?.now);
+    if (options.mirrorFreshness) {
+      if(options.mirrorFreshness.deploymentRef){mirrorRefSchema.parse(options.mirrorFreshness.deploymentRef);if(!options.mirrorFreshness.approval)throw new Error("MIRROR_POLICY_UNAPPROVED");}
+      const mirrorScope = {workspaceId:options.workspaceId,accountId:options.accountId,environment:"sandbox" as const};
+      const boundMirrors = options.mirrorFreshness.source && options.mirrorFreshness.approval ? (options.mirrorFreshness.bindings ?? []).map(b=>b.mirrorId) : [];
+      mirrorFreshness = new MirrorFreshnessRepository(store.database, mirrorScope, {boundMirrors, approval:options.mirrorFreshness.approval,policies:options.mirrorFreshness.policies,now:options.operations?.now});
+      mirrorRuntime = new MirrorFreshnessRuntime(mirrorFreshness,mirrorScope,options.mirrorFreshness.source,options.mirrorFreshness.bindings);
+    }
     stockSupport = createStockSupportWorkflow(store.database,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
@@ -284,7 +322,7 @@ export function createAgentServer(options: AgentServerOptions) {
     controls = createOperationsControls({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
       ledger: operations.ledger, jobs: operations.jobs, health: providerHealth, source: options.operationsControlSource, now: options.operations?.now,
-      authority:controlAuthority,canonical:()=>operationsBridge,
+      authority:controlAuthority,canonical:()=>operationsBridge,reconciliationSource:reconciliation?.view,
       serviceReaders:controlAuthority?createOperationsControlServiceReaders({authority:controlAuthority,
         runtime:()=>options.runtime?runtimeApi:undefined,reporting:()=>actionFoundation.reporting}):undefined });
     if(options.operationsCanonical&&controlAuthority)operationsBridge=createOperationsControlBridge({
@@ -295,7 +333,8 @@ export function createAgentServer(options: AgentServerOptions) {
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
       source: options.sourcingPlanSource, now: options.operations?.now });
     analytics = createNativeAnalyticsReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, referenceKey: operationsSecret,
-      source: options.analyticsSource, now: options.operations?.now });
+      source: options.analyticsSource, now: options.operations?.now,
+      attachWeeklyEvidence: (data, definition, alias) => actionFoundation.weeklySnapshots?.attachTrendEvidence(data, definition, alias) });
     if (options.rewardDomain) rewardDomain = createRewardDomainBridge({
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       repository: rewards, commercialPolicy: commercialPolicy!, source: options.rewardDomain.source,
@@ -342,6 +381,8 @@ export function createAgentServer(options: AgentServerOptions) {
     actionFoundation = createActionFoundation({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, jobs: operations.jobs, ledger: operations.ledger,
+      ...(operationalAlerts && options.operationalAlerts?.report
+        ? { operationalAlerts: { repository: operationalAlerts, report: options.operationalAlerts.report } } : {}),
       bindings: actionBindings, now: options.operations?.now,
       commercialEligibility: manifest => {
         if (!["invitation", "activation", "shipment"].includes(manifest.draft.phase)) return new Map();
@@ -354,7 +395,7 @@ export function createAgentServer(options: AgentServerOptions) {
       } });
     runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
-      registry: options.runtime?.registry ?? { registrations: new Map(), executors: new Map() },
+      registry: runtimeRegistry,
       authority: options.runtime?.authority, now: options.operations?.now });
     runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
@@ -512,6 +553,8 @@ export function createAgentServer(options: AgentServerOptions) {
     readBase.extend({ viewKey: z.literal("scheduleDetail"), filters: z.object({ jobId: z.string().min(1).max(4096) }).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("assessmentRecord"), filters: z.object({ creatorId: z.string().min(1), assessmentId: z.string().min(1), ...commercialSelection }).strict() }),
     readBase.extend({ viewKey: z.literal("nightlyReconciliation"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("mirrorRunDetail"), filters: z.object({runId:mirrorRefSchema}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
+    readBase.extend({ viewKey: z.literal("mirrorFreshness"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("shippingHub"), filters: z.object({}).strict(), period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("inventoryOverview"), filters: inventoryFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
     readBase.extend({ viewKey: z.literal("supportWorkspace"), filters: supportFilters, period: z.null(), sort: z.array(z.never()).max(0) }),
@@ -598,6 +641,11 @@ export function createAgentServer(options: AgentServerOptions) {
       if(path.startsWith("/v1/reports/")) {
         actionFoundation.authenticateReporting(req.headers.authorization);
         if(new URL(req.url!,"http://localhost").search) return reply(res,400,{code:"INVALID_INPUT",executionCertainty:"uncertain"});
+        const thresholdMatch=/^\/v1\/reports\/thresholds\/([^/]+)$/.exec(path);
+        if(req.method==="GET" && thresholdMatch) {
+          const runRef=runtimeApi.readOpaqueRunRef(decodeURIComponent(thresholdMatch[1]!));
+          return reply(res,200,actionFoundation.readOperationalAlertDeliveries(runRef,req.headers.authorization));
+        }
         if(req.method==="POST" && ["/v1/reports/accept","/v1/reports/work","/v1/reports/reconcile"].includes(path)) {
           if(!req.headers["content-type"]?.startsWith("application/json")) return reply(res,415,{code:"JSON_REQUIRED",executionCertainty:"uncertain"});
           const operation=path.slice("/v1/reports/".length) as "accept"|"work"|"reconcile";
@@ -866,6 +914,9 @@ export function createAgentServer(options: AgentServerOptions) {
         shippingHub: { sourceAuthority: options.shippingHubSource ? "injected" : "notConnected", readOnly: true },
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
+        nightlyReconciliation: { readBinding: options.mirrorReconciliation ? "injected" : "notConnected", repairWriter: "notConnected" },
+        operationalThresholds: { sourceAuthority: operationalAlerts ? "injected" : "notConnected",
+          delivery: options.operationalAlerts?.report && options.actionFoundation?.reporting ? "shared-reporting" : "notConnected" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
           importAuthority: options.siteTraffic?.machine ? "source-guarded-machine" : "notConnected", actualImportStatus: "read-from-source-evidence" },
         dailySourcingPlan: { sourceAuthority: options.sourcingPlanSource ? "injected" : "notConnected", views: "read-only-projections", discoveryExecution: "notConnected", dispatch: "notConnected" },
@@ -875,6 +926,35 @@ export function createAgentServer(options: AgentServerOptions) {
           ledgerExport: options.actionFoundation?.ledger || options.settlements?.ledger ? "injected" : "notConnected", readinessRelease: "notGranted" },
         scorecardEvidence: { routeAuthority: options.scorecardAuthority ? "injected" : "notConnected" },
         assetRegistry: { storage: "durable", sourceAuthority: options.assetAuthority ? "injected" : "notConnected", providerExecution: "notConnected" },
+        automationFailureReporting: {
+          sourceAuthority: options.actionFoundation?.reporting?.automationFailures ? "injected" : "notConnected",
+          delivery: options.actionFoundation?.reporting?.automationFailures ? "shared-reporting" : "notConnected",
+        },
+        dailyExceptionsDigest: {
+          sourceAuthority: options.actionFoundation?.reporting?.dailyDigest ? "injected" : "notConnected",
+          schedule: {
+            localTime: "08:30", timezone: "America/Los_Angeles", cadence: "weekdays-and-active-cohort",
+            activation: options.actionFoundation?.reporting?.dailyDigest ? "source-owned" : "unconfigured",
+          },
+          delivery: options.actionFoundation?.reporting?.dailyDigest ? "shared-reporting" : "notConnected",
+        },
+        weeklyKpiSnapshots: {
+          sourceAuthority: options.actionFoundation?.reporting?.weeklySnapshots ? "injected" : "notConnected",
+          schedule: { localTime: "08:30", timezone: "America/Los_Angeles", cadence: "monday-after-approved-launch",
+            activation: options.actionFoundation?.reporting?.weeklySnapshots ? "source-owned" : "unconfigured" },
+          delivery: options.actionFoundation?.reporting?.weeklySnapshots ? "shared-reporting" : "notConnected",
+        },
+        launchPulse: {
+          sourceAuthority: options.actionFoundation?.reporting?.launchPulse ? "injected" : "notConnected",
+          activation: options.actionFoundation?.reporting?.launchPulse?.window?.enabled ? "source-owned" : "unconfigured",
+          delivery: options.actionFoundation?.reporting?.launchPulse ? "shared-reporting" : "notConnected",
+        },
+        creatorHandoffFeed: {
+          sourceAuthority: options.actionFoundation?.reporting?.creatorFeed ? "injected" : "notConnected",
+          delivery: options.actionFoundation?.reporting?.creatorFeed ? "shared-reporting" : "notConnected",
+          schedule: { cadence: "monday", localTime: "08:30", timezone: "America/Los_Angeles",
+            activation: options.actionFoundation?.reporting?.creatorFeed ? "source-owned" : "unconfigured" },
+        },
         models: (["website", "tiktok-shop"] as const).map((route) => ({ modelId: MODEL_FOR_ROUTE[route], configHash: modelBinding(route)?.hash ?? null })),
       });
       const match = /^\/v1\/creators\/([^/]+)$/.exec(path);
@@ -929,6 +1009,35 @@ export function createAgentServer(options: AgentServerOptions) {
             dataState: result.dataState, data: result.data, sourceFreshness: [], coverage: result.coverage,
             capabilities: result.capabilities, page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } };
           result.assertCurrent(); return reply(res, 200, envelope);
+        }
+        if (input.viewKey === "mirrorRunDetail") {
+          if(input.page.cursor!==null)return reply(res,400,{code:"INVALID_CURSOR",executionCertainty:"notApplied"});
+          const run=mirrorFreshness?.readRun(input.filters.runId)??null;
+          const completion=mirrorRuntime?.completion(input.filters.runId)??null;
+          const data={kind:"mirror-run",run,completion};
+          return reply(res,200,{schemaVersion:ADAPTER_SCHEMA,requestId:input.requestId,scope:{...input.requestedScope,authorizationScopeVersion:"creator-agent.scope.v1"},
+            dataVersion:versionOfData(data),dataState:run?"ready":"unavailable",data,sourceFreshness:[],coverage:{expectedCount:null,observedCount:run?1:0,missingCount:null,complete:false,reasonCodes:run?[]:["MIRROR_RUN_UNAVAILABLE"]},
+            capabilities:[],page:{nextCursor:null,hasMore:false},refresh:{nextPollAfterMs:null}});
+        }
+        if (input.viewKey === "mirrorFreshness") {
+          if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
+          // Read-only classification at the current clock; incidents belong to the sweep, never to a read.
+          const mirrors = mirrorFreshness ? mirrorFreshness.evaluate() : unconfiguredMirrorFreshness((options.operations?.now ?? Date.now)());
+          const bound = mirrors.filter(mirror => mirror.policy.runsBound).length;
+          const data = { kind: "mirror-freshness" as const, configured: bound > 0, mirrors,
+            policy:mirrorFreshness?.approval??null,incidents:mirrorFreshness?.openIncidents()??[],
+            schedule:mirrorRuntime?.scheduleEvidence()??{state:"unconfigured",everyMinutes:15,timezone:"America/Los_Angeles",deploymentRef:null,lastSweepAt:null,nextSweepAt:null} };
+          const observed = mirrors.filter(mirror => mirror.state !== "unknown").length;
+          return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
+            scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, dataVersion: versionOfData(data),
+            dataState: bound === 0 ? "unavailable" : observed < mirrors.length ? "partial" : "ready", data,
+            sourceFreshness: mirrors.flatMap(mirror => { const d13 = toD13SourceFreshness(mirror); return d13 ? [{ sourceRef: { source: "mirror:" + mirror.mirrorId,
+              accountId: options.accountId, sourceId: null, canonicalId: null, url: null, identityState: "unresolved", provenanceRef: "mirror-freshness:" + mirror.mirrorId },
+              observedAt: mirror.checkedAt, mirroredAt: mirror.evidence.lastComplete?.finishedAt ?? null, ...d13 }] : []; }),
+            coverage: { expectedCount: mirrors.length, observedCount: observed, missingCount: mirrors.length - observed, complete: observed === mirrors.length,
+              // Every unknown mirror explains itself: unbound, no owner threshold, or invalid evidence.
+              reasonCodes: [...new Set(mirrors.filter(mirror => mirror.state === "unknown").flatMap(mirror => mirror.reasonCodes))] },
+            capabilities: [], page: { nextCursor: null, hasMore: false }, refresh: { nextPollAfterMs: null } });
         }
         if (input.viewKey === "launchControl") {
           if (input.page.cursor !== null) return reply(res, 400, { code: "INVALID_CURSOR", executionCertainty: "notApplied" });
@@ -1507,11 +1616,14 @@ export function createAgentServer(options: AgentServerOptions) {
       return reply(res, 500, { code: "AGENT_ERROR", executionCertainty: "uncertain" });
     }
   });
+  server.once("listening",()=>{if(options.mirrorFreshness?.deploymentRef)mirrorRuntime?.start(options.mirrorFreshness.deploymentRef);});
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
-  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+  return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime,
+    mirrorReconciliation: reconciliation, operationalAlerts, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
+    mirrorRuntime?.stop();
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }
     try { store.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("STORE_CLOSE_FAILED"); }
     if (failure) reject(failure); else resolve();

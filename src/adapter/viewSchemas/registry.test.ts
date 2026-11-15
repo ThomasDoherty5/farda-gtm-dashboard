@@ -27,6 +27,7 @@ import {controlSections,nativeOperationsControlSchema} from "@/creator-agent/ope
 import { settingsActionSchemas, settingsViewSchemas } from "./settings";
 
 const nativeOnlyViews={...exportViewSchemas,fulfillmentProposal:fulfillmentProposalSchema};
+const unavailableInDemo={...nativeOnlyViews,mirrorFreshness:settingsViewSchemas.mirrorFreshness,mirrorRunDetail:settingsViewSchemas.mirrorRunDetail};
 const AREAS = [nativeOnlyViews,analyticsViewSchemas, approvalViewSchemas, collaborationViewSchemas, creatorsViewSchemas, evidenceViewSchemas, financeViewSchemas, lifecycleViewSchemas, monitorViewSchemas, opsViewSchemas, recruitmentViewSchemas, scorecardsViewSchemas, settingsViewSchemas, shippingHubViewSchemas];
 const scope = { workspaceId: "w", accountIds: ["a"], environment: "sandbox" as const };
 let n = 0;
@@ -138,9 +139,9 @@ const WITH_RECORD: Record<string, unknown[]> = {
 
 describe("every view the demo can serve passes its own schema through the live adapter", () => {
   const live = createLiveAdapter("sandbox", { transport: served(), retryDelayMs: 0 });
-  const keys = Object.keys(viewSchemas).filter(key=>!(key in nativeOnlyViews));
+  const keys = Object.keys(viewSchemas).filter(key=>!(key in unavailableInDemo));
 
-  it.each(Object.keys(nativeOnlyViews))("%s has no demo export or invented recovery receipt",async viewKey=>{
+  it.each(Object.keys(unavailableInDemo))("%s has no demo export or invented recovery receipt",async viewKey=>{
     await expect(createDemoAdapter().readView({...read(viewKey),requestedScope:{...scope,environment:"demo"}})).rejects.toMatchObject({body:{code:"INTEGRATION_PENDING"}});
   });
 

@@ -100,7 +100,10 @@ test("five native source routes retain full content, keyboard navigation and res
  const inspect=page.getByRole("button",{name:"Inspect evidence",exact:true}).first();await inspect.focus();await page.keyboard.press("Enter");
  const detail=page.getByRole("dialog");await expect(detail).toBeVisible();await expect(detail).toContainText("Provider role");
  await axe(page);await page.keyboard.press("Escape");await expect(inspect).toBeFocused();
- await page.goto("/settings/capabilities");const validation=page.getByRole("button",{name:"Plan validation",exact:true});await validation.focus();await page.keyboard.press("Enter");
+ renew();await page.goto("/settings/capabilities");
+ const validation=page.getByRole("button",{name:"Plan validation",exact:true});
+ // The control is focusable while its source evidence is still loading.
+ await expect(validation).toBeEnabled();await validation.focus();await expect(validation).toBeFocused();await page.keyboard.press("Enter");
  await expect(page.getByRole("dialog",{name:"Plan validation",exact:true})).toBeVisible();await page.keyboard.press("Escape");await expect(validation).toBeFocused();
  await page.setViewportSize({width:320,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(320);
  await page.evaluate(()=>{document.documentElement.style.fontSize="200%";});
