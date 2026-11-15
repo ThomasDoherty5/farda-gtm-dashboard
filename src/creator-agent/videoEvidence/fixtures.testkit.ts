@@ -5,8 +5,10 @@
 import {
   J20_TAXONOMY_VERSION, type EvidenceReview, type LifestyleContext, type PostEvidence, type PostMetric,
 } from "../evidence.ts";
+import { digest } from "../config.ts";
+import type { SourcePost, VideoEvidenceRead, VideoEvidenceRequest, VideoEvidenceSnapshot, VideoEvidenceSource } from "./contract.ts";
 
-export const J20_FIXTURE_AT = "2026-11-08T12:00:00.000Z";
+export const J20_FIXTURE_AT = "2026-11-06T12:00:00.000Z";
 const at = J20_FIXTURE_AT;
 
 export function fixtureContext(overrides: Partial<LifestyleContext> = {}): LifestyleContext {
@@ -54,5 +56,69 @@ export function fixtureJ20Post(n: number, review: EvidenceReview = fixtureReview
     context: fixtureContext(), metrics: [fixtureMetric("views", 1000 + n), fixtureMetric("shares", null)],
     productionChoices: [], shoppableContext: { status: "unknown", productRef: null, anchorEvidenceRef: null, observedAt: null },
     ...overrides,
+  };
+}
+
+/* ---------- Sandbox collector: synthetic fixture stage only ---------- */
+
+/** A J20 source page observation for synthetic post `n`. Likes default to an exact, fictional 201. */
+export function fixtureSourcePost(n: number, overrides: Partial<SourcePost> = {}): SourcePost {
+  const day = String(Math.min(28, n)).padStart(2, "0");
+  return {
+    network: "instagram", sourceUrl: `https://www.instagram.com/reel/SYNTHJ20${n}/`, canonicalMediaRef: null,
+    publishedAt: `2026-10-${day}T12:00:00.000Z`, access: "permitted", route: "publicNativeUi", providerAccount: "synthetic-provider-account-1",
+    permissionRef: "synthetic:permission", permissionCheckedAt: at, retrievedAt: at, contentFingerprint: `synthetic-fingerprint-${n}`,
+    evidenceRefs: [`synthetic:read:${n}`], relevant: true, context: fixtureContext(),
+    likes: { value: 201, rawLabel: "201", sourceType: "nativePublicCounter", sourceRef: `synthetic:likes:${n}`, missingReason: null },
+    metrics: [fixtureMetric("views", 1000 + n), fixtureMetric("shares", null)],
+    review: structuredClone(fixtureReviews.complete),
+    comments: { status: "observed", ordering: "First visible top-level rows in source order", observedAt: at, rows: [
+      { commentId: `synthetic-c${n}-1`, authorRef: `synthetic-author-${n}`, creator: false, promotional: false, prompted: false,
+        categories: ["purchaseEvaluation"], text: "Where is the fictional case from?" },
+      { commentId: `synthetic-c${n}-2`, authorRef: `synthetic-author-${n}-b`, creator: false, promotional: false, prompted: true,
+        categories: ["promptedKeyword"], text: "FICTIONAL" },
+    ] },
+    productionChoices: [{ key: "framing", atSec: 0, observation: "Top-down framing of the fictional bag.", evidenceRef: `synthetic:framing:${n}` }],
+    shoppableContext: { status: "unknown", productRef: null, anchorEvidenceRef: null, observedAt: null },
+    ...overrides,
+  };
+}
+
+type Page = Omit<VideoEvidenceSnapshot, "requestDigest" | "observedAt" | "validUntil" | "receiptRef">;
+type Reply = { kind: "page"; page: Page } | { kind: "read"; read: Exclude<VideoEvidenceRead, { state: "observed" }> } | { kind: "throw"; error: Error };
+export const fixtureBrief = { ref: "synthetic-brief-travel-case", version: "v1", checkoutRoute: "website" as const };
+
+/**
+ * The sandbox J20 collector. It reports `synthetic-fixture` truthfully, serves scripted fictional pages by cursor, and refuses
+ * to exist in a production process. It is a protocol fixture, not a source observation.
+ */
+export function createSyntheticVideoCollector(now: () => number) {
+  if (process.env.NODE_ENV === "production") throw new Error("The synthetic J20 collector is a test double and refuses to run when NODE_ENV is production.");
+  const replies = new Map<string, Reply[]>();
+  const requests: VideoEvidenceRequest[] = [];
+  const state = { permitted: true, reads: 0 };
+  const key = (cursor: string | null) => cursor ?? "first";
+  const source: VideoEvidenceSource = {
+    stage: "synthetic-fixture", collectorVersion: "j20-synthetic-collector.v1",
+    async read(request) {
+      requests.push(structuredClone(request)); state.reads++;
+      const queue = replies.get(key(request.cursor)) ?? [];
+      const reply = queue.length > 1 ? queue.shift()! : queue[0];
+      if (!reply) return { state: "unavailable", reasonCode: "SYNTHETIC_PAGE_MISSING", retryAfterMs: 0 };
+      if (reply.kind === "throw") throw reply.error;
+      if (reply.kind === "read") return structuredClone(reply.read);
+      const observedAt = new Date(now()).toISOString();
+      return { state: "observed", snapshot: { ...structuredClone(reply.page), receiptRef: `receipt:synthetic-j20-${state.reads}`,
+        requestDigest: digest(request), observedAt, validUntil: new Date(now() + 60_000).toISOString() } };
+    },
+    assertCurrent() { if (!state.permitted) throw new Error("Synthetic source permission withdrawn"); },
+  };
+  return {
+    source, requests, state,
+    /** Replies are consumed in order for a cursor; the last reply repeats. */
+    on(cursor: string | null, ...next: Reply[]) { replies.set(key(cursor), next); },
+    page(posts: SourcePost[], extra: Partial<Page> = {}): Reply {
+      return { kind: "page", page: { brief: fixtureBrief, listedPosts: posts.length, posts, audience: [], nextCursor: null, ...extra } };
+    },
   };
 }

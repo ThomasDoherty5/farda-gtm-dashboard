@@ -15,6 +15,7 @@ import { MAX_DISPUTES, MAX_OBSERVATIONS, MAX_REASON, MAX_TEXT } from "@/features
 import { instant, text } from "./acquisitionPrimitives";
 import { creatorAssessmentSchema } from "@/creator-agent/assessmentSchema";
 import { evidencePacketSchema } from "@/creator-agent/evidence";
+import { videoEvidenceQualitySchema } from "@/creator-agent/videoEvidence/qualityContract";
 
 const seconds = z.number().finite().nonnegative();
 
@@ -88,6 +89,8 @@ const evidenceRecord = z.object({
   qualification: creatorAssessmentSchema.nullable().optional(),
   agentEvidence: evidencePacketSchema.nullable().optional(),
   sourceReview: sourceReviewSchema.optional(),
+  /** J20 evidence-quality projection, present only for collected packets. Not rendered until the original design covers it. */
+  videoEvidenceQuality: videoEvidenceQualitySchema.optional(),
 }).superRefine((record, ctx) => {
   const assessment = record.qualification;
   const packet = record.agentEvidence;

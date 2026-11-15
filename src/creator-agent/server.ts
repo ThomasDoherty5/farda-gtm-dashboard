@@ -38,6 +38,7 @@ import { openCollaborationRef } from "./creatorPlatformReferences.ts";
 import { creatorPlatformKeys, creatorPlatformFilterSchema, readCreatorPlatformView } from "./creatorPlatformReader.ts";
 import { protectCommentAuthors } from "./evidencePrivacy.ts";
 import { createCreatorEvidenceWriter, type CreatorEvidenceWriter } from "./creatorEvidenceWriter.ts";
+import { bindVideoEvidence, type BoundVideoEvidence, type VideoEvidenceBinding } from "./videoEvidence/runtime.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -172,6 +173,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   /** Trusted source and existing daily observe registration. This does not activate a job or bind a repair writer. */
   mirrorReconciliation?: MirrorReconciliationBinding;
   operationalAlerts?: { sweep: OperationalAlertSweepBinding; report?: OperationalAlertReportBinding };
+  /** Trusted J20 collector and an existing compiled daily J20 registration. It writes only through the creator evidence writer. */
+  videoEvidence?: VideoEvidenceBinding;
   /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
    * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
   mirrorFreshness?: Pick<MirrorFreshnessOptions, "approval" | "policies"> & MirrorRuntimeConfig;
@@ -215,6 +218,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let mirrorRuntime: MirrorFreshnessRuntime | null = null;
   let operationsSecret: string;
   let evidenceWriter: CreatorEvidenceWriter;
+  let videoEvidence: BoundVideoEvidence | null;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
@@ -279,6 +283,9 @@ export function createAgentServer(options: AgentServerOptions) {
       runtimeRegistry = bindOperationalAlertSweep(operationalAlerts, reconciliationScope, runtimeRegistry,
         options.operationalAlerts.sweep, options.operations?.now);
     }
+    videoEvidence = options.videoEvidence ? bindVideoEvidence({ registry: runtimeRegistry, binding: options.videoEvidence, intake, store,
+      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now }) : null;
+    if (videoEvidence) runtimeRegistry = videoEvidence.registry;
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
     commercialProjection = createCommercialProjection({ offers, db: store.database,
@@ -919,6 +926,7 @@ export function createAgentServer(options: AgentServerOptions) {
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         nightlyReconciliation: { readBinding: options.mirrorReconciliation ? "injected" : "notConnected", repairWriter: "notConnected" },
+        videoEvidence: videoEvidence?.capability ?? { collector: "notConnected", writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only", dispatch: "notConnected" },
         operationalThresholds: { sourceAuthority: operationalAlerts ? "injected" : "notConnected",
           delivery: options.operationalAlerts?.report && options.actionFoundation?.reporting ? "shared-reporting" : "notConnected" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",

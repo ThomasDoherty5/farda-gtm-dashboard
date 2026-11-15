@@ -3,6 +3,7 @@ import { canonicalJson, digest } from "./config.ts";
 import { nativePostIdentity, type PostEvidence } from "./evidence.ts";
 import { reviewInputSchema, type EvidenceAnnotation, type SourceReview } from "./evidenceReviewContract.ts";
 import type { AgentStore, StoredAssessment } from "./store.ts";
+import { videoEvidenceQuality } from "./videoEvidence/quality.ts";
 
 export class EvidenceReviewError extends Error {
   readonly code: string; readonly status: number; readonly currentVersion?: string;
@@ -67,7 +68,9 @@ function resolvedByReview(prior: PostEvidence, current: PostEvidence, annotation
   const priorFact = facts(prior)[Number(match[2])];
   return priorFact !== undefined && !facts(current).some(f => digest(f) === digest(priorFact));
 }
-function projection(record: Effective, post: PostEvidence, sourceReview: SourceReview, version: string) {
+function projection(record: Effective, post: PostEvidence, sourceReview: SourceReview, version: string, reviewedTargets: ReadonlyMap<string, ReadonlySet<string>>) {
+  // Present only for J20-collected packets, so earlier evidence records keep their exact shape.
+  const quality = videoEvidenceQuality(record, reviewedTargets);
   const unknown = (reasonCode: string) => ({ state: "unknown" as const, value: null, reasonCode, evidenceRefs: [],
     sourceRef: null, occurredAt: null, sourceUpdatedAt: null, observedAt: record.recordedAt });
   return {
@@ -76,7 +79,7 @@ function projection(record: Effective, post: PostEvidence, sourceReview: SourceR
     modelPublication: { label: record.assessment.config.version ?? "Configuration unbound", note: "Configuration recorded with this assessment." },
     assessments: { creative: unknown("NO_CREATIVE_WEIGHT_BINDING"), routine: unknown("SEE_AGENT_QUALIFICATION"), commerce: unknown("NO_VERIFIED_ORDER_EVIDENCE") },
     firstReview: null, disputes: [], readiness: { state: "notReady" as const, reasonCodes: sourceReview.contested ? ["CONTESTED"] : ["AGENT_ASSESSMENT_READ_ONLY"] },
-    qualification: record.assessment, agentEvidence: record.packet, sourceReview,
+    qualification: record.assessment, agentEvidence: record.packet, sourceReview, ...(quality ? { videoEvidenceQuality: quality } : {}),
   };
 }
 type Receipt = { resourceRef: string; version: string; resource: EvidenceAnnotation; updatedAt: string; persistedByRef: string; reasonCodes: string[] };
@@ -140,7 +143,12 @@ export class EvidenceReviewRepository {
     const version = `er-${basisHash}-${annotations.length}`;
     const effective = sourceReview.contested ? { ...record, assessment: { ...record.assessment, state: "reviewNeeded" as const,
       reasonCodes: [...new Set([...record.assessment.reasonCodes,"EVIDENCE_DISPUTED"])] } } : record;
-    return { data: projection(effective,post,sourceReview,version), stale: record.stale || sourceReview.contested,
+    const reviewedTargets = new Map<string, Set<string>>();
+    if (stored.packet.collection) for (const row of this.store.database.prepare("SELECT body FROM evidence_review_annotations WHERE json_extract(body,'$.input.runId')=?").all(stored.runId)) {
+      const annotation = JSON.parse(String(row.body)) as EvidenceAnnotation;
+      if (annotation.postId && annotation.original) reviewedTargets.set(annotation.postId, (reviewedTargets.get(annotation.postId) ?? new Set()).add(annotation.original.id));
+    }
+    return { data: projection(effective,post,sourceReview,version,reviewedTargets), stale: record.stale || sourceReview.contested,
       canAnnotate: !record.stale && !superseded && annotations.length < 100 };
   }
   read(creatorId: string, evidenceId: string, runId?: string) {
