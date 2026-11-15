@@ -110,7 +110,7 @@ export class AgentStore {
       if (latest) {
         const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates,
           // J20 collection facts are evidence too; absent on earlier packets, so their comparison is unchanged.
-          ...(p.collection ? { collection: p.collection } : {}) });
+          ...(p.collection ? { collection: p.collection } : {}), ...(p.detachedCollection ? { detachedCollection: p.detachedCollection } : {}) });
         const termsDomain = (p: EvidencePacket) => p.activationGates;
         if (digest(evidenceDomain(normalizePacket(latest.packet))) !== digest(evidenceDomain(packet)) && latest.packet.evidenceRevision === packet.evidenceRevision)
           throw new AgentConflict("EVIDENCE_REVISION_REUSED");

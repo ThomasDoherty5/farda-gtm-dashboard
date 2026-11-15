@@ -1,7 +1,7 @@
 import { boundedSourceRead } from "../actions/readBoundary.ts";
 import { digest, type ConfigBinding } from "../config.ts";
 import type { CreatorEvidenceWriter } from "../creatorEvidenceWriter.ts";
-import { J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, type EvidencePacket } from "../evidence.ts";
+import { J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, type ClaimDisposition, type EvidencePacket } from "../evidence.ts";
 import type { IntakeRepository } from "../intake/repository.ts";
 import { RuntimeError, type RuntimeExecutor, type RuntimeRegistration, type RuntimeRegistry, type RuntimeStep } from "../jobs/runtimeSchema.ts";
 import type { OperationsScope } from "../operations.ts";
@@ -31,7 +31,9 @@ function assertRegistration(registration: RuntimeRegistration | undefined, regis
  * resolves claims, sends or bypasses source access; login and MFA become the runtime's owned takeover.
  */
 export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: VideoEvidenceBinding; intake: IntakeRepository; store: AgentStore;
-  writer: CreatorEvidenceWriter; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null; scope: OperationsScope; now?: () => number }) {
+  writer: CreatorEvidenceWriter; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null; scope: OperationsScope; now?: () => number;
+  /** Reviewer-path dispositions for this creator's collected claims, read from saved human annotations by the server. */
+  claimDispositions?: (creatorId: string) => ClaimDisposition[] }) {
   const { binding, intake, store, writer } = deps;
   const { source } = binding;
   const stage = source.stage;
@@ -47,7 +49,7 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
   const registrationHash = digest(registration);
   const now = deps.now ?? Date.now;
   const scope = { workspaceId: deps.scope.workspaceId, accountId: deps.scope.accountId, environment: "sandbox" as const };
-  const collector = { version: source.collectorVersion, stage };
+  const collector = { version: source.collectorVersion, stage, qualification: stage === "source" ? { ...binding.qualification! } : null };
 
   const executor: RuntimeExecutor = {
     mode: "observe",
@@ -57,12 +59,15 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
       const work = intake.reviewWork(context.subjectRef);
       if (!work) return { state: "held", reasonCode: "J20_NOT_QUEUED" };
       if (!work.briefRef) return { state: "held", reasonCode: "J20_BRIEF_UNBOUND" };
+      // A reviewer's audited detach keeps J20 off that brief; nothing is read or written until a person changes it.
+      const head = store.latest(work.creatorId);
+      if (head?.packet.detachedCollection && head.packet.briefId === work.briefRef.ref) return { state: "held", reasonCode: "J20_COLLECTION_DETACHED" };
       const route = context.binding.route === "browser" ? "browser" as const : "api" as const;
       const request: VideoEvidenceRequest = { version: J20_COLLECTOR_REQUEST_VERSION, scope: { ...scope }, creatorId: work.creatorId,
         intakeRevision: work.revision, briefRef: work.briefRef, profiles: work.profiles, cursor: context.cursor, maxRecords: context.maxRecords,
         route, window: structuredClone(context.window), samplingPolicyVersion: J20_SAMPLING_POLICY_VERSION, taxonomyVersion: J20_TAXONOMY_VERSION,
         reviewRequirements: J20_REVIEW_REQUIREMENTS, sourcePermissionRefs: [...binding.sourcePermissionRefs], researchGateRef: binding.researchGateRef,
-        priorEvidenceRefs: (() => { const head = store.latest(work.creatorId); return head ? [`j20-evidence:${head.runId}`] : []; })() };
+        priorEvidenceRefs: head ? [`j20-evidence:${head.runId}`] : [] };
       const channel = route === "browser" ? "browser" as const : registration.apiChannel;
       const response = await context.invoke(channel, () => boundedSourceRead(() => source.read(structuredClone(request))))
         .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
@@ -91,12 +96,16 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
       assertSnapshot();
       const prior = store.latest(work.creatorId);
       let built: ReturnType<typeof buildCollectedPacket>;
-      try { built = buildCollectedPacket({ creatorId: work.creatorId, prior: prior?.packet ?? null, snapshot, collector, protect: writer.protect }); }
+      try { built = buildCollectedPacket({ creatorId: work.creatorId, prior: prior?.packet ?? null, snapshot, collector, protect: writer.protect,
+        dispositions: deps.claimDispositions?.(work.creatorId) ?? [] }); }
       catch (error) {
         // Only source content is reported as a source error; an internal merge problem is held for an owner.
         if (error instanceof J20SourceDataError) throw new RuntimeError("J20_SOURCE_RESPONSE_INVALID", 502);
         return { state: "held", reasonCode: error instanceof J20MergeError ? "J20_PACKET_MERGE_INVALID" : "J20_PACKET_BUILD_FAILED" };
       }
+      // Reviewer-entered evidence is replaced only by J20 footage J20 can actually show: at least one accessible, sourced post.
+      if (prior && !prior.packet.collection && !built.packet.posts.some(post => post.source && (post.accessObservation?.state ?? "permitted") === "permitted"))
+        return { state: "held", reasonCode: "J20_AWAITING_ACCESSIBLE_EVIDENCE" };
       let runId = prior?.runId ?? null;
       if (built.changed && (prior || snapshot.posts.length)) {
         const expectedVersion = prior?.revision ?? 0;

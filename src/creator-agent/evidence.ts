@@ -95,13 +95,17 @@ export const actionKindSchema = z.enum(["hook", "handlingOperationUse", "explana
 /** Claim topics that need a person: compatibility, medical and outcome claims take the reviewer exception path. */
 export const claimTopicSchema = z.enum(["compatibility", "medical", "productFunction", "outcome", "other"]);
 export const HUMAN_REVIEW_CLAIM_TOPICS: readonly z.infer<typeof claimTopicSchema>[] = ["compatibility", "medical", "outcome", "other"];
-const HEALTH_OR_OUTCOME_WORDING = /\b(?:cur(?:e|ed|es|ing)|heal(?:s|ed|ing)?|treat(?:s|ed|ing|ment)?|diagnos\w*|symptom\w*|disease\w*|condition\w*|disorder\w*|pregnan\w*|fertil\w*|ivf|endometriosis|diabet\w*|insulin|medicat\w*|medicine\w*|prescri\w*|doctor\w*|clinical\w*|therap\w*|pain|safe (?:for|while|during)|side effects?|dose|dosage|injection\w*|vial\w*|refrigerat\w*|weight loss|glp-?1)\b/i;
 /**
- * A claim a person must review: a compatibility, medical, outcome or uncategorized topic, or any claim worded about health,
- * medication, treatment or outcomes whatever its topic. The agent never resolves these.
+ * A narrow safety net for explicit medical, diagnostic and treatment-outcome wording, so a mis-tagged claim still reaches a
+ * person. Everyday phrases ("treat yourself", "retail therapy", "back pain from her old bag", "great condition") do not match.
+ */
+const MEDICAL_WORDING = /\b(?:cur(?:e|ed|es|ing)\s+(?:my|her|his|their|your|the)\b|diagnos\w*|symptoms?|diseases?|disorders?|pregnan\w*|breastfeeding|fertility|infertil\w*|ivf|endometriosis|pcos|diabet\w*|insulin|medications?|medicines?|prescri\w*|doctors?|clinical|side effects?|injections?|glp-?1|chemo\w*|weight loss|lose weight)\b/i;
+/**
+ * A claim a person must review. The required topic decides first: compatibility, medical, outcome and uncategorized topics
+ * always need a person. Explicit medical wording also does, whatever the topic. The agent never resolves these.
  */
 export const claimNeedsPerson = (claim: { text: string; topic?: z.infer<typeof claimTopicSchema> }) =>
-  claim.topic === undefined || HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic) || HEALTH_OR_OUTCOME_WORDING.test(claim.text);
+  (claim.topic !== undefined && HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic)) || MEDICAL_WORDING.test(claim.text);
 const spokenMethod = z.enum(["heard", "asr", "nativeCaptions"]);
 /**
  * Descriptive only: the edge allowance `reviewCoverage` uses to call a continuous review full. It gates nothing.
@@ -411,6 +415,21 @@ export const collectionExclusionSchema = z.enum([
   "EXCLUDED_CLINICAL_LECTURE", "EXCLUDED_IVF_FERTILITY_EXPLAINER", "EXCLUDED_GENERIC_MEDICAL_EDUCATION",
   "ACCESS_LOGIN_REQUIRED", "ACCESS_PERMISSION_DENIED", "ACCESS_UNAVAILABLE", "POST_REMOVED", "REVIEW_IGNORED_BELOW_GATE",
 ]);
+const collectedClaim = z.object({ atSec: seconds, text: reason, method: spokenMethod, topic: claimTopicSchema }).strict();
+/** A collected claim that needs a person, kept by post and claim until a person disposes of it. */
+export const claimRecordSchema = z.object({ postId: id, claim: collectedClaim }).strict();
+/**
+ * A person's disposition from the existing reviewer disagree/override path, bound to the exact post and claim. Only the server
+ * copies these from saved reviewer annotations; a collector or a reviewer packet write cannot add one.
+ */
+export const claimDispositionSchema = z.object({ postId: id, claim: collectedClaim, annotationRef: z.string().uuid(),
+  kind: z.enum(["disagree", "override"]), reviewerRef: id, recordedAt: instant }).strict();
+export type ClaimRecord = z.infer<typeof claimRecordSchema>;
+export type ClaimDisposition = z.infer<typeof claimDispositionSchema>;
+/** Stable identity of one claim on one post: its time, method, topic and exact text. */
+export const claimKey = (postId: string, claim: { atSec: number; method: string; topic?: string; text: string }) =>
+  JSON.stringify([postId, claim.atSec, claim.method, claim.topic ?? null, claim.text]);
+
 /** The J20 version marker and run-level source facts for a collected packet. Derived counts are projected, never stored. */
 export const collectionSchema = z.object({
   schemaVersion: z.literal(VIDEO_EVIDENCE_SCHEMA_VERSION),
@@ -430,9 +449,23 @@ export const collectionSchema = z.object({
   audience: z.array(audienceEvidenceSchema).max(20),
   /** Farda-authored text withheld by the inference screen. The text itself is never stored. */
   quarantined: z.array(z.object({ postId: id, field: z.string().min(1).max(120), reasonCodes: z.array(code).min(1).max(10) }).strict()).max(100),
+  /** Every collected claim that needed a person, carried until disposed of, even when a later read no longer shows it. */
+  claims: z.array(claimRecordSchema).max(200).optional(),
+  claimDispositions: z.array(claimDispositionSchema).max(200).optional(),
+  /** The deployment-held qualification record a `source`-stage collector ran under; null for a synthetic fixture. */
+  collectorQualification: z.object({ ref: id, version: id }).strict().nullable().optional(),
 }).strict().superRefine((collection, ctx) => {
+  const fail = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
   if (new Set(collection.exclusions.map(entry => entry.postId)).size !== collection.exclusions.length)
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["exclusions"], message: "List each excluded post once with all of its reasons." });
+    fail("exclusions", "List each excluded post once with all of its reasons.");
+  if ((collection.collectorStage === "source") !== Boolean(collection.collectorQualification))
+    fail("collectorQualification", "Only a qualified source collector records a qualification, and it must.");
+  const listed = new Set((collection.claims ?? []).map(entry => claimKey(entry.postId, entry.claim)));
+  if (listed.size !== (collection.claims ?? []).length) fail("claims", "List each claim once.");
+  if ((collection.claimDispositions ?? []).some(entry => !listed.has(claimKey(entry.postId, entry.claim))))
+    fail("claimDispositions", "A disposition must belong to a listed claim.");
+  if (new Set((collection.claimDispositions ?? []).map(entry => entry.annotationRef)).size !== (collection.claimDispositions ?? []).length)
+    fail("claimDispositions", "Each reviewer annotation disposes of one claim once.");
 });
 export type EvidenceCollection = z.infer<typeof collectionSchema>;
 
@@ -453,6 +486,11 @@ const packetShapeSchema = z.object({
   activationGates: z.array(gateSchema).max(100),
   /** Present only on packets written by the J20 collector; it versions every J20 field below it. */
   collection: collectionSchema.optional(),
+  /**
+   * A reviewer's audited exit from a collected revision on the same brief. It names the exact collected revision it leaves and
+   * why; history keeps that revision unchanged, and J20 does not re-attach to the detached brief.
+   */
+  detachedCollection: z.object({ fromRevision: z.number().int().positive().safe(), fromEvidenceRevision: id, reason: z.string().trim().min(12).max(500) }).strict().optional(),
 }).strict().superRefine((packet, ctx) => {
   for (const key of ["posts", "recentPosts"] as const)
     if (new Set(packet[key].map((post) => post.postId)).size !== packet[key].length)
@@ -463,7 +501,12 @@ const packetShapeSchema = z.object({
     const reviewed = new Set(packet.posts.map(post => post.postId));
     if (packet.collection.exclusions.some(entry => reviewed.has(entry.postId)))
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["collection", "exclusions"], message: "An excluded post cannot also sit in the reviewed packet." });
+    const listed = packet.collection.claims && new Set(packet.collection.claims.map(entry => claimKey(entry.postId, entry.claim)));
+    if (listed && packet.posts.some(post => post.source && post.review.claims.some(claim => claimNeedsPerson(claim) && !listed.has(claimKey(post.postId, claim)))))
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["collection", "claims"], message: "Every collected claim that needs a person stays listed." });
   }
+  if (packet.detachedCollection && (packet.collection || packet.posts.some(post => post.source)))
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["detachedCollection"], message: "A detached packet carries no J20 collection or J20-sourced posts." });
   if (new Set(packet.posts.map(nativePostIdentity)).size !== packet.posts.length)
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["posts"], message: "The same native asset cannot be submitted under different record IDs." });
   for (const key of ["invitationGates", "activationGates"] as const)
@@ -472,6 +515,19 @@ const packetShapeSchema = z.object({
 });
 export type EvidencePacket = z.infer<typeof packetShapeSchema>;
 export const evidencePacketSchema: z.ZodType<EvidencePacket, z.ZodTypeDef, z.input<typeof packetShapeSchema>> = packetShapeSchema;
+
+/**
+ * Collected claims that need a person: the carried list plus any on J20-sourced posts, and which of them a person has
+ * disposed of through the reviewer path. Packets without J20 provenance have none.
+ */
+export function personClaims(packet: EvidencePacket) {
+  const all = new Map<string, ClaimRecord>();
+  for (const entry of packet.collection?.claims ?? []) all.set(claimKey(entry.postId, entry.claim), entry);
+  for (const post of packet.posts) if (post.source) for (const claim of post.review.claims) if (claimNeedsPerson(claim) && claim.topic)
+    all.set(claimKey(post.postId, claim), { postId: post.postId, claim: { atSec: claim.atSec, text: claim.text, method: claim.method, topic: claim.topic } });
+  const disposed = new Set((packet.collection?.claimDispositions ?? []).map(entry => claimKey(entry.postId, entry.claim)));
+  return { all: [...all.values()], pending: [...all.entries()].filter(([key]) => !disposed.has(key)).map(([, entry]) => entry) };
+}
 
 const viewGroupSchema = z.object({
   definition: reason, window: reason, paid: z.enum(["yes", "no", "unknown"]), count: count.positive(),

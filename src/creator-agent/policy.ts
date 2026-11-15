@@ -1,6 +1,6 @@
 import { creatorAssessmentSchema, POLICY_VERSION, AGENT_VERSION, AGENT_SCHEMA_VERSION } from "./assessmentSchema.ts";
 import type { CreatorAssessment } from "./assessmentSchema.ts";
-import { claimNeedsPerson, deriveCommentStats, deriveMetadataBaseline } from "./evidence.ts";
+import { deriveCommentStats, deriveMetadataBaseline, personClaims } from "./evidence.ts";
 import type { EvidencePacket, PostEvidence } from "./evidence.ts";
 import type { ConfigBinding, ModelConfig } from "./config.ts";
 import { anchorFor } from "./ratingPolicy.ts";
@@ -68,8 +68,11 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   }
   // Collected medical, compatibility, outcome or health-worded claims need a person; the agent never resolves them. Reviewer
   // disagreement or override on the existing path then holds the record as disputed. Packets without J20 provenance are unchanged.
-  const openClaims = packet.posts.filter(p => p.source).flatMap(p => p.review.claims.filter(claimNeedsPerson)).length;
-  if (openClaims) add("CLAIMS_REVIEWED", "unknown", `${openClaims} collected claim(s) need a person on the reviewer path`);
+  // A person's disagree or override on that exact post and claim, copied by the server from the reviewer path, clears it.
+  const claims = personClaims(packet);
+  if (claims.all.length) add("CLAIMS_REVIEWED", claims.pending.length ? "unknown" : "pass", claims.pending.length
+    ? `${claims.pending.length}/${claims.all.length} collected claim(s) still need a person on the reviewer path`
+    : `${claims.all.length} collected claim(s) have a person's recorded disposition`);
   const contentGates = [...gates];
   const contentQualification = contentGates.some((g) => g.state === "fail") ? "hold" : contentGates.some((g) => g.state === "unknown") ? "reviewNeeded" : "pass";
   add("CONFIG_BOUND", binding ? "pass" : "unknown", binding ? "Immutable current/baseline numeric configuration verified" : "No approved immutable numeric baseline is bound; historical fixtures are not a fallback");

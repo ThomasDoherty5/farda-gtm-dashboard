@@ -16,7 +16,7 @@ import { evidenceViewSchemas } from "../adapter/viewSchemas/evidence.ts";
 import { runtimeApiAckSchema, safeRuntimeRunSchema } from "./jobs/runtimeViews.ts";
 import { SYNTHETIC_READ_TOKEN as reader, SYNTHETIC_REVIEW_TOKEN as reviewer, syntheticBinding, syntheticPacket } from "./testFixtures.ts";
 import { DISPOSITION_QUERY } from "./evidenceReviewStore.ts";
-import { createSyntheticVideoCollector, fixtureBrief, fixtureReviews, fixtureSourcePost } from "./videoEvidence/fixtures.testkit.ts";
+import { createSyntheticVideoCollector, fixtureBrief, fixtureReviews, fixtureSourcePost, J20_FIXTURE_AT } from "./videoEvidence/fixtures.testkit.ts";
 import type { VideoEvidenceQuality } from "./videoEvidence/qualityContract.ts";
 
 /** Synthetic identities, posts and receipts only. This proves the J20 protocol in the sandbox, not a live source collection. */
@@ -330,7 +330,8 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     const rated = await put({ ...latest.packet, evidenceRevision: "reviewer-rated", ratings: { routine: 4, demo: 3 } }, "synthetic-j20-rate");
     expect(rated.status).toBe(200);
     expect(h.app.store.latest(creatorId)!.assessment.criteria).toEqual({ routine: 4, demo: 3 });
-    const relabeled = { ...latest.packet, evidenceRevision: "reviewer-forged", collection: { ...latest.packet.collection!, collectorStage: "source" as const } };
+    const relabeled = { ...latest.packet, evidenceRevision: "reviewer-forged", collection: { ...latest.packet.collection!, collectorStage: "source" as const,
+      collectorQualification: { ref: "reviewer:claimed-qualification", version: "q1" } } };
     expect(await put(relabeled, "synthetic-j20-forge-stage")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
     const upgraded = structuredClone(latest.packet); upgraded.evidenceRevision = "reviewer-upgraded";
     upgraded.posts[0]!.review.observedActions.push({ atSec: 20, action: "A use the collector never observed.", meaningfulUse: true, kind: "handlingOperationUse" });
@@ -463,6 +464,116 @@ describe("J20 review findings", () => {
     const plan = h.app.store.database.prepare(`EXPLAIN QUERY PLAN ${DISPOSITION_QUERY}`).all("synthetic-run").map(row => String(row.detail)).join(" | ");
     expect(plan).toContain("evidence_review_run_kind");
     expect(plan).not.toMatch(/SCAN evidence_review_annotations(?! USING)/);
+  });
+});
+
+/** Second review round. Each test failed on 3a4803c before its fix. */
+describe("J20 re-review findings", () => {
+  async function reviewerFirst(eventId: string) {
+    const h = await harness();
+    const { creatorId } = await h.discover(eventId);
+    const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, termsRevision: "terms-human" };
+    const put = (packet: unknown, key: string, expectedVersion: number) => h.call("PUT", `/v1/creators/${creatorId}`, { packet, expectedVersion,
+      policyVersion: "2026-11-04", configHash: syntheticBinding().hash }, reviewer, key);
+    expect((await put(human, `${eventId}-human`, 0)).status).toBe(200);
+    return { h, creatorId, human, put };
+  }
+
+  it("N1: an empty, denied or below-gate page never replaces reviewer evidence", async () => {
+    const { h, creatorId, human, put } = await reviewerFirst("n1a");
+    const before = h.app.store.latest(creatorId)!;
+    for (const page of [h.collector.page([]), h.collector.page([{ ...fixtureSourcePost(1), access: "permissionDenied", review: null }]),
+      h.collector.page([fixtureSourcePost(2, { likes: { value: 150, rawLabel: "150", sourceType: "nativePublicCounter", sourceRef: "synthetic:likes", missingReason: null } })])]) {
+      h.collector.on(null, page);
+      const read = await (await h.runDay()).work();
+      expect(read.run.items.map(item => item.reasonCode)).toEqual(["J20_AWAITING_ACCESSIBLE_EVIDENCE"]);
+      expect(h.app.store.history(creatorId)).toHaveLength(1);
+    }
+    expect(h.app.store.latest(creatorId)).toEqual(before);
+    expect((await put({ ...human, evidenceRevision: "reviewer-revised" }, "n1a-revise", 1)).status).toBe(200);
+  });
+
+  it("N1: a reviewer can move a collected creator to another brief, or detach collection with an audited reason", async () => {
+    const { h, creatorId, human, put } = await reviewerFirst("n1b");
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })]));
+    await (await h.runDay()).work();
+    const collected = h.app.store.latest(creatorId)!;
+    expect(collected.packet.collection).toBeDefined();
+    const back = { ...human, evidenceRevision: "reviewer-back" };
+    expect(await put(back, "n1b-silent", collected.revision)).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    const detached = { ...back, detachedCollection: { fromRevision: collected.revision, fromEvidenceRevision: collected.packet.evidenceRevision,
+      reason: "Collected footage belongs to a different person; restoring reviewer evidence." } };
+    expect(await put({ ...detached, detachedCollection: { ...detached.detachedCollection, fromRevision: 1 } }, "n1b-wrong-base", collected.revision))
+      .toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    expect((await put(detached, "n1b-detach", collected.revision)).status).toBe(200);
+    const restored = h.app.store.latest(creatorId)!;
+    expect(restored.packet.detachedCollection).toEqual(detached.detachedCollection);
+    expect(restored.packet.posts.map(p => p.postId)).toEqual(human.posts.map(p => p.postId));
+    expect(restored.packet.collection).toBeUndefined();
+    expect(h.app.store.history(creatorId)[1]).toEqual(collected);
+    // J20 does not silently re-attach to the detached brief.
+    const read = await (await h.runDay()).work();
+    expect(read.run.items.map(item => item.reasonCode)).toEqual(["J20_COLLECTION_DETACHED"]);
+    expect(h.app.store.history(creatorId)).toHaveLength(3);
+    // Moving the creator to another brief is a plain reviewer write.
+    expect((await put({ ...back, briefId: "synthetic-other-brief", evidenceRevision: "reviewer-other-brief" }, "n1b-brief", restored.revision)).status).toBe(200);
+  });
+
+  it("N2/N3: a person's disagreement clears the claim gate for that exact claim; the claim stays gated until then", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("n2");
+    const medical = { atSec: 9, text: "Says the case keeps her medication cool all day.", method: "heard" as const, topic: "medical" as const };
+    const claimed = { ...structuredClone(fixtureReviews.complete), claims: [medical] };
+    const others = [fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" }), fixtureSourcePost(3, { publishedAt: "2026-10-03T12:00:00.000Z" })];
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: claimed }), ...others]));
+    await (await h.runDay()).work();
+    const first = h.app.store.latest(creatorId)!;
+    const claimedPost = first.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!;
+    expect(first.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
+    // N3: a re-read whose review drops the claim, or whose fingerprint is missing, does not clear it.
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { contentFingerprint: null, review: null }), ...others]));
+    await (await h.runDay()).work();
+    expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
+    // The person disagrees on the original run through the existing reviewer path.
+    const view = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: claimedPost.postId, runId: first.runId })).body.data) as
+      { version: string; sourceReview: { basisHash: string } };
+    expect((await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "n2-claim", resourceKind: "reviewerAssessment",
+      resourceRef: claimedPost.postId, expectedVersion: view.version, idempotencyKey: "n2-claim", payload: { kind: "disagree", creatorId, runId: first.runId,
+        basisHash: view.sourceReview.basisHash, targetId: "claim-0", reason: "The medication claim is not supported for Farda." } })).status).toBe(409);
+    // Annotations attach to the current run only, so the person reviews the claim on the latest collected run.
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: claimed }), ...others]));
+    await (await h.runDay()).work();
+    const current = h.app.store.latest(creatorId)!;
+    const live = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: claimedPost.postId })).body.data) as
+      { version: string; sourceReview: { basisHash: string } };
+    expect((await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "n2-claim-live", resourceKind: "reviewerAssessment",
+      resourceRef: claimedPost.postId, expectedVersion: live.version, idempotencyKey: "n2-claim-live", payload: { kind: "disagree", creatorId, runId: current.runId,
+        basisHash: live.sourceReview.basisHash, targetId: "claim-0", reason: "The medication claim is not supported for Farda." } })).status).toBe(200);
+    await (await h.runDay()).work();
+    const cleared = h.app.store.latest(creatorId)!;
+    expect(cleared.revision).toBeGreaterThan(current.revision);
+    expect(cleared.packet.collection!.claimDispositions).toEqual([expect.objectContaining({ postId: claimedPost.postId, kind: "disagree" })]);
+    expect(cleared.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
+    // The disagreement itself still holds the effective recommendation as disputed.
+    expect((await h.call("GET", `/v1/creators/${creatorId}`, undefined, reader)).body).toMatchObject({ assessment: { state: "reviewNeeded",
+      reasonCodes: expect.arrayContaining(["EVIDENCE_DISPUTED"]) } });
+  });
+
+  it("N2: a reviewer cannot forge a claim disposition, and a collector page cannot carry one", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("n2b");
+    const claimed = { ...structuredClone(fixtureReviews.complete), claims: [{ atSec: 9, text: "Says it is safe while pregnant.", method: "heard" as const, topic: "other" as const }] };
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: claimed })]));
+    await (await h.runDay()).work();
+    const latest = h.app.store.latest(creatorId)!;
+    const forged = structuredClone(latest.packet);
+    forged.evidenceRevision = "reviewer-forged-disposition";
+    forged.collection!.claimDispositions = forged.collection!.claims!.map(claim => ({ postId: claim.postId, claim: claim.claim,
+      annotationRef: "00000000-0000-4000-8000-000000000000", kind: "override" as const, reviewerRef: "agent-reviewer", recordedAt: J20_FIXTURE_AT }));
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, { packet: forged, expectedVersion: latest.revision, policyVersion: "2026-11-04",
+      configHash: syntheticBinding().hash }, reviewer, "n2b-forge")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    h.collector.on(null, { kind: "read", read: { state: "observed", snapshot: { dispositions: [] } } as never });
+    await expect((await h.runDay()).work()).rejects.toMatchObject({ code: "J20_SOURCE_RESPONSE_INVALID" });
   });
 });
 

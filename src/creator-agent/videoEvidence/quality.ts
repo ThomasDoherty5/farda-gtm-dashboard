@@ -1,4 +1,4 @@
-import { claimNeedsPerson, reviewCoverage, type EvidencePacket, type PostEvidence } from "../evidence.ts";
+import { claimKey, personClaims, reviewCoverage, type ClaimRecord, type EvidencePacket, type PostEvidence } from "../evidence.ts";
 import type { CreatorAssessment } from "../assessmentSchema.ts";
 import { likeGate } from "../policy.ts";
 import { videoEvidenceQualitySchema, type VideoEvidenceQuality } from "./qualityContract.ts";
@@ -10,7 +10,8 @@ const DAY_MS = 86_400_000;
 /** Disposition kind recorded on the existing reviewer path, by post and target. */
 export type ClaimDispositions = ReadonlyMap<string, ReadonlyMap<string, "disagree" | "override">>;
 
-function footage(post: PostEvidence, quarantined: number, dispositions: ReadonlyMap<string, "disagree" | "override">): VideoEvidenceQuality["footage"][number] {
+function footage(post: PostEvidence, quarantined: number, claims: readonly ClaimRecord[], stored: ReadonlyMap<string, "disagree" | "override">,
+  live: ReadonlyMap<string, "disagree" | "override">): VideoEvidenceQuality["footage"][number] {
   const coverage = reviewCoverage(post.review);
   const access = post.accessObservation?.state ?? "permitted";
   // A clip watched in full or credited as a complete sampled review can say a feature was not shown; anything less stays unknown.
@@ -18,11 +19,13 @@ function footage(post: PostEvidence, quarantined: number, dispositions: Readonly
   const shown = new Set(post.review.observedActions.flatMap(action => action.kind ? [action.kind] : []));
   const features = Object.fromEntries(FEATURES.map(key => [key, shown.has(key) ? "observed" : fullyReviewed ? "notObserved" : "unknown"])) as
     VideoEvidenceQuality["footage"][number]["features"];
-  const claimsReview = post.review.claims.flatMap((claim, index) => {
-    if (!claimNeedsPerson(claim)) return [];
-    const kind = dispositions.get(`claim-${index}`);
-    return [{ targetId: `claim-${index}`, atSec: claim.atSec, text: claim.text, topic: claim.topic ?? null,
-      disposition: kind === "disagree" ? "disagreed" as const : kind === "override" ? "overridden" as const : "pending" as const }];
+  // Carried claims stay listed after a later read drops them; a current target appears only while the current review shows the claim.
+  const claimsReview = claims.map(entry => {
+    const index = post.review.claims.findIndex(claim => claimKey(post.postId, claim) === claimKey(entry.postId, entry.claim));
+    const targetId = index < 0 ? null : `claim-${index}`;
+    const kind = stored.get(claimKey(entry.postId, entry.claim)) ?? (targetId ? live.get(targetId) : undefined);
+    return { targetId, atSec: entry.claim.atSec, text: entry.claim.text, topic: entry.claim.topic,
+      disposition: kind === "disagree" ? "disagreed" as const : kind === "override" ? "overridden" as const : "pending" as const };
   });
   const nextAction: NextAction = access !== "permitted" ? "sourceUnavailable" : !fullyReviewed ? "needsPlayback"
     : claimsReview.some(claim => claim.disposition === "pending") || quarantined ? "needsClaimReview" : "reviewComplete";
@@ -46,7 +49,10 @@ export function videoEvidenceQuality(record: { packet: EvidencePacket; assessmen
   const collection = packet.collection;
   if (!collection) return null;
   const quarantinedBy = (postId: string) => collection.quarantined.filter(entry => entry.postId === postId).length;
-  const posts = packet.posts.map(post => footage(post, quarantinedBy(post.postId), dispositions.get(post.postId) ?? new Map()));
+  const ledger = personClaims(packet).all;
+  const stored = new Map((collection.claimDispositions ?? []).map(entry => [claimKey(entry.postId, entry.claim), entry.kind] as const));
+  const posts = packet.posts.map(post => footage(post, quarantinedBy(post.postId), ledger.filter(entry => entry.postId === post.postId), stored,
+    dispositions.get(post.postId) ?? new Map()));
   const reviewed = new Set(packet.posts.map(post => post.postId));
   const exclusions = new Map(collection.exclusions.map(entry => [entry.postId, entry.reasons]));
   const observedAt = Date.parse(collection.observedAt);
@@ -74,7 +80,11 @@ export function videoEvidenceQuality(record: { packet: EvidencePacket; assessmen
   if (packet.posts.some(post => post.review.status === "complete" && post.review.visualMethod === "continuous" &&
       !["completeAudioVisual", "fullVisualOnly"].includes(reviewCoverage(post.review).viewingStatus))) limitations.add("COMPLETE_REVIEW_WITHOUT_FULL_COVERAGE");
   const pendingLikes = metadataOnly.some(post => post.reasons.includes("LIKES_PENDING_PROOF"));
-  const nextAction: NextAction = posts.some(post => post.nextAction === "needsClaimReview") ? "needsClaimReview"
+  // Carried claims on posts no longer in the packet still need a person until disposed of.
+  const shownPosts = new Set(packet.posts.map(post => post.postId));
+  const orphanClaims = personClaims(packet).pending.filter(entry => !shownPosts.has(entry.postId)).length;
+  if (orphanClaims) limitations.add("CARRIED_CLAIMS_PENDING");
+  const nextAction: NextAction = orphanClaims || posts.some(post => post.nextAction === "needsClaimReview") ? "needsClaimReview"
     : !eligible.length && (posts.length || accessExcluded) && posts.every(post => post.nextAction === "sourceUnavailable") ? "sourceUnavailable"
       : !packetComplete && posts.some(post => post.nextAction === "needsPlayback") ? "needsPlayback"
         : !packetComplete && pendingLikes ? "needsMetricProof"

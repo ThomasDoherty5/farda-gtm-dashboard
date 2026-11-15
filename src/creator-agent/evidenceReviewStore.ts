@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { canonicalJson, digest } from "./config.ts";
-import { nativePostIdentity, type PostEvidence } from "./evidence.ts";
+import { nativePostIdentity, type ClaimDisposition, type PostEvidence } from "./evidence.ts";
 import { reviewInputSchema, type EvidenceAnnotation, type SourceReview } from "./evidenceReviewContract.ts";
 import type { AgentStore, StoredAssessment } from "./store.ts";
 import { videoEvidenceQuality, type ClaimDispositions } from "./videoEvidence/quality.ts";
@@ -119,6 +119,26 @@ export class EvidenceReviewRepository {
         && !resolvedByReview(prior,post,annotation))) return true;
     }
     return false;
+  }
+  /**
+   * People's disagree/override dispositions on this creator's claims, bound to the exact post and claim of the run they were
+   * saved against. Read through the (creator, kind) index. Only reviewer saves create these annotations.
+   */
+  claimDispositions(creatorId: string): ClaimDisposition[] {
+    const rows = this.store.database.prepare(`SELECT body FROM evidence_review_annotations WHERE json_extract(body,'$.input.creatorId')=?
+      AND json_extract(body,'$.input.kind') IN ('disagree','override') ORDER BY json_extract(body,'$.recordedAt')`).all(creatorId);
+    const runs = new Map<string, StoredAssessment | null>();
+    return rows.flatMap(row => {
+      const annotation = JSON.parse(String(row.body)) as EvidenceAnnotation;
+      const match = annotation.original ? /^claim-(\d+)$/.exec(annotation.original.id) : null;
+      if (!match || !annotation.postId || annotation.input.kind === "observation") return [];
+      const runId = annotation.input.runId;
+      if (!runs.has(runId)) runs.set(runId, this.store.findRun(creatorId, runId));
+      const claim = runs.get(runId)?.packet.posts.find(post => post.postId === annotation.postId)?.review.claims[Number(match[1])];
+      if (!claim?.topic) return [];
+      return [{ postId: annotation.postId, claim: { atSec: claim.atSec, text: claim.text, method: claim.method, topic: claim.topic },
+        annotationRef: annotation.id, kind: annotation.input.kind, reviewerRef: annotation.reviewer, recordedAt: annotation.recordedAt }];
+    });
   }
   private adjacent(creatorId: string, postId: string, revision: number, newer: boolean): string | null {
     // Locate a prior/next receipt for this exact post even when it disappeared from an intermediate packet.

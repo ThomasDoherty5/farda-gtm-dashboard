@@ -18,7 +18,7 @@ const snapshot = (posts: SourcePost[], extra: Partial<VideoEvidenceSnapshot> = {
   requestDigest: digest("synthetic"), observedAt: J20_FIXTURE_AT, validUntil: "2026-11-06T13:00:00.000Z", brief: fixtureBrief, listedPosts: posts.length,
   policyWindow: { start: "2026-09-01T00:00:00.000Z", end: J20_FIXTURE_AT, timezone: "UTC" }, posts, audience: [], nextCursor: null, ...extra });
 const collect = (posts: SourcePost[], prior: EvidencePacket | null = null, extra: Partial<VideoEvidenceSnapshot> = {}) =>
-  buildCollectedPacket({ creatorId: "synthetic-creator", prior, snapshot: snapshot(posts, extra), collector: { version: "synthetic-collector.v1", stage: "synthetic-fixture" }, protect });
+  buildCollectedPacket({ creatorId: "synthetic-creator", prior, snapshot: snapshot(posts, extra), collector: { version: "synthetic-collector.v1", stage: "synthetic-fixture", qualification: null }, protect });
 const dated = (n: number, day: number, overrides: Partial<SourcePost> = {}) => fixtureSourcePost(n, { publishedAt: `2026-10-${String(day).padStart(2, "0")}T12:00:00.000Z`, ...overrides });
 const assess = (packet: EvidencePacket) => assessCreator(packet, syntheticBinding());
 const gates = (packet: EvidencePacket) => Object.fromEntries(assess(packet).gates.filter(g => ["QUALIFYING_POSTS", "PUBLICATION_DATES", "MEANINGFUL_USE"].includes(g.id)).map(g => [g.id, g.state]));
@@ -245,3 +245,46 @@ describe("J20 review findings (pure rules)", () => {
     expect(qualityOf(reviewed)).toMatchObject({ footage: [{ viewingStatus: "partialPlayback" }], limitations: expect.arrayContaining(["COMPLETE_REVIEW_WITHOUT_FULL_COVERAGE"]) });
   });
 });
+
+/** Second review round. Each test failed on 3a4803c before its fix. */
+describe("J20 re-review findings (pure rules)", () => {
+  const claim = (text: string, topic: "medical" | "other" | "productFunction") => ({ ...structuredClone(fixtureReviews.complete),
+    claims: [{ atSec: 9, text, method: "heard" as const, topic }] });
+  const claimsGate = (packet: EvidencePacket) => assess(packet).gates.find(g => g.id === "CLAIMS_REVIEWED")?.state ?? "absent";
+
+  it("N2: ordinary product language does not trip the claim gate; explicit medical or treatment-outcome wording does", () => {
+    for (const text of ["Says to treat yourself to the fictional bag.", "Calls it retail therapy.", "No more back pain from her old bag.", "The leather stays in great condition."])
+      expect(claimsGate(collect([dated(1, 1, { review: claim(text, "productFunction") })]).packet), text).toBe("absent");
+    for (const text of ["Says it cured her endometriosis.", "Says it is safe while pregnant.", "Says it helps with IVF."])
+      expect(claimsGate(collect([dated(1, 1, { review: claim(text, "productFunction") })]).packet), text).toBe("unknown");
+    expect(claimsGate(collect([dated(1, 1, { review: claim("Says the zipper is sturdy.", "medical") })]).packet)).toBe("unknown");
+  });
+
+  it("N3: an unresolved claim is carried by post and claim until a person disposes of it", () => {
+    const first = collect([dated(1, 1, { review: claim("Says it keeps her medication cool.", "medical") })]).packet;
+    const dropped = collect([dated(1, 1)], first).packet;
+    expect(dropped.posts[0]!.review.claims).toEqual([]);
+    expect(claimsGate(dropped)).toBe("unknown");
+    expect(qualityOf(dropped)).toMatchObject({ nextAction: "needsClaimReview",
+      footage: [{ claimsReview: [{ targetId: null, topic: "medical", disposition: "pending" }] }] });
+    const reset = collect([dated(1, 1, { contentFingerprint: null, review: null })], first).packet;
+    expect(claimsGate(reset)).toBe("unknown");
+  });
+
+  it("N4: re-opening identical footage with a new receipt and time keeps reviewer ratings", () => {
+    const first = { ...collect([dated(1, 1), dated(2, 2)]).packet, ratings: { routine: 4, demo: 3 } };
+    const reopened = collect([dated(1, 1, { review: { ...structuredClone(fixtureReviews.complete), reviewedAt: "2026-11-06T12:30:00.000Z",
+      sourceRef: "synthetic:review:reopened" } }), dated(2, 2)], first).packet;
+    expect(reopened.ratings).toEqual({ routine: 4, demo: 3 });
+  });
+
+  it("N5: a source-stage packet records its collector qualification, and a fixture never does", () => {
+    const source = buildCollectedPacket({ creatorId: "synthetic-creator", prior: null, snapshot: snapshot([dated(1, 1)]),
+      collector: { version: "qualified-collector.v1", stage: "source", qualification: { ref: "synthetic:qualification", version: "q1" } }, protect }).packet;
+    expect(source.collection).toMatchObject({ collectorStage: "source", collectorQualification: { ref: "synthetic:qualification", version: "q1" } });
+    expect(() => buildCollectedPacket({ creatorId: "synthetic-creator", prior: null, snapshot: snapshot([dated(1, 1)]),
+      collector: { version: "unqualified.v1", stage: "source", qualification: null }, protect })).toThrow();
+    expect(collect([dated(1, 1)]).packet.collection!.collectorQualification).toBeNull();
+  });
+});
+

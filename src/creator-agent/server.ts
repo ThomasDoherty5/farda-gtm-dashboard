@@ -284,7 +284,8 @@ export function createAgentServer(options: AgentServerOptions) {
         options.operationalAlerts.sweep, options.operations?.now);
     }
     videoEvidence = options.videoEvidence ? bindVideoEvidence({ registry: runtimeRegistry, binding: options.videoEvidence, intake, store,
-      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now }) : null;
+      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now,
+      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId) }) : null;
     if (videoEvidence) runtimeRegistry = videoEvidence.registry;
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });

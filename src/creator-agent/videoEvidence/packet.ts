@@ -1,6 +1,7 @@
 import { digest } from "../config.ts";
 import {
-  J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, evidencePacketSchema, postEvidenceSchema,
+  J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, claimKey, evidencePacketSchema, intervalUnion, personClaims, postEvidenceSchema,
+  type ClaimDisposition, type ClaimRecord,
   isExactCountLabel, isRoundedCountLabel, nativePostIdentity,
   type EvidenceCollection, type EvidencePacket, type EvidenceReview, type NativeLikes, type PostEvidence, type RecentPostMetadata,
 } from "../evidence.ts";
@@ -90,8 +91,16 @@ function ratedFootageUnchanged(prior: EvidencePacket, next: EvidencePacket) {
   return prior.posts.every(rated => {
     const now = current.get(rated.postId);
     const before = rated.source?.contentFingerprint ?? null, after = now?.source?.contentFingerprint ?? null;
-    return !!now && before !== null && before === after && digest(rated.review) === digest(now.review);
+    return !!now && before !== null && before === after && digest(footageFacts(rated.review)) === digest(footageFacts(now.review));
   });
+}
+/** What the footage review observed: methods, ranges, points, actions, claims and narration. Receipts and times are not footage. */
+function footageFacts(review: EvidenceReview) {
+  const set = (items: readonly unknown[]) => [...new Set(items.map(item => JSON.stringify(item)))].sort();
+  const union = (spans: readonly { startSec: number; endSec: number }[]) => intervalUnion(spans).map(span => [span.startSec, span.endSec]);
+  return { status: review.status, visualMethod: review.visualMethod, audioMethod: review.audioMethod, durationSeconds: review.durationSeconds ?? null,
+    sampledPoints: [...new Set(review.sampledPoints)].sort((a, b) => a - b), watched: union(review.watchedIntervals), heard: union(review.heardIntervals ?? []),
+    actions: set(review.observedActions), claims: set(review.claims), narration: set(review.narration ?? []) };
 }
 
 /** Source-supplied content that cannot form a valid post. The runtime reports it as a source response error. */
@@ -107,7 +116,10 @@ export type CollectedPacket = { packet: EvidencePacket; changed: boolean; quaran
  * touch are carried as stored, and every change becomes a new immutable revision through the shared writer.
  */
 export function buildCollectedPacket(input: { creatorId: string; prior: EvidencePacket | null; snapshot: VideoEvidenceSnapshot;
-  collector: { version: string; stage: "synthetic-fixture" | "source" }; protect(packet: EvidencePacket): EvidencePacket }): CollectedPacket {
+  collector: { version: string; stage: "synthetic-fixture" | "source"; qualification: { ref: string; version: string } | null };
+  protect(packet: EvidencePacket): EvidencePacket;
+  /** Server-copied dispositions from saved reviewer annotations. A collector never supplies these. */
+  dispositions?: readonly ClaimDisposition[] }): CollectedPacket {
   const { creatorId, snapshot } = input;
   // Brief, brief version and checkout route define the evidence basis. A different basis carries nothing.
   const sameBasis = !!input.prior && input.prior.briefId === snapshot.brief.ref && input.prior.checkoutRoute === snapshot.brief.checkoutRoute &&
@@ -193,6 +205,7 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
     // A collector cannot verify audience proof; verified aggregate evidence comes only from the server-held route proof.
     audience: snapshot.audience.length ? snapshot.audience.map(entry => ({ ...entry, verified: false })) : collectedPrior?.collection?.audience ?? [],
     quarantined: [...quarantined.values()].flat().slice(0, 100),
+    collectorQualification: input.collector.stage === "source" ? input.collector.qualification : null,
   };
   const draft = {
     creatorId, briefId: snapshot.brief.ref, checkoutRoute: snapshot.brief.checkoutRoute, evidenceRevision: "j20-pending",
@@ -202,6 +215,15 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
     ratings: { routine: null, demo: null }, criterionRatings: prior?.criterionRatings ?? {}, criterionEvidenceRefs: prior?.criterionEvidenceRefs ?? {},
     invitationGates: prior?.invitationGates ?? [], activationGates: prior?.activationGates ?? [], collection,
   };
+  // Claims that needed a person are carried by post and claim, across reads and evidence bases, until a person disposes of them.
+  const ledger = new Map<string, ClaimRecord>();
+  for (const entry of input.prior?.collection?.claims ?? []) ledger.set(claimKey(entry.postId, entry.claim), entry);
+  for (const entry of personClaims({ ...draft, collection: undefined } as unknown as EvidencePacket).all) ledger.set(claimKey(entry.postId, entry.claim), entry);
+  const disposed = new Map<string, ClaimDisposition>();
+  for (const entry of [...input.prior?.collection?.claimDispositions ?? [], ...input.dispositions ?? []])
+    if (ledger.has(claimKey(entry.postId, entry.claim)) && ![...disposed.values()].some(seen => seen.annotationRef === entry.annotationRef)) disposed.set(entry.annotationRef, entry);
+  collection.claims = [...ledger.values()].slice(0, 200);
+  collection.claimDispositions = [...disposed.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt) || a.annotationRef.localeCompare(b.annotationRef)).slice(0, 200);
   const parsed = evidencePacketSchema.safeParse(draft);
   if (!parsed.success) throw new J20MergeError("J20_PACKET_MERGE_INVALID");
   const candidate = input.protect(parsed.data);
