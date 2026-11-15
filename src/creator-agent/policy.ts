@@ -120,7 +120,7 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
       unassessedAudioPosts: packet.posts.filter(p => p.review.audioMethod === "unassessed").length,
       verifiedCriteria: rows.filter(c => c.rating !== null).length, configuredCriteria: rows.length,
       sourceCoverage: !snapshot ? "unknown" : providerGates.every(g => g.state !== "unknown") && rows.every(c => c.rating !== null) ? "complete" : "partial" },
-    metrics: snapshot?.metrics ?? [], coveredWeight: coverage, acceptedTerms: snapshot?.terms ?? null, commerce: snapshot?.commerce ?? null,
+    metrics: snapshot?.metrics ?? [], ...(snapshot?.unavailableMetrics ? { unavailableMetrics: snapshot.unavailableMetrics } : {}), coveredWeight: coverage, acceptedTerms: snapshot?.terms ?? null, commerce: snapshot?.commerce ?? null,
     audience: snapshot?.audience ?? null,
     criteria: rows.map(c => {
       const isCreative = c.id === binding?.current.routineCriterionId || c.id === binding?.current.demoCriterionId;
