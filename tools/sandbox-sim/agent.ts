@@ -27,6 +27,7 @@ import { ShippingHubReadError, type ShippingHubSource } from "../../src/creator-
 import { collabTestAt, collabTestId, collaborationSnapshot, collaborationTestSource } from "../../src/creator-agent/collaborationWorkflowFixtures.ts";
 import { nativeSourcingSourceFixture } from "../../src/creator-agent/sourcing/nativeFixtures.testkit.ts";
 import { sourcingSourceFixture } from "../../src/creator-agent/sourcing/fixtures.testkit.ts";
+import { mirrorTestApproval, mirrorTestBindings, mirrorTestCompletion, mirrorTestSource } from "../../src/creator-agent/mirrorFreshnessTestFixtures.ts";
 import { originalLayoutFinanceSource } from "../../e2e-agent/support/original-layout-finance-source.ts";
 import { originalLayoutOperationsSource } from "../../e2e-agent/support/original-layout-operations-source.ts";
 
@@ -214,6 +215,13 @@ export async function startSimAgent(env: Record<string, string | undefined> = pr
     assertCurrent(snapshot, binding) { if (snapshot.binding.principal.principalRef !== binding.principal.principalRef) throw new ShippingHubReadError("DENIED", 403); },
   };
 
+  // Mirror freshness (/settings/connections), as mirror-freshness.spec.ts serves it: the fictional approval is
+  // re-dated to yesterday (the repository refuses an approval from the future), and the sweep runs on the
+  // server's own 15-minute schedule.
+  const mirrors = mirrorTestSource();
+  const mirrorFreshness = { source: mirrors.source, bindings: mirrorTestBindings, deploymentRef: "sandbox-sim",
+    approval: { ...mirrorTestApproval, approvedAt: new Date(Date.now() - DAY).toISOString() } };
+
   const bindings = loadApprovedBindings();
   const app = createAgentServer({
     databasePath, ...scope, readToken, reviewToken, bindings, secureCookies: false,
@@ -229,7 +237,7 @@ export async function startSimAgent(env: Record<string, string | undefined> = pr
     collaborationSourceReader: framed(collabTestAt, now => collaborationTestSource(id => id === collabTestId ? collaborationSnapshot() : null, now)),
     sourcingPlanSource: delegate(sourcing, f => f.source),
     lifecycleSource: lifecycleTestSource(async () => structuredClone(lifecycle.current.value), Date.now),
-    shippingHubSource,
+    shippingHubSource, mirrorFreshness,
   });
   try {
     // The registered job behind the controls fixture's finite task, as controls.spec.ts registers it.
@@ -246,6 +254,16 @@ export async function startSimAgent(env: Record<string, string | undefined> = pr
     const member = f.monitor.snapshot.members[0]!;
     link.member = { creatorId: member.creatorId, revision: member.revision, cohort: member.cohort, notionReceipt: member.notionReceipt, sheetsReceipt: member.sheetsReceipt, verification: structuredClone(member.verification) };
     link.creatorId = member.creatorId;
+    // The spec's six recorded runs, timed back from now; collaborations stays never synced. Orders and
+    // shipments keep completing on the refresh cycle, so they stay current while the others age honestly.
+    const ingest = (id: Parameters<typeof mirrorTestCompletion>[0], outcome: Parameters<typeof mirrorTestCompletion>[1], minutesAgo: number, changed: number) =>
+      app.mirrorRuntime!.ingest(mirrors.add(mirrorTestCompletion(id, outcome, Date.now() - minutesAgo * MINUTE, changed)));
+    for (const [id, outcome, ago, changed] of [["orders", "complete", 10, 2], ["shipments", "complete", 10, 0], ["stock", "complete", 90, 1],
+      ["support", "partial", 5, 0], ["finance", "failed", 5, 0], ["content", "accessRevoked", 5, 0]] as const) await ingest(id, outcome, ago, changed);
+    every(REFRESH_MS, () => {
+      Promise.all([ingest("orders", "complete", 0, 2), ingest("shipments", "complete", 0, 0)])
+        .catch((error: unknown) => console.error("sandbox-sim: mirror run ingest failed.", error));
+    });
   } catch (error) { await app.close(); throw error; }
   const host = "127.0.0.1";
   await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(port, host, resolve); });

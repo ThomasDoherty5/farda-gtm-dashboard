@@ -4,7 +4,7 @@
 // Usage: npm run sim [-- --open | --open=reviewer]. See docs/sandbox-sim.md.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 const port = (name, fallback) => {
   const value = Number(process.env[name] ?? fallback);
@@ -16,7 +16,9 @@ if (appPort === agentPort) throw new Error("The app and agent need distinct port
 const openArg = process.argv.slice(2).find(arg => arg === "--open" || arg.startsWith("--open="));
 const openRole = openArg ? (openArg === "--open=reviewer" ? "reviewer" : "reader") : null;
 const origin = `http://127.0.0.1:${appPort}`, agentOrigin = `http://127.0.0.1:${agentPort}`;
-const dataDir = ".agent-data/sim", distDir = `${dataDir}/dist`;
+// FARDA_SIM_DATA_DIR lets a second run (npm run sim:smoke) keep its own database, tokens and build.
+const dataDir = (process.env.FARDA_SIM_DATA_DIR ?? ".agent-data/sim").replace(/\/+$/, ""), distDir = `${dataDir}/dist`;
+if (!/^\.agent-data\/sim(\/[A-Za-z0-9._-]+)*$/.test(dataDir) || dataDir.split("/").includes("..")) throw new Error("FARDA_SIM_DATA_DIR must be .agent-data/sim or a folder inside it.");
 // Fresh per run, server-only, never committed (.agent-data/ is gitignored) and never baked into the client.
 const readToken = randomBytes(32).toString("hex"), reviewToken = randomBytes(32).toString("hex");
 const vite = ["node_modules/vite/bin/vite.js"];
@@ -69,8 +71,14 @@ try {
     FARDA_SIM_AGENT_PORT: String(agentPort), FARDA_SIM_DATABASE: `${dataDir}/agent.sqlite` });
   await waitFor(`${agentOrigin}/health`, "Agent service");
   const adapterEnv = { VITE_FARDA_ADAPTER: "sandbox", VITE_FARDA_ADAPTER_BASE_URL: origin, FARDA_AGENT_PROXY_TARGET: agentOrigin };
-  if (process.env.FARDA_SIM_SKIP_BUILD === "1" && existsSync(`${distDir}/index.html`)) console.log("sandbox-sim: reusing the previous sandbox build.");
-  else await finished(start("build", [...vite, "build", "--outDir", distDir, "--emptyOutDir", "--logLevel", "warn"], adapterEnv));
+  // The adapter origin is baked into the build, so a build is reused only for the same app origin.
+  const stamp = `${distDir}/.sim-origin`, reusable = existsSync(`${distDir}/index.html`) && existsSync(stamp) && readFileSync(stamp, "utf8") === origin;
+  if (process.env.FARDA_SIM_SKIP_BUILD === "1" && reusable) console.log("sandbox-sim: reusing the previous sandbox build.");
+  else {
+    if (process.env.FARDA_SIM_SKIP_BUILD === "1") console.log(`sandbox-sim: no reusable build for ${origin}; building.`);
+    await finished(start("build", [...vite, "build", "--outDir", distDir, "--emptyOutDir", "--logLevel", "warn"], adapterEnv));
+    writeFileSync(stamp, origin);
+  }
   start("preview", [...vite, "preview", "--host", "127.0.0.1", "--port", String(appPort), "--strictPort", "--outDir", distDir], adapterEnv);
   await waitFor(origin, "Dashboard preview");
   console.log(`
@@ -83,7 +91,8 @@ Sign in as reader:
      ${readToken}
   3. Open ${origin}/overview. The session lasts one hour; repeat step 1 when it ends.
 Reviewer (approve/save) sessions use a bearer token only: run  npm run sim -- --open=reviewer
-Tokens for scripts: ${dataDir}/session.json. Press Ctrl-C to stop both servers.
+Tokens for scripts: ${dataDir}/session.json. Every run starts with a fresh database and new tokens.
+Press Ctrl-C to stop both servers.
 `);
   if (openRole) {
     const { chromium } = await import("@playwright/test");
