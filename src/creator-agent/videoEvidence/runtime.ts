@@ -91,12 +91,13 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
         const expectedVersion = prior?.revision ?? 0;
         try {
           const saved = await writer.write({ packet: built.packet, expectedVersion, configHash: deps.modelBinding(built.packet.checkoutRoute)?.hash ?? null },
-            `j20:${digest({ creatorId: work.creatorId, expectedVersion, evidenceRevision: built.packet.evidenceRevision })}`,
+            `j20:${digest({ creatorId: work.creatorId, expectedVersion, evidenceRevision: built.packet.evidenceRevision, receipt: snapshot.receiptRef })}`,
             { origin: "collector", fence: () => { context.assertCurrent(); assertSnapshot(); context.assertCurrent(); } });
           runId = saved.runId;
         } catch (error) {
           // A concurrent reviewer or collector write moved the head: re-read the latest evidence on retry, never overwrite it.
-          if (error instanceof AgentConflict && error.message === "VERSION_CONFLICT") return { state: "retry", reasonCode: "J20_EVIDENCE_HEAD_MOVED", retryAfterMs: 1000 };
+          if (error instanceof AgentConflict && ["VERSION_CONFLICT", "IDEMPOTENCY_KEY_REUSED"].includes(error.message))
+            return { state: "retry", reasonCode: "J20_EVIDENCE_HEAD_MOVED", retryAfterMs: 1000 };
           throw error;
         }
       }

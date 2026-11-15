@@ -46,7 +46,7 @@ function j20Registration(overrides: Partial<RuntimeRegistration> = {}) {
     browserBinding: null, browserExecutorRef: null, definition: { ...base.definition, jobId: "synthetic-j20" }, ...overrides });
 }
 
-async function harness(options: { registration?: RuntimeRegistration; bind?: boolean } = {}) {
+async function harness(options: { registration?: RuntimeRegistration; bind?: boolean; scorecardAuthority?: AgentServerOptions["scorecardAuthority"] } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "farda-j20-")), databasePath = join(directory, "agent.sqlite");
   const store = new AgentStore(databasePath, scope);
   const registration = options.registration ?? j20Registration();
@@ -63,7 +63,7 @@ async function harness(options: { registration?: RuntimeRegistration; bind?: boo
   kit.authority.assertWindow = (proof, r, now) => assertWindow(issued.get(proof.receiptRef) ?? proof, r, now);
   const collector = createSyntheticVideoCollector(kit.now);
   const appOptions: AgentServerOptions = { databasePath, workspaceId: scope.workspaceId, accountId: scope.accountId, readToken: reader, reviewToken: reviewer,
-    bindings: [syntheticBinding()], operations: { now: kit.now },
+    bindings: [syntheticBinding()], operations: { now: kit.now }, scorecardAuthority: options.scorecardAuthority,
     intakeAuthority: { route: () => "Ready", suppression: v => ({ version: v, entries: [] }), crosswalk: v => ({ version: v, entries: [] }),
       sinks: { "notion-creator-crm": new Sink("notion"), "sheets-watchlist": new Sink("sheets") } },
     runtime: { registry: { ...kit.registry, executors: new Map() }, authority: kit.authority, machine: { token: runtimeToken, workerRef: kit.machine.workerRef,
@@ -330,6 +330,29 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     upgraded.posts[0]!.review.observedActions.push({ atSec: 20, action: "A use the collector never observed.", meaningfulUse: true, kind: "handlingOperationUse" });
     expect(await put(upgraded, "synthetic-j20-forge-review")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
     expect(h.app.store.history(creatorId)).toHaveLength(2);
+  });
+
+  it("retries instead of overwriting when a reviewer write moves the evidence head mid-step, then merges over it", async () => {
+    const race = { armed: false, write: () => {} };
+    const h = await harness({ scorecardAuthority: { resolve: () => { if (race.armed) { race.armed = false; race.write(); } return null; } } });
+    const { creatorId } = await h.discover("d8");
+    const posts = [fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })];
+    h.collector.on(null, h.collector.page(posts));
+    await (await h.runDay()).work();
+    const first = h.app.store.latest(creatorId)!;
+    race.write = () => { const rated = { ...first.packet, evidenceRevision: "reviewer-concurrent", ratings: { routine: 4, demo: 4 } };
+      h.app.store.save(rated, { ...first.assessment, evidenceRevision: "reviewer-concurrent" }, first.revision, "synthetic-concurrent-review"); };
+    race.armed = true;
+    h.collector.on(null, h.collector.page(posts.map((p, i) => i ? p : { ...p, metrics: [{ ...p.metrics[0]!, value: 7777, rawLabel: "7777" }, p.metrics[1]!] })));
+    const day = await h.runDay();
+    expect((await day.work()).run.state).not.toBe("completed");
+    expect(h.app.store.history(creatorId).map(r => r.packet.evidenceRevision)).toEqual([first.packet.evidenceRevision, "reviewer-concurrent"]);
+    h.kit.advance(2000); await h.kit.verify("api");
+    expect((await day.work()).run.state).toBe("completed");
+    const merged = h.app.store.latest(creatorId)!;
+    expect(merged.revision).toBe(3);
+    expect(merged.packet.ratings).toEqual({ routine: 4, demo: 4 });
+    expect(merged.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!.metrics![0]!.value).toBe(7777);
   });
 
   it("refuses a misbound registration and never runs the synthetic collector in production", async () => {
