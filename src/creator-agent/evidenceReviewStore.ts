@@ -3,7 +3,11 @@ import { canonicalJson, digest } from "./config.ts";
 import { nativePostIdentity, type PostEvidence } from "./evidence.ts";
 import { reviewInputSchema, type EvidenceAnnotation, type SourceReview } from "./evidenceReviewContract.ts";
 import type { AgentStore, StoredAssessment } from "./store.ts";
-import { videoEvidenceQuality } from "./videoEvidence/quality.ts";
+import { videoEvidenceQuality, type ClaimDispositions } from "./videoEvidence/quality.ts";
+/** Disagree/override dispositions for one run, read through the (runId, kind) expression index rather than a body scan. */
+export const DISPOSITION_QUERY = `SELECT json_extract(body,'$.postId') AS post_id,json_extract(body,'$.original.id') AS target_id,
+  json_extract(body,'$.input.kind') AS kind FROM evidence_review_annotations
+  WHERE json_extract(body,'$.input.runId')=? AND json_extract(body,'$.input.kind') IN ('disagree','override') ORDER BY revision`;
 
 export class EvidenceReviewError extends Error {
   readonly code: string; readonly status: number; readonly currentVersion?: string;
@@ -68,9 +72,9 @@ function resolvedByReview(prior: PostEvidence, current: PostEvidence, annotation
   const priorFact = facts(prior)[Number(match[2])];
   return priorFact !== undefined && !facts(current).some(f => digest(f) === digest(priorFact));
 }
-function projection(record: Effective, post: PostEvidence, sourceReview: SourceReview, version: string, reviewedTargets: ReadonlyMap<string, ReadonlySet<string>>) {
+function projection(record: Effective, post: PostEvidence, sourceReview: SourceReview, version: string, dispositions: ClaimDispositions) {
   // Present only for J20-collected packets, so earlier evidence records keep their exact shape.
-  const quality = videoEvidenceQuality(record, reviewedTargets);
+  const quality = videoEvidenceQuality(record, dispositions);
   const unknown = (reasonCode: string) => ({ state: "unknown" as const, value: null, reasonCode, evidenceRefs: [],
     sourceRef: null, occurredAt: null, sourceUpdatedAt: null, observedAt: record.recordedAt });
   return {
@@ -143,12 +147,12 @@ export class EvidenceReviewRepository {
     const version = `er-${basisHash}-${annotations.length}`;
     const effective = sourceReview.contested ? { ...record, assessment: { ...record.assessment, state: "reviewNeeded" as const,
       reasonCodes: [...new Set([...record.assessment.reasonCodes,"EVIDENCE_DISPUTED"])] } } : record;
-    const reviewedTargets = new Map<string, Set<string>>();
-    if (stored.packet.collection) for (const row of this.store.database.prepare("SELECT body FROM evidence_review_annotations WHERE json_extract(body,'$.input.runId')=?").all(stored.runId)) {
-      const annotation = JSON.parse(String(row.body)) as EvidenceAnnotation;
-      if (annotation.postId && annotation.original) reviewedTargets.set(annotation.postId, (reviewedTargets.get(annotation.postId) ?? new Set()).add(annotation.original.id));
+    const dispositions = new Map<string, Map<string, "disagree" | "override">>();
+    if (stored.packet.collection) for (const row of this.store.database.prepare(DISPOSITION_QUERY).all(stored.runId)) {
+      const postId = row.post_id === null ? null : String(row.post_id), targetId = row.target_id === null ? null : String(row.target_id);
+      if (postId && targetId) (dispositions.get(postId) ?? dispositions.set(postId, new Map()).get(postId)!).set(targetId, row.kind === "override" ? "override" : "disagree");
     }
-    return { data: projection(effective,post,sourceReview,version,reviewedTargets), stale: record.stale || sourceReview.contested,
+    return { data: projection(effective,post,sourceReview,version,dispositions), stale: record.stale || sourceReview.contested,
       canAnnotate: !record.stale && !superseded && annotations.length < 100 };
   }
   read(creatorId: string, evidenceId: string, runId?: string) {

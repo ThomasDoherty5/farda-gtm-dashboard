@@ -926,7 +926,7 @@ export function createAgentServer(options: AgentServerOptions) {
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         nightlyReconciliation: { readBinding: options.mirrorReconciliation ? "injected" : "notConnected", repairWriter: "notConnected" },
-        videoEvidence: videoEvidence?.capability ?? { collector: "notConnected", writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only", dispatch: "notConnected" },
+        videoEvidence: videoEvidence?.capability ?? { collector: "notConnected", collectorQualification: "none", writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only", dispatch: "notConnected" },
         operationalThresholds: { sourceAuthority: operationalAlerts ? "injected" : "notConnected",
           delivery: options.operationalAlerts?.report && options.actionFoundation?.reporting ? "shared-reporting" : "notConnected" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",

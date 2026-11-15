@@ -18,7 +18,9 @@ export const videoEvidenceQualitySchema = z.object({
   counts: z.object({ listed: count.nullable(), observed: count, accessible: count, eligible: count, reviewed: count, metadataOnly: count, excluded: count }).strict(),
   footage: z.array(z.object({
     postId: id, access: z.enum(["permitted", "loginRequired", "permissionDenied", "unavailable", "deleted"]),
-    change: z.enum(["firstObserved", "unchanged", "changed", "removed"]),
+    change: z.enum(["firstObserved", "unchanged", "changed", "removed", "unverified"]),
+    /** Who produced the stored review. A collector review is always the agent; a person reviews only through annotations. */
+    reviewer: z.enum(["agent", "person", "unknown"]),
     viewingStatus: viewingStatusSchema, audioCoverage: audioCoverageSchema,
     visualSeconds: z.number().nonnegative(), heardSeconds: z.number().nonnegative(), durationSeconds: z.number().positive().nullable(),
     visualCoveragePct: z.number().min(0).max(100).nullable(), heardCoveragePct: z.number().min(0).max(100).nullable(), sampledPoints: count,
@@ -26,8 +28,12 @@ export const videoEvidenceQualitySchema = z.object({
     playbackElapsedSeconds: z.number().nonnegative().nullable(),
     features: z.object({ hook: featureState, handlingOperationUse: featureState, explanation: featureState, visibleOutcome: featureState, cta: featureState }).strict(),
     narration: count, outcomeCausality: z.literal("unresolved"),
-    /** Existing reviewer target IDs (`claim-N`) that still need a person on the disagree/override path. */
-    claimsForReview: z.array(z.string().regex(/^claim-\d+$/)).max(500),
+    /**
+     * Claims a person must review (medical, compatibility, outcome, uncategorized or health-worded), with their existing
+     * reviewer target (`claim-N`) and the disposition recorded on the disagree/override path. The agent never resolves one.
+     */
+    claimsReview: z.array(z.object({ targetId: z.string().regex(/^claim-\d+$/), atSec: z.number().nonnegative(), text: z.string().min(1).max(1_000),
+      topic: z.enum(["compatibility", "medical", "productFunction", "outcome", "other"]).nullable(), disposition: z.enum(["pending", "disagreed", "overridden"]) }).strict()).max(500),
     quarantinedFields: count,
     nextAction: j20NextActionSchema,
   }).strict()).max(50),

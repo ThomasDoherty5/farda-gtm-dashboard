@@ -89,13 +89,18 @@ const audience = z.object({
   /** Only an authorized dated native report or a creator export with provenance. No inferred, self-described or location route exists. */
   sourceType: z.enum(["authorizedNativeAnalytics", "datedCreatorExport"]).optional(), provenanceRef: text.optional(),
 }).strict().refine((a) => Date.parse(a.windowEnd) > Date.parse(a.windowStart), { message: "Audience needs an ordered source window." });
+/** New provider proof: an aligned or misaligned audience must name its authorized report type and provenance. Stored history keeps the earlier optional shape. */
+const sourceAudience = audience.superRefine((a, ctx) => {
+  if (a.alignment !== "unknown" && (!a.sourceType || !a.provenanceRef))
+    ctx.addIssue({ code: "custom", message: "Verified audience evidence names an authorized native report or dated creator export and its provenance." });
+});
 
 /** Independent, server-supplied evidence snapshot; this is never accepted from a dashboard POST/PUT. */
 export const sourceSnapshotSchema = z.object({
   workspaceId: text, accountId: text, creatorId: text, creatorSourceId: text, checkoutRoute: route, evidenceRevision: text, termsRevision: text,
   sourceRef: text, observedAt: instant, validUntil: instant, provider: providerFamily, market: text, programId: text, programVersion: text,
   programEligibility: receipt, supportedClaims: receipt.nullable(), terms: terms.nullable(), commerce: z.discriminatedUnion("kind", [website, shop]),
-  metrics: z.array(metricSchema).max(50), audience: audience.nullable(), reliability: receipt.nullable(), economics: receipt.nullable(),
+  metrics: z.array(metricSchema).max(50), audience: sourceAudience.nullable(), reliability: receipt.nullable(), economics: receipt.nullable(),
   criteria: z.array(criterionEvidence).max(4),
   unavailableMetrics: z.array(unavailableMetricSchema).max(50).optional(),
 }).strict().superRefine((s, ctx) => {

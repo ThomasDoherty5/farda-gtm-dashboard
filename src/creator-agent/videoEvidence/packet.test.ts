@@ -16,7 +16,7 @@ const scope = { workspaceId: "synthetic-workspace", accountId: "synthetic-accoun
 const protect = (packet: EvidencePacket) => protectCommentAuthors(packet, scope, "synthetic-operations-secret-not-a-secret-0001");
 const snapshot = (posts: SourcePost[], extra: Partial<VideoEvidenceSnapshot> = {}): VideoEvidenceSnapshot => ({ receiptRef: "receipt:synthetic-page",
   requestDigest: digest("synthetic"), observedAt: J20_FIXTURE_AT, validUntil: "2026-11-06T13:00:00.000Z", brief: fixtureBrief, listedPosts: posts.length,
-  posts, audience: [], nextCursor: null, ...extra });
+  policyWindow: { start: "2026-09-01T00:00:00.000Z", end: J20_FIXTURE_AT, timezone: "UTC" }, posts, audience: [], nextCursor: null, ...extra });
 const collect = (posts: SourcePost[], prior: EvidencePacket | null = null, extra: Partial<VideoEvidenceSnapshot> = {}) =>
   buildCollectedPacket({ creatorId: "synthetic-creator", prior, snapshot: snapshot(posts, extra), collector: { version: "synthetic-collector.v1", stage: "synthetic-fixture" }, protect });
 const dated = (n: number, day: number, overrides: Partial<SourcePost> = {}) => fixtureSourcePost(n, { publishedAt: `2026-10-${String(day).padStart(2, "0")}T12:00:00.000Z`, ...overrides });
@@ -129,9 +129,10 @@ describe("J20-07 / J20-09 taxonomy exclusions and the inference screen", () => {
   it("excludes clinical, IVF and medical-education footage from the reviewed packet, with no credit for educator status", () => {
     const { packet } = collect([dated(1, 1, { context: { ...fixtureSourcePost(1).context, exclusion: "ivfFertilityExplainer", educatorOrCredentialed: true } }),
       dated(2, 2, { context: { ...fixtureSourcePost(2).context, primaryBucket: "other" } }), dated(3, 3, { context: { ...fixtureSourcePost(3).context, primaryBucket: "unknown" } })]);
-    expect(packet.posts).toEqual([]);
-    expect(packet.collection!.exclusions.map(e => e.reasons).sort()).toEqual([["CONTEXT_NOT_LIFESTYLE"], ["CONTEXT_UNKNOWN"], ["EXCLUDED_IVF_FERTILITY_EXPLAINER"]]);
-    expect(packet.recentPosts.every(p => !p.relevant)).toBe(true);
+    // Only the approved exclusion removes footage; "other" and "unknown" labels are recorded without gating.
+    expect(packet.posts.map(p => p.context!.primaryBucket).sort()).toEqual(["other", "unknown"]);
+    expect(packet.collection!.exclusions.map(e => e.reasons)).toEqual([["EXCLUDED_IVF_FERTILITY_EXPLAINER"]]);
+    expect(packet.recentPosts.filter(p => !p.relevant)).toHaveLength(1);
   });
   it("refuses health, demographic, purchasing-power and outcome inference but passes ordinary product language", () => {
     for (const text of ["She looks pregnant here.", "The creator has a chronic condition.", "Viewers are probably 25-34 year olds.", "Followers aged 25-34 love it.",
@@ -148,5 +149,99 @@ describe("J20-07 / J20-09 taxonomy exclusions and the inference screen", () => {
     expect(post.review.interruption).toEqual({ atSec: 12, reason: "Interruption reason withheld by the inference screen." });
     expect(screened.collection!.quarantined.map(q => q.field).sort()).toEqual(["context.secondaryLabels[1]", "productionChoices[0].observation", "review.interruption.reason"]);
     expect(JSON.stringify(screened)).not.toMatch(/older women|Wealthy households|seems depressed/);
+  });
+});
+
+/** Regression tests for the independent review of the first head. Each failed before its fix. */
+describe("J20 review findings (pure rules)", () => {
+  const gated = (packet: EvidencePacket): EvidencePacket => ({ ...packet, ratings: { routine: 4, demo: 4 },
+    invitationGates: ["identity", "sourcePermission", "suppression", "supportedBrief"].map(id => ({ id, status: "pass" as const, sourceRef: `synthetic:invite:${id}` })) });
+  const claim = (text: string, topic?: "medical" | "other" | "productFunction") => ({ ...structuredClone(fixtureReviews.complete),
+    claims: [{ atSec: 9, text, method: "heard" as const, ...(topic ? { topic } : {}) }] });
+
+  it("B2/T5: untagged collected claims are refused, and other or health-worded claims still need a person", () => {
+    expect(() => collect([dated(1, 1, { review: claim("Says it cured her endometriosis.") })])).toThrow();
+    for (const [text, topic] of [["Says it is safe while pregnant.", "other"], ["Says it cured her endometriosis.", "productFunction"]] as const) {
+      const { packet } = collect([dated(1, 1, { review: claim(text, topic) }), dated(2, 2), dated(3, 3)]);
+      const quality = qualityOf(packet);
+      expect(quality.nextAction, text).toBe("needsClaimReview");
+      expect(quality.footage.flatMap(f => f.claimsReview)).toEqual([expect.objectContaining({ targetId: "claim-0", topic, text, disposition: "pending" })]);
+    }
+    const plain = collect([dated(1, 1, { review: claim("Says the zipper is sturdy.", "productFunction") }), dated(2, 2), dated(3, 3)]).packet;
+    expect(qualityOf(plain).footage.flatMap(f => f.claimsReview)).toEqual([]);
+  });
+
+  it("B2/T13: an open collected medical claim holds J02 below prospective invitation", () => {
+    const clean = gated(collect([dated(1, 1), dated(2, 2), dated(3, 3)]).packet);
+    expect(assess(clean).state).toBe("prospectiveInviteEligible");
+    const claimed = gated(collect([dated(1, 1, { review: claim("Says it keeps her medication cool.", "medical") }), dated(2, 2), dated(3, 3)]).packet);
+    const assessment = assess(claimed);
+    expect(assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
+    expect(assessment.state).toBe("reviewNeeded");
+    expect(assessment.contentQualification).toBe("reviewNeeded");
+  });
+
+  it("M1: removed or denied posts lose J02 packet and creative credit; pre-J20 packets without access facts are unchanged", () => {
+    const base = gated(collect([dated(1, 1), dated(2, 2), dated(3, 3)]).packet);
+    for (const state of ["deleted", "permissionDenied", "loginRequired", "unavailable"] as const) {
+      const lost = { ...base, posts: base.posts.map((p, i) => i ? p : { ...p, accessObservation: { ...p.accessObservation!, state } }) };
+      expect(assess(lost).packet.qualifyingPosts, state).toBe(2);
+    }
+    const onlyRemoved = { ...base, posts: base.posts.map(p => ({ ...p, accessObservation: { ...p.accessObservation!, state: "deleted" as const } })) };
+    expect(assess(onlyRemoved).criteria).toEqual({ routine: null, demo: null });
+  });
+
+  it("M2/T4: a like-count change or a newly found post keeps reviewer ratings; changed rated footage resets them", () => {
+    const first = { ...collect([dated(1, 1), dated(2, 2)]).packet, ratings: { routine: 4, demo: 3 } };
+    const moreLikes = collect([dated(1, 1, { likes: { ...fixtureSourcePost(1).likes, value: 205, rawLabel: "205" } }), dated(2, 2)], first).packet;
+    expect(moreLikes.ratings).toEqual({ routine: 4, demo: 3 });
+    const newPost = collect([dated(1, 1), dated(2, 2), dated(3, 3)], first).packet;
+    expect(newPost.ratings).toEqual({ routine: 4, demo: 3 });
+    const rereviewed = collect([dated(1, 1, { review: structuredClone(fixtureReviews.muted) }), dated(2, 2)], first).packet;
+    expect(rereviewed.ratings).toEqual({ routine: null, demo: null });
+  });
+
+  it("m4: a missing fingerprint is unknown footage identity, never unchanged, so the earlier review is not carried", () => {
+    const first = collect([dated(1, 1, { contentFingerprint: null })]).packet;
+    const reread = collect([dated(1, 1, { contentFingerprint: null, review: null })], first).packet;
+    expect(reread.posts[0]).toMatchObject({ source: { change: "unverified" }, review: { status: "unassessed" } });
+  });
+
+  it("M3/T8: a collector cannot present its review as a person's", () => {
+    const { packet } = collect([dated(1, 1, { review: { ...structuredClone(fixtureReviews.complete), reviewerRef: "human:synthetic-person" } })]);
+    expect(packet.posts[0]!.review.reviewerRef).toBe("agent:j20-video-evidence.v1/synthetic-collector.v1");
+    expect(qualityOf(packet).footage[0]).toMatchObject({ reviewer: "agent" });
+  });
+
+  it("m1: rounded views stay out of the comparable baseline instead of becoming exact", () => {
+    const { packet } = collect([dated(1, 1, { metrics: [fixtureMetric("views", 1_200_000, { rawLabel: "1.2M", approximate: true })] })]);
+    expect(packet.recentPosts[0]!.views).toMatchObject({ status: "unknown" });
+    expect(assess(packet).metadata.comparableViewCount).toBe(0);
+  });
+
+  it("m3: a new brief version starts a new evidence basis and never carries ratings", () => {
+    const first = { ...collect([dated(1, 1)]).packet, ratings: { routine: 4, demo: 4 } };
+    const next = collect([dated(2, 2)], first, { brief: { ...fixtureBrief, version: "v2" } }).packet;
+    expect(next.posts).toHaveLength(1);
+    expect(next.ratings).toEqual({ routine: null, demo: null });
+  });
+
+  it("m5: collector-supplied audience evidence is never self-verified", () => {
+    const asserted = { dimension: "countryRegion" as const, buckets: [{ label: "Fictional region", share: 0.5 }], sourceType: "authorizedNativeAnalytics" as const,
+      periodStart: "2026-10-01T00:00:00.000Z", periodEnd: "2026-10-31T00:00:00.000Z", observedAt: J20_FIXTURE_AT, provenanceRef: "synthetic:report", verified: true };
+    const { packet } = collect([dated(1, 1)], null, { audience: [asserted] });
+    expect(packet.collection!.audience[0]!.verified).toBe(false);
+    expect(qualityOf(packet).audience).toEqual({ verified: 0, unverified: 1 });
+  });
+
+  it("M5: only owner-approved rules gate; builder-coined labels do not exclude footage", () => {
+    const { packet } = collect([dated(1, 1, { context: { ...fixtureSourcePost(1).context, primaryBucket: "other" } }),
+      dated(2, 2, { context: { ...fixtureSourcePost(2).context, primaryBucket: "unknown" } })]);
+    expect(packet.posts).toHaveLength(2);
+    expect(packet.collection!.samplingPolicyVersion).toBe("approved-creator-scorecard-policy.2026-11-04");
+    const partial = { ...structuredClone(fixtureReviews.complete), watchedIntervals: [{ startSec: 0, endSec: 10 }], heardIntervals: [{ startSec: 0, endSec: 10 }] };
+    const reviewed = collect([dated(1, 1, { review: partial })]).packet;
+    expect(reviewed.posts[0]!.review.status).toBe("complete");
+    expect(qualityOf(reviewed)).toMatchObject({ footage: [{ viewingStatus: "partialPlayback" }], limitations: expect.arrayContaining(["COMPLETE_REVIEW_WITHOUT_FULL_COVERAGE"]) });
   });
 });

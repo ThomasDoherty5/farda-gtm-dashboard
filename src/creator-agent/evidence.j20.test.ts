@@ -6,6 +6,7 @@ import {
   J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, type EvidenceCollection, type EvidenceReview,
 } from "./evidence.ts";
 import { assessCreator } from "./policy.ts";
+import { POLICY_VERSION } from "./assessmentSchema.ts";
 import { routeAssessmentSchema, resolveScorecardEvidence, sourceSnapshotSchema } from "./routeEvidence.ts";
 import { syntheticBinding, syntheticPacket, syntheticSourceSnapshot, SYNTHETIC_SCOPE } from "./testFixtures.ts";
 import { fixtureContext, fixtureJ20Post, fixtureMetric, fixtureReviews, J20_FIXTURE_AT } from "./videoEvidence/fixtures.testkit.ts";
@@ -85,15 +86,15 @@ describe("J20-02 / J20-13 review status and modality coverage", () => {
     expect(reviewCoverage(reviewSchema.parse(fixtureReviews.captionOnly))).toMatchObject({ visualSeconds: 0, visualCoveragePct: null, sampledPoints: 0 });
   });
   it("elapsed playback alone cannot pass full-review validation", () => {
-    const elapsedOnly = review({ watchedIntervals: [{ startSec: 0, endSec: 10 }], heardIntervals: [], audioMethod: "unassessed", playbackElapsedSeconds: 30,
-      observedActions: [] });
-    expect(reviewSchema.safeParse(elapsedOnly).success).toBe(false);
-    expect(reviewSchema.safeParse({ ...elapsedOnly, durationSeconds: null }).success).toBe(false);
-    const honest = reviewSchema.parse({ ...elapsedOnly, status: "partial", sourceRef: null });
-    expect(reviewCoverage(honest)).toMatchObject({ viewingStatus: "partialPlayback", visualSeconds: 10, visualCoveragePct: 33.3, playbackElapsedSeconds: 30 });
+    // Elapsed player time is never an observed interval, so on its own it cannot complete a review (main's completion rule).
+    const elapsedAlone = review({ watchedIntervals: [], heardIntervals: [], audioMethod: "unassessed", playbackElapsedSeconds: 30, observedActions: [] });
+    expect(reviewSchema.safeParse(elapsedAlone).success).toBe(false);
+    // With partial observed ranges the derived status is partial playback, never a full review, whatever the player time says.
+    const partial = reviewSchema.parse(review({ watchedIntervals: [{ startSec: 0, endSec: 10 }], heardIntervals: [], audioMethod: "unassessed", playbackElapsedSeconds: 30, observedActions: [] }));
+    expect(reviewCoverage(partial)).toMatchObject({ viewingStatus: "partialPlayback", visualSeconds: 10, visualCoveragePct: 33.3, playbackElapsedSeconds: 30 });
     // Overlapping or repeated ranges never add coverage.
-    const repeated = review({ watchedIntervals: [{ startSec: 0, endSec: 10 }, { startSec: 0, endSec: 10 }, { startSec: 5, endSec: 10 }], heardIntervals: [], audioMethod: "unassessed", observedActions: [] });
-    expect(reviewSchema.safeParse(repeated).success).toBe(false);
+    const repeated = reviewSchema.parse(review({ watchedIntervals: [{ startSec: 0, endSec: 10 }, { startSec: 0, endSec: 10 }, { startSec: 5, endSec: 10 }], heardIntervals: [], audioMethod: "unassessed", observedActions: [] }));
+    expect(reviewCoverage(repeated)).toMatchObject({ viewingStatus: "partialPlayback", visualSeconds: 10 });
   });
   it("muted, caption-only and interrupted reviews earn no coverage they did not observe", () => {
     expect(reviewSchema.safeParse({ ...fixtureReviews.muted, heardIntervals: [{ startSec: 0, endSec: 30 }] }).success).toBe(false);
@@ -101,12 +102,13 @@ describe("J20-02 / J20-13 review status and modality coverage", () => {
     expect(reviewSchema.safeParse({ ...fixtureReviews.captionOnly, status: "complete", sourceRef: "synthetic:review" }).success).toBe(false);
     expect(reviewSchema.safeParse({ ...fixtureReviews.captionOnly, observedActions: [{ atSec: 2, action: "Caption says it fits.", meaningfulUse: true }] }).success).toBe(false);
     expect(reviewSchema.safeParse({ ...fixtureReviews.captionOnly, audioMethod: "heard" }).success).toBe(false);
-    expect(reviewSchema.safeParse({ ...fixtureReviews.interrupted, status: "complete", sourceRef: "synthetic:review" }).success).toBe(false);
+    // An interruption is recorded and derived as interrupted, never as full coverage. Whether it also blocks "complete" is NEEDS-OWNER.
+    expect(reviewCoverage(reviewSchema.parse({ ...fixtureReviews.interrupted, status: "complete", sourceRef: "synthetic:review" })).viewingStatus).toBe("interrupted");
   });
-  it("refuses timestamps past the clip and a complete sampled review without its clip duration", () => {
+  it("refuses timestamps past the end of a clip of known length", () => {
     expect(reviewSchema.safeParse(review({ observedActions: [{ atSec: 31, action: "Late action.", meaningfulUse: false, kind: "hook" }] })).success).toBe(false);
     expect(reviewSchema.safeParse({ ...fixtureReviews.sampled, sampledPoints: [0, 45] }).success).toBe(false);
-    expect(reviewSchema.safeParse({ ...fixtureReviews.sampled, durationSeconds: null }).success).toBe(false);
+    expect(reviewSchema.safeParse({ ...fixtureReviews.sampled, durationSeconds: null }).success).toBe(true);
   });
 });
 
@@ -123,11 +125,12 @@ describe("J20-04 shown action, narration and interpretation stay separate", () =
 });
 
 describe("J20-07 lifestyle taxonomy and exclusions", () => {
-  it("cannot mark clinical, IVF/fertility, medical-education, other or unknown content as relevant; educator status is only recorded", () => {
+  it("cannot mark clinical, IVF/fertility or medical-education content as relevant; bucket labels and educator status are only recorded", () => {
     for (const exclusion of ["clinicalLecture", "ivfFertilityExplainer", "genericMedicalEducation"] as const)
       expect(postEvidenceSchema.safeParse(fixtureJ20Post(1, undefined, { context: fixtureContext({ exclusion }) })).success, exclusion).toBe(false);
+    // The approved policy lists other briefs (e.g. fitness routines), so "other" and "unknown" labels never gate relevance.
     for (const primaryBucket of ["other", "unknown"] as const)
-      expect(postEvidenceSchema.safeParse(fixtureJ20Post(1, undefined, { context: fixtureContext({ primaryBucket }) })).success, primaryBucket).toBe(false);
+      expect(postEvidenceSchema.safeParse(fixtureJ20Post(1, undefined, { context: fixtureContext({ primaryBucket }) })).success, primaryBucket).toBe(true);
     expect(postEvidenceSchema.safeParse(fixtureJ20Post(1, undefined, { relevant: false, context: fixtureContext({ exclusion: "clinicalLecture", educatorOrCredentialed: true }) })).success).toBe(true);
     const plain = { ...syntheticPacket(), posts: [1, 2, 3].map(n => fixtureJ20Post(n)), collection: collection() };
     const educator = { ...plain, posts: plain.posts.map(post => ({ ...post, context: fixtureContext({ educatorOrCredentialed: true }) })) };
@@ -186,3 +189,30 @@ describe("J20-05 provider metric observations keep missing distinct from zero", 
     expect(assessment.routeEvidence?.metrics.some(metric => metric.name === "orders")).toBe(false);
   });
 });
+
+/** Regression tests for the independent review of the first head. Each failed before its fix. */
+describe("J20 review findings (schema)", () => {
+  it("M4/T6: a collected post must say what each shown action is, and only shown handling or use counts", () => {
+    const untyped = fixtureJ20Post(1); untyped.review.observedActions = [{ atSec: 4, action: "Talks about packing it.", meaningfulUse: true }];
+    expect(postEvidenceSchema.safeParse(untyped).success).toBe(false);
+    const legacy = review({ observedActions: [{ atSec: 4, action: "Packs the fictional case.", meaningfulUse: true }] });
+    expect(reviewSchema.safeParse(legacy).success).toBe(true);
+  });
+  it("B2: a collected claim needs a topic; reviewer-entered claims keep the earlier optional shape", () => {
+    const untagged = fixtureJ20Post(1); untagged.review.claims = [{ atSec: 4, text: "Says it fits a fictional vial.", method: "heard" }];
+    expect(postEvidenceSchema.safeParse(untagged).success).toBe(false);
+    expect(reviewSchema.safeParse(review({ claims: [{ atSec: 4, text: "Says it fits.", method: "heard" }] })).success).toBe(true);
+  });
+  it("m5: verified provider audience evidence names its authorized source type and provenance", () => {
+    const snapshot = syntheticSourceSnapshot(syntheticPacket());
+    const { sourceType: _type, provenanceRef: _ref, ...unnamed } = snapshot.audience!;
+    void _type; void _ref;
+    expect(sourceSnapshotSchema.safeParse({ ...snapshot, audience: unnamed }).success).toBe(false);
+    expect(sourceSnapshotSchema.safeParse({ ...snapshot, audience: { ...unnamed, alignment: "unknown" } }).success).toBe(true);
+    expect(sourceSnapshotSchema.safeParse(snapshot).success).toBe(true);
+  });
+  it("M5: the sampling policy version binds the owner-approved policy revision", () => {
+    expect(J20_SAMPLING_POLICY_VERSION).toBe(`approved-creator-scorecard-policy.${POLICY_VERSION}`);
+  });
+});
+

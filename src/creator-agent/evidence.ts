@@ -16,7 +16,16 @@ const code = z.string().regex(/^[A-Z][A-Z0-9_]{0,99}$/);
 
 /* J20 direct-video evidence versions. A packet that carries `collection` was written by the J20 collector under these versions. */
 export const VIDEO_EVIDENCE_SCHEMA_VERSION = "farda.video-evidence.v1" as const;
-export const J20_SAMPLING_POLICY_VERSION = "j20-sampling.2026-11-04.v1" as const;
+/**
+ * The owner-approved "Farda — approved creator scorecard policy" revision of 2026-11-04 (the same revision as POLICY_VERSION):
+ * strict >200 native likes, the 3-post / 2-date packet with 2 action posts, the 10 recent relevant unpinned posts and up to
+ * 20 visible top-level comments. J20 adds no sampling rule of its own.
+ */
+export const J20_SAMPLING_POLICY_VERSION = "approved-creator-scorecard-policy.2026-11-04" as const;
+/**
+ * Label for the lifestyle vocabulary and the three content exclusions in the J20 acceptance criteria. Only those exclusions
+ * gate relevance; the bucket labels are descriptive. NEEDS-OWNER: confirm the vocabulary and its version label.
+ */
 export const J20_TAXONOMY_VERSION = "j20-lifestyle-taxonomy.v1" as const;
 const EXACT_LABEL = /^\d{1,3}(?:,\d{3})+$|^\d+$/;
 const ROUNDED_LABEL = /^\d+(?:[.,]\d+)?\s*[KkMmBb]$/;
@@ -85,9 +94,19 @@ const intervalSchema = z.object({ startSec: seconds, endSec: seconds }).strict()
 export const actionKindSchema = z.enum(["hook", "handlingOperationUse", "explanation", "visibleOutcome", "cta"]);
 /** Claim topics that need a person: compatibility, medical and outcome claims take the reviewer exception path. */
 export const claimTopicSchema = z.enum(["compatibility", "medical", "productFunction", "outcome", "other"]);
-export const HUMAN_REVIEW_CLAIM_TOPICS: readonly z.infer<typeof claimTopicSchema>[] = ["compatibility", "medical", "outcome"];
+export const HUMAN_REVIEW_CLAIM_TOPICS: readonly z.infer<typeof claimTopicSchema>[] = ["compatibility", "medical", "outcome", "other"];
+const HEALTH_OR_OUTCOME_WORDING = /\b(?:cur(?:e|ed|es|ing)|heal(?:s|ed|ing)?|treat(?:s|ed|ing|ment)?|diagnos\w*|symptom\w*|disease\w*|condition\w*|disorder\w*|pregnan\w*|fertil\w*|ivf|endometriosis|diabet\w*|insulin|medicat\w*|medicine\w*|prescri\w*|doctor\w*|clinical\w*|therap\w*|pain|safe (?:for|while|during)|side effects?|dose|dosage|injection\w*|vial\w*|refrigerat\w*|weight loss|glp-?1)\b/i;
+/**
+ * A claim a person must review: a compatibility, medical, outcome or uncategorized topic, or any claim worded about health,
+ * medication, treatment or outcomes whatever its topic. The agent never resolves these.
+ */
+export const claimNeedsPerson = (claim: { text: string; topic?: z.infer<typeof claimTopicSchema> }) =>
+  claim.topic === undefined || HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic) || HEALTH_OR_OUTCOME_WORDING.test(claim.text);
 const spokenMethod = z.enum(["heard", "asr", "nativeCaptions"]);
-/** Half a second at each edge for frame-accurate players; nothing else counts as full coverage. */
+/**
+ * Descriptive only: the edge allowance `reviewCoverage` uses to call a continuous review full. It gates nothing.
+ * NEEDS-OWNER: an approved tolerance, if full-clip coverage is ever required.
+ */
 export const COVERAGE_EDGE_TOLERANCE_SEC = 0.5;
 
 type Span = { startSec: number; endSec: number };
@@ -148,14 +167,9 @@ export const reviewSchema = z.object({
     if (!review.sourceRef) fail("sourceRef", "A completed review needs its source review receipt.");
     if (review.visualMethod === "unassessed" || review.visualMethod === "captionOnly") fail("visualMethod", "Audio, captions or a saved draft alone cannot complete a visual review.");
     if (review.visualMethod === "sampledFrames" && !review.sampledPoints.length) fail("sampledPoints", "Record the actual sampled points.");
+    // Completion keeps main's rule: actual watched intervals or sampled points plus a receipt. Elapsed player time is never an
+    // interval, so it cannot complete a review alone. NEEDS-OWNER: whether "complete" must also cover the whole clip.
     if (review.visualMethod === "continuous" && !review.watchedIntervals.length) fail("watchedIntervals", "Record the actual watched intervals.");
-    if (review.interruption) fail("interruption", "An interrupted review is partial.");
-    // Once playback facts are recorded, a complete continuous review must actually cover the clip; elapsed time never substitutes.
-    const timed = review.durationSeconds !== undefined || review.playbackElapsedSeconds !== undefined;
-    if (timed && review.visualMethod === "continuous" && !coversWholeClip(review.watchedIntervals, review.durationSeconds))
-      fail("watchedIntervals", "Elapsed playback or partial ranges cannot pass full-review validation.");
-    if (timed && review.visualMethod === "sampledFrames" && (review.durationSeconds ?? null) === null)
-      fail("durationSeconds", "A complete sampled review needs the clip duration its frames were drawn from.");
   }
   if (review.status === "unassessed" && (review.visualMethod !== "unassessed" || review.audioMethod !== "unassessed" || review.claims.length || review.narration?.length))
     fail("status", "Assessed material must be labeled partial rather than unassessed.");
@@ -173,7 +187,8 @@ export const reviewSchema = z.object({
   }
   const duration = review.durationSeconds ?? null;
   if (duration !== null) {
-    const past = (at: number) => at > duration + COVERAGE_EDGE_TOLERANCE_SEC;
+    // A timestamp after the end of a clip of known length is impossible, not a policy judgement.
+    const past = (at: number) => at > duration;
     if ([...review.watchedIntervals, ...(review.heardIntervals ?? [])].some(span => past(span.endSec)) || review.sampledPoints.some(past) ||
         [...review.observedActions, ...review.claims, ...(review.narration ?? [])].some(item => past(item.atSec)) || (review.interruption && past(review.interruption.atSec)))
       fail("durationSeconds", "Observed ranges and timestamps cannot extend past the clip.");
@@ -244,8 +259,11 @@ export const postSourceSchema = z.object({
   permissionCheckedAt: instant,
   retrievedAt: instant,
   contentFingerprint: id.nullable(),
-  /** `changed`: the content fingerprint differs from the prior version. `removed`: the source reports the post gone. */
-  change: z.enum(["firstObserved", "unchanged", "changed", "removed"]),
+  /**
+   * `changed`: the content fingerprint differs from the prior version. `removed`: the source reports the post gone.
+   * `unverified`: a fingerprint is missing on either side, so the footage identity is unknown and nothing is carried.
+   */
+  change: z.enum(["firstObserved", "unchanged", "changed", "removed", "unverified"]),
   evidenceRefs: z.array(sourceRef).max(50),
 }).strict().superRefine((source, ctx) => {
   if (Date.parse(source.permissionCheckedAt) > Date.parse(source.retrievedAt))
@@ -255,6 +273,7 @@ export const postSourceSchema = z.object({
 /** Approved lifestyle taxonomy. Clinical lectures, IVF/fertility explainers and generic medical education are excluded. */
 export const lifestyleBucketSchema = z.enum(["grwm", "workday", "organization", "travelPurse", "practicalProductUse", "other", "unknown"]);
 export const contentExclusionSchema = z.enum(["clinicalLecture", "ivfFertilityExplainer", "genericMedicalEducation"]);
+/** Descriptive lifestyle labels from the J20 acceptance criteria; they record context and gate nothing. */
 export const APPROVED_LIFESTYLE_BUCKETS: readonly z.infer<typeof lifestyleBucketSchema>[] = ["grwm", "workday", "organization", "travelPurse", "practicalProductUse"];
 export const lifestyleContextSchema = z.object({
   taxonomyVersion: z.literal(J20_TAXONOMY_VERSION),
@@ -331,14 +350,19 @@ export const postEvidenceSchema = z.object({
   const fail = (path: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [path], message });
   if (!isOriginalVideoUrl(post.sourceUrl, post.network))
     fail("sourceUrl", "Use the original HTTPS Instagram or TikTok video URL for this network, without embedded credentials.");
-  if (post.context && post.relevant && (post.context.exclusion !== null || !APPROVED_LIFESTYLE_BUCKETS.includes(post.context.primaryBucket)))
-    fail("relevant", "Only approved lifestyle contexts without a clinical, fertility or medical-education exclusion are relevant.");
+  // J20-07 acceptance: clinical lectures, IVF/fertility explainers and generic medical education are excluded. Bucket labels are descriptive.
+  if (post.context && post.relevant && post.context.exclusion !== null)
+    fail("relevant", "A clinical, fertility or medical-education exclusion is never relevant.");
   if (post.metrics && new Set(post.metrics.map(metric => metric.key)).size !== post.metrics.length) fail("metrics", "Record each counter once.");
   if (post.source) {
     // A J20-collected post always states its access, context, counters and playback facts, even when they are unknown.
     if (!post.context || !post.metrics || !post.accessObservation) fail("source", "J20 posts record their context, counters and access observation.");
     if (post.review.durationSeconds === undefined || post.review.playbackElapsedSeconds === undefined || post.review.interruption === undefined || post.review.narration === undefined)
       fail("review", "J20 posts record clip duration, elapsed playback, interruption and narration, even when unknown.");
+    // Approved policy: record observed action and narrated claim separately; an explanation never earns credit for an action it does not show.
+    if (post.review.observedActions.some(action => action.kind === undefined))
+      fail("review", "Each collected shown action states its kind; only shown handling, operation or use can count as brief-matched use.");
+    if (post.review.claims.some(claim => claim.topic === undefined)) fail("review", "Each collected claim states its topic so it can reach a person.");
     if (Date.parse(post.source.retrievedAt) > Date.parse(post.observedAt)) fail("observedAt", "A post cannot be observed before it was retrieved.");
     if ((post.source.change === "removed") !== (post.accessObservation?.state === "deleted"))
       fail("accessObservation", "A removed post and a deleted-access observation must agree.");
@@ -400,6 +424,8 @@ export const collectionSchema = z.object({
   observedAt: instant,
   /** Candidates the source listed for this creator, or null when the source did not say. */
   listedPosts: count.max(10_000).nullable(),
+  /** The recent-post window the source listed from (VideoEvidenceRecord `policy_window`). */
+  policyWindow: z.object({ start: instant.nullable(), end: instant, timezone: z.string().min(1).max(64) }).strict().optional(),
   exclusions: z.array(z.object({ postId: id, reasons: z.array(collectionExclusionSchema).min(1).max(8), observedAt: instant }).strict()).max(200),
   audience: z.array(audienceEvidenceSchema).max(20),
   /** Farda-authored text withheld by the inference screen. The text itself is never stored. */

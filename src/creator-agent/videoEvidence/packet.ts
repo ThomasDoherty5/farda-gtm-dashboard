@@ -1,6 +1,6 @@
 import { digest } from "../config.ts";
 import {
-  APPROVED_LIFESTYLE_BUCKETS, J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, evidencePacketSchema,
+  J20_SAMPLING_POLICY_VERSION, J20_TAXONOMY_VERSION, VIDEO_EVIDENCE_SCHEMA_VERSION, evidencePacketSchema, postEvidenceSchema,
   isExactCountLabel, isRoundedCountLabel, nativePostIdentity,
   type EvidenceCollection, type EvidencePacket, type EvidenceReview, type NativeLikes, type PostEvidence, type RecentPostMetadata,
 } from "../evidence.ts";
@@ -80,8 +80,25 @@ export function evidenceFacts(packet: EvidencePacket) {
       exclusions: collection.exclusions.map(({ observedAt: _at, ...entry }) => { void _at; return entry; }) },
   };
 }
-const reviewedFacts = (packet: EvidencePacket | null) => digest((packet?.posts ?? []).map(post => [post.postId, post.relevant, post.nativeLikes,
-  post.review, post.context ?? null, post.accessObservation?.state ?? null]));
+/**
+ * Reviewer creative ratings describe the footage of the posts that were rated. They carry only while every rated post is still
+ * present with the same confirmed footage (a known, equal fingerprint) and the same review. A like-count change or a newly
+ * found post does not reset them; a missing fingerprint is unknown footage, never unchanged.
+ */
+function ratedFootageUnchanged(prior: EvidencePacket, next: EvidencePacket) {
+  const current = new Map(next.posts.map(post => [post.postId, post]));
+  return prior.posts.every(rated => {
+    const now = current.get(rated.postId);
+    const before = rated.source?.contentFingerprint ?? null, after = now?.source?.contentFingerprint ?? null;
+    return !!now && before !== null && before === after && digest(rated.review) === digest(now.review);
+  });
+}
+
+/** Source-supplied content that cannot form a valid post. The runtime reports it as a source response error. */
+export class J20SourceDataError extends Error {}
+/** An internal merge that cannot form a valid packet. The runtime holds it for an owner; it is never blamed on the source. */
+export class J20MergeError extends Error {}
+export const j20ReviewerRef = (collectorVersion: string) => `agent:j20-video-evidence.v1/${collectorVersion}`;
 
 export type CollectedPacket = { packet: EvidencePacket; changed: boolean; quarantined: number };
 
@@ -92,18 +109,23 @@ export type CollectedPacket = { packet: EvidencePacket; changed: boolean; quaran
 export function buildCollectedPacket(input: { creatorId: string; prior: EvidencePacket | null; snapshot: VideoEvidenceSnapshot;
   collector: { version: string; stage: "synthetic-fixture" | "source" }; protect(packet: EvidencePacket): EvidencePacket }): CollectedPacket {
   const { creatorId, snapshot } = input;
-  // A different brief or checkout route starts a new evidence basis; nothing brief-specific is carried across.
-  const prior = input.prior && input.prior.briefId === snapshot.brief.ref && input.prior.checkoutRoute === snapshot.brief.checkoutRoute ? input.prior : null;
-  const priorPosts = new Map((prior?.posts ?? []).map(post => [post.postId, post]));
-  const priorRecent = new Map((prior?.recentPosts ?? []).map(post => [post.postId, post]));
+  // Brief, brief version and checkout route define the evidence basis. A different basis carries nothing.
+  const sameBasis = !!input.prior && input.prior.briefId === snapshot.brief.ref && input.prior.checkoutRoute === snapshot.brief.checkoutRoute &&
+    (!input.prior.collection || input.prior.collection.briefVersion === snapshot.brief.version);
+  // Reviewer-entered posts are not J20 observations: a collected packet starts its post set from J20 posts only, keeping the
+  // reviewer's gates, terms and criterion ratings for the same brief and route.
+  const prior = sameBasis ? input.prior : null;
+  const collectedPrior = prior?.collection ? prior : null;
+  const priorPosts = new Map((collectedPrior?.posts ?? []).map(post => [post.postId, post]));
+  const priorRecent = new Map((collectedPrior?.recentPosts ?? []).map(post => [post.postId, post]));
   const posts = new Map(priorPosts), recent = new Map(priorRecent);
-  const exclusions = new Map((prior?.collection?.exclusions ?? []).map(entry => [entry.postId, entry]));
+  const exclusions = new Map((collectedPrior?.collection?.exclusions ?? []).map(entry => [entry.postId, entry]));
   const quarantined = new Map<string, Quarantined[]>();
-  for (const entry of prior?.collection?.quarantined ?? []) quarantined.set(entry.postId, [...quarantined.get(entry.postId) ?? [], entry]);
+  for (const entry of collectedPrior?.collection?.quarantined ?? []) quarantined.set(entry.postId, [...quarantined.get(entry.postId) ?? [], entry]);
   const touched = new Set<string>();
   for (const observed of snapshot.posts) {
     const postId = j20PostId(creatorId, observed);
-    if (touched.has(postId)) throw new Error("J20_DUPLICATE_SOURCE_POST");
+    if (touched.has(postId)) throw new J20SourceDataError("J20_DUPLICATE_SOURCE_POST");
     touched.add(postId);
     posts.delete(postId); exclusions.delete(postId); quarantined.delete(postId);
     const previous = priorPosts.get(postId);
@@ -121,30 +143,33 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
     const reasons: Exclusion[] = [];
     if (gate === "fail") reasons.push("LIKES_NOT_ABOVE_200");
     if (gate === "unknown") reasons.push("LIKES_PENDING_PROOF");
+    // J20-07: these three exclusions gate relevance. Bucket labels (including other and unknown) are recorded, not gating.
     if (observed.context.exclusion) reasons.push(CONTEXT_EXCLUSION[observed.context.exclusion]);
-    if (observed.context.primaryBucket === "unknown") reasons.push("CONTEXT_UNKNOWN");
-    else if (!APPROVED_LIFESTYLE_BUCKETS.includes(observed.context.primaryBucket)) reasons.push("CONTEXT_NOT_LIFESTYLE");
     if (!observed.relevant) reasons.push("NOT_RELEVANT_TO_BRIEF");
     const relevant = !reasons.some(reason => reason !== "LIKES_NOT_ABOVE_200" && reason !== "LIKES_PENDING_PROOF");
     const views = observed.metrics.find(metric => metric.key === "views");
     // Every accessible post, including ordinary lower-like posts, feeds the recent metadata baseline without deep-review credit.
+    // A rounded view label is not an exact count, so it stays out of the comparable baseline.
     recent.set(postId, { postId, canonicalMediaId, publishedAt: observed.publishedAt, relevant, pinned: observed.context.pinned, nativeLikes,
       paid: observed.context.paid,
-      views: views && views.value !== null ? { status: "known", value: views.value, definition: views.definition, window: views.window }
-        : { status: views?.missingReason === "hidden" || views?.missingReason === "notAuthorized" ? "unavailable" : "unknown",
-          reason: `Views ${views?.missingReason ?? "notCollected"}.` } } satisfies RecentPostMetadata);
+      views: views && views.value !== null && !views.approximate ? { status: "known", value: views.value, definition: views.definition, window: views.window }
+        : views?.approximate ? { status: "unknown", reason: `Views shown only as the rounded label ${views.rawLabel}.` }
+          : { status: views?.missingReason === "hidden" || views?.missingReason === "notAuthorized" ? "unavailable" : "unknown",
+            reason: `Views ${views?.missingReason ?? "notCollected"}.` } } satisfies RecentPostMetadata);
     if (reasons.length) {
       if (observed.review && observed.review.status !== "unassessed" && gate !== "pass") reasons.push("REVIEW_IGNORED_BELOW_GATE");
       exclusions.set(postId, { postId, reasons, observedAt: observed.retrievedAt });
       continue;
     }
-    const edited = !!previous?.source && previous.source.contentFingerprint !== null && observed.contentFingerprint !== null &&
-      previous.source.contentFingerprint !== observed.contentFingerprint;
+    const before = previous?.source?.contentFingerprint ?? null, after = observed.contentFingerprint;
+    const confirmedSame = !!previous?.source && before !== null && after !== null && before === after;
     // The change label describes this version against the one before it; an identical re-read keeps the stored label.
-    const change = !previous?.source ? "firstObserved" as const : edited ? "changed" as const
-      : previous.source.change === "removed" ? "unchanged" as const : previous.source.change;
-    // A post that was not re-opened keeps its earlier review only while its content is the same footage.
-    const review = observed.review ?? (previous && !edited ? withPlaybackFacts(previous.review) : unopened());
+    const change = !previous?.source ? "firstObserved" as const : before === null || after === null ? "unverified" as const
+      : before !== after ? "changed" as const : previous.source.change === "removed" || previous.source.change === "unverified" ? "unchanged" as const : previous.source.change;
+    // A post that was not re-opened keeps its earlier review only while its footage is confirmed to be the same.
+    // The collector's own reviewer label is never stored: an agent review is always recorded as the agent.
+    const review = observed.review ? { ...observed.review, reviewerRef: j20ReviewerRef(input.collector.version) }
+      : confirmedSame && previous ? withPlaybackFacts(previous.review) : unopened();
     const built: PostEvidence = { postId, canonicalMediaId, network: observed.network, sourceUrl: observed.sourceUrl, accessObservation: access,
       publishedAt: observed.publishedAt, observedAt: observed.retrievedAt, relevant: true, nativeLikes, review, comments: observed.comments,
       source: { route: observed.route, providerAccountRef: observed.providerAccount, permissionRef: observed.permissionRef,
@@ -152,6 +177,7 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
         change, evidenceRefs: observed.evidenceRefs },
       context: observed.context, metrics: observed.metrics, productionChoices: observed.productionChoices, shoppableContext: observed.shoppableContext };
     const screened = screen(built);
+    if (!postEvidenceSchema.safeParse(screened.post).success) throw new J20SourceDataError("J20_SOURCE_POST_INVALID");
     posts.set(postId, screened.post);
     if (screened.quarantined.length) quarantined.set(postId, screened.quarantined);
   }
@@ -161,9 +187,11 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
     schemaVersion: VIDEO_EVIDENCE_SCHEMA_VERSION, collectorVersion: input.collector.version, collectorStage: input.collector.stage,
     samplingPolicyVersion: J20_SAMPLING_POLICY_VERSION, taxonomyVersion: J20_TAXONOMY_VERSION, briefVersion: snapshot.brief.version,
     sourceReceiptRef: snapshot.receiptRef, observedAt: snapshot.observedAt,
-    listedPosts: snapshot.listedPosts ?? prior?.collection?.listedPosts ?? null,
+    listedPosts: snapshot.listedPosts ?? collectedPrior?.collection?.listedPosts ?? null,
+    ...(snapshot.policyWindow ? { policyWindow: snapshot.policyWindow } : collectedPrior?.collection?.policyWindow ? { policyWindow: collectedPrior.collection.policyWindow } : {}),
     exclusions: [...exclusions.values()].sort((a, b) => a.postId.localeCompare(b.postId)).slice(0, 200),
-    audience: snapshot.audience.length ? snapshot.audience : prior?.collection?.audience ?? [],
+    // A collector cannot verify audience proof; verified aggregate evidence comes only from the server-held route proof.
+    audience: snapshot.audience.length ? snapshot.audience.map(entry => ({ ...entry, verified: false })) : collectedPrior?.collection?.audience ?? [],
     quarantined: [...quarantined.values()].flat().slice(0, 100),
   };
   const draft = {
@@ -174,9 +202,10 @@ export function buildCollectedPacket(input: { creatorId: string; prior: Evidence
     ratings: { routine: null, demo: null }, criterionRatings: prior?.criterionRatings ?? {}, criterionEvidenceRefs: prior?.criterionEvidenceRefs ?? {},
     invitationGates: prior?.invitationGates ?? [], activationGates: prior?.activationGates ?? [], collection,
   };
-  // Reviewer creative ratings stay attached only while the reviewed footage they rated is unchanged; otherwise they return to unknown.
-  const candidate = input.protect(evidencePacketSchema.parse(draft));
-  if (prior && reviewedFacts(input.protect(prior)) === reviewedFacts(candidate)) candidate.ratings = prior.ratings;
+  const parsed = evidencePacketSchema.safeParse(draft);
+  if (!parsed.success) throw new J20MergeError("J20_PACKET_MERGE_INVALID");
+  const candidate = input.protect(parsed.data);
+  if (prior && ratedFootageUnchanged(input.protect(prior), candidate)) candidate.ratings = prior.ratings;
   const packet = evidencePacketSchema.parse({ ...candidate, evidenceRevision: `j20-${digest(evidenceFacts(candidate)).slice(0, 32)}` });
   const changed = !input.prior || digest(evidenceFacts(input.protect(input.prior))) !== digest(evidenceFacts(packet));
   return { packet, changed, quarantined: collection.quarantined.length };

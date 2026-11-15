@@ -96,7 +96,8 @@ export function syntheticSourceSnapshot(packet: Pick<EvidencePacket, "creatorId"
     metrics: [{ name: "retainedSales", value: 2500, unit: "minorCurrency", currency: "USD", definition: "Net of mature refunds",
       denominator: "eligible creator orders", windowStart, windowEnd, sampleSize: 2, maturity: "mature", sourceRef: criterionRef("verifiedCommerce") }],
     audience: { sourceRef: criterionRef("audienceAlignment"), denominator: "audience panel", sampleSize: 150, windowStart, windowEnd,
-      country: "source aggregate geography", age: "source aggregate age groups", language: "source aggregate languages", alignment: "pass" },
+      country: "source aggregate geography", age: "source aggregate age groups", language: "source aggregate languages", alignment: "pass",
+      sourceType: "authorizedNativeAnalytics", provenanceRef: "fixture:audience-report" },
     reliability: pass(criterionRef("reliability")), economics: pass(criterionRef("offerEconomics")),
     criteria: (["verifiedCommerce", "audienceAlignment", "reliability", "offerEconomics"] as const).flatMap(id => {
       const rating = ratings[id];

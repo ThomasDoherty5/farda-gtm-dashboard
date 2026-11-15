@@ -1,6 +1,6 @@
 import { creatorAssessmentSchema, POLICY_VERSION, AGENT_VERSION, AGENT_SCHEMA_VERSION } from "./assessmentSchema.ts";
 import type { CreatorAssessment } from "./assessmentSchema.ts";
-import { deriveCommentStats, deriveMetadataBaseline } from "./evidence.ts";
+import { claimNeedsPerson, deriveCommentStats, deriveMetadataBaseline } from "./evidence.ts";
 import type { EvidencePacket, PostEvidence } from "./evidence.ts";
 import type { ConfigBinding, ModelConfig } from "./config.ts";
 import { anchorFor } from "./ratingPolicy.ts";
@@ -11,9 +11,15 @@ export const MODEL_FOR_ROUTE = { website: "WEBSITE-AFFILIATE-v3", "tiktok-shop":
 export function likeGate(post: PostEvidence): "pass" | "fail" | "unknown" {
   return post.nativeLikes.status !== "known" || !post.nativeLikes.exact ? "unknown" : post.nativeLikes.value > 200 ? "pass" : "fail";
 }
+/**
+ * A post counts only while its original is still reachable. Removed, login-gated, denied or unavailable originals keep their
+ * history but earn no packet or creative credit. Packets saved before access was recorded are unchanged.
+ * NEEDS-OWNER: whether a removed post's earlier observation may still count.
+ */
+const accessible = (post: PostEvidence) => (post.accessObservation?.state ?? "permitted") === "permitted";
 /** Critical ratings use the reviewed post packet; every other numeric rating needs its own source proof. */
 function creativeRating(packet: EvidencePacket, key: "routine" | "demo") {
-  const reviewed = packet.posts.some(post => post.relevant && post.publishedAt && likeGate(post) === "pass" && post.review.status === "complete" && post.review.sourceRef);
+  const reviewed = packet.posts.some(post => accessible(post) && post.relevant && post.publishedAt && likeGate(post) === "pass" && post.review.status === "complete" && post.review.sourceRef);
   return reviewed ? packet.ratings[key] : null;
 }
 export function configuredRating(packet: EvidencePacket, config: ModelConfig, criterionId: string, proof?: ScorecardProof): number | null {
@@ -45,14 +51,14 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
   // Cross-posts/reuploads cannot turn one demonstrated action into repeated evidence.
   const independent = new Map<string, PostEvidence>();
   for (const p of packet.posts) {
-    if (p.relevant && likeGate(p) === "pass" && p.review.status === "complete" && p.publishedAt) {
+    if (accessible(p) && p.relevant && likeGate(p) === "pass" && p.review.status === "complete" && p.publishedAt) {
       const existing = independent.get(p.canonicalMediaId);
       if (!existing || p.publishedAt < (existing.publishedAt ?? "")) independent.set(p.canonicalMediaId, p);
     }
   }
   const posts = [...independent.values()];
   const dates = new Set(posts.map((p) => new Date(p.publishedAt!).toISOString().slice(0, 10)));
-  const usePosts = posts.filter((p) => packet.posts.some((related) => related.canonicalMediaId === p.canonicalMediaId && related.relevant && likeGate(related) === "pass" && related.review.status === "complete" && related.publishedAt && related.review.observedActions.some((a) => a.meaningfulUse)));
+  const usePosts = posts.filter((p) => packet.posts.some((related) => related.canonicalMediaId === p.canonicalMediaId && accessible(related) && related.relevant && likeGate(related) === "pass" && related.review.status === "complete" && related.publishedAt && related.review.observedActions.some((a) => a.meaningfulUse)));
   add("QUALIFYING_POSTS", posts.length >= 3 ? "pass" : "unknown", `${posts.length}/3 independent relevant complete posts with exact native likes >200`);
   add("PUBLICATION_DATES", dates.size >= 2 ? "pass" : "unknown", `${dates.size}/2 publication dates`);
   add("MEANINGFUL_USE", usePosts.length >= 2 ? "pass" : "unknown", `${usePosts.length}/2 on-brief action/use examples`);
@@ -60,6 +66,10 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
     const rating = creativeRating(packet, key);
     add(key === "routine" ? "ROUTINE_FLOOR" : "DEMO_FLOOR", rating === null ? "unknown" : rating >= 3 ? "pass" : "fail", rating === null ? "Required criterion evidence is unknown" : `Verified rating ${rating}/5; minimum 3/5`);
   }
+  // Collected medical, compatibility, outcome or health-worded claims need a person; the agent never resolves them. Reviewer
+  // disagreement or override on the existing path then holds the record as disputed. Packets without J20 provenance are unchanged.
+  const openClaims = packet.posts.filter(p => p.source).flatMap(p => p.review.claims.filter(claimNeedsPerson)).length;
+  if (openClaims) add("CLAIMS_REVIEWED", "unknown", `${openClaims} collected claim(s) need a person on the reviewer path`);
   const contentGates = [...gates];
   const contentQualification = contentGates.some((g) => g.state === "fail") ? "hold" : contentGates.some((g) => g.state === "unknown") ? "reviewNeeded" : "pass";
   add("CONFIG_BOUND", binding ? "pass" : "unknown", binding ? "Immutable current/baseline numeric configuration verified" : "No approved immutable numeric baseline is bound; historical fixtures are not a fallback");

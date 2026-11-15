@@ -14,7 +14,8 @@ import { AgentStore } from "./store.ts";
 import { SCHEMA_VERSION } from "../adapter/contract.ts";
 import { evidenceViewSchemas } from "../adapter/viewSchemas/evidence.ts";
 import { runtimeApiAckSchema, safeRuntimeRunSchema } from "./jobs/runtimeViews.ts";
-import { SYNTHETIC_READ_TOKEN as reader, SYNTHETIC_REVIEW_TOKEN as reviewer, syntheticBinding } from "./testFixtures.ts";
+import { SYNTHETIC_READ_TOKEN as reader, SYNTHETIC_REVIEW_TOKEN as reviewer, syntheticBinding, syntheticPacket } from "./testFixtures.ts";
+import { DISPOSITION_QUERY } from "./evidenceReviewStore.ts";
 import { createSyntheticVideoCollector, fixtureBrief, fixtureReviews, fixtureSourcePost } from "./videoEvidence/fixtures.testkit.ts";
 import type { VideoEvidenceQuality } from "./videoEvidence/qualityContract.ts";
 
@@ -74,7 +75,8 @@ async function harness(options: { registration?: RuntimeRegistration; bind?: boo
         observedAt: new Date(kit.now()).toISOString(), validUntil: new Date(kit.now() + 60_000).toISOString() }),
       assertCurrent: () => {},
     } }, worker: { token: dispatchToken, workerRef: "synthetic-dispatch-machine", resolve: async () => { throw new Error("Bare dispatch is not used by J20"); }, assertCurrent: () => {} } },
-    ...(options.bind === false ? {} : { videoEvidence: { registrationRef: registration.registrationRef, handoffRef: "synthetic-j20-owner-handoff", source: collector.source } }),
+    ...(options.bind === false ? {} : { videoEvidence: { registrationRef: registration.registrationRef, handoffRef: "synthetic-j20-owner-handoff", source: collector.source,
+      sourcePermissionRefs: ["synthetic:permission"], researchGateRef: "synthetic:research-gate" } }),
   };
   const app = createAgentServer(appOptions);
   await new Promise<void>((resolve, reject) => { app.server.once("error", reject); app.server.listen(0, "127.0.0.1", resolve); });
@@ -253,7 +255,8 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     const { creatorId } = await h2.discover("d5");
     h2.collector.on(null, h2.collector.page([fixtureSourcePost(1)], { brief: { ...fixtureBrief, version: "v2" } }));
     await expect((await h2.runDay()).work()).rejects.toMatchObject({ code: "J20_BRIEF_MISMATCH" });
-    const elapsedOnly = { ...structuredClone(fixtureReviews.complete), watchedIntervals: [{ startSec: 0, endSec: 10 }], heardIntervals: [], audioMethod: "unassessed" as const };
+    // Elapsed player time alone (no observed interval) cannot complete a review.
+    const elapsedOnly = { ...structuredClone(fixtureReviews.complete), watchedIntervals: [], heardIntervals: [], audioMethod: "unassessed" as const, playbackElapsedSeconds: 30 };
     h2.collector.on(null, h2.collector.page([fixtureSourcePost(1, { review: elapsedOnly })]));
     await expect((await h2.runDay()).work()).rejects.toMatchObject({ code: "J20_SOURCE_RESPONSE_INVALID" });
     expect(h2.app.store.latest(creatorId)).toBeNull();
@@ -295,7 +298,8 @@ describe("J20 collector through the registered runtime, intake queue and shared 
       packet: { qualifyingPosts: 2, status: "needsEvidence" }, audience: { verified: 0, unverified: 0 } });
     expect(quality.limitations).toEqual(expect.arrayContaining(["SYNTHETIC_FIXTURE_COLLECTOR", "PARTIAL_SOURCE_LISTING", "NO_VERIFIED_AUDIENCE_REPORT", "INFERENCE_TEXT_QUARANTINED"]));
     expect(quality.footage.find(f => f.postId === claimedPost.postId)).toMatchObject({ viewingStatus: "completeAudioVisual", audioCoverage: "heard", narration: 1,
-      claimsForReview: ["claim-0"], quarantinedFields: 1, outcomeCausality: "unresolved", nextAction: "needsClaimReview",
+      claimsReview: [{ targetId: "claim-0", atSec: 9, text: "Says the case keeps her medication cool all day.", topic: "medical", disposition: "pending" }],
+      reviewer: "agent", quarantinedFields: 1, outcomeCausality: "unresolved", nextAction: "needsClaimReview",
       features: { hook: "observed", handlingOperationUse: "observed", explanation: "notObserved", visibleOutcome: "notObserved", cta: "notObserved" } });
     expect(quality.metadataOnly).toEqual([expect.objectContaining({ pinned: true, paid: "yes", likeGate: "fail", rawLikeLabel: "150", ageDays: expect.any(Number), reasons: ["LIKES_NOT_ABOVE_200"] })]);
     const body = JSON.stringify(record.body);
@@ -308,7 +312,9 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     expect(saved.status).toBe(200);
     const after = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: claimedPost.postId })).body.data) as
       { videoEvidenceQuality: VideoEvidenceQuality; qualification: { state: string; reasonCodes: string[] } };
-    expect(after.videoEvidenceQuality.footage.find(f => f.postId === claimedPost.postId)!.claimsForReview).toEqual([]);
+    expect(after.videoEvidenceQuality.footage.find(f => f.postId === claimedPost.postId)!.claimsReview).toEqual([
+      expect.objectContaining({ targetId: "claim-0", disposition: "disagreed" })]);
+    expect(stored.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
     expect(after.qualification).toMatchObject({ state: "reviewNeeded", reasonCodes: expect.arrayContaining(["EVIDENCE_DISPUTED"]) });
     expect(h.app.store.latest(creatorId)!.assessment.state).not.toBe("activationReady");
   });
@@ -364,6 +370,99 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     const fake = { stage: "synthetic-fixture" as const, collectorVersion: "synthetic-collector.v1", read: async () => null, assertCurrent: () => {} };
     expect(() => createAgentServer({ databasePath: ":memory:", workspaceId: scope.workspaceId, accountId: scope.accountId, readToken: reader, reviewToken: reviewer,
       runtime: { registry: { registrations: new Map([["synthetic-j20", j20Registration()]]), executors: new Map() } },
-      videoEvidence: { registrationRef: "synthetic-j20", handoffRef: "synthetic-handoff", source: fake } })).toThrow("J20_SYNTHETIC_COLLECTOR_IN_PRODUCTION");
+      videoEvidence: { registrationRef: "synthetic-j20", handoffRef: "synthetic-handoff", source: fake, sourcePermissionRefs: ["synthetic:permission"],
+        researchGateRef: "synthetic:research-gate" } })).toThrow("J20_SYNTHETIC_COLLECTOR_IN_PRODUCTION");
   });
 });
+
+/** Regression tests for the independent review of the first head. Each failed before its fix. */
+describe("J20 review findings", () => {
+  async function collected(eventId: string) {
+    const h = await harness();
+    const { creatorId } = await h.discover(eventId);
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" }), fixtureSourcePost(3, { publishedAt: "2026-10-03T12:00:00.000Z" })]));
+    await (await h.runDay()).work();
+    const latest = h.app.store.latest(creatorId)!;
+    const put = (packet: unknown, key: string, expectedVersion = latest.revision) => h.call("PUT", `/v1/creators/${creatorId}`, { packet, expectedVersion,
+      policyVersion: latest.assessment.policyVersion, configHash: syntheticBinding().hash }, reviewer, key);
+    return { h, creatorId, latest, put };
+  }
+
+  it("B1/T1: a reviewer cannot strip J20 provenance and rewrite collected facts", async () => {
+    const { h, creatorId, latest, put } = await collected("f1");
+    const stripped = structuredClone(latest.packet) as Record<string, unknown> & EvidencePacket;
+    delete stripped.collection; stripped.evidenceRevision = "reviewer-stripped";
+    for (const post of stripped.posts) { delete post.source; post.nativeLikes = { status: "known", value: 99999, exact: true, sourceRef: "reviewer:claim" }; }
+    expect(await put(stripped, "f1-strip")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    expect(h.app.store.history(creatorId)).toHaveLength(1);
+  });
+
+  it("B1/T2: a reviewer cannot drop a collected post or inflate the metadata baseline under the same collection", async () => {
+    const { h, creatorId, latest, put } = await collected("f2");
+    const inflated = structuredClone(latest.packet);
+    inflated.evidenceRevision = "reviewer-inflated"; inflated.posts.pop();
+    inflated.recentPosts = inflated.recentPosts.map(post => ({ ...post, views: { status: "known", value: 9_999_999, definition: "reviewer", window: "reviewer" } }));
+    expect(await put(inflated, "f2-inflate")).toMatchObject({ status: 409, body: { code: "J20_COLLECTION_READ_ONLY" } });
+    expect(h.app.store.latest(creatorId)!.assessment.metadata.medianViews).not.toBe(9_999_999);
+    // Ratings, criterion ratings, gates and revision labels remain the reviewer's to change.
+    const rated = { ...latest.packet, evidenceRevision: "reviewer-rated", termsRevision: "terms-reviewer", ratings: { routine: 3, demo: 3 },
+      invitationGates: [{ id: "identity", status: "pass" as const, sourceRef: "synthetic:identity" }] };
+    expect((await put(rated, "f2-rate")).status).toBe(200);
+  });
+
+  it("m6: a write against a missing base revision is a version conflict, not a provenance refusal", async () => {
+    const { put, latest } = await collected("f3");
+    expect(await put({ ...latest.packet, evidenceRevision: "reviewer-missing" }, "f3-missing", 7)).toMatchObject({ status: 409, body: { code: "VERSION_CONFLICT" } });
+  });
+
+  it("B3/T7: a creator with reviewer evidence on the same brief is still collected, keeping gates and terms", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("f4");
+    const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref, termsRevision: "terms-human" };
+    const saved = await h.call("PUT", `/v1/creators/${creatorId}`, { packet: human, expectedVersion: 0, policyVersion: "2026-11-04", configHash: syntheticBinding().hash }, reviewer, "f4-human");
+    expect(saved.status).toBe(200);
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })]));
+    expect((await (await h.runDay()).work()).run.state).toBe("completed");
+    const latest = h.app.store.latest(creatorId)!;
+    expect(latest.revision).toBe(2);
+    expect(latest.packet.posts.every(post => post.source)).toBe(true);
+    expect(latest.packet).toMatchObject({ termsRevision: "terms-human", invitationGates: human.invitationGates });
+    expect(h.app.store.history(creatorId)[0]!.packet.posts.map(p => p.postId)).toEqual(human.posts.map(p => p.postId));
+  });
+
+  it("M1/T3: a removed post no longer earns J02 packet credit, and the projection agrees", async () => {
+    const { h, creatorId } = await collected("f5");
+    expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "QUALIFYING_POSTS")!.state).toBe("pass");
+    h.collector.on(null, h.collector.page([{ ...fixtureSourcePost(1), access: "removed", review: null }]));
+    await (await h.runDay()).work();
+    const latest = h.app.store.latest(creatorId)!;
+    expect(latest.assessment.gates.find(g => g.id === "QUALIFYING_POSTS")!.state).toBe("unknown");
+    const removed = latest.packet.posts.find(p => p.accessObservation?.state === "deleted")!;
+    const view = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: removed.postId })).body.data) as { videoEvidenceQuality: VideoEvidenceQuality };
+    expect(view.videoEvidenceQuality).toMatchObject({ counts: { eligible: 2 }, packet: { qualifyingPosts: 2, status: "needsEvidence" } });
+  });
+
+  it("m7: a collector cannot claim the source stage without a qualified-collector binding", async () => {
+    const kit = createRuntimeTestkit(new AgentStore(":memory:", scope).database, { registration: j20Registration() });
+    const claimed = { stage: "source" as const, collectorVersion: "unqualified-collector.v1", read: async () => null, assertCurrent: () => {} };
+    const base = { databasePath: ":memory:", workspaceId: scope.workspaceId, accountId: scope.accountId, readToken: reader, reviewToken: reviewer,
+      runtime: { registry: { ...kit.registry, executors: new Map() } } };
+    expect(() => createAgentServer({ ...base, videoEvidence: { registrationRef: "synthetic-j20", handoffRef: "synthetic-handoff", source: claimed,
+      sourcePermissionRefs: ["synthetic:permission"], researchGateRef: "synthetic:research-gate" } })).toThrow("J20_COLLECTOR_UNQUALIFIED");
+    const qualified = createAgentServer({ ...base, videoEvidence: { registrationRef: "synthetic-j20", handoffRef: "synthetic-handoff", source: claimed,
+      sourcePermissionRefs: ["synthetic:permission"], researchGateRef: "synthetic:research-gate", qualification: { ref: "synthetic:qualification", version: "q1" } } });
+    await new Promise<void>(resolve => qualified.server.listen(0, "127.0.0.1", resolve));
+    const address = qualified.server.address() as { port: number };
+    const caps = await (await fetch(`http://127.0.0.1:${address.port}/v1/capabilities`, { headers: { authorization: `Bearer ${reader}` } })).json() as { videoEvidence: unknown };
+    expect(caps.videoEvidence).toMatchObject({ collector: "source", collectorQualification: "configured" });
+    await qualified.close();
+  });
+
+  it("m8: claim dispositions are read through the run/kind index, not a scan of every annotation", async () => {
+    const { h } = await collected("f6");
+    const plan = h.app.store.database.prepare(`EXPLAIN QUERY PLAN ${DISPOSITION_QUERY}`).all("synthetic-run").map(row => String(row.detail)).join(" | ");
+    expect(plan).toContain("evidence_review_run_kind");
+    expect(plan).not.toMatch(/SCAN evidence_review_annotations(?! USING)/);
+  });
+});
+

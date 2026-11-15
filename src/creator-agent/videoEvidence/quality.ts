@@ -1,4 +1,4 @@
-import { HUMAN_REVIEW_CLAIM_TOPICS, reviewCoverage, type EvidencePacket, type PostEvidence } from "../evidence.ts";
+import { claimNeedsPerson, reviewCoverage, type EvidencePacket, type PostEvidence } from "../evidence.ts";
 import type { CreatorAssessment } from "../assessmentSchema.ts";
 import { likeGate } from "../policy.ts";
 import { videoEvidenceQualitySchema, type VideoEvidenceQuality } from "./qualityContract.ts";
@@ -7,7 +7,10 @@ type NextAction = VideoEvidenceQuality["nextAction"];
 const FEATURES = ["hook", "handlingOperationUse", "explanation", "visibleOutcome", "cta"] as const;
 const DAY_MS = 86_400_000;
 
-function footage(post: PostEvidence, quarantined: number, reviewedTargets: ReadonlySet<string>): VideoEvidenceQuality["footage"][number] {
+/** Disposition kind recorded on the existing reviewer path, by post and target. */
+export type ClaimDispositions = ReadonlyMap<string, ReadonlyMap<string, "disagree" | "override">>;
+
+function footage(post: PostEvidence, quarantined: number, dispositions: ReadonlyMap<string, "disagree" | "override">): VideoEvidenceQuality["footage"][number] {
   const coverage = reviewCoverage(post.review);
   const access = post.accessObservation?.state ?? "permitted";
   // A clip watched in full or credited as a complete sampled review can say a feature was not shown; anything less stays unknown.
@@ -15,15 +18,21 @@ function footage(post: PostEvidence, quarantined: number, reviewedTargets: Reado
   const shown = new Set(post.review.observedActions.flatMap(action => action.kind ? [action.kind] : []));
   const features = Object.fromEntries(FEATURES.map(key => [key, shown.has(key) ? "observed" : fullyReviewed ? "notObserved" : "unknown"])) as
     VideoEvidenceQuality["footage"][number]["features"];
-  const claimsForReview = post.review.claims.flatMap((claim, index) => claim.topic && HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic) &&
-    !reviewedTargets.has(`claim-${index}`) ? [`claim-${index}`] : []);
+  const claimsReview = post.review.claims.flatMap((claim, index) => {
+    if (!claimNeedsPerson(claim)) return [];
+    const kind = dispositions.get(`claim-${index}`);
+    return [{ targetId: `claim-${index}`, atSec: claim.atSec, text: claim.text, topic: claim.topic ?? null,
+      disposition: kind === "disagree" ? "disagreed" as const : kind === "override" ? "overridden" as const : "pending" as const }];
+  });
   const nextAction: NextAction = access !== "permitted" ? "sourceUnavailable" : !fullyReviewed ? "needsPlayback"
-    : claimsForReview.length || quarantined ? "needsClaimReview" : "reviewComplete";
-  return { postId: post.postId, access, change: post.source?.change ?? "firstObserved", viewingStatus: coverage.viewingStatus, audioCoverage: coverage.audioCoverage,
+    : claimsReview.some(claim => claim.disposition === "pending") || quarantined ? "needsClaimReview" : "reviewComplete";
+  const reviewerRef = post.review.reviewerRef ?? null;
+  return { postId: post.postId, access, change: post.source?.change ?? "firstObserved",
+    reviewer: reviewerRef === null ? "unknown" : reviewerRef.startsWith("agent:") ? "agent" : post.source ? "unknown" : "person", viewingStatus: coverage.viewingStatus, audioCoverage: coverage.audioCoverage,
     visualSeconds: coverage.visualSeconds, heardSeconds: coverage.heardSeconds, durationSeconds: coverage.durationSeconds,
     visualCoveragePct: coverage.visualCoveragePct, heardCoveragePct: coverage.heardCoveragePct, sampledPoints: coverage.sampledPoints,
     playbackElapsedSeconds: coverage.playbackElapsedSeconds, features, narration: post.review.narration?.length ?? 0, outcomeCausality: "unresolved",
-    claimsForReview, quarantinedFields: quarantined, nextAction };
+    claimsReview, quarantinedFields: quarantined, nextAction };
 }
 
 /**
@@ -32,12 +41,12 @@ function footage(post: PostEvidence, quarantined: number, reviewedTargets: Reado
  * collector's own claim. Returns null for packets that were not collected by J20.
  */
 export function videoEvidenceQuality(record: { packet: EvidencePacket; assessment: Pick<CreatorAssessment, "packet" | "gates"> },
-  reviewedTargets: ReadonlyMap<string, ReadonlySet<string>> = new Map()): VideoEvidenceQuality | null {
+  dispositions: ClaimDispositions = new Map()): VideoEvidenceQuality | null {
   const { packet, assessment } = record;
   const collection = packet.collection;
   if (!collection) return null;
   const quarantinedBy = (postId: string) => collection.quarantined.filter(entry => entry.postId === postId).length;
-  const posts = packet.posts.map(post => footage(post, quarantinedBy(post.postId), reviewedTargets.get(post.postId) ?? new Set()));
+  const posts = packet.posts.map(post => footage(post, quarantinedBy(post.postId), dispositions.get(post.postId) ?? new Map()));
   const reviewed = new Set(packet.posts.map(post => post.postId));
   const exclusions = new Map(collection.exclusions.map(entry => [entry.postId, entry.reasons]));
   const observedAt = Date.parse(collection.observedAt);
@@ -61,6 +70,9 @@ export function videoEvidenceQuality(record: { packet: EvidencePacket; assessmen
   if (posts.some(post => post.audioCoverage !== "heard")) limitations.add("AUDIO_NOT_HEARD_ON_SOME_POSTS");
   if (collection.quarantined.length) limitations.add("INFERENCE_TEXT_QUARANTINED");
   if (!verifiedAudience) limitations.add("NO_VERIFIED_AUDIENCE_REPORT");
+  // Descriptive, not a gate: J02 keeps main's completion rule; whether full coverage is required is an owner decision.
+  if (packet.posts.some(post => post.review.status === "complete" && post.review.visualMethod === "continuous" &&
+      !["completeAudioVisual", "fullVisualOnly"].includes(reviewCoverage(post.review).viewingStatus))) limitations.add("COMPLETE_REVIEW_WITHOUT_FULL_COVERAGE");
   const pendingLikes = metadataOnly.some(post => post.reasons.includes("LIKES_PENDING_PROOF"));
   const nextAction: NextAction = posts.some(post => post.nextAction === "needsClaimReview") ? "needsClaimReview"
     : !eligible.length && (posts.length || accessExcluded) && posts.every(post => post.nextAction === "sourceUnavailable") ? "sourceUnavailable"

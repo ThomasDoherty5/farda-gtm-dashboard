@@ -19,16 +19,19 @@ export type CreatorEvidenceWriter = {
 };
 
 /**
- * A reviewer can rate or annotate a collected packet, but cannot author J20 collection facts: the `collection` marker and
- * every post carrying J20 source provenance must equal the revision the reviewer edited from.
+ * A reviewer can rate or gate a collected packet, never author or strip J20 collection facts. The rule follows the BASE
+ * revision the reviewer edited from: if it was collected, the brief, route, collection marker, every reviewed post and every
+ * recent-post row must be returned exactly as stored. Only ratings, criterion ratings and their references, gates and
+ * revision labels may change. A packet that was never collected cannot gain J20 provenance through this path.
  */
 function assertCollectedFactsUnchanged(store: AgentStore, packet: EvidencePacket, expectedVersion: number, protect: (packet: EvidencePacket) => EvidencePacket) {
-  if (!packet.collection && !packet.posts.some(post => post.source)) return;
-  const base = store.history(packet.creatorId).find(record => record.revision === expectedVersion);
+  const base = expectedVersion ? store.history(packet.creatorId).find(record => record.revision === expectedVersion) : null;
+  if (expectedVersion && !base) throw new AgentConflict("VERSION_CONFLICT");
   const basis = base ? protect(base.packet) : null;
-  const priorPosts = new Map((basis?.posts ?? []).map(post => [post.postId, digest(post)]));
-  if ((packet.collection && digest(packet.collection) !== digest(basis?.collection ?? null)) ||
-      packet.posts.some(post => post.source && priorPosts.get(post.postId) !== digest(post))) throw new AgentConflict("J20_COLLECTION_READ_ONLY");
+  const collectedFacts = (p: EvidencePacket) => digest({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute,
+    posts: p.posts, recentPosts: p.recentPosts, collection: p.collection ?? null });
+  if (basis?.collection ? collectedFacts(basis) !== collectedFacts(packet) : Boolean(packet.collection || packet.posts.some(post => post.source)))
+    throw new AgentConflict("J20_COLLECTION_READ_ONLY");
 }
 
 export function createCreatorEvidenceWriter(deps: { store: AgentStore; scope: OperationsScope; secret: string;

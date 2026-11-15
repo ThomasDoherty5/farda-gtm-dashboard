@@ -7,8 +7,8 @@ import { RuntimeError, type RuntimeExecutor, type RuntimeRegistration, type Runt
 import type { OperationsScope } from "../operations.ts";
 import { assertSynchronousVoid } from "../sourceFence.ts";
 import { AgentConflict, type AgentStore } from "../store.ts";
-import { J20_COLLECTOR_REQUEST_VERSION, videoEvidenceReadSchema, type VideoEvidenceBinding, type VideoEvidenceRequest, type VideoEvidenceSnapshot } from "./contract.ts";
-import { buildCollectedPacket } from "./packet.ts";
+import { J20_COLLECTOR_REQUEST_VERSION, J20_REVIEW_REQUIREMENTS, videoEvidenceReadSchema, type VideoEvidenceBinding, type VideoEvidenceRequest, type VideoEvidenceSnapshot } from "./contract.ts";
+import { buildCollectedPacket, J20MergeError, J20SourceDataError } from "./packet.ts";
 
 export const J20_EXECUTOR_VERSION = "j20-video-evidence.v1" as const;
 
@@ -34,15 +34,20 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
   writer: CreatorEvidenceWriter; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null; scope: OperationsScope; now?: () => number }) {
   const { binding, intake, store, writer } = deps;
   const { source } = binding;
-  if (source.stage !== "source" && source.stage !== "synthetic-fixture") throw new RuntimeError("J20_COLLECTOR_STAGE_INVALID", 422);
+  const stage = source.stage;
+  if (stage !== "source" && stage !== "synthetic-fixture") throw new RuntimeError("J20_COLLECTOR_STAGE_INVALID", 422);
+  // A collector's stage is self-declared; only a deployment-held qualification record lets one report `source`.
+  if (stage === "source" && !(binding.qualification?.ref.trim() && binding.qualification.version.trim())) throw new RuntimeError("J20_COLLECTOR_UNQUALIFIED", 422);
+  if (!binding.sourcePermissionRefs.length || binding.sourcePermissionRefs.some(ref => !ref.trim()) || !binding.researchGateRef.trim())
+    throw new RuntimeError("J20_BINDING_INCOMPLETE", 422);
   // The same guard as the reference test double: a synthetic collector never runs in a production process.
-  if (source.stage === "synthetic-fixture" && process.env.NODE_ENV === "production") throw new RuntimeError("J20_SYNTHETIC_COLLECTOR_IN_PRODUCTION", 422);
+  if (stage === "synthetic-fixture" && process.env.NODE_ENV === "production") throw new RuntimeError("J20_SYNTHETIC_COLLECTOR_IN_PRODUCTION", 422);
   const registration = deps.registry.registrations.get(binding.registrationRef);
   assertRegistration(registration, deps.registry);
   const registrationHash = digest(registration);
   const now = deps.now ?? Date.now;
   const scope = { workspaceId: deps.scope.workspaceId, accountId: deps.scope.accountId, environment: "sandbox" as const };
-  const collector = { version: source.collectorVersion, stage: source.stage };
+  const collector = { version: source.collectorVersion, stage };
 
   const executor: RuntimeExecutor = {
     mode: "observe",
@@ -55,7 +60,9 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
       const route = context.binding.route === "browser" ? "browser" as const : "api" as const;
       const request: VideoEvidenceRequest = { version: J20_COLLECTOR_REQUEST_VERSION, scope: { ...scope }, creatorId: work.creatorId,
         intakeRevision: work.revision, briefRef: work.briefRef, profiles: work.profiles, cursor: context.cursor, maxRecords: context.maxRecords,
-        route, window: structuredClone(context.window), samplingPolicyVersion: J20_SAMPLING_POLICY_VERSION, taxonomyVersion: J20_TAXONOMY_VERSION };
+        route, window: structuredClone(context.window), samplingPolicyVersion: J20_SAMPLING_POLICY_VERSION, taxonomyVersion: J20_TAXONOMY_VERSION,
+        reviewRequirements: J20_REVIEW_REQUIREMENTS, sourcePermissionRefs: [...binding.sourcePermissionRefs], researchGateRef: binding.researchGateRef,
+        priorEvidenceRefs: (() => { const head = store.latest(work.creatorId); return head ? [`j20-evidence:${head.runId}`] : []; })() };
       const channel = route === "browser" ? "browser" as const : registration.apiChannel;
       const response = await context.invoke(channel, () => boundedSourceRead(() => source.read(structuredClone(request))))
         .then(value => ({ ok: true as const, value }), error => ({ ok: false as const, error }));
@@ -85,7 +92,11 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
       const prior = store.latest(work.creatorId);
       let built: ReturnType<typeof buildCollectedPacket>;
       try { built = buildCollectedPacket({ creatorId: work.creatorId, prior: prior?.packet ?? null, snapshot, collector, protect: writer.protect }); }
-      catch { throw new RuntimeError("J20_SOURCE_RESPONSE_INVALID", 502); }
+      catch (error) {
+        // Only source content is reported as a source error; an internal merge problem is held for an owner.
+        if (error instanceof J20SourceDataError) throw new RuntimeError("J20_SOURCE_RESPONSE_INVALID", 502);
+        return { state: "held", reasonCode: error instanceof J20MergeError ? "J20_PACKET_MERGE_INVALID" : "J20_PACKET_BUILD_FAILED" };
+      }
       let runId = prior?.runId ?? null;
       if (built.changed && (prior || snapshot.posts.length)) {
         const expectedVersion = prior?.revision ?? 0;
@@ -112,7 +123,8 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
   if (registration.browserExecutorRef) executors.set(registration.browserExecutorRef, executor);
   return {
     registry: { registrations: deps.registry.registrations, executors } satisfies RuntimeRegistry,
-    capability: { collector: source.stage, collectorVersion: source.collectorVersion, executorVersion: J20_EXECUTOR_VERSION,
+    capability: { collector: stage, collectorQualification: binding.qualification ? "configured" as const : "none" as const,
+      collectorVersion: source.collectorVersion, executorVersion: J20_EXECUTOR_VERSION,
       schemaVersion: VIDEO_EVIDENCE_SCHEMA_VERSION, samplingPolicyVersion: J20_SAMPLING_POLICY_VERSION, taxonomyVersion: J20_TAXONOMY_VERSION,
       writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only", dispatch: "notConnected" },
   };

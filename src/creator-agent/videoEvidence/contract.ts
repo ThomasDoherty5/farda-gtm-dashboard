@@ -60,6 +60,8 @@ export const videoEvidenceSnapshotSchema = z.object({
   /** The source's binding of the intake brief to its checkout route. It must name the exact queued brief and version. */
   brief: z.object({ ref: id, version: id, checkoutRoute: z.enum(["website", "tiktok-shop"]) }).strict(),
   listedPosts: count.max(10_000).nullable(),
+  /** The recent-post window the listing covered, or null when the source did not bound it. */
+  policyWindow: z.object({ start: runtimeInstant.nullable(), end: runtimeInstant, timezone: z.string().min(1).max(64) }).strict().nullable(),
   posts: z.array(sourcePostSchema).max(100),
   audience: z.array(audienceEvidenceSchema).max(20),
   nextCursor: runtimeRef.nullable(),
@@ -75,6 +77,12 @@ export const videoEvidenceReadSchema = z.discriminatedUnion("state", [
 ]);
 export type VideoEvidenceRead = z.infer<typeof videoEvidenceReadSchema>;
 
+/**
+ * Owner-approved review requirements ("Farda — approved creator scorecard policy", 2026-11-04). They are sent to the collector
+ * so it reads enough; J02 still decides qualification from the stored evidence.
+ */
+export const J20_REVIEW_REQUIREMENTS = { policyRevision: "2026-11-04", deepReviewMinimumLikesExclusive: 200, packetPosts: 3, packetPublicationDates: 2,
+  packetActionPosts: 2, recentRelevantUnpinnedPosts: 10, visibleTopLevelCommentsPerPost: 20 } as const;
 export type VideoEvidenceRequest = {
   version: typeof J20_COLLECTOR_REQUEST_VERSION;
   scope: { workspaceId: string; accountId: string; environment: "sandbox" };
@@ -88,6 +96,13 @@ export type VideoEvidenceRequest = {
   window: RuntimeWindow;
   samplingPolicyVersion: string;
   taxonomyVersion: string;
+  reviewRequirements: typeof J20_REVIEW_REQUIREMENTS;
+  /** Permission receipts the deployment holds for this collection. The collector must not read beyond them. */
+  sourcePermissionRefs: string[];
+  /** The completed research gate this collection is run under. */
+  researchGateRef: string;
+  /** The stored evidence this read extends; the collector never receives earlier review text. */
+  priorEvidenceRefs: string[];
 };
 
 /**
@@ -107,4 +122,11 @@ export type VideoEvidenceBinding = {
   /** The owned handoff a person uses for login or MFA; the runtime resumes only on a source-issued resolution receipt. */
   handoffRef: string;
   source: VideoEvidenceSource;
+  sourcePermissionRefs: string[];
+  researchGateRef: string;
+  /**
+   * Required before a collector may report the `source` stage: the deployment's record that this collector, its account
+   * permissions and its source receipts were qualified. Without it only `synthetic-fixture` is accepted.
+   */
+  qualification?: { ref: string; version: string };
 };

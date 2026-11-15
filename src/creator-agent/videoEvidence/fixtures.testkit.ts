@@ -118,7 +118,8 @@ export function createSyntheticVideoCollector(now: () => number) {
     /** Replies are consumed in order for a cursor; the last reply repeats. */
     on(cursor: string | null, ...next: Reply[]) { replies.set(key(cursor), next); },
     page(posts: SourcePost[], extra: Partial<Page> = {}): Reply {
-      return { kind: "page", page: { brief: fixtureBrief, listedPosts: posts.length, posts, audience: [], nextCursor: null, ...extra } };
+      return { kind: "page", page: { brief: fixtureBrief, listedPosts: posts.length,
+        policyWindow: { start: "2026-09-01T00:00:00.000Z", end: at, timezone: "UTC" }, posts, audience: [], nextCursor: null, ...extra } };
     },
   };
 }
