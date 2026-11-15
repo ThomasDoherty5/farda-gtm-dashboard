@@ -236,8 +236,11 @@ describe("actual creator-agent HTTP + SQLite service", () => {
     expect(app!.store.history(original.creatorId)).toEqual([originalFreshReceipt(first.body), originalFreshReceipt(next.body)]);
     const replay = await put(original);
     expect(replay.status).toBe(200);
-    expect(replay.body).toEqual({ ...first.body, stale: true, assessment: { ...first.body.assessment, state: "reviewNeeded",
-      reasonCodes: [...new Set([...first.body.assessment.reasonCodes, "STALE_ASSESSMENT", "SUPERSEDED_ASSESSMENT"])] } });
+    const reasonCodes = [...new Set([...first.body.assessment.reasonCodes, "STALE_ASSESSMENT", "SUPERSEDED_ASSESSMENT"])];
+    // The stale read also withdraws the unsent recommendation; the stored run keeps the original handoff.
+    expect(replay.body).toEqual({ ...first.body, stale: true, assessment: { ...first.body.assessment, state: "reviewNeeded", reasonCodes,
+      nextAction: { ...first.body.assessment.nextAction, recommendation: "reviewNeeded" } } });
+    expect(first.body.assessment.nextAction).toMatchObject({ recommendation: "prospectiveInviteEligible" });
   });
 
   it("rejects stale policy/configuration and forged input before persistence", async () => {

@@ -6,7 +6,8 @@ import { z } from "zod";
 import { evidencePacketSchema } from "./evidence.ts";
 import { digest, type ConfigBinding } from "./config.ts";
 import { AGENT_SCHEMA_VERSION, POLICY_VERSION, AGENT_VERSION } from "./assessmentSchema.ts";
-import { MODEL_FOR_ROUTE } from "./policy.ts";
+import { MODEL_FOR_ROUTE, RUBRIC_VERSION } from "./policy.ts";
+import { holdForReview } from "./assessmentHandoff.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
@@ -270,7 +271,10 @@ export function createAgentServer(options: AgentServerOptions) {
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
     evidenceWriter = createCreatorEvidenceWriter({ store, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, scorecardAuthority: options.scorecardAuthority, modelBinding: route => modelBinding(route), acceptedTerms: id => offers.acceptedTerms(id),
-      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId) });
+      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId),
+      reviewerOverrides: (packet, through) => evidenceReviews.reviewerOverrides(packet, through),
+      challengeWatermark: creatorId => evidenceReviews.challengeWatermark(creatorId),
+      offerCurrent: terms => offers.matchesOfferVersion(terms.offerId, terms.version, terms.manifestHash) });
     let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
     const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
     reconciliation = options.mirrorReconciliation
@@ -472,10 +476,12 @@ export function createAgentServer(options: AgentServerOptions) {
     const terms = record.assessment.routeEvidence?.acceptedTerms;
     const offerSuperseded = terms?.origin === "saved-offer" && !offers.matchesOfferVersion(terms.offerId, terms.version, terms.manifestHash);
     const contested = includeReviewerDisputes && evidenceReviews.contested(record);
-    const stale = contested || superseded || offerSuperseded || isScorecardProofExpired(record.assessment) || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
+    const rubricChanged = record.assessment.rubricVersion !== undefined && record.assessment.rubricVersion !== RUBRIC_VERSION;
+    const stale = contested || superseded || offerSuperseded || rubricChanged || isScorecardProofExpired(record.assessment) || record.assessment.policyVersion !== POLICY_VERSION || record.assessment.agentVersion !== AGENT_VERSION || record.assessment.config.hash !== (binding?.hash ?? null);
+    const reasonCodes = [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])];
     return { ...record, packet: protectCommentAuthors(record.packet,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret),
-      stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
+      stale, assessment: stale ? holdForReview(record.assessment, reasonCodes) : record.assessment };
   };
   /**
    * Trigger `reviewerDisposition`: right after a person rules on a collected claim, append a re-assessed revision of the latest

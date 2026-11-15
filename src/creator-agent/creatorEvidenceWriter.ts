@@ -3,7 +3,8 @@ import { claimKey, evidencePacketSchema, nativePostIdentity, type ClaimDispositi
 import { protectCommentAuthors } from "./evidencePrivacy.ts";
 import type { OfferRepository } from "./offers/repository.ts";
 import type { OperationsScope } from "./operations.ts";
-import { assessCreator } from "./policy.ts";
+import { assessCreator, rescoreOf } from "./policy.ts";
+import type { ReviewerOverride } from "./assessmentSchema.ts";
 import { resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
 import { AgentConflict, type AgentStore, type CallerRequest, type StoredAssessment } from "./store.ts";
 
@@ -90,7 +91,12 @@ function withDispositions(packet: EvidencePacket, saved: readonly ClaimDispositi
 
 export function createCreatorEvidenceWriter(deps: { store: AgentStore; scope: OperationsScope; secret: string;
   scorecardAuthority?: ScorecardAuthority; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null;
-  acceptedTerms: OfferRepository["acceptedTerms"]; claimDispositions?: (creatorId: string) => ClaimDisposition[] }): CreatorEvidenceWriter {
+  acceptedTerms: OfferRepository["acceptedTerms"]; claimDispositions?: (creatorId: string) => ClaimDisposition[];
+  /** J02-08: open reviewer challenges from the existing evidence-review annotations, recorded in the new snapshot. */
+  reviewerOverrides?(packet: EvidencePacket, throughRevision: number): ReviewerOverride[];
+  /** Append-only high-water mark of those challenges, re-read inside the save transaction. */
+  challengeWatermark?(creatorId: string): string;
+  offerCurrent?(terms: { offerId: string; version: string; manifestHash: string }): boolean }): CreatorEvidenceWriter {
   const protect = (packet: EvidencePacket) => protectCommentAuthors(packet, deps.scope, deps.secret);
   // The caller's own request, before any server augmentation; the store keeps it on the receipt row in the save transaction.
   const callerHashOf = (packet: EvidencePacket, expectedVersion: number, configHash: string | null, origin: string) =>
@@ -112,9 +118,21 @@ export function createCreatorEvidenceWriter(deps: { store: AgentStore; scope: Op
       packet = withDispositions(packet, deps.claimDispositions?.(packet.creatorId) ?? [], deps.store.latest(packet.creatorId)?.packet.evidenceRevision ?? null);
       const proof = await resolveScorecardEvidence(deps.scorecardAuthority, { workspaceId: deps.scope.workspaceId, accountId: deps.scope.accountId },
         packet, Date.now(), id => deps.acceptedTerms(id));
-      const assessment = assessCreator(packet, binding, proof);
+      // J02 has no runtime family of its own: reviewer writes, the J20 collector and the server's re-assessment after a claim
+      // ruling all rescore here, and the trigger is classified from the stored prior run rather than accepted from a caller.
+      // The basis is the expected prior revision. A newer head makes the save replay or conflict, never use this result.
+      const latest = deps.store.latest(packet.creatorId);
+      const prior = latest?.revision === input.expectedVersion ? latest : null;
+      const watermark = deps.challengeWatermark?.(packet.creatorId) ?? null;
+      const reviewerOverrides = deps.reviewerOverrides?.(packet, input.expectedVersion) ?? [];
+      const assessment = assessCreator(packet, binding, proof, { reviewerOverrides,
+        rescore: rescoreOf(prior, packet, binding?.hash ?? null, reviewerOverrides, terms => deps.offerCurrent?.(terms) ?? false, Date.now(), origin) });
       options.fence?.();
-      return deps.store.save(packet, assessment, input.expectedVersion, idempotencyKey, protect, caller);
+      // A reviewer challenge recorded after the read above would be missing from this snapshot: refuse inside the transaction.
+      // A same-key replay already settled above, and the store settles it again before this fence runs.
+      return deps.store.save(packet, assessment, input.expectedVersion, idempotencyKey, protect, caller, () => {
+        if ((deps.challengeWatermark?.(packet.creatorId) ?? null) !== watermark) throw new AgentConflict("REVIEWER_CHALLENGE_CHANGED");
+      });
     },
   };
 }

@@ -121,8 +121,9 @@ export function bindVideoEvidence(deps: { registry: RuntimeRegistry; binding: Vi
             { origin: "collector", fence: () => { context.assertCurrent(); assertSnapshot(); context.assertCurrent(); } });
           runId = saved.runId;
         } catch (error) {
-          // A concurrent reviewer or collector write moved the head: re-read the latest evidence on retry, never overwrite it.
-          if (error instanceof AgentConflict && ["VERSION_CONFLICT", "IDEMPOTENCY_KEY_REUSED"].includes(error.message))
+          // A concurrent reviewer or collector write moved the head, or a reviewer challenge arrived after J02 read the
+          // overrides: re-read the latest evidence and challenges on retry, never overwrite or miss them.
+          if (error instanceof AgentConflict && ["VERSION_CONFLICT", "IDEMPOTENCY_KEY_REUSED", "REVIEWER_CHALLENGE_CHANGED"].includes(error.message))
             return { state: "retry", reasonCode: "J20_EVIDENCE_HEAD_MOVED", retryAfterMs: 1000 };
           throw error;
         }

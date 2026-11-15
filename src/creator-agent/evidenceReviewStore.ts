@@ -8,6 +8,8 @@ import { CLAIM_DIGEST_TARGET, claimDigestTarget, videoEvidenceQuality, type Clai
 export const DISPOSITION_QUERY = `SELECT json_extract(body,'$.postId') AS post_id,json_extract(body,'$.original.id') AS target_id,
   json_extract(body,'$.input.kind') AS kind FROM evidence_review_annotations
   WHERE json_extract(body,'$.input.runId')=? AND json_extract(body,'$.input.kind') IN ('disagree','override') ORDER BY revision`;
+import type { ReviewerOverride } from "./assessmentSchema.ts";
+import { holdForReview } from "./assessmentHandoff.ts";
 
 export class EvidenceReviewError extends Error {
   readonly code: string; readonly status: number; readonly currentVersion?: string;
@@ -108,11 +110,12 @@ export class EvidenceReviewRepository {
       CREATE INDEX IF NOT EXISTS evidence_review_creator_kind ON evidence_review_annotations(
         json_extract(body,'$.input.creatorId'),json_extract(body,'$.input.kind'));`);
   }
-  contested(record: StoredAssessment): boolean {
+  /** Disagreements and overrides on runs up to `throughRevision` that the given packet's current review has not resolved. */
+  private *openChallenges(packet: EvidencePacket, throughRevision: number) {
     const rows = this.store.database.prepare(`SELECT n.body AS annotation,a.body AS source FROM evidence_review_annotations n
       JOIN assessments a ON a.run_id=json_extract(n.body,'$.input.runId')
       WHERE json_extract(n.body,'$.input.creatorId')=? AND json_extract(n.body,'$.input.kind') IN ('disagree','override')
-      AND a.revision<=?`).iterate(record.packet.creatorId,record.revision);
+      AND a.revision<=? ORDER BY a.revision,n.revision,n.basis`).iterate(packet.creatorId,throughRevision);
     for (const row of rows) {
       const annotation = JSON.parse(String(row.annotation)) as EvidenceAnnotation;
       // Scoped to the claim-digest targets J20 introduced: a person's ruling on that exact claim is its resolution. Every
@@ -120,10 +123,12 @@ export class EvidenceReviewRepository {
       if (annotation.original && CLAIM_DIGEST_TARGET.test(annotation.original.id)) continue;
       const original = JSON.parse(String(row.source)) as StoredAssessment;
       const prior = original.packet.posts.find(p => annotation.postId ? p.postId === annotation.postId : reviewBasis(this.scope,original,p) === annotation.input.basisHash);
-      if (!prior) return true;
-      if (record.packet.posts.some(post => (post.canonicalMediaId === prior.canonicalMediaId || nativePostIdentity(post) === nativePostIdentity(prior))
-        && !resolvedByReview(prior,post,annotation))) return true;
+      if (!prior || packet.posts.some(post => (post.canonicalMediaId === prior.canonicalMediaId || nativePostIdentity(post) === nativePostIdentity(prior))
+        && !resolvedByReview(prior,post,annotation))) yield { annotation, original };
     }
+  }
+  contested(record: StoredAssessment): boolean {
+    for (const open of this.openChallenges(record.packet,record.revision)) { void open; return true; }
     return false;
   }
   /**
@@ -147,6 +152,22 @@ export class EvidenceReviewRepository {
       if (!claim?.topic) return [];
       return [{ postId: annotation.postId, claim: { atSec: claim.atSec, text: claim.text, method: claim.method, topic: claim.topic },
         annotationRef: annotation.id, kind: annotation.input.kind, reviewerRef: annotation.reviewer, recordedAt: annotation.recordedAt }];
+    });
+  }
+  /** Append-only count and high-water row of this creator's disagreements and overrides; any new challenge changes it. */
+  challengeWatermark(creatorId: string): string {
+    const row = this.store.database.prepare(`SELECT COUNT(*) AS n,COALESCE(MAX(rowid),0) AS hi FROM evidence_review_annotations
+      WHERE json_extract(body,'$.input.creatorId')=? AND json_extract(body,'$.input.kind') IN ('disagree','override')`).get(creatorId);
+    return `${Number(row?.n ?? 0)}:${Number(row?.hi ?? 0)}`;
+  }
+  /** J02-08: the open reviewer challenges a new assessment snapshot must carry, with the versions each was recorded against. */
+  reviewerOverrides(packet: EvidencePacket, throughRevision: number): ReviewerOverride[] {
+    return [...this.openChallenges(packet,throughRevision)].map(({ annotation: n, original: o }) => {
+      if (n.input.kind === "observation") throw new EvidenceReviewError("VALIDATION_FAILED",422);
+      return { annotationRef: n.id, kind: n.input.kind, postId: n.postId ?? null, targetRef: n.input.targetId, targetLabel: n.original?.label ?? null,
+        reason: n.input.reason, replacement: n.input.kind === "override" ? n.input.replacement : null, reviewerRef: n.reviewer, recordedAt: n.recordedAt,
+        basis: { revision: o.revision, evidenceRevision: o.packet.evidenceRevision, termsRevision: o.packet.termsRevision, policyVersion: o.assessment.policyVersion,
+          modelId: o.assessment.modelId, configHash: o.assessment.config.hash, agentVersion: o.assessment.agentVersion, rubricVersion: o.assessment.rubricVersion ?? null } };
     });
   }
   private adjacent(creatorId: string, postId: string, revision: number, newer: boolean): string | null {
@@ -174,8 +195,8 @@ export class EvidenceReviewRepository {
       olderRunId: this.adjacent(creatorId,evidenceId,stored.revision,false), newerRunId: this.adjacent(creatorId,evidenceId,stored.revision,true),
       targets: sourceTargets(post, stored.packet), annotations };
     const version = `er-${basisHash}-${annotations.length}`;
-    const effective = sourceReview.contested ? { ...record, assessment: { ...record.assessment, state: "reviewNeeded" as const,
-      reasonCodes: [...new Set([...record.assessment.reasonCodes,"EVIDENCE_DISPUTED"])] } } : record;
+    const effective = sourceReview.contested ? { ...record, assessment: holdForReview(record.assessment,
+      [...new Set([...record.assessment.reasonCodes,"EVIDENCE_DISPUTED"])]) } : record;
     const dispositions = new Map<string, Map<string, "disagree" | "override">>();
     if (stored.packet.collection) for (const row of this.store.database.prepare(DISPOSITION_QUERY).all(stored.runId)) {
       const postId = row.post_id === null ? null : String(row.post_id), targetId = row.target_id === null ? null : String(row.target_id);

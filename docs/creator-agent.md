@@ -115,6 +115,35 @@ Evidence retains sampled points versus continuous intervals, heard versus ASR/ca
 
 SQLite writes are transactional, append-only, expected-version checked and idempotent. A key reused for different input is rejected. Revised evidence/terms must use a new revision label. Source evidence remains the reviewer's responsibility; schema validation is not a claim that the agent independently verified a native platform.
 
+### Versioned snapshot
+
+Every new assessment also records:
+
+- **Versions.** `rubricVersion` and the accepted `offer` version and manifest hash (or why there is none), beside the existing model, configuration, evidence, terms and policy versions.
+- **Score bounds.** `scoreBounds` gives known points with unknown criteria at 0 and at 5. Bounds are not imputation and never drive a decision.
+- **Calibration.** `calibrationState` is `provisional` for a bound approved operating policy and `draft` when unbound. Sales prediction stays `unvalidated` until held-out mature outcomes are attached; the schema refuses `heldOutEvaluated` and `approvedCalibrated` without them. `retired` is recordable only for a bound configuration, with `calibration.retiredFrom: "provisional"` naming the state it followed.
+- **Metric compatibility.** `metricCompatibility` checks unit, numerator and denominator, window, cohort, post age, traffic class, source definition and refund basis before verified commerce or a full engagement rate is derived. A mismatch is never derived; a required dimension the source cannot establish stays unverified.
+  - Retained sales measurements that declare no refund basis keep the earlier rule (the retained-sales name with a mature window), reported with a non-blocking `REFUND_BASIS_LEGACY_DEFINITION` caveat. Declared bases must agree, and a mix of declared and undeclared inputs is unverified. Repeated windows must not overlap. Windows of different lengths, such as consecutive calendar months, are reported as `WINDOW_LENGTH_DIFFERS` and do not block.
+  - The full engagement rate needs every counter, non-zero views, and one snapshot per dated post taken after publication. There is no approved age-normalization rule, so posts of different ages (UTC calendar days from publication to snapshot) leave the rate unverified (`POST_AGE_NOT_NORMALIZED`).
+  - The reach verdict reads the existing metadata baseline's own grouping. It never regroups rows or changes the baseline's median.
+- **Reviewer overrides.** Open reviewer disagreements and overrides from the evidence-review annotations are copied with their reason and the versions they were recorded against, and `REVIEWER_OVERRIDE_OPEN` is added to `reasonCodes`. The snapshot lists the first 100 open challenges and records the full number in `reviewerOverrideCount`, so a creator with more is still rescored. The scored `state` stays the evidence result; the dispute hold still applies at read time. The challenge high-water mark is re-checked inside the write transaction, so a challenge recorded during scoring refuses the write instead of being missed.
+- **Separate dimensions.** Creative fit, commerce evidence, confidence and financial readiness are reported separately. Creator Offer Economics v1 is not applied as policy, and every J11 ledger field (retained net merchandise, orders, units, bundle mix, returns, contribution, payback, reward progress and liability) is `unavailable` with its reason. GMV never fills one.
+- **Proposal-only handoff.** `nextAction` records only the recommendation (review-needed while a reviewer challenge is open) and the hash of its basis. It names no J04 phase or requirement, because J04 owns previews and the offer policy owns commercial eligibility; nothing in J04 reads it yet. It never dispatches, confers approval, sends, spends, enrolls or ships.
+- **Rescore triggers.** `rescore` classifies why the run happened (initial, evidence ready, objective, candidate route, offer, stale proof, policy, reviewer override, or an explicit rescore when a prior run exists and nothing changed) from the stored prior run. Only two paths start a rescore: the J20 collector's registered runtime and the reviewer `PUT`. Both go through the shared creator evidence writer. A direct engine call outside the writer records `rescore: null` rather than an invented reason.
+
+A later evidence, offer, rubric, policy or configuration change makes a read stale. That read withdraws the unsent recommendation to review-needed in `qualification`. `assessedQualification` still returns the stored snapshot, including its original recommendation, exactly as it keeps the original `state`. Stored snapshots, including earlier agent versions, are never rewritten.
+
+Owner decisions not taken here:
+- **Audience proof age.** No approved maximum age exists for the audience window, so an old audience window inside a current provider lease is still credited.
+- **Paid-traffic retained sales.** These still count for verified commerce, with the mix reported.
+- **Commerce window period.** Windows of different lengths are reported, not blocked.
+- **Engagement post age.** Posts of different ages leave the rate unverified.
+- **Refund basis on new provider proof.** A declared refund basis is not yet required.
+
+Tests pin each of these, so an owner decision will be a visible change.
+
+**Release note.** Every stored assessment from an earlier agent version reads as review-needed (`STALE_ASSESSMENT`) until it is written again through the reviewer `PUT` or a J20 collector run. Nothing rescores it automatically.
+
 ## Zapier connection
 
 After deployment and login, use a server-side Zapier authenticated HTTP action to PUT a source-reviewed packet. Store the reviewer credential in the private connection, send the expected policy/config/revision and idempotency key, and retain the returned run ID. Retry the same request with the same key after uncertainty; reconcile a conflict before changing the key. A reader connection may inspect capabilities/results.

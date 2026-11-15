@@ -15,7 +15,7 @@ import { SCHEMA_VERSION } from "../adapter/contract.ts";
 import { evidenceViewSchemas } from "../adapter/viewSchemas/evidence.ts";
 import { runtimeApiAckSchema, safeRuntimeRunSchema } from "./jobs/runtimeViews.ts";
 import { SYNTHETIC_READ_TOKEN as reader, SYNTHETIC_REVIEW_TOKEN as reviewer, syntheticBinding, syntheticPacket } from "./testFixtures.ts";
-import { DISPOSITION_QUERY } from "./evidenceReviewStore.ts";
+import { DISPOSITION_QUERY, EvidenceReviewRepository } from "./evidenceReviewStore.ts";
 import { createSyntheticVideoCollector, fixtureBrief, fixtureReviews, fixtureSourcePost, J20_FIXTURE_AT } from "./videoEvidence/fixtures.testkit.ts";
 import type { VideoEvidenceQuality } from "./videoEvidence/qualityContract.ts";
 
@@ -177,6 +177,9 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     expect(history).toHaveLength(2);
     expect(history[0]).toEqual(first[0]);
     expect(history[1]!.packet.evidenceRevision).not.toBe(first[0]!.packet.evidenceRevision);
+    // J02 rescoring is triggered by the registered J20 runtime through the shared writer, classified from the stored prior run.
+    expect([first[0]!.assessment.rescore, history[1]!.assessment.rescore]).toEqual([{ triggers: ["initial"], priorRevision: null }, { triggers: ["evidenceReady"], priorRevision: 1 }]);
+    expect(history[1]!.assessment.nextAction).toMatchObject({ dispatch: "none", confersApproval: false });
     const capabilities = await h.call("GET", "/v1/capabilities", undefined, reader);
     expect(capabilities.body.videoEvidence).toMatchObject({ collector: "synthetic-fixture", writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only" });
   });
@@ -360,6 +363,35 @@ describe("J20 collector through the registered runtime, intake queue and shared 
     expect(merged.revision).toBe(3);
     expect(merged.packet.ratings).toEqual({ routine: 4, demo: 4 });
     expect(merged.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!.metrics![0]!.value).toBe(7777);
+  });
+
+  it("retries when a reviewer challenge lands after J02 read the overrides, then records it on the next attempt", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("d9");
+    const posts = [fixtureSourcePost(1), fixtureSourcePost(2, { publishedAt: "2026-10-02T12:00:00.000Z" })];
+    h.collector.on(null, h.collector.page(posts));
+    await (await h.runDay()).work();
+    const first = h.app.store.latest(creatorId)!, postId = first.packet.posts[0]!.postId;
+    // A second annotation connection, as another reviewer process would have.
+    const reviews = new EvidenceReviewRepository(h.app.store, { workspaceId: scope.workspaceId, accountId: scope.accountId }, r => ({ ...r, stale: false }));
+    const view = reviews.read(creatorId, postId)!;
+    // The writer's fence calls the source check after J02 read the overrides and immediately before the append.
+    let calls = 0; const check = h.collector.source.assertCurrent;
+    h.collector.source.assertCurrent = (...args) => {
+      if (++calls === 2) reviews.saveFromAdapter(postId, view.data.version, { kind: "disagree", creatorId, runId: first.runId,
+        basisHash: view.data.sourceReview.basisHash, targetId: "review", reason: "A synthetic challenge raised during collection." }, "synthetic-raced", "agent-reviewer", "reviewerAssessment");
+      return check(...args);
+    };
+    h.collector.on(null, h.collector.page(posts.map((p, i) => i ? p : { ...p, metrics: [{ ...p.metrics[0]!, value: 8888, rawLabel: "8888" }, p.metrics[1]!] })));
+    const day = await h.runDay();
+    expect((await day.work()).run.state).not.toBe("completed");
+    expect(h.app.store.history(creatorId)).toHaveLength(1);
+    h.kit.advance(2000); await h.kit.verify("api");
+    expect((await day.work()).run.state).toBe("completed");
+    const latest = h.app.store.latest(creatorId)!;
+    expect(latest.revision).toBe(2);
+    expect(latest.assessment.reviewerOverrides!.map(o => o.kind)).toEqual(["disagree"]);
+    expect(latest.assessment.rescore).toEqual({ triggers: ["evidenceReady", "reviewerOverride"], priorRevision: 1 });
   });
 
   it("refuses a misbound registration and never runs the synthetic collector in production", async () => {
@@ -713,6 +745,11 @@ describe("J20 third-pass findings", () => {
     effective = (await h.call("GET", `/v1/creators/${creatorId}`, undefined, reader)).body as { assessment: { reasonCodes: string[] } };
     expect(effective.assessment.reasonCodes).not.toEqual(expect.arrayContaining(["EVIDENCE_DISPUTED"]));
     expect(effective.assessment.reasonCodes).not.toContain("CLAIMS_REVIEWED");
+    // J02: a claim-digest ruling is a resolution, not an open challenge, so it never deadlocks the recommendation.
+    expect(latest.assessment.reasonCodes).not.toContain("REVIEWER_OVERRIDE_OPEN");
+    expect(latest.assessment).toMatchObject({ reviewerOverrides: [], reviewerOverrideCount: 0 });
+    expect(latest.assessment.nextAction!.recommendation).toBe(latest.assessment.state);
+    expect(h.app.store.history(creatorId).some(r => r.assessment.rescore?.triggers.includes("reviewerDisposition"))).toBe(true);
     // A reworded claim is a new pending target.
     h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: { ...claimed, claims: [{ ...medical, text: "Says the case keeps her insulin cold." }, outcome] } }), ...three().slice(1)]));
     await (await h.runDay()).work();

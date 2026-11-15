@@ -1,13 +1,42 @@
-import { creatorAssessmentSchema, POLICY_VERSION, AGENT_VERSION, AGENT_SCHEMA_VERSION } from "./assessmentSchema.ts";
-import type { CreatorAssessment } from "./assessmentSchema.ts";
+import { creatorAssessmentSchema, POLICY_VERSION, AGENT_VERSION, AGENT_SCHEMA_VERSION, REVIEWER_OVERRIDE_LIMIT } from "./assessmentSchema.ts";
+import type { CreatorAssessment, ReviewerOverride } from "./assessmentSchema.ts";
 import { deriveCommentStats, deriveMetadataBaseline, personClaims } from "./evidence.ts";
 import type { EvidencePacket, PostEvidence } from "./evidence.ts";
-import type { ConfigBinding, ModelConfig } from "./config.ts";
-import { anchorFor } from "./ratingPolicy.ts";
-import { criterionSource, sourceGates, type ScorecardProof } from "./routeEvidence.ts";
+import { digest, type ConfigBinding, type ModelConfig } from "./config.ts";
+import { anchorFor, ratingPolicy } from "./ratingPolicy.ts";
+import { criterionSource, isScorecardProofExpired, sourceGates, type ScorecardProof } from "./routeEvidence.ts";
+import { commerceCompatibility, engagementCompatibility, reachCompatibility } from "./metricCompatibility.ts";
+import { proposeNextAction } from "./assessmentHandoff.ts";
 import { scoreOf } from "../features/scorecards/scorecardMath.ts";
 
-export const MODEL_FOR_ROUTE = { website: "WEBSITE-AFFILIATE-v3", "tiktok-shop": "TIKTOK-SHOP-AFFILIATE-v3" } as const;
+export const RUBRIC_VERSION = ratingPolicy.evidenceRubricRevision;
+/**
+ * Server-derived inputs that are not part of the evidence packet: open reviewer challenges and why this run happened.
+ * The creator evidence writer always supplies both. A direct engine call without them records no rescore reason at all.
+ */
+export type AssessmentContext = { reviewerOverrides?: readonly ReviewerOverride[]; rescore: NonNullable<CreatorAssessment["rescore"]> };
+
+type PriorRun = { revision: number; packet: Pick<EvidencePacket, "evidenceRevision" | "briefId" | "checkoutRoute" | "termsRevision">; assessment: CreatorAssessment };
+/** Classify why a rescore happened from the stored prior run, never from a caller-supplied reason. */
+export function rescoreOf(prior: PriorRun | null, packet: EvidencePacket, configHash: string | null, overrides: readonly ReviewerOverride[],
+  offerCurrent: (terms: { offerId: string; version: string; manifestHash: string }) => boolean, nowMs = Date.now(),
+  origin: "reviewer" | "collector" | "reviewerDisposition" = "reviewer"): NonNullable<CreatorAssessment["rescore"]> {
+  if (!prior) return { triggers: ["initial"], priorRevision: null };
+  const a = prior.assessment, terms = a.routeEvidence?.acceptedTerms;
+  const triggers: NonNullable<CreatorAssessment["rescore"]>["triggers"] = [];
+  if (prior.packet.evidenceRevision !== packet.evidenceRevision) triggers.push("evidenceReady");
+  if (prior.packet.briefId !== packet.briefId) triggers.push("objectiveChange");
+  if (prior.packet.checkoutRoute !== packet.checkoutRoute) triggers.push("candidateChange");
+  if (prior.packet.termsRevision !== packet.termsRevision || (terms?.origin === "saved-offer" && !offerCurrent(terms))) triggers.push("offerChange");
+  if (isScorecardProofExpired(a, nowMs)) triggers.push("staleEvidence");
+  if (a.policyVersion !== POLICY_VERSION || a.agentVersion !== AGENT_VERSION || a.config.hash !== configHash || (a.rubricVersion ?? null) !== RUBRIC_VERSION) triggers.push("policyChange");
+  if (overrides.some(o => !a.reviewerOverrides?.some(p => p.annotationRef === o.annotationRef))) triggers.push("reviewerOverride");
+  // The server re-assesses right after a person rules on a collected claim; that ruling, not a caller, is the reason.
+  if (origin === "reviewerDisposition") triggers.push("reviewerDisposition");
+  return { triggers: triggers.length ? triggers : ["explicitRescore"], priorRevision: prior.revision };
+}
+
+export const MODEL_FOR_ROUTE ={ website: "WEBSITE-AFFILIATE-v3", "tiktok-shop": "TIKTOK-SHOP-AFFILIATE-v3" } as const;
 export function likeGate(post: PostEvidence): "pass" | "fail" | "unknown" {
   return post.nativeLikes.status !== "known" || !post.nativeLikes.exact ? "unknown" : post.nativeLikes.value > 200 ? "pass" : "fail";
 }
@@ -43,7 +72,7 @@ function secondsOf(intervals: { startSec: number; endSec: number }[]): number {
 }
 
 /** Deterministic J02 decision over authenticated, source-linked reviewed evidence. No guessed metrics or replacement weights. */
-export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | null, proof?: ScorecardProof): CreatorAssessment {
+export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | null, proof?: ScorecardProof, context?: AssessmentContext): CreatorAssessment {
   const modelId = MODEL_FOR_ROUTE[packet.checkoutRoute];
   if (binding && binding.current.modelId !== modelId) throw new Error("WRONG_ROUTE_MODEL");
   const gates: CreatorAssessment["gates"] = [];
@@ -119,7 +148,17 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
       state = "prospectiveInviteEligible";
     }
   }
+  // J02-08: open reviewer challenges are recorded beside the scored result. The scored state stays the evidence result;
+  // the server's read-time dispute hold still applies, and the recorded recommendation and blockers wait for the reviewer.
+  // Every open challenge holds the recommendation; the snapshot lists the first 100 and records the full count, so a
+  // creator with more open challenges is still rescored rather than refused.
+  const openOverrides = context?.reviewerOverrides ?? [];
+  const reviewerOverrides = openOverrides.slice(0, REVIEWER_OVERRIDE_LIMIT);
   const snapshot = proof?.snapshot;
+  // J02-05: validate each feature's inputs before anything is derived from them.
+  const commerce = commerceCompatibility(snapshot, snapshot?.criteria.find(c => c.id === "verifiedCommerce")?.sourceRefs ?? null);
+  // The reach verdict reads the existing baseline's own grouping; it never re-derives or overrides its median.
+  const reach = reachCompatibility(baseline);
   const dateOrder = baseline.selected.map(p => p.publishedAt!).sort((a, b) => Date.parse(a) - Date.parse(b));
   const routeGate = providerGates.find(g => g.id === "SOURCE:route")!;
   const routeEvidence = {
@@ -145,16 +184,42 @@ export function assessCreator(packet: EvidencePacket, binding: ConfigBinding | n
       spread: baseline.viewStats.spread, definition: baseline.viewStats.definition, window: baseline.viewStats.window, paid: baseline.viewStats.paid,
       firstPublishedAt: dateOrder.at(0) ?? null, lastPublishedAt: dateOrder.at(-1) ?? null },
   };
+  // A reviewer's audited detach from J20 collection stays visible on every assessment of the detached packet.
+  const reasonCodes = [...gates.filter((g) => g.state !== "pass").map((g) => g.id), ...(packet.detachedCollection ? ["J20_DETACHED"] : []),
+    ...(openOverrides.length ? ["REVIEWER_OVERRIDE_OPEN"] : [])];
+  const recommendation = openOverrides.length && state !== "hold" ? "reviewNeeded" : state;
+  const unknownWeight = rows.reduce((sum, c) => sum + (c.rating === null ? c.weight : 0), 0);
+  const scoreBounds = score ? { min: score.earned, max: score.earned + unknownWeight, total: score.total } : { min: null, max: null, total: null };
+  const terms = snapshot?.terms;
+  const offer = terms ? { state: "bound" as const, origin: terms.origin, version: terms.version, manifestHash: terms.manifestHash }
+    : { state: "none" as const, reason: !snapshot ? "SOURCE_PROOF_UNAVAILABLE" as const : proof?.reason === "ACCEPTED_OFFER_MISSING_OR_CHANGED" ? "ACCEPTED_OFFER_MISSING_OR_CHANGED" as const : "NO_ACCEPTED_TERMS" as const };
+  const j11 = { state: "unavailable", reason: "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED" } as const;
+  const basisHash = digest({ creatorId: packet.creatorId, briefId: packet.briefId, route: packet.checkoutRoute, evidenceRevision: packet.evidenceRevision,
+    termsRevision: packet.termsRevision, modelId, configHash: binding?.hash ?? null, policyVersion: POLICY_VERSION, rubricVersion: RUBRIC_VERSION,
+    agentVersion: AGENT_VERSION, state, offer, reviewerOverrides: reviewerOverrides.map(o => o.annotationRef), reviewerOverrideCount: openOverrides.length });
   return creatorAssessmentSchema.parse({
     schemaVersion: AGENT_SCHEMA_VERSION, policyVersion: POLICY_VERSION, agentVersion: AGENT_VERSION,
     creatorId: packet.creatorId, briefId: packet.briefId, evidenceRevision: packet.evidenceRevision, termsRevision: packet.termsRevision, modelId,
     config: { status: binding ? "bound" : "unbound", version: binding?.current.version ?? null, hash: binding?.hash ?? null, baselineHash: binding?.baselineHash ?? null, numericHash: binding?.numericHash ?? null },
     configuration: binding ? { criteria: rows, bands: binding.current.bands, arithmetic: binding.current.arithmetic } : null,
     state, contentQualification, gates, packet: { qualifyingPosts: posts.length, publicationDates: dates.size, meaningfulUsePosts: usePosts.length, postIds: posts.map((p) => p.postId) }, criteria: { routine: creativeRating(packet, "routine"), demo: creativeRating(packet, "demo") }, score,
-    metadata: { sampleSize: baseline.selected.length, coverage: baseline.coverage, reasonCodes: baseline.coverageReasons, postIds: baseline.selected.map((p) => p.postId), medianViews: baseline.viewStats.median, minViews: baseline.viewStats.min, maxViews: baseline.viewStats.max, comparableViewCount: baseline.viewStats.knownCount },
+    metadata: { sampleSize: baseline.selected.length, coverage: baseline.coverage, reasonCodes: baseline.coverageReasons, postIds: baseline.selected.map((p) => p.postId),
+      medianViews: baseline.viewStats.median, minViews: baseline.viewStats.min, maxViews: baseline.viewStats.max, comparableViewCount: baseline.viewStats.knownCount },
     comments, reviews: packet.posts.map((p) => ({ postId: p.postId, status: p.review.status, visualMethod: p.review.visualMethod, audioMethod: p.review.audioMethod, sampledPointCount: p.review.sampledPoints.length, continuousSeconds: secondsOf(p.review.watchedIntervals), likeGate: likeGate(p) })),
     routeEvidence,
-    // A reviewer's audited detach from J20 collection stays visible on every assessment of the detached packet.
-    reasonCodes: [...gates.filter((g) => g.state !== "pass").map((g) => g.id), ...(packet.detachedCollection ? ["J20_DETACHED"] : [])],
+    reasonCodes,
+    rubricVersion: RUBRIC_VERSION, offer, scoreBounds,
+    calibrationState: binding ? "provisional" : "draft",
+    calibration: { operatingPolicy: { status: binding ? "approvedOperatingPolicy" : "configurationUnbound", policyVersion: POLICY_VERSION, rubricVersion: RUBRIC_VERSION,
+      configVersion: binding?.current.version ?? null }, salesPrediction: { status: "unvalidated", reason: "HELD_OUT_MATURE_OUTCOMES_NOT_ATTACHED" }, heldOutEvaluationRef: null, retiredFrom: null },
+    metricCompatibility: [commerce, reach, engagementCompatibility(packet.posts)],
+    reviewerOverrides, reviewerOverrideCount: openOverrides.length,
+    dimensions: { creativeFit: contentQualification, confidence: routeEvidence.confidence.sourceCoverage, financialReadiness: "unavailable",
+      commerceEvidence: commerce.state !== "derived" ? commerce.state : criterionSource(snapshot, "verifiedCommerce") ? "verified" : "unverified" },
+    economics: { policy: { ref: "CEO-v1", status: "pendingOwnerApproval", appliedAsPolicy: false }, ledger: { owner: "J11", state: "notConnected" },
+      fields: { retainedNetMerchandise: j11, retainedOrders: j11, retainedUnits: j11, bundleMix: j11, returns: j11, contributionAfterCosts: j11,
+        acquisitionPayback: j11, rewardProgress: j11, rewardLiability: j11 } },
+    nextAction: proposeNextAction(recommendation, basisHash),
+    rescore: context?.rescore ?? null,
   });
 }

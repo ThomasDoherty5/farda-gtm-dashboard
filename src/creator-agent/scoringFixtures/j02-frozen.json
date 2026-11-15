@@ -1,0 +1,3063 @@
+{
+ "modelId": "WEBSITE-AFFILIATE-v3",
+ "configHash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6",
+ "nowMs": 1770076800000,
+ "base": {
+  "packet": {
+   "creatorId": "synthetic-frozen-creator",
+   "briefId": "synthetic-travel-use",
+   "checkoutRoute": "website",
+   "evidenceRevision": "synthetic-evidence-v1",
+   "termsRevision": "synthetic-terms-v1",
+   "posts": [
+    {
+     "postId": "synthetic-post-1",
+     "canonicalMediaId": "synthetic-media-1",
+     "network": "instagram",
+     "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_1/",
+     "publishedAt": "2026-10-01T12:00:00.000Z",
+     "observedAt": "2026-11-04T12:00:00.000Z",
+     "relevant": true,
+     "nativeLikes": {
+      "status": "known",
+      "value": 201,
+      "exact": true,
+      "sourceRef": "synthetic:metric:1"
+     },
+     "review": {
+      "status": "complete",
+      "visualMethod": "continuous",
+      "audioMethod": "unassessed",
+      "sampledPoints": [],
+      "watchedIntervals": [
+       {
+        "startSec": 0,
+        "endSec": 8
+       }
+      ],
+      "observedActions": [
+       {
+        "atSec": 4,
+        "action": "Opens a fictional case and returns it to a travel bag.",
+        "meaningfulUse": true
+       }
+      ],
+      "claims": [],
+      "inferences": [],
+      "sourceRef": "synthetic:review:1"
+     },
+     "comments": {
+      "status": "observed",
+      "ordering": "First visible top-level rows in source order",
+      "observedAt": "2026-11-04T12:00:00.000Z",
+      "rows": [
+       {
+        "commentId": "synthetic-comment-1",
+        "authorRef": "synthetic-author-1",
+        "creator": false,
+        "promotional": false,
+        "prompted": false,
+        "categories": [
+         "purchaseEvaluation",
+         "productUnderstanding"
+        ],
+        "text": "Would this fictional case fit a small bag?"
+       },
+       {
+        "commentId": "synthetic-comment-2",
+        "authorRef": "synthetic-author-2",
+        "creator": false,
+        "promotional": false,
+        "prompted": true,
+        "categories": [
+         "promptedKeyword"
+        ],
+        "text": "FICTIONAL LINK"
+       }
+      ]
+     }
+    },
+    {
+     "postId": "synthetic-post-2",
+     "canonicalMediaId": "synthetic-media-2",
+     "network": "instagram",
+     "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_2/",
+     "publishedAt": "2026-10-02T12:00:00.000Z",
+     "observedAt": "2026-11-04T12:00:00.000Z",
+     "relevant": true,
+     "nativeLikes": {
+      "status": "known",
+      "value": 201,
+      "exact": true,
+      "sourceRef": "synthetic:metric:2"
+     },
+     "review": {
+      "status": "complete",
+      "visualMethod": "sampledFrames",
+      "audioMethod": "unassessed",
+      "sampledPoints": [
+       0,
+       4,
+       8
+      ],
+      "watchedIntervals": [],
+      "observedActions": [
+       {
+        "atSec": 4,
+        "action": "Opens a fictional case and returns it to a travel bag.",
+        "meaningfulUse": true
+       }
+      ],
+      "claims": [],
+      "inferences": [],
+      "sourceRef": "synthetic:review:2"
+     },
+     "comments": {
+      "status": "unavailable",
+      "reason": "Synthetic source-access limitation."
+     }
+    },
+    {
+     "postId": "synthetic-post-3",
+     "canonicalMediaId": "synthetic-media-3",
+     "network": "instagram",
+     "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_3/",
+     "publishedAt": "2026-10-02T12:00:00.000Z",
+     "observedAt": "2026-11-04T12:00:00.000Z",
+     "relevant": true,
+     "nativeLikes": {
+      "status": "known",
+      "value": 201,
+      "exact": true,
+      "sourceRef": "synthetic:metric:3"
+     },
+     "review": {
+      "status": "complete",
+      "visualMethod": "sampledFrames",
+      "audioMethod": "unassessed",
+      "sampledPoints": [
+       0,
+       4,
+       8
+      ],
+      "watchedIntervals": [],
+      "observedActions": [],
+      "claims": [],
+      "inferences": [],
+      "sourceRef": "synthetic:review:3"
+     },
+     "comments": {
+      "status": "observed",
+      "ordering": "First visible top-level rows in source order",
+      "observedAt": "2026-11-04T12:00:00.000Z",
+      "rows": []
+     }
+    }
+   ],
+   "recentPosts": [
+    {
+     "postId": "synthetic-recent-1",
+     "canonicalMediaId": "synthetic-recent-media-1",
+     "publishedAt": "2026-10-01T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 5,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:1"
+     },
+     "views": {
+      "status": "known",
+      "value": 0,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-2",
+     "canonicalMediaId": "synthetic-recent-media-2",
+     "publishedAt": "2026-10-02T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 301,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:2"
+     },
+     "views": {
+      "status": "known",
+      "value": 100,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-3",
+     "canonicalMediaId": "synthetic-recent-media-3",
+     "publishedAt": "2026-10-03T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 5,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:3"
+     },
+     "views": {
+      "status": "known",
+      "value": 200,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-4",
+     "canonicalMediaId": "synthetic-recent-media-4",
+     "publishedAt": "2026-10-04T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 301,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:4"
+     },
+     "views": {
+      "status": "known",
+      "value": 300,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-5",
+     "canonicalMediaId": "synthetic-recent-media-5",
+     "publishedAt": "2026-10-05T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 5,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:5"
+     },
+     "views": {
+      "status": "known",
+      "value": 400,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-6",
+     "canonicalMediaId": "synthetic-recent-media-6",
+     "publishedAt": "2026-10-06T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 301,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:6"
+     },
+     "views": {
+      "status": "known",
+      "value": 500,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-7",
+     "canonicalMediaId": "synthetic-recent-media-7",
+     "publishedAt": "2026-10-07T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 5,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:7"
+     },
+     "views": {
+      "status": "known",
+      "value": 600,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-8",
+     "canonicalMediaId": "synthetic-recent-media-8",
+     "publishedAt": "2026-10-08T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 301,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:8"
+     },
+     "views": {
+      "status": "known",
+      "value": 700,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-9",
+     "canonicalMediaId": "synthetic-recent-media-9",
+     "publishedAt": "2026-10-09T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 5,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:9"
+     },
+     "views": {
+      "status": "known",
+      "value": 800,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    },
+    {
+     "postId": "synthetic-recent-10",
+     "canonicalMediaId": "synthetic-recent-media-10",
+     "publishedAt": "2026-10-10T12:00:00.000Z",
+     "relevant": true,
+     "pinned": false,
+     "nativeLikes": {
+      "status": "known",
+      "value": 301,
+      "exact": true,
+      "sourceRef": "synthetic:recent-likes:10"
+     },
+     "views": {
+      "status": "known",
+      "value": 900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot"
+     },
+     "paid": "no"
+    }
+   ],
+   "ratings": {
+    "routine": 5,
+    "demo": 4
+   },
+   "criterionRatings": {
+    "verifiedCommerce": 3,
+    "audienceAlignment": 4,
+    "reliability": 4,
+    "offerEconomics": 4
+   },
+   "criterionEvidenceRefs": {
+    "verifiedCommerce": [
+     "synthetic:criterion-proof:verifiedCommerce"
+    ],
+    "audienceAlignment": [
+     "synthetic:criterion-proof:audienceAlignment"
+    ],
+    "reliability": [
+     "synthetic:criterion-proof:reliability"
+    ],
+    "offerEconomics": [
+     "synthetic:criterion-proof:offerEconomics"
+    ]
+   },
+   "invitationGates": [
+    {
+     "id": "identity",
+     "status": "pass",
+     "sourceRef": "synthetic:invite:identity"
+    },
+    {
+     "id": "sourcePermission",
+     "status": "pass",
+     "sourceRef": "synthetic:invite:sourcePermission"
+    },
+    {
+     "id": "suppression",
+     "status": "pass",
+     "sourceRef": "synthetic:invite:suppression"
+    },
+    {
+     "id": "supportedBrief",
+     "status": "pass",
+     "sourceRef": "synthetic:invite:supportedBrief"
+    }
+   ],
+   "activationGates": [
+    {
+     "id": "audience",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:audience"
+    },
+    {
+     "id": "terms",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:terms"
+    },
+    {
+     "id": "programEligibility",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:programEligibility"
+    },
+    {
+     "id": "attribution",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:attribution"
+    },
+    {
+     "id": "supportedClaims",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:supportedClaims"
+    },
+    {
+     "id": "websiteProgramEligibility",
+     "status": "pass",
+     "sourceRef": "synthetic:activate:websiteProgramEligibility"
+    }
+   ]
+  },
+  "source": {
+   "workspaceId": "synthetic-workspace",
+   "accountId": "synthetic-account",
+   "creatorId": "synthetic-frozen-creator",
+   "checkoutRoute": "website",
+   "termsRevision": "synthetic-terms-v1",
+   "evidenceRevision": "synthetic-evidence-v1",
+   "creatorSourceId": "source-creator-id",
+   "sourceRef": "fixture:provider-snapshot",
+   "provider": "external-affiliate",
+   "programId": "fixture-program",
+   "programVersion": "v1",
+   "market": "US",
+   "observedAt": "2020-02-01T00:00:00Z",
+   "validUntil": "2100-01-01T00:00:00Z",
+   "programEligibility": {
+    "status": "pass",
+    "sourceRef": "fixture:program"
+   },
+   "supportedClaims": {
+    "status": "pass",
+    "sourceRef": "fixture:claims"
+   },
+   "terms": {
+    "origin": "provider",
+    "shopAdsRateBps": null,
+    "nativeStandardRateVersion": null,
+    "nativeAdsRateVersion": null,
+    "offerId": "fixture-offer",
+    "version": "v1",
+    "manifestHash": "synthetic-manifest-digest",
+    "acceptedRef": "fixture:accepted-offer-v1",
+    "termsRevision": "synthetic-terms-v1",
+    "provider": "external-affiliate",
+    "programId": "fixture-program",
+    "programVersion": "v1",
+    "currency": "USD",
+    "commission": {
+     "kind": "percentage",
+     "basisPoints": 2000
+    },
+    "eligibleBase": "retained merchandise",
+    "refundRule": "reverse refunded credit",
+    "guaranteedFeeMinor": 0
+   },
+   "commerce": {
+    "kind": "website",
+    "linkOrCodeRef": "fixture:link",
+    "attributionPrecedence": "fixture:precedence",
+    "test": {
+     "expectedProviderCredit": true,
+     "orderId": "test-order",
+     "refundOfOrderId": "test-order",
+     "refundApplied": true,
+     "sourceRef": "fixture:test-order-and-refund"
+    }
+   },
+   "metrics": [
+    {
+     "name": "retainedSales",
+     "value": 2500,
+     "unit": "minorCurrency",
+     "currency": "USD",
+     "definition": "Net of mature refunds",
+     "denominator": "eligible creator orders",
+     "windowStart": "2020-01-01T00:00:00Z",
+     "windowEnd": "2020-02-01T00:00:00Z",
+     "sampleSize": 2,
+     "maturity": "mature",
+     "sourceRef": "synthetic:criterion-proof:verifiedCommerce"
+    }
+   ],
+   "audience": {
+    "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+    "denominator": "audience panel",
+    "sampleSize": 150,
+    "windowStart": "2020-01-01T00:00:00Z",
+    "windowEnd": "2020-02-01T00:00:00Z",
+    "country": "source aggregate geography",
+    "age": "source aggregate age groups",
+    "language": "source aggregate languages",
+    "alignment": "pass",
+    "sourceType": "authorizedNativeAnalytics",
+    "provenanceRef": "fixture:audience-report"
+   },
+   "reliability": {
+    "status": "pass",
+    "sourceRef": "synthetic:criterion-proof:reliability"
+   },
+   "economics": {
+    "status": "pass",
+    "sourceRef": "synthetic:criterion-proof:offerEconomics"
+   },
+   "criteria": [
+    {
+     "id": "verifiedCommerce",
+     "sourceRefs": [
+      "synthetic:criterion-proof:verifiedCommerce"
+     ],
+     "rating": 3,
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "audienceAlignment",
+     "sourceRefs": [
+      "synthetic:criterion-proof:audienceAlignment"
+     ],
+     "rating": 4,
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "reliability",
+     "sourceRefs": [
+      "synthetic:criterion-proof:reliability"
+     ],
+     "rating": 4,
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "offerEconomics",
+     "sourceRefs": [
+      "synthetic:criterion-proof:offerEconomics"
+     ],
+     "rating": 4,
+     "rationale": "Fixture measurement reviewed for this criterion."
+    }
+   ]
+  }
+ },
+ "expected": {
+  "schemaVersion": "creator-agent.v1",
+  "policyVersion": "2026-11-04",
+  "agentVersion": "1.3.0",
+  "creatorId": "synthetic-frozen-creator",
+  "briefId": "synthetic-travel-use",
+  "evidenceRevision": "synthetic-evidence-v1",
+  "termsRevision": "synthetic-terms-v1",
+  "modelId": "WEBSITE-AFFILIATE-v3",
+  "config": {
+   "status": "bound",
+   "version": "2026-11-04.launch-v1",
+   "hash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6",
+   "baselineHash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6",
+   "numericHash": "f4d4bccc424dd9a8dfc36cd1b71337b81f441cce312ec2e1b8bfea0e13ac6488"
+  },
+  "configuration": {
+   "criteria": [
+    {
+     "id": "routineFit",
+     "label": "Contextual / routine fit",
+     "weight": 25,
+     "rating": 5
+    },
+    {
+     "id": "demonstrationStorytelling",
+     "label": "Demonstration / storytelling",
+     "weight": 20,
+     "rating": 4
+    },
+    {
+     "id": "verifiedCommerce",
+     "label": "Verified comparable commerce",
+     "weight": 15,
+     "rating": 3
+    },
+    {
+     "id": "audienceAlignment",
+     "label": "Audience alignment",
+     "weight": 15,
+     "rating": 4
+    },
+    {
+     "id": "reliability",
+     "label": "Collaboration reliability",
+     "weight": 10,
+     "rating": 4
+    },
+    {
+     "id": "offerEconomics",
+     "label": "Offer economics",
+     "weight": 15,
+     "rating": 4
+    }
+   ],
+   "bands": [
+    {
+     "id": "hold",
+     "min": 0
+    },
+    {
+     "id": "manualReview",
+     "min": 65
+    },
+    {
+     "id": "priorityReview",
+     "min": 80
+    }
+   ],
+   "arithmetic": "weight*rating/5;round-complete-total;no-rescaling"
+  },
+  "state": "activationReady",
+  "contentQualification": "pass",
+  "gates": [
+   {
+    "id": "QUALIFYING_POSTS",
+    "state": "pass",
+    "reason": "3/3 independent relevant complete posts with exact native likes >200"
+   },
+   {
+    "id": "PUBLICATION_DATES",
+    "state": "pass",
+    "reason": "2/2 publication dates"
+   },
+   {
+    "id": "MEANINGFUL_USE",
+    "state": "pass",
+    "reason": "2/2 on-brief action/use examples"
+   },
+   {
+    "id": "ROUTINE_FLOOR",
+    "state": "pass",
+    "reason": "Verified rating 5/5; minimum 3/5"
+   },
+   {
+    "id": "DEMO_FLOOR",
+    "state": "pass",
+    "reason": "Verified rating 4/5; minimum 3/5"
+   },
+   {
+    "id": "CONFIG_BOUND",
+    "state": "pass",
+    "reason": "Immutable current/baseline numeric configuration verified"
+   },
+   {
+    "id": "INVITE:identity",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:identity"
+   },
+   {
+    "id": "INVITE:sourcePermission",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:sourcePermission"
+   },
+   {
+    "id": "INVITE:suppression",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:suppression"
+   },
+   {
+    "id": "INVITE:supportedBrief",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:supportedBrief"
+   },
+   {
+    "id": "ACTIVATE:audience",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:audience"
+   },
+   {
+    "id": "ACTIVATE:terms",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:terms"
+   },
+   {
+    "id": "ACTIVATE:programEligibility",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:programEligibility"
+   },
+   {
+    "id": "ACTIVATE:attribution",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:attribution"
+   },
+   {
+    "id": "ACTIVATE:supportedClaims",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:supportedClaims"
+   },
+   {
+    "id": "ACTIVATE:websiteProgramEligibility",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+   },
+   {
+    "id": "SOURCE:route",
+    "state": "pass",
+    "reason": "fixture:program"
+   },
+   {
+    "id": "SOURCE:terms",
+    "state": "pass",
+    "reason": "fixture:accepted-offer-v1"
+   },
+   {
+    "id": "SOURCE:audience",
+    "state": "pass",
+    "reason": "synthetic:criterion-proof:audienceAlignment"
+   },
+   {
+    "id": "SOURCE:supportedClaims",
+    "state": "pass",
+    "reason": "fixture:claims"
+   },
+   {
+    "id": "SOURCE:offerEconomics",
+    "state": "pass",
+    "reason": "synthetic:criterion-proof:offerEconomics"
+   },
+   {
+    "id": "SOURCE:websiteLink",
+    "state": "pass",
+    "reason": "fixture:link"
+   },
+   {
+    "id": "SOURCE:attributionPrecedence",
+    "state": "pass",
+    "reason": "fixture:precedence"
+   },
+   {
+    "id": "SOURCE:orderRefundTest",
+    "state": "pass",
+    "reason": "fixture:test-order-and-refund"
+   },
+   {
+    "id": "INVITE_NUMERIC_RULES",
+    "state": "pass",
+    "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+   }
+  ],
+  "packet": {
+   "qualifyingPosts": 3,
+   "publicationDates": 2,
+   "meaningfulUsePosts": 2,
+   "postIds": [
+    "synthetic-post-1",
+    "synthetic-post-2",
+    "synthetic-post-3"
+   ]
+  },
+  "criteria": {
+   "routine": 5,
+   "demo": 4
+  },
+  "score": {
+   "earned": 82,
+   "max": 100,
+   "total": 82,
+   "unknownCount": 0,
+   "band": "priorityReview"
+  },
+  "metadata": {
+   "sampleSize": 10,
+   "coverage": "complete",
+   "reasonCodes": [],
+   "postIds": [
+    "synthetic-recent-10",
+    "synthetic-recent-9",
+    "synthetic-recent-8",
+    "synthetic-recent-7",
+    "synthetic-recent-6",
+    "synthetic-recent-5",
+    "synthetic-recent-4",
+    "synthetic-recent-3",
+    "synthetic-recent-2",
+    "synthetic-recent-1"
+   ],
+   "medianViews": 450,
+   "minViews": 0,
+   "maxViews": 900,
+   "comparableViewCount": 10
+  },
+  "comments": [
+   {
+    "postId": "synthetic-post-1",
+    "status": "observed",
+    "rowCount": 2,
+    "uniqueAuthors": 2,
+    "unknownAuthorRows": 0,
+    "promptedRows": 1,
+    "creatorRows": 0,
+    "promotionalRows": 0,
+    "categoryCounts": {
+     "generalReaction": 0,
+     "routineApplication": 0,
+     "productUnderstanding": 1,
+     "practicalObjection": 0,
+     "purchaseEvaluation": 1,
+     "promptedKeyword": 1,
+     "selfReportedOwnership": 0
+    },
+    "ordering": "First visible top-level rows in source order",
+    "reason": null
+   },
+   {
+    "postId": "synthetic-post-2",
+    "status": "unavailable",
+    "rowCount": null,
+    "uniqueAuthors": null,
+    "unknownAuthorRows": null,
+    "promptedRows": null,
+    "creatorRows": null,
+    "promotionalRows": null,
+    "categoryCounts": null,
+    "ordering": null,
+    "reason": "Synthetic source-access limitation."
+   },
+   {
+    "postId": "synthetic-post-3",
+    "status": "observed",
+    "rowCount": 0,
+    "uniqueAuthors": 0,
+    "unknownAuthorRows": 0,
+    "promptedRows": 0,
+    "creatorRows": 0,
+    "promotionalRows": 0,
+    "categoryCounts": {
+     "generalReaction": 0,
+     "routineApplication": 0,
+     "productUnderstanding": 0,
+     "practicalObjection": 0,
+     "purchaseEvaluation": 0,
+     "promptedKeyword": 0,
+     "selfReportedOwnership": 0
+    },
+    "ordering": "First visible top-level rows in source order",
+    "reason": null
+   }
+  ],
+  "reviews": [
+   {
+    "postId": "synthetic-post-1",
+    "status": "complete",
+    "visualMethod": "continuous",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 0,
+    "continuousSeconds": 8,
+    "likeGate": "pass"
+   },
+   {
+    "postId": "synthetic-post-2",
+    "status": "complete",
+    "visualMethod": "sampledFrames",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 3,
+    "continuousSeconds": 0,
+    "likeGate": "pass"
+   },
+   {
+    "postId": "synthetic-post-3",
+    "status": "complete",
+    "visualMethod": "sampledFrames",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 3,
+    "continuousSeconds": 0,
+    "likeGate": "pass"
+   }
+  ],
+  "routeEvidence": {
+   "route": "website",
+   "status": "verified",
+   "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+   "reason": "SOURCE_VERIFIED",
+   "sourceRef": "fixture:provider-snapshot",
+   "provider": "external-affiliate",
+   "programId": "fixture-program",
+   "programVersion": "v1",
+   "market": "US",
+   "creatorSourceId": "source-creator-id",
+   "observedAt": "2020-02-01T00:00:00Z",
+   "validUntil": "2100-01-01T00:00:00Z",
+   "coveredWeight": 100,
+   "metrics": [
+    {
+     "name": "retainedSales",
+     "unit": "minorCurrency",
+     "currency": "USD",
+     "definition": "Net of mature refunds",
+     "denominator": "eligible creator orders",
+     "windowStart": "2020-01-01T00:00:00Z",
+     "windowEnd": "2020-02-01T00:00:00Z",
+     "sampleSize": 2,
+     "maturity": "mature",
+     "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+     "value": 2500
+    }
+   ],
+   "confidence": {
+    "completePublicReviews": 3,
+    "distinctPublicationDates": 2,
+    "commentsObservedPosts": 2,
+    "unassessedAudioPosts": 3,
+    "verifiedCriteria": 6,
+    "configuredCriteria": 6,
+    "sourceCoverage": "complete"
+   },
+   "criteria": [
+    {
+     "id": "routineFit",
+     "rating": 5,
+     "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+     "sourceRefs": [
+      "synthetic:review:1",
+      "synthetic:review:2",
+      "synthetic:review:3"
+     ],
+     "rationale": null
+    },
+    {
+     "id": "demonstrationStorytelling",
+     "rating": 4,
+     "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+     "sourceRefs": [
+      "synthetic:review:1",
+      "synthetic:review:2",
+      "synthetic:review:3"
+     ],
+     "rationale": null
+    },
+    {
+     "id": "verifiedCommerce",
+     "rating": 3,
+     "anchor": "Source-defined retained sales support this category in a comparable window.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:verifiedCommerce"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "audienceAlignment",
+     "rating": 4,
+     "anchor": "Comparable audience observations repeatedly support the brief.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:audienceAlignment"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "reliability",
+     "rating": 4,
+     "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:reliability"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "offerEconomics",
+     "rating": 4,
+     "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:offerEconomics"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    }
+   ],
+   "comparison": {
+    "status": "known",
+    "count": 10,
+    "median": 450,
+    "spread": 900,
+    "definition": "synthetic native video views",
+    "window": "lifetime at synthetic snapshot",
+    "paid": "no",
+    "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+    "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+   },
+   "commerce": {
+    "kind": "website",
+    "linkOrCodeRef": "fixture:link",
+    "attributionPrecedence": "fixture:precedence",
+    "test": {
+     "expectedProviderCredit": true,
+     "orderId": "test-order",
+     "refundOfOrderId": "test-order",
+     "refundApplied": true,
+     "sourceRef": "fixture:test-order-and-refund"
+    }
+   },
+   "acceptedTerms": {
+    "origin": "provider",
+    "offerId": "fixture-offer",
+    "version": "v1",
+    "manifestHash": "synthetic-manifest-digest",
+    "acceptedRef": "fixture:accepted-offer-v1",
+    "termsRevision": "synthetic-terms-v1",
+    "shopAdsRateBps": null,
+    "nativeStandardRateVersion": null,
+    "nativeAdsRateVersion": null,
+    "provider": "external-affiliate",
+    "programId": "fixture-program",
+    "programVersion": "v1",
+    "currency": "USD",
+    "commission": {
+     "kind": "percentage",
+     "basisPoints": 2000
+    },
+    "eligibleBase": "retained merchandise",
+    "refundRule": "reverse refunded credit",
+    "guaranteedFeeMinor": 0
+   },
+   "audience": {
+    "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+    "denominator": "audience panel",
+    "sampleSize": 150,
+    "windowStart": "2020-01-01T00:00:00Z",
+    "windowEnd": "2020-02-01T00:00:00Z",
+    "country": "source aggregate geography",
+    "age": "source aggregate age groups",
+    "language": "source aggregate languages",
+    "alignment": "pass",
+    "sourceType": "authorizedNativeAnalytics",
+    "provenanceRef": "fixture:audience-report"
+   }
+  },
+  "reasonCodes": [],
+  "rubricVersion": "route-proof.v1",
+  "offer": {
+   "state": "bound",
+   "origin": "provider",
+   "version": "v1",
+   "manifestHash": "synthetic-manifest-digest"
+  },
+  "scoreBounds": {
+   "min": 82,
+   "max": 82,
+   "total": 82
+  },
+  "calibrationState": "provisional",
+  "calibration": {
+   "operatingPolicy": {
+    "status": "approvedOperatingPolicy",
+    "policyVersion": "2026-11-04",
+    "rubricVersion": "route-proof.v1",
+    "configVersion": "2026-11-04.launch-v1"
+   },
+   "salesPrediction": {
+    "status": "unvalidated",
+    "reason": "HELD_OUT_MATURE_OUTCOMES_NOT_ATTACHED"
+   },
+   "heldOutEvaluationRef": null,
+   "retiredFrom": null
+  },
+  "metricCompatibility": [
+   {
+    "feature": "verifiedCommerce",
+    "state": "derived",
+    "inputCount": 1,
+    "dimensions": {
+     "unit": "match",
+     "numeratorDenominator": "match",
+     "window": "match",
+     "cohort": "match",
+     "postAge": "notApplicable",
+     "trafficClass": "unknown",
+     "sourceDefinition": "match",
+     "refundBasis": "match"
+    },
+    "reasons": [
+     "TRAFFIC_CLASS_UNKNOWN",
+     "REFUND_BASIS_LEGACY_DEFINITION"
+    ]
+   },
+   {
+    "feature": "reachBaseline",
+    "state": "derived",
+    "inputCount": 10,
+    "dimensions": {
+     "unit": "match",
+     "numeratorDenominator": "notApplicable",
+     "window": "match",
+     "cohort": "match",
+     "postAge": "unknown",
+     "trafficClass": "match",
+     "sourceDefinition": "match",
+     "refundBasis": "notApplicable"
+    },
+    "reasons": [
+     "POST_AGE_SNAPSHOT_UNAVAILABLE"
+    ]
+   },
+   {
+    "feature": "engagementRate",
+    "state": "unavailable",
+    "inputCount": 3,
+    "dimensions": {
+     "unit": "unknown",
+     "numeratorDenominator": "unknown",
+     "window": "unknown",
+     "cohort": "unknown",
+     "postAge": "unknown",
+     "trafficClass": "unknown",
+     "sourceDefinition": "unknown",
+     "refundBasis": "notApplicable"
+    },
+    "reasons": [
+     "VIEWS_MISSING",
+     "COMMENT_TOTAL_MISSING",
+     "SHARES_MISSING",
+     "SAVES_MISSING"
+    ]
+   }
+  ],
+  "reviewerOverrides": [],
+  "reviewerOverrideCount": 0,
+  "dimensions": {
+   "creativeFit": "pass",
+   "commerceEvidence": "verified",
+   "confidence": "complete",
+   "financialReadiness": "unavailable"
+  },
+  "economics": {
+   "policy": {
+    "ref": "CEO-v1",
+    "status": "pendingOwnerApproval",
+    "appliedAsPolicy": false
+   },
+   "ledger": {
+    "owner": "J11",
+    "state": "notConnected"
+   },
+   "fields": {
+    "retainedNetMerchandise": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "retainedOrders": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "retainedUnits": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "bundleMix": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "returns": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "contributionAfterCosts": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "acquisitionPayback": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "rewardProgress": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    },
+    "rewardLiability": {
+     "state": "unavailable",
+     "reason": "J11_RETAINED_SALES_LEDGER_NOT_CONNECTED"
+    }
+   }
+  },
+  "nextAction": {
+   "recommendation": "activationReady",
+   "basisHash": "0f696df91fc108604e725aa821c4951bdb3905027291028f6849aaa04ebdb571",
+   "mode": "propose",
+   "dispatch": "none",
+   "confersApproval": false,
+   "effects": {
+    "sends": false,
+    "spends": false,
+    "enrolls": false,
+    "ships": false
+   }
+  },
+  "rescore": {
+   "triggers": [
+    "initial"
+   ],
+   "priorRevision": null
+  }
+ },
+ "cases": {
+  "viralOutlier": {
+   "change": "The oldest of the ten baseline posts has 5,000,000 views; every other input is the base.",
+   "delta": {
+    "metadata": {
+     "sampleSize": 10,
+     "coverage": "complete",
+     "reasonCodes": [],
+     "postIds": [
+      "synthetic-recent-10",
+      "synthetic-recent-9",
+      "synthetic-recent-8",
+      "synthetic-recent-7",
+      "synthetic-recent-6",
+      "synthetic-recent-5",
+      "synthetic-recent-4",
+      "synthetic-recent-3",
+      "synthetic-recent-2",
+      "synthetic-recent-1"
+     ],
+     "medianViews": 550,
+     "minViews": 100,
+     "maxViews": 5000000,
+     "comparableViewCount": 10
+    },
+    "routeEvidence": {
+     "route": "website",
+     "status": "verified",
+     "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+     "reason": "SOURCE_VERIFIED",
+     "sourceRef": "fixture:provider-snapshot",
+     "provider": "external-affiliate",
+     "programId": "fixture-program",
+     "programVersion": "v1",
+     "market": "US",
+     "creatorSourceId": "source-creator-id",
+     "observedAt": "2020-02-01T00:00:00Z",
+     "validUntil": "2100-01-01T00:00:00Z",
+     "coveredWeight": 100,
+     "metrics": [
+      {
+       "name": "retainedSales",
+       "unit": "minorCurrency",
+       "currency": "USD",
+       "definition": "Net of mature refunds",
+       "denominator": "eligible creator orders",
+       "windowStart": "2020-01-01T00:00:00Z",
+       "windowEnd": "2020-02-01T00:00:00Z",
+       "sampleSize": 2,
+       "maturity": "mature",
+       "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+       "value": 2500
+      }
+     ],
+     "confidence": {
+      "completePublicReviews": 3,
+      "distinctPublicationDates": 2,
+      "commentsObservedPosts": 2,
+      "unassessedAudioPosts": 3,
+      "verifiedCriteria": 6,
+      "configuredCriteria": 6,
+      "sourceCoverage": "complete"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": 3,
+       "anchor": "Source-defined retained sales support this category in a comparable window.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:verifiedCommerce"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": 4,
+       "anchor": "Comparable audience observations repeatedly support the brief.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:audienceAlignment"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "reliability",
+       "rating": 4,
+       "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:reliability"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "offerEconomics",
+       "rating": 4,
+       "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:offerEconomics"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      }
+     ],
+     "comparison": {
+      "status": "known",
+      "count": 10,
+      "median": 550,
+      "spread": 4999900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot",
+      "paid": "no",
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": {
+      "kind": "website",
+      "linkOrCodeRef": "fixture:link",
+      "attributionPrecedence": "fixture:precedence",
+      "test": {
+       "expectedProviderCredit": true,
+       "orderId": "test-order",
+       "refundOfOrderId": "test-order",
+       "refundApplied": true,
+       "sourceRef": "fixture:test-order-and-refund"
+      }
+     },
+     "acceptedTerms": {
+      "origin": "provider",
+      "offerId": "fixture-offer",
+      "version": "v1",
+      "manifestHash": "synthetic-manifest-digest",
+      "acceptedRef": "fixture:accepted-offer-v1",
+      "termsRevision": "synthetic-terms-v1",
+      "shopAdsRateBps": null,
+      "nativeStandardRateVersion": null,
+      "nativeAdsRateVersion": null,
+      "provider": "external-affiliate",
+      "programId": "fixture-program",
+      "programVersion": "v1",
+      "currency": "USD",
+      "commission": {
+       "kind": "percentage",
+       "basisPoints": 2000
+      },
+      "eligibleBase": "retained merchandise",
+      "refundRule": "reverse refunded credit",
+      "guaranteedFeeMinor": 0
+     },
+     "audience": {
+      "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+      "denominator": "audience panel",
+      "sampleSize": 150,
+      "windowStart": "2020-01-01T00:00:00Z",
+      "windowEnd": "2020-02-01T00:00:00Z",
+      "country": "source aggregate geography",
+      "age": "source aggregate age groups",
+      "language": "source aggregate languages",
+      "alignment": "pass",
+      "sourceType": "authorizedNativeAnalytics",
+      "provenanceRef": "fixture:audience-report"
+     }
+    }
+   }
+  },
+  "missingShares": {
+   "change": "The reviewed posts are J20-collected with exact views, comment totals and saves, but the source hides shares.",
+   "delta": {
+    "gates": [
+     {
+      "id": "QUALIFYING_POSTS",
+      "state": "pass",
+      "reason": "3/3 independent relevant complete posts with exact native likes >200"
+     },
+     {
+      "id": "PUBLICATION_DATES",
+      "state": "pass",
+      "reason": "3/2 publication dates"
+     },
+     {
+      "id": "MEANINGFUL_USE",
+      "state": "pass",
+      "reason": "3/2 on-brief action/use examples"
+     },
+     {
+      "id": "ROUTINE_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 5/5; minimum 3/5"
+     },
+     {
+      "id": "DEMO_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 4/5; minimum 3/5"
+     },
+     {
+      "id": "CONFIG_BOUND",
+      "state": "pass",
+      "reason": "Immutable current/baseline numeric configuration verified"
+     },
+     {
+      "id": "INVITE:identity",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:identity"
+     },
+     {
+      "id": "INVITE:sourcePermission",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:sourcePermission"
+     },
+     {
+      "id": "INVITE:suppression",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:suppression"
+     },
+     {
+      "id": "INVITE:supportedBrief",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:supportedBrief"
+     },
+     {
+      "id": "ACTIVATE:audience",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:audience"
+     },
+     {
+      "id": "ACTIVATE:terms",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:terms"
+     },
+     {
+      "id": "ACTIVATE:programEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:programEligibility"
+     },
+     {
+      "id": "ACTIVATE:attribution",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:attribution"
+     },
+     {
+      "id": "ACTIVATE:supportedClaims",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:supportedClaims"
+     },
+     {
+      "id": "ACTIVATE:websiteProgramEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+     },
+     {
+      "id": "SOURCE:route",
+      "state": "pass",
+      "reason": "fixture:program"
+     },
+     {
+      "id": "SOURCE:terms",
+      "state": "pass",
+      "reason": "fixture:accepted-offer-v1"
+     },
+     {
+      "id": "SOURCE:audience",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:audienceAlignment"
+     },
+     {
+      "id": "SOURCE:supportedClaims",
+      "state": "pass",
+      "reason": "fixture:claims"
+     },
+     {
+      "id": "SOURCE:offerEconomics",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:offerEconomics"
+     },
+     {
+      "id": "SOURCE:websiteLink",
+      "state": "pass",
+      "reason": "fixture:link"
+     },
+     {
+      "id": "SOURCE:attributionPrecedence",
+      "state": "pass",
+      "reason": "fixture:precedence"
+     },
+     {
+      "id": "SOURCE:orderRefundTest",
+      "state": "pass",
+      "reason": "fixture:test-order-and-refund"
+     },
+     {
+      "id": "INVITE_NUMERIC_RULES",
+      "state": "pass",
+      "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+     }
+    ],
+    "packet": {
+     "qualifyingPosts": 3,
+     "publicationDates": 3,
+     "meaningfulUsePosts": 3,
+     "postIds": [
+      "j20-synthetic-1",
+      "j20-synthetic-2",
+      "j20-synthetic-3"
+     ]
+    },
+    "comments": [
+     {
+      "postId": "j20-synthetic-1",
+      "status": "unknown",
+      "rowCount": null,
+      "uniqueAuthors": null,
+      "unknownAuthorRows": null,
+      "promptedRows": null,
+      "creatorRows": null,
+      "promotionalRows": null,
+      "categoryCounts": null,
+      "ordering": null,
+      "reason": "Synthetic comments not inspected."
+     },
+     {
+      "postId": "j20-synthetic-2",
+      "status": "unknown",
+      "rowCount": null,
+      "uniqueAuthors": null,
+      "unknownAuthorRows": null,
+      "promptedRows": null,
+      "creatorRows": null,
+      "promotionalRows": null,
+      "categoryCounts": null,
+      "ordering": null,
+      "reason": "Synthetic comments not inspected."
+     },
+     {
+      "postId": "j20-synthetic-3",
+      "status": "unknown",
+      "rowCount": null,
+      "uniqueAuthors": null,
+      "unknownAuthorRows": null,
+      "promptedRows": null,
+      "creatorRows": null,
+      "promotionalRows": null,
+      "categoryCounts": null,
+      "ordering": null,
+      "reason": "Synthetic comments not inspected."
+     }
+    ],
+    "reviews": [
+     {
+      "postId": "j20-synthetic-1",
+      "status": "complete",
+      "visualMethod": "continuous",
+      "audioMethod": "heard",
+      "sampledPointCount": 0,
+      "continuousSeconds": 30,
+      "likeGate": "pass"
+     },
+     {
+      "postId": "j20-synthetic-2",
+      "status": "complete",
+      "visualMethod": "continuous",
+      "audioMethod": "heard",
+      "sampledPointCount": 0,
+      "continuousSeconds": 30,
+      "likeGate": "pass"
+     },
+     {
+      "postId": "j20-synthetic-3",
+      "status": "complete",
+      "visualMethod": "continuous",
+      "audioMethod": "heard",
+      "sampledPointCount": 0,
+      "continuousSeconds": 30,
+      "likeGate": "pass"
+     }
+    ],
+    "routeEvidence": {
+     "route": "website",
+     "status": "verified",
+     "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+     "reason": "SOURCE_VERIFIED",
+     "sourceRef": "fixture:provider-snapshot",
+     "provider": "external-affiliate",
+     "programId": "fixture-program",
+     "programVersion": "v1",
+     "market": "US",
+     "creatorSourceId": "source-creator-id",
+     "observedAt": "2020-02-01T00:00:00Z",
+     "validUntil": "2100-01-01T00:00:00Z",
+     "coveredWeight": 100,
+     "metrics": [
+      {
+       "name": "retainedSales",
+       "unit": "minorCurrency",
+       "currency": "USD",
+       "definition": "Net of mature refunds",
+       "denominator": "eligible creator orders",
+       "windowStart": "2020-01-01T00:00:00Z",
+       "windowEnd": "2020-02-01T00:00:00Z",
+       "sampleSize": 2,
+       "maturity": "mature",
+       "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+       "value": 2500
+      }
+     ],
+     "confidence": {
+      "completePublicReviews": 3,
+      "distinctPublicationDates": 3,
+      "commentsObservedPosts": 0,
+      "unassessedAudioPosts": 0,
+      "verifiedCriteria": 6,
+      "configuredCriteria": 6,
+      "sourceCoverage": "complete"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:complete",
+        "synthetic:review:complete",
+        "synthetic:review:complete"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:complete",
+        "synthetic:review:complete",
+        "synthetic:review:complete"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": 3,
+       "anchor": "Source-defined retained sales support this category in a comparable window.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:verifiedCommerce"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": 4,
+       "anchor": "Comparable audience observations repeatedly support the brief.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:audienceAlignment"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "reliability",
+       "rating": 4,
+       "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:reliability"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "offerEconomics",
+       "rating": 4,
+       "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:offerEconomics"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      }
+     ],
+     "comparison": {
+      "status": "known",
+      "count": 10,
+      "median": 450,
+      "spread": 900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot",
+      "paid": "no",
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": {
+      "kind": "website",
+      "linkOrCodeRef": "fixture:link",
+      "attributionPrecedence": "fixture:precedence",
+      "test": {
+       "expectedProviderCredit": true,
+       "orderId": "test-order",
+       "refundOfOrderId": "test-order",
+       "refundApplied": true,
+       "sourceRef": "fixture:test-order-and-refund"
+      }
+     },
+     "acceptedTerms": {
+      "origin": "provider",
+      "offerId": "fixture-offer",
+      "version": "v1",
+      "manifestHash": "synthetic-manifest-digest",
+      "acceptedRef": "fixture:accepted-offer-v1",
+      "termsRevision": "synthetic-terms-v1",
+      "shopAdsRateBps": null,
+      "nativeStandardRateVersion": null,
+      "nativeAdsRateVersion": null,
+      "provider": "external-affiliate",
+      "programId": "fixture-program",
+      "programVersion": "v1",
+      "currency": "USD",
+      "commission": {
+       "kind": "percentage",
+       "basisPoints": 2000
+      },
+      "eligibleBase": "retained merchandise",
+      "refundRule": "reverse refunded credit",
+      "guaranteedFeeMinor": 0
+     },
+     "audience": {
+      "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+      "denominator": "audience panel",
+      "sampleSize": 150,
+      "windowStart": "2020-01-01T00:00:00Z",
+      "windowEnd": "2020-02-01T00:00:00Z",
+      "country": "source aggregate geography",
+      "age": "source aggregate age groups",
+      "language": "source aggregate languages",
+      "alignment": "pass",
+      "sourceType": "authorizedNativeAnalytics",
+      "provenanceRef": "fixture:audience-report"
+     }
+    },
+    "metricCompatibility": [
+     {
+      "feature": "verifiedCommerce",
+      "state": "derived",
+      "inputCount": 1,
+      "dimensions": {
+       "unit": "match",
+       "numeratorDenominator": "match",
+       "window": "match",
+       "cohort": "match",
+       "postAge": "notApplicable",
+       "trafficClass": "unknown",
+       "sourceDefinition": "match",
+       "refundBasis": "match"
+      },
+      "reasons": [
+       "TRAFFIC_CLASS_UNKNOWN",
+       "REFUND_BASIS_LEGACY_DEFINITION"
+      ]
+     },
+     {
+      "feature": "reachBaseline",
+      "state": "derived",
+      "inputCount": 10,
+      "dimensions": {
+       "unit": "match",
+       "numeratorDenominator": "notApplicable",
+       "window": "match",
+       "cohort": "match",
+       "postAge": "unknown",
+       "trafficClass": "match",
+       "sourceDefinition": "match",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "POST_AGE_SNAPSHOT_UNAVAILABLE"
+      ]
+     },
+     {
+      "feature": "engagementRate",
+      "state": "unavailable",
+      "inputCount": 3,
+      "dimensions": {
+       "unit": "unknown",
+       "numeratorDenominator": "unknown",
+       "window": "unknown",
+       "cohort": "unknown",
+       "postAge": "unknown",
+       "trafficClass": "unknown",
+       "sourceDefinition": "unknown",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "SHARES_MISSING"
+      ]
+     }
+    ]
+   }
+  },
+  "mixedPaidTraffic": {
+   "change": "Three of the ten baseline posts are paid, and the cited retained sales report mixed organic and paid traffic.",
+   "delta": {
+    "metadata": {
+     "sampleSize": 10,
+     "coverage": "complete",
+     "reasonCodes": [],
+     "postIds": [
+      "synthetic-recent-10",
+      "synthetic-recent-9",
+      "synthetic-recent-8",
+      "synthetic-recent-7",
+      "synthetic-recent-6",
+      "synthetic-recent-5",
+      "synthetic-recent-4",
+      "synthetic-recent-3",
+      "synthetic-recent-2",
+      "synthetic-recent-1"
+     ],
+     "medianViews": null,
+     "minViews": null,
+     "maxViews": null,
+     "comparableViewCount": 10
+    },
+    "routeEvidence": {
+     "route": "website",
+     "status": "verified",
+     "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+     "reason": "SOURCE_VERIFIED",
+     "sourceRef": "fixture:provider-snapshot",
+     "provider": "external-affiliate",
+     "programId": "fixture-program",
+     "programVersion": "v1",
+     "market": "US",
+     "creatorSourceId": "source-creator-id",
+     "observedAt": "2020-02-01T00:00:00Z",
+     "validUntil": "2100-01-01T00:00:00Z",
+     "coveredWeight": 100,
+     "metrics": [
+      {
+       "name": "retainedSales",
+       "unit": "minorCurrency",
+       "currency": "USD",
+       "definition": "Net of mature refunds",
+       "denominator": "eligible creator orders",
+       "windowStart": "2020-01-01T00:00:00Z",
+       "windowEnd": "2020-02-01T00:00:00Z",
+       "sampleSize": 2,
+       "maturity": "mature",
+       "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+       "refundBasis": "excluded",
+       "trafficMix": "mixed",
+       "value": 2500
+      }
+     ],
+     "confidence": {
+      "completePublicReviews": 3,
+      "distinctPublicationDates": 2,
+      "commentsObservedPosts": 2,
+      "unassessedAudioPosts": 3,
+      "verifiedCriteria": 6,
+      "configuredCriteria": 6,
+      "sourceCoverage": "complete"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": 3,
+       "anchor": "Source-defined retained sales support this category in a comparable window.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:verifiedCommerce"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": 4,
+       "anchor": "Comparable audience observations repeatedly support the brief.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:audienceAlignment"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "reliability",
+       "rating": 4,
+       "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:reliability"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "offerEconomics",
+       "rating": 4,
+       "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:offerEconomics"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      }
+     ],
+     "comparison": {
+      "status": "incomparable",
+      "count": 10,
+      "median": null,
+      "spread": null,
+      "definition": null,
+      "window": null,
+      "paid": null,
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": {
+      "kind": "website",
+      "linkOrCodeRef": "fixture:link",
+      "attributionPrecedence": "fixture:precedence",
+      "test": {
+       "expectedProviderCredit": true,
+       "orderId": "test-order",
+       "refundOfOrderId": "test-order",
+       "refundApplied": true,
+       "sourceRef": "fixture:test-order-and-refund"
+      }
+     },
+     "acceptedTerms": {
+      "origin": "provider",
+      "offerId": "fixture-offer",
+      "version": "v1",
+      "manifestHash": "synthetic-manifest-digest",
+      "acceptedRef": "fixture:accepted-offer-v1",
+      "termsRevision": "synthetic-terms-v1",
+      "shopAdsRateBps": null,
+      "nativeStandardRateVersion": null,
+      "nativeAdsRateVersion": null,
+      "provider": "external-affiliate",
+      "programId": "fixture-program",
+      "programVersion": "v1",
+      "currency": "USD",
+      "commission": {
+       "kind": "percentage",
+       "basisPoints": 2000
+      },
+      "eligibleBase": "retained merchandise",
+      "refundRule": "reverse refunded credit",
+      "guaranteedFeeMinor": 0
+     },
+     "audience": {
+      "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+      "denominator": "audience panel",
+      "sampleSize": 150,
+      "windowStart": "2020-01-01T00:00:00Z",
+      "windowEnd": "2020-02-01T00:00:00Z",
+      "country": "source aggregate geography",
+      "age": "source aggregate age groups",
+      "language": "source aggregate languages",
+      "alignment": "pass",
+      "sourceType": "authorizedNativeAnalytics",
+      "provenanceRef": "fixture:audience-report"
+     }
+    },
+    "metricCompatibility": [
+     {
+      "feature": "verifiedCommerce",
+      "state": "derived",
+      "inputCount": 1,
+      "dimensions": {
+       "unit": "match",
+       "numeratorDenominator": "match",
+       "window": "match",
+       "cohort": "match",
+       "postAge": "notApplicable",
+       "trafficClass": "unknown",
+       "sourceDefinition": "match",
+       "refundBasis": "match"
+      },
+      "reasons": [
+       "TRAFFIC_INCLUDES_PAID"
+      ]
+     },
+     {
+      "feature": "reachBaseline",
+      "state": "incompatible",
+      "inputCount": 10,
+      "dimensions": {
+       "unit": "match",
+       "numeratorDenominator": "notApplicable",
+       "window": "match",
+       "cohort": "match",
+       "postAge": "unknown",
+       "trafficClass": "mismatch",
+       "sourceDefinition": "match",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "POST_AGE_SNAPSHOT_UNAVAILABLE",
+       "TRAFFIC_CLASS_MIXED"
+      ]
+     },
+     {
+      "feature": "engagementRate",
+      "state": "unavailable",
+      "inputCount": 3,
+      "dimensions": {
+       "unit": "unknown",
+       "numeratorDenominator": "unknown",
+       "window": "unknown",
+       "cohort": "unknown",
+       "postAge": "unknown",
+       "trafficClass": "unknown",
+       "sourceDefinition": "unknown",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "VIEWS_MISSING",
+       "COMMENT_TOTAL_MISSING",
+       "SHARES_MISSING",
+       "SAVES_MISSING"
+      ]
+     }
+    ]
+   }
+  },
+  "expiredSourceProof": {
+   "change": "The provider envelope carrying audience, commerce and terms proof expired before the assessment time.",
+   "delta": {
+    "configuration": {
+     "criteria": [
+      {
+       "id": "routineFit",
+       "label": "Contextual / routine fit",
+       "weight": 25,
+       "rating": 5
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "label": "Demonstration / storytelling",
+       "weight": 20,
+       "rating": 4
+      },
+      {
+       "id": "verifiedCommerce",
+       "label": "Verified comparable commerce",
+       "weight": 15,
+       "rating": null
+      },
+      {
+       "id": "audienceAlignment",
+       "label": "Audience alignment",
+       "weight": 15,
+       "rating": null
+      },
+      {
+       "id": "reliability",
+       "label": "Collaboration reliability",
+       "weight": 10,
+       "rating": null
+      },
+      {
+       "id": "offerEconomics",
+       "label": "Offer economics",
+       "weight": 15,
+       "rating": null
+      }
+     ],
+     "bands": [
+      {
+       "id": "hold",
+       "min": 0
+      },
+      {
+       "id": "manualReview",
+       "min": 65
+      },
+      {
+       "id": "priorityReview",
+       "min": 80
+      }
+     ],
+     "arithmetic": "weight*rating/5;round-complete-total;no-rescaling"
+    },
+    "state": "prospectiveInviteEligible",
+    "gates": [
+     {
+      "id": "QUALIFYING_POSTS",
+      "state": "pass",
+      "reason": "3/3 independent relevant complete posts with exact native likes >200"
+     },
+     {
+      "id": "PUBLICATION_DATES",
+      "state": "pass",
+      "reason": "2/2 publication dates"
+     },
+     {
+      "id": "MEANINGFUL_USE",
+      "state": "pass",
+      "reason": "2/2 on-brief action/use examples"
+     },
+     {
+      "id": "ROUTINE_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 5/5; minimum 3/5"
+     },
+     {
+      "id": "DEMO_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 4/5; minimum 3/5"
+     },
+     {
+      "id": "CONFIG_BOUND",
+      "state": "pass",
+      "reason": "Immutable current/baseline numeric configuration verified"
+     },
+     {
+      "id": "INVITE:identity",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:identity"
+     },
+     {
+      "id": "INVITE:sourcePermission",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:sourcePermission"
+     },
+     {
+      "id": "INVITE:suppression",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:suppression"
+     },
+     {
+      "id": "INVITE:supportedBrief",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:supportedBrief"
+     },
+     {
+      "id": "ACTIVATE:audience",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:audience"
+     },
+     {
+      "id": "ACTIVATE:terms",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:terms"
+     },
+     {
+      "id": "ACTIVATE:programEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:programEligibility"
+     },
+     {
+      "id": "ACTIVATE:attribution",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:attribution"
+     },
+     {
+      "id": "ACTIVATE:supportedClaims",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:supportedClaims"
+     },
+     {
+      "id": "ACTIVATE:websiteProgramEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+     },
+     {
+      "id": "SOURCE:route",
+      "state": "unknown",
+      "reason": "SOURCE_STALE"
+     },
+     {
+      "id": "INVITE_NUMERIC_RULES",
+      "state": "pass",
+      "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+     }
+    ],
+    "score": {
+     "earned": 41,
+     "max": 100,
+     "total": null,
+     "unknownCount": 4,
+     "band": null
+    },
+    "routeEvidence": {
+     "route": "website",
+     "status": "unknown",
+     "verifiedModelId": null,
+     "reason": "SOURCE_STALE",
+     "sourceRef": null,
+     "provider": null,
+     "programId": null,
+     "programVersion": null,
+     "market": null,
+     "creatorSourceId": null,
+     "observedAt": null,
+     "validUntil": null,
+     "coveredWeight": 45,
+     "metrics": [],
+     "confidence": {
+      "completePublicReviews": 3,
+      "distinctPublicationDates": 2,
+      "commentsObservedPosts": 2,
+      "unassessedAudioPosts": 3,
+      "verifiedCriteria": 2,
+      "configuredCriteria": 6,
+      "sourceCoverage": "unknown"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": null,
+       "anchor": null,
+       "sourceRefs": [],
+       "rationale": null
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": null,
+       "anchor": null,
+       "sourceRefs": [],
+       "rationale": null
+      },
+      {
+       "id": "reliability",
+       "rating": null,
+       "anchor": null,
+       "sourceRefs": [],
+       "rationale": null
+      },
+      {
+       "id": "offerEconomics",
+       "rating": null,
+       "anchor": null,
+       "sourceRefs": [],
+       "rationale": null
+      }
+     ],
+     "comparison": {
+      "status": "known",
+      "count": 10,
+      "median": 450,
+      "spread": 900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot",
+      "paid": "no",
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": null,
+     "acceptedTerms": null,
+     "audience": null
+    },
+    "reasonCodes": [
+     "SOURCE:route"
+    ],
+    "offer": {
+     "state": "none",
+     "reason": "SOURCE_PROOF_UNAVAILABLE"
+    },
+    "scoreBounds": {
+     "min": 41,
+     "max": 96,
+     "total": null
+    },
+    "metricCompatibility": [
+     {
+      "feature": "verifiedCommerce",
+      "state": "unavailable",
+      "inputCount": 0,
+      "dimensions": {
+       "unit": "unknown",
+       "numeratorDenominator": "unknown",
+       "window": "unknown",
+       "cohort": "unknown",
+       "postAge": "notApplicable",
+       "trafficClass": "unknown",
+       "sourceDefinition": "unknown",
+       "refundBasis": "unknown"
+      },
+      "reasons": [
+       "SOURCE_PROOF_UNAVAILABLE"
+      ]
+     },
+     {
+      "feature": "reachBaseline",
+      "state": "derived",
+      "inputCount": 10,
+      "dimensions": {
+       "unit": "match",
+       "numeratorDenominator": "notApplicable",
+       "window": "match",
+       "cohort": "match",
+       "postAge": "unknown",
+       "trafficClass": "match",
+       "sourceDefinition": "match",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "POST_AGE_SNAPSHOT_UNAVAILABLE"
+      ]
+     },
+     {
+      "feature": "engagementRate",
+      "state": "unavailable",
+      "inputCount": 3,
+      "dimensions": {
+       "unit": "unknown",
+       "numeratorDenominator": "unknown",
+       "window": "unknown",
+       "cohort": "unknown",
+       "postAge": "unknown",
+       "trafficClass": "unknown",
+       "sourceDefinition": "unknown",
+       "refundBasis": "notApplicable"
+      },
+      "reasons": [
+       "VIEWS_MISSING",
+       "COMMENT_TOTAL_MISSING",
+       "SHARES_MISSING",
+       "SAVES_MISSING"
+      ]
+     }
+    ],
+    "dimensions": {
+     "creativeFit": "pass",
+     "commerceEvidence": "unavailable",
+     "confidence": "unknown",
+     "financialReadiness": "unavailable"
+    },
+    "nextAction": {
+     "recommendation": "prospectiveInviteEligible",
+     "basisHash": "cdade3e3e3c659104e96e2d195437323aa3fb07a09352c363f59fb6b6272d563",
+     "mode": "propose",
+     "dispatch": "none",
+     "confersApproval": false,
+     "effects": {
+      "sends": false,
+      "spends": false,
+      "enrolls": false,
+      "ships": false
+     }
+    }
+   }
+  },
+  "incompleteFootage": {
+   "change": "The third reviewed post's footage review is partial rather than complete.",
+   "delta": {
+    "state": "reviewNeeded",
+    "contentQualification": "reviewNeeded",
+    "gates": [
+     {
+      "id": "QUALIFYING_POSTS",
+      "state": "unknown",
+      "reason": "2/3 independent relevant complete posts with exact native likes >200"
+     },
+     {
+      "id": "PUBLICATION_DATES",
+      "state": "pass",
+      "reason": "2/2 publication dates"
+     },
+     {
+      "id": "MEANINGFUL_USE",
+      "state": "pass",
+      "reason": "2/2 on-brief action/use examples"
+     },
+     {
+      "id": "ROUTINE_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 5/5; minimum 3/5"
+     },
+     {
+      "id": "DEMO_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 4/5; minimum 3/5"
+     },
+     {
+      "id": "CONFIG_BOUND",
+      "state": "pass",
+      "reason": "Immutable current/baseline numeric configuration verified"
+     },
+     {
+      "id": "INVITE:identity",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:identity"
+     },
+     {
+      "id": "INVITE:sourcePermission",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:sourcePermission"
+     },
+     {
+      "id": "INVITE:suppression",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:suppression"
+     },
+     {
+      "id": "INVITE:supportedBrief",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:supportedBrief"
+     },
+     {
+      "id": "ACTIVATE:audience",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:audience"
+     },
+     {
+      "id": "ACTIVATE:terms",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:terms"
+     },
+     {
+      "id": "ACTIVATE:programEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:programEligibility"
+     },
+     {
+      "id": "ACTIVATE:attribution",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:attribution"
+     },
+     {
+      "id": "ACTIVATE:supportedClaims",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:supportedClaims"
+     },
+     {
+      "id": "ACTIVATE:websiteProgramEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+     },
+     {
+      "id": "SOURCE:route",
+      "state": "pass",
+      "reason": "fixture:program"
+     },
+     {
+      "id": "SOURCE:terms",
+      "state": "pass",
+      "reason": "fixture:accepted-offer-v1"
+     },
+     {
+      "id": "SOURCE:audience",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:audienceAlignment"
+     },
+     {
+      "id": "SOURCE:supportedClaims",
+      "state": "pass",
+      "reason": "fixture:claims"
+     },
+     {
+      "id": "SOURCE:offerEconomics",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:offerEconomics"
+     },
+     {
+      "id": "SOURCE:websiteLink",
+      "state": "pass",
+      "reason": "fixture:link"
+     },
+     {
+      "id": "SOURCE:attributionPrecedence",
+      "state": "pass",
+      "reason": "fixture:precedence"
+     },
+     {
+      "id": "SOURCE:orderRefundTest",
+      "state": "pass",
+      "reason": "fixture:test-order-and-refund"
+     },
+     {
+      "id": "INVITE_NUMERIC_RULES",
+      "state": "pass",
+      "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+     }
+    ],
+    "packet": {
+     "qualifyingPosts": 2,
+     "publicationDates": 2,
+     "meaningfulUsePosts": 2,
+     "postIds": [
+      "synthetic-post-1",
+      "synthetic-post-2"
+     ]
+    },
+    "reviews": [
+     {
+      "postId": "synthetic-post-1",
+      "status": "complete",
+      "visualMethod": "continuous",
+      "audioMethod": "unassessed",
+      "sampledPointCount": 0,
+      "continuousSeconds": 8,
+      "likeGate": "pass"
+     },
+     {
+      "postId": "synthetic-post-2",
+      "status": "complete",
+      "visualMethod": "sampledFrames",
+      "audioMethod": "unassessed",
+      "sampledPointCount": 3,
+      "continuousSeconds": 0,
+      "likeGate": "pass"
+     },
+     {
+      "postId": "synthetic-post-3",
+      "status": "partial",
+      "visualMethod": "sampledFrames",
+      "audioMethod": "unassessed",
+      "sampledPointCount": 3,
+      "continuousSeconds": 0,
+      "likeGate": "pass"
+     }
+    ],
+    "routeEvidence": {
+     "route": "website",
+     "status": "verified",
+     "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+     "reason": "SOURCE_VERIFIED",
+     "sourceRef": "fixture:provider-snapshot",
+     "provider": "external-affiliate",
+     "programId": "fixture-program",
+     "programVersion": "v1",
+     "market": "US",
+     "creatorSourceId": "source-creator-id",
+     "observedAt": "2020-02-01T00:00:00Z",
+     "validUntil": "2100-01-01T00:00:00Z",
+     "coveredWeight": 100,
+     "metrics": [
+      {
+       "name": "retainedSales",
+       "unit": "minorCurrency",
+       "currency": "USD",
+       "definition": "Net of mature refunds",
+       "denominator": "eligible creator orders",
+       "windowStart": "2020-01-01T00:00:00Z",
+       "windowEnd": "2020-02-01T00:00:00Z",
+       "sampleSize": 2,
+       "maturity": "mature",
+       "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+       "value": 2500
+      }
+     ],
+     "confidence": {
+      "completePublicReviews": 2,
+      "distinctPublicationDates": 2,
+      "commentsObservedPosts": 2,
+      "unassessedAudioPosts": 3,
+      "verifiedCriteria": 6,
+      "configuredCriteria": 6,
+      "sourceCoverage": "complete"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": 3,
+       "anchor": "Source-defined retained sales support this category in a comparable window.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:verifiedCommerce"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": 4,
+       "anchor": "Comparable audience observations repeatedly support the brief.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:audienceAlignment"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "reliability",
+       "rating": 4,
+       "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:reliability"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "offerEconomics",
+       "rating": 4,
+       "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:offerEconomics"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      }
+     ],
+     "comparison": {
+      "status": "known",
+      "count": 10,
+      "median": 450,
+      "spread": 900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot",
+      "paid": "no",
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": {
+      "kind": "website",
+      "linkOrCodeRef": "fixture:link",
+      "attributionPrecedence": "fixture:precedence",
+      "test": {
+       "expectedProviderCredit": true,
+       "orderId": "test-order",
+       "refundOfOrderId": "test-order",
+       "refundApplied": true,
+       "sourceRef": "fixture:test-order-and-refund"
+      }
+     },
+     "acceptedTerms": {
+      "origin": "provider",
+      "offerId": "fixture-offer",
+      "version": "v1",
+      "manifestHash": "synthetic-manifest-digest",
+      "acceptedRef": "fixture:accepted-offer-v1",
+      "termsRevision": "synthetic-terms-v1",
+      "shopAdsRateBps": null,
+      "nativeStandardRateVersion": null,
+      "nativeAdsRateVersion": null,
+      "provider": "external-affiliate",
+      "programId": "fixture-program",
+      "programVersion": "v1",
+      "currency": "USD",
+      "commission": {
+       "kind": "percentage",
+       "basisPoints": 2000
+      },
+      "eligibleBase": "retained merchandise",
+      "refundRule": "reverse refunded credit",
+      "guaranteedFeeMinor": 0
+     },
+     "audience": {
+      "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+      "denominator": "audience panel",
+      "sampleSize": 150,
+      "windowStart": "2020-01-01T00:00:00Z",
+      "windowEnd": "2020-02-01T00:00:00Z",
+      "country": "source aggregate geography",
+      "age": "source aggregate age groups",
+      "language": "source aggregate languages",
+      "alignment": "pass",
+      "sourceType": "authorizedNativeAnalytics",
+      "provenanceRef": "fixture:audience-report"
+     }
+    },
+    "reasonCodes": [
+     "QUALIFYING_POSTS"
+    ],
+    "dimensions": {
+     "creativeFit": "reviewNeeded",
+     "commerceEvidence": "verified",
+     "confidence": "complete",
+     "financialReadiness": "unavailable"
+    },
+    "nextAction": {
+     "recommendation": "reviewNeeded",
+     "basisHash": "a9e1a5f00802533da40d1fcda501fad6a46be44b44c0bfbc0699578d0a8d0f39",
+     "mode": "propose",
+     "dispatch": "none",
+     "confersApproval": false,
+     "effects": {
+      "sends": false,
+      "spends": false,
+      "enrolls": false,
+      "ships": false
+     }
+    }
+   }
+  },
+  "changedOffer": {
+   "change": "Accepted saved-offer terms reference v1, but the current saved offer is v2.",
+   "delta": {
+    "termsRevision": "synthetic-manifest-digest",
+    "state": "prospectiveInviteEligible",
+    "gates": [
+     {
+      "id": "QUALIFYING_POSTS",
+      "state": "pass",
+      "reason": "3/3 independent relevant complete posts with exact native likes >200"
+     },
+     {
+      "id": "PUBLICATION_DATES",
+      "state": "pass",
+      "reason": "2/2 publication dates"
+     },
+     {
+      "id": "MEANINGFUL_USE",
+      "state": "pass",
+      "reason": "2/2 on-brief action/use examples"
+     },
+     {
+      "id": "ROUTINE_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 5/5; minimum 3/5"
+     },
+     {
+      "id": "DEMO_FLOOR",
+      "state": "pass",
+      "reason": "Verified rating 4/5; minimum 3/5"
+     },
+     {
+      "id": "CONFIG_BOUND",
+      "state": "pass",
+      "reason": "Immutable current/baseline numeric configuration verified"
+     },
+     {
+      "id": "INVITE:identity",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:identity"
+     },
+     {
+      "id": "INVITE:sourcePermission",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:sourcePermission"
+     },
+     {
+      "id": "INVITE:suppression",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:suppression"
+     },
+     {
+      "id": "INVITE:supportedBrief",
+      "state": "pass",
+      "reason": "pass; source synthetic:invite:supportedBrief"
+     },
+     {
+      "id": "ACTIVATE:audience",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:audience"
+     },
+     {
+      "id": "ACTIVATE:terms",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:terms"
+     },
+     {
+      "id": "ACTIVATE:programEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:programEligibility"
+     },
+     {
+      "id": "ACTIVATE:attribution",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:attribution"
+     },
+     {
+      "id": "ACTIVATE:supportedClaims",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:supportedClaims"
+     },
+     {
+      "id": "ACTIVATE:websiteProgramEligibility",
+      "state": "pass",
+      "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+     },
+     {
+      "id": "SOURCE:route",
+      "state": "pass",
+      "reason": "fixture:program"
+     },
+     {
+      "id": "SOURCE:terms",
+      "state": "unknown",
+      "reason": "Required provider evidence is unknown."
+     },
+     {
+      "id": "SOURCE:audience",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:audienceAlignment"
+     },
+     {
+      "id": "SOURCE:supportedClaims",
+      "state": "pass",
+      "reason": "fixture:claims"
+     },
+     {
+      "id": "SOURCE:offerEconomics",
+      "state": "pass",
+      "reason": "synthetic:criterion-proof:offerEconomics"
+     },
+     {
+      "id": "SOURCE:websiteLink",
+      "state": "pass",
+      "reason": "fixture:link"
+     },
+     {
+      "id": "SOURCE:attributionPrecedence",
+      "state": "pass",
+      "reason": "fixture:precedence"
+     },
+     {
+      "id": "SOURCE:orderRefundTest",
+      "state": "pass",
+      "reason": "fixture:test-order-and-refund"
+     },
+     {
+      "id": "INVITE_NUMERIC_RULES",
+      "state": "pass",
+      "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+     }
+    ],
+    "routeEvidence": {
+     "route": "website",
+     "status": "verified",
+     "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+     "reason": "ACCEPTED_OFFER_MISSING_OR_CHANGED",
+     "sourceRef": "fixture:provider-snapshot",
+     "provider": "shopify-collabs",
+     "programId": "fixture-program",
+     "programVersion": "v1",
+     "market": "US",
+     "creatorSourceId": "source-creator-id",
+     "observedAt": "2020-02-01T00:00:00Z",
+     "validUntil": "2100-01-01T00:00:00Z",
+     "coveredWeight": 100,
+     "metrics": [
+      {
+       "name": "retainedSales",
+       "unit": "minorCurrency",
+       "currency": "USD",
+       "definition": "Net of mature refunds",
+       "denominator": "eligible creator orders",
+       "windowStart": "2020-01-01T00:00:00Z",
+       "windowEnd": "2020-02-01T00:00:00Z",
+       "sampleSize": 2,
+       "maturity": "mature",
+       "sourceRef": "synthetic:criterion-proof:verifiedCommerce",
+       "value": 2500
+      }
+     ],
+     "confidence": {
+      "completePublicReviews": 3,
+      "distinctPublicationDates": 2,
+      "commentsObservedPosts": 2,
+      "unassessedAudioPosts": 3,
+      "verifiedCriteria": 6,
+      "configuredCriteria": 6,
+      "sourceCoverage": "partial"
+     },
+     "criteria": [
+      {
+       "id": "routineFit",
+       "rating": 5,
+       "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "demonstrationStorytelling",
+       "rating": 4,
+       "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+       "sourceRefs": [
+        "synthetic:review:1",
+        "synthetic:review:2",
+        "synthetic:review:3"
+       ],
+       "rationale": null
+      },
+      {
+       "id": "verifiedCommerce",
+       "rating": 3,
+       "anchor": "Source-defined retained sales support this category in a comparable window.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:verifiedCommerce"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "audienceAlignment",
+       "rating": 4,
+       "anchor": "Comparable audience observations repeatedly support the brief.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:audienceAlignment"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "reliability",
+       "rating": 4,
+       "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:reliability"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      },
+      {
+       "id": "offerEconomics",
+       "rating": 4,
+       "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+       "sourceRefs": [
+        "synthetic:criterion-proof:offerEconomics"
+       ],
+       "rationale": "Fixture measurement reviewed for this criterion."
+      }
+     ],
+     "comparison": {
+      "status": "known",
+      "count": 10,
+      "median": 450,
+      "spread": 900,
+      "definition": "synthetic native video views",
+      "window": "lifetime at synthetic snapshot",
+      "paid": "no",
+      "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+      "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+     },
+     "commerce": {
+      "kind": "website",
+      "linkOrCodeRef": "fixture:link",
+      "attributionPrecedence": "fixture:precedence",
+      "test": {
+       "expectedProviderCredit": true,
+       "orderId": "test-order",
+       "refundOfOrderId": "test-order",
+       "refundApplied": true,
+       "sourceRef": "fixture:test-order-and-refund"
+      }
+     },
+     "acceptedTerms": null,
+     "audience": {
+      "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+      "denominator": "audience panel",
+      "sampleSize": 150,
+      "windowStart": "2020-01-01T00:00:00Z",
+      "windowEnd": "2020-02-01T00:00:00Z",
+      "country": "source aggregate geography",
+      "age": "source aggregate age groups",
+      "language": "source aggregate languages",
+      "alignment": "pass",
+      "sourceType": "authorizedNativeAnalytics",
+      "provenanceRef": "fixture:audience-report"
+     }
+    },
+    "reasonCodes": [
+     "SOURCE:terms"
+    ],
+    "offer": {
+     "state": "none",
+     "reason": "ACCEPTED_OFFER_MISSING_OR_CHANGED"
+    },
+    "dimensions": {
+     "creativeFit": "pass",
+     "commerceEvidence": "verified",
+     "confidence": "partial",
+     "financialReadiness": "unavailable"
+    },
+    "nextAction": {
+     "recommendation": "prospectiveInviteEligible",
+     "basisHash": "a46e5a19cbaeb4094ea188413a70c30f8a11d4626f993c87c215af51b8f4d8f7",
+     "mode": "propose",
+     "dispatch": "none",
+     "confersApproval": false,
+     "effects": {
+      "sends": false,
+      "spends": false,
+      "enrolls": false,
+      "ships": false
+     }
+    }
+   }
+  },
+  "replay": {
+   "change": "The unchanged frozen base inputs.",
+   "delta": {}
+  }
+ }
+}
