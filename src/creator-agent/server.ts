@@ -6,7 +6,7 @@ import { z } from "zod";
 import { evidencePacketSchema } from "./evidence.ts";
 import { digest, type ConfigBinding } from "./config.ts";
 import { AGENT_SCHEMA_VERSION, POLICY_VERSION, AGENT_VERSION } from "./assessmentSchema.ts";
-import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
+import { MODEL_FOR_ROUTE } from "./policy.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
@@ -37,6 +37,7 @@ import type { CollaborationSourceReader } from "./collaborationWorkflowSchema.ts
 import { openCollaborationRef } from "./creatorPlatformReferences.ts";
 import { creatorPlatformKeys, creatorPlatformFilterSchema, readCreatorPlatformView } from "./creatorPlatformReader.ts";
 import { protectCommentAuthors } from "./evidencePrivacy.ts";
+import { createCreatorEvidenceWriter, type CreatorEvidenceWriter } from "./creatorEvidenceWriter.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -57,7 +58,7 @@ import { funnelFilterSchema } from "./funnelContract.ts";
 import { readScorecardPreview, scorecardPreviewFilters } from "./scorecardPreview.ts";
 import { createMediaComposition, type MediaComposition, type MediaDomainBindings } from "./mediaComposition.ts";
 import { createMediaResources } from "./mediaResources.ts";
-import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
+import { isScorecardProofExpired, type ScorecardAuthority } from "./routeEvidence.ts";
 import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
 import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
 import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, type MonitorSourceReader } from "./monitor/reader.ts";
@@ -213,6 +214,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let mirrorFreshness: MirrorFreshnessRepository | null = null;
   let mirrorRuntime: MirrorFreshnessRuntime | null = null;
   let operationsSecret: string;
+  let evidenceWriter: CreatorEvidenceWriter;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
@@ -262,6 +264,8 @@ export function createAgentServer(options: AgentServerOptions) {
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    evidenceWriter = createCreatorEvidenceWriter({ store, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, scorecardAuthority: options.scorecardAuthority, modelBinding: route => modelBinding(route), acceptedTerms: id => offers.acceptedTerms(id) });
     let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
     const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
     reconciliation = options.mirrorReconciliation
@@ -969,14 +973,7 @@ export function createAgentServer(options: AgentServerOptions) {
         if (input.packet.creatorId !== decodeURIComponent(match[1]!)) return reply(res, 400, { code: "IDENTITY_MISMATCH" });
         const key = req.headers["idempotency-key"];
         if (typeof key !== "string" || !key.trim() || key.length > 240) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED" });
-        const binding = modelBinding(input.packet.checkoutRoute);
-        if (input.configHash !== (binding?.hash ?? null)) return reply(res, 409, { code: "CONFIG_VERSION_CONFLICT", executionCertainty: "notApplied" });
-        const protect = (packet: z.infer<typeof evidencePacketSchema>) => protectCommentAuthors(packet,
-          { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret);
-        const packet = protect(input.packet);
-        const proof = await resolveScorecardEvidence(options.scorecardAuthority, { workspaceId: options.workspaceId, accountId: options.accountId }, packet, Date.now(), id => offers.acceptedTerms(id));
-        const assessment = assessCreator(packet, binding, proof);
-        const saved = store.save(packet, assessment, input.expectedVersion, key, protect);
+        const saved = await evidenceWriter.write(input, key);
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {
