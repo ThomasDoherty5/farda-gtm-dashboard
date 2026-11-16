@@ -83,7 +83,7 @@ Rows are ordered by a per-window digest, so a row that keeps failing does not si
 
 The runtime caps a page at the registration's `maxItems`, at most 100. Further pages are admitted with the runtime's `continue` once every item of the prior page has completed.
 
-A row-level denial completes its item with an explicit inaccessible outcome, so it never blocks later pages. The runtime step evidence carries `j08-inaccessible:<reason>`, so runtime views never read it as a plain success. A source-session takeover does hold the page, because the whole source is unusable.
+A row-level denial completes its item with an explicit inaccessible outcome, so it never blocks later pages. The runtime step evidence carries `j08-inaccessible:<reason>`, so runtime views never read it as a plain success. The step reports `recordCount: 1`: the one record is the source's access observation itself, not a post. The runtime requires a step's evidence references not to exceed its record count, and a denied page returns no posts. A source-session takeover does hold the page, because the whole source is unusable.
 
 Coverage is computed for the whole window across all its pages. Frozen rows on pages not yet admitted are deferred, with `J08_PRIOR_PAGE_INCOMPLETE` or `J08_PAGE_NOT_YET_ADMITTED`.
 
@@ -124,7 +124,14 @@ J14 routing is a durable outbox. A failure row is persisted with the failure, an
 - A J14 call that throws is also retried.
 - J14 deduplicates by event ID, so it observes each window and condition once.
 
-The outbox drains whenever the runtime resolves J08 activation: every hourly trigger, manual recheck, work call, catch-up and runtime read of a J08 run. Activation is resolved before it is checked, so a revoked activation still drains the outbox. The outbox also drains on every window admission and refresh.
+The outbox drains at two points, both on write paths:
+
+- **The runtime machine route**, before an authenticated mutating J08 command reaches the runtime: `fire` (hourly trigger or manual recheck), `catchUp`, `work`, `continue` and `takeover`. The drain runs before the runtime checks activation, so a revoked activation still drains the outbox.
+- **Window admission and refresh** (`prepareWindow`).
+
+Reads never drain. Fenced run and registration reads back `runDetail`, `/v1/read`, the operations-control readers and the runtime's own read-before-machine step, so a read makes no J14 check and no write.
+
+Each drain is bounded: at most 20 rows and a 10-second budget. Rows past either bound stay in the outbox for the next mutating command.
 
 **Known limitation:** while the server does not compose the J08 binding at all, no J08 code runs. Unrouted failures stay in the store and drain when the binding is composed again. J14's own owner-run checks keep observing the source independently. Draining from J14's check cycle would mean J14 calling J08, which changes J14's behaviour, so it was not done.
 
@@ -195,7 +202,7 @@ The projected packet expires at the existing 90-minute monitor ceiling, measured
 
 ### Funnel ledger reads
 
-The funnel ledger is read once per runtime run and reused by that run's pages. Orders or publication records that arrive mid-run are picked up by the next run; the monitor reader's reconciled totals re-verify against the current ledger in the meantime.
+The funnel ledger is read once per runtime run and reused by that run's pages, for at most 60 seconds. A run that lasts longer re-reads the ledger. Every attribution claim is labelled with the time of the ledger snapshot it was computed from (`asOf`), not with the page's write time, so a cached read never claims to be fresher than it is. Orders or publication records that arrive after the snapshot are picked up by the next read; the monitor reader's reconciled totals re-verify against the current ledger in the meantime.
 
 **Deployment rule:** a social source adapter (an Instagram, TikTok or Inbox reader that feeds J08 pages) must never also produce funnel-ledger `published` records. J08 reads the creative and deliverable mapping from those records. If the same adapter wrote them, the mapping would come from the social page again, through a circle.
 

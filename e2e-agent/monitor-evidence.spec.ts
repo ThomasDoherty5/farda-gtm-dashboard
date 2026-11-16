@@ -10,7 +10,6 @@ import { MonitorError } from "../src/creator-agent/monitor/reader.ts";
 import { intakeInputSchema,type SinkBinding,type SinkReceipt } from "../src/creator-agent/intake/contract.ts";
 import type { CanonicalRecord } from "../src/creator-agent/intake/repository.ts";
 import { SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
-import { AgentStore } from "../src/creator-agent/store.ts";
 import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
 import { nativeContentSchema } from "../src/creator-agent/monitor/contract.ts";
 import { runtimeSyntheticScope } from "../src/creator-agent/jobs/runtime.testkit.ts";
@@ -219,15 +218,17 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
 test("J08 sandbox run feeds the monitor reads through the registered runtime, with resume and truthful coverage",async({page},testInfo)=>{
   test.setTimeout(180_000);
   const dir=testInfo.outputPath("j08-sandbox-evidence");mkdirSync(dir,{recursive:true});
-  const scope=runtimeSyntheticScope,databasePath=join(dir,"agent.sqlite"),store=new AgentStore(databasePath,scope);
-  const slot=(hoursAgo:number)=>new Date((Math.floor(Date.now()/3600_000)-hoursAgo)*3600_000).toISOString();
+  const scope=runtimeSyntheticScope,databasePath=join(dir,"agent.sqlite");
+  // The base hour is fixed once, so a run that crosses an hour boundary keeps the same windows.
+  const base=Math.floor(Date.now()/3600_000),slot=(hoursAgo:number)=>new Date((base-hoursAgo)*3600_000).toISOString();
   const world=createJ08SandboxWorld(Date.now,Date.now()),suppressed=new Set<string>(),proofs=new Map<string,string>();
-  const runtime=createJ08SandboxRuntime(store.database,{now:Date.now});
-  await runtime.initialize();
+  const runtime=createJ08SandboxRuntime({now:Date.now});
   const token="synthetic-j08-runtime-worker-credential-e2e0";
   // No test holder: the server composes J08's frozen watchlist into the injected runtime authority.
   const app=createAgentServer(j08SandboxServerOptions({databasePath,scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,machineToken:token,runtime,world,
     suppressed,proofs,policy:()=>j08SandboxPolicy}));
+  // The synthetic runtime shares the server's own SQLite connection.
+  await runtime.initialize(app.store.database);
   await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});
   const origin=`http://127.0.0.1:${process.env.E2E_AGENT_SERVER_PORT}`;
   const post=async(path:string,body:unknown,bearer=token,headers:Record<string,string>={})=>{const r=await fetch(origin+path,{method:"POST",headers:{authorization:"Bearer "+bearer,"content-type":"application/json",...headers},body:JSON.stringify(body)});return {status:r.status,body:await r.json() as Record<string,unknown>};};
@@ -316,5 +317,5 @@ test("J08 sandbox run feeds the monitor reads through the registered runtime, wi
       windows:app.contentMonitor!.windows().map(w=>app.contentMonitor!.trace(w.windowRef,key))},null,2);
     for(const raw of ["synthetic-tt-account-d","synthetic-ig-account-a","7300000000000000004",...ids.values()])expect(saved).not.toContain(raw);
     writeFileSync(join(dir,"j08-sandbox-run.json"),saved);
-  }finally{await app.close();store.close();}
+  }finally{await app.close();}
 });

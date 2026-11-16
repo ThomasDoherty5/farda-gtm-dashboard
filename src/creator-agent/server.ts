@@ -639,6 +639,9 @@ export function createAgentServer(options: AgentServerOptions) {
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "uncertain" });
         const parsed = runtimeApiCommandSchema.safeParse(await bodyOf(req));
         if (!parsed.success) throw new RuntimeApiError("INVALID_INPUT", 422, "uncertain");
+        // J08's durable J14 routing outbox drains before an authenticated mutating machine command, even one that activation will then
+        // refuse. It is bounded, touches only J08's unrouted failures, and never runs on a read path.
+        if (contentMonitor && ["fire", "catchUp", "work", "continue", "takeover"].includes(parsed.data.operation)) await contentMonitor.drainRoutes();
         return reply(res, 200, await runtimeApi.execute(parsed.data.operation, parsed.data.input, req.headers.authorization));
       }
       if (path === "/v1/worker/dispatch" || path === "/v1/approvals/observe") {

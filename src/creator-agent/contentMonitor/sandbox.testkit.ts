@@ -166,53 +166,58 @@ export function createJ08SandboxSource(world: J08SandboxWorld): J08SourceReader 
  * J08's frozen watchlist. Activation, quota, takeover and current-state fences reuse the shared runtime testkit. It never claims a live
  * schedule: the trigger is the sandbox driver. `ignoreMembership` simulates a misbehaving authority that substitutes its own list.
  */
-export function createJ08SandboxRuntime(db: DatabaseSync, options: { now: () => number; maxItems?: number }) {
+export function createJ08SandboxRuntime(options: { now: () => number; maxItems?: number }) {
   const r0 = j08SandboxRegistration();
   const registration = options.maxItems ? j08SandboxRegistration({ definition: { ...r0.definition, budgets: { ...r0.definition.budgets, maxItems: options.maxItems } } }) : r0;
   const manual = j08SandboxManualRegistration(registration);
-  const kit = createRuntimeTestkit(db, { registration, now: options.now });
+  // The testkit is attached to the agent server's own SQLite connection after the server starts, so no second connection contends for locks.
+  let attached: ReturnType<typeof createRuntimeTestkit> | null = null;
+  const current = () => { if (!attached) throw new Error("Attach the synthetic runtime to the server connection first."); return attached; };
   const state = { ignoreMembership: false };
   const issued = new Map<string, string>(), base = new Map<string, RuntimePreflight>(), enrollments = new Map<string, string>();
   const remember = <T extends { receiptRef: string }>(proof: T): T => { issued.set(proof.receiptRef, digest(proof)); return structuredClone(proof); };
-  const lease = (receiptRef: string) => ({ scope: kit.options.scope, receiptRef, observedAt: new Date(options.now()).toISOString(), validUntil: new Date(options.now() + 60_000).toISOString() });
+  const lease = (receiptRef: string) => ({ scope: current().options.scope, receiptRef, observedAt: new Date(options.now()).toISOString(), validUntil: new Date(options.now() + 60_000).toISOString() });
   const assertIssued = (proof: { receiptRef: string; validUntil: string }) => {
-    if (kit.state.denied) throw new RuntimeError("SOURCE_SCOPE_DENIED", 403);
-    if (!kit.state.active) throw new RuntimeError("RUNTIME_ACTIVATION_REVOKED");
+    if (current().state.denied) throw new RuntimeError("SOURCE_SCOPE_DENIED", 403);
+    if (!current().state.active) throw new RuntimeError("RUNTIME_ACTIVATION_REVOKED");
     if (issued.get(proof.receiptRef) !== digest(proof) || Date.parse(proof.validUntil) <= options.now()) throw new RuntimeError("SYNTHETIC_SOURCE_PROOF_STALE");
   };
   const authority: RuntimeAuthority = {
-    resolveActivation: r => kit.authority.resolveActivation(r),
-    assertActivation: (proof, r, now) => kit.authority.assertActivation(proof, r, now),
+    resolveActivation: r => current().authority.resolveActivation(r),
+    assertActivation: (proof, r, now) => current().authority.assertActivation(proof, r, now),
     prepareWindow: async ({ registration: r, window, continuation, membership }) => {
-      if (kit.state.denied) throw new RuntimeError("SOURCE_SCOPE_DENIED", 403);
-      if (!kit.state.active) throw new RuntimeError("RUNTIME_ACTIVATION_REVOKED");
+      if (current().state.denied) throw new RuntimeError("SOURCE_SCOPE_DENIED", 403);
+      if (!current().state.active) throw new RuntimeError("RUNTIME_ACTIVATION_REVOKED");
       if (!membership) throw new RuntimeError("SYNTHETIC_MEMBERSHIP_REQUIRED");
       const items = state.ignoreMembership ? [{ itemKey: "synthetic-substituted", subjectRef: "synthetic-substituted", evidenceRef: null, enrollmentRef: "synthetic-enrollment" }] : membership.items;
       for (const item of items) enrollments.set(JSON.stringify([window.windowRef, item.subjectRef]), item.enrollmentRef ?? "");
-      return remember({ ...lease(`receipt:synthetic-j08-window-${digest({ window, continuation, at: options.now() })}`), sourceVersion: kit.state.sourceVersion,
+      return remember({ ...lease(`receipt:synthetic-j08-window-${digest({ window, continuation, at: options.now() })}`), sourceVersion: current().state.sourceVersion,
         registrationHash: digest(r), window, kind: "source" as const, ...membership, items, ...(state.ignoreMembership ? { total: 1, coverage: "complete" as const, continuation: null } : {}) });
     },
-    assertWindow: proof => { assertIssued(proof); if (proof.sourceVersion !== kit.state.sourceVersion) throw new RuntimeError("SYNTHETIC_SOURCE_CHANGED"); },
+    assertWindow: proof => { assertIssued(proof); if (proof.sourceVersion !== current().state.sourceVersion) throw new RuntimeError("SYNTHETIC_SOURCE_CHANGED"); },
     resolvePreflight: async request => {
-      const proof = await kit.authority.resolvePreflight(request) as RuntimePreflight;
+      const proof = await current().authority.resolvePreflight(request) as RuntimePreflight;
       const own = { ...proof, receiptRef: `receipt:synthetic-j08-preflight-${digest(proof.receiptRef)}`,
         enrollmentRef: enrollments.get(JSON.stringify([request.window.windowRef, request.item.subjectRef])) ?? null };
       base.set(own.receiptRef, proof);
       return remember(own);
     },
-    assertCurrent: (proof, request, now) => { assertIssued(proof); kit.authority.assertCurrent(base.get(proof.receiptRef)!, request, now); },
-    resolveTakeover: request => kit.authority.resolveTakeover(request),
-    assertTakeover: (proof, now) => kit.authority.assertTakeover(proof, now),
+    assertCurrent: (proof, request, now) => { assertIssued(proof); current().authority.assertCurrent(base.get(proof.receiptRef)!, request, now); },
+    resolveTakeover: request => current().authority.resolveTakeover(request),
+    assertTakeover: (proof, now) => current().authority.assertTakeover(proof, now),
   };
-  /** Verifies the shared source binding and installs both registrations into the shared runtime tables. */
-  const initialize = async () => {
+  /** Re-attaches to a restarted server's connection; the registrations and verified binding already live in the shared file. */
+  const attach = (db: DatabaseSync) => { attached = createRuntimeTestkit(db, { registration, now: options.now }); return attached; };
+  /** Attaches, verifies the shared source binding and installs both registrations into the server's runtime tables. */
+  const initialize = async (db: DatabaseSync) => {
+    const kit = attach(db);
     await kit.initialize();
     const installer = new JobRuntime(db, { ...kit.options, registry: { registrations: new Map([[manual.registrationRef, manual]]),
       executors: new Map([[manual.executorRef, { mode: "observe" as const, execute: async () => ({ state: "held", reasonCode: "SYNTHETIC_INSTALL_ONLY" }) }]]) } });
     installer.install(manual.registrationRef, 0, kit.machine);
   };
   const registrations = new Map([[registration.registrationRef, registration], [manual.registrationRef, manual]]);
-  return { kit, registration, manual, registrations, authority, state, initialize };
+  return { get kit() { return current(); }, registration, manual, registrations, authority, state, attach, initialize, workerRef: "worker:synthetic-runtime" };
 }
 
 /** Fictional J14 source-health target for the J08 binding. Its probe reads the same synthetic world; it contacts nothing. */
@@ -330,8 +335,8 @@ export function j08SandboxServerOptions(input: { databasePath: string; scope: { 
     intakeAuthority: j08SandboxIntakeAuthority(input.suppressed),
     funnelAuthority: { resolve: async (s, _request, ref) => input.proofs.has(ref) ? { ...s, eventHash: input.proofs.get(ref)! } : null },
     runtime: { registry: { registrations: runtime.registrations, executors: new Map() }, authority: runtime.authority,
-      machine: { token: input.machineToken, workerRef: runtime.kit.machine.workerRef,
-        resolve: async (s, operation, request) => ({ scope: s, workerRef: runtime.kit.machine.workerRef, operation, inputHash: digest(request), proofRef: "synthetic-machine-proof",
+      machine: { token: input.machineToken, workerRef: runtime.workerRef,
+        resolve: async (s, operation, request) => ({ scope: s, workerRef: runtime.workerRef, operation, inputHash: digest(request), proofRef: "synthetic-machine-proof",
           observedAt: at(), validUntil: until() }), assertCurrent: () => {} } },
     contentMonitor: { registrationRef: runtime.registration.registrationRef, manualRecheck: { registrationRef: runtime.manual.registrationRef },
       policy: input.policy, source: createJ08SandboxSource(world), evidenceStage: "synthetic" } };

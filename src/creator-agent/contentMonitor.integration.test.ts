@@ -4,7 +4,6 @@ import { FunnelRepository } from "./funnelStore.ts";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentStore } from "./store.ts";
 import { createAgentServer, type AgentServerOptions } from "./server.ts";
 import { runtimeSyntheticScope as scope } from "./jobs/runtime.testkit.ts";
 import { runtimeApiAckSchema } from "./jobs/runtimeViews.ts";
@@ -19,21 +18,24 @@ import type { J08Policy } from "./contentMonitor/contract.ts";
 const machineToken = "synthetic-j08-runtime-worker-credential-0000";
 const closes: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of closes.splice(0).reverse()) await close(); });
-/** Past hourly slots on the real clock: J08 never runs ahead of the order ledger's own clock. */
-const slot = (hoursAgo: number) => new Date((Math.floor(Date.now() / 3600_000) - hoursAgo) * 3600_000).toISOString();
+/**
+ * Past hourly slots. The base hour is fixed once per sandbox, so a test that crosses an hour boundary keeps the same windows. Clocks stay
+ * real because the order ledger keeps its own real clock; J08 never runs ahead of it.
+ */
+let slotBase = Math.floor(Date.now() / 3600_000);
+const slot = (hoursAgo: number) => new Date((slotBase - hoursAgo) * 3600_000).toISOString();
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const count = (app: ReturnType<typeof createAgentServer>, table: string) => Number(app.store.database.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get()!.n);
 
 /** Actual agent service, real SQLite, real J01 intake, order ledger, J14 provider health and runtime routes, and the J08 sandbox source. */
 async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "farda-j08-")), databasePath = join(directory, "agent.sqlite");
-  const store = new AgentStore(databasePath, scope);
+  slotBase = Math.floor(Date.now() / 3600_000);
   const world = createJ08SandboxWorld(Date.now, Date.now());
   if (options.failOnce === false) world.failOnce.clear();
   let policy: J08Policy = structuredClone(j08SandboxPolicy);
   const suppressed = new Set<string>(), proofs = new Map<string, string>();
-  const runtime = createJ08SandboxRuntime(store.database, { now: Date.now, maxItems: options.maxItems });
-  await runtime.initialize();
+  const runtime = createJ08SandboxRuntime({ now: Date.now, maxItems: options.maxItems });
   // No test holder: the server composes the J08 plan into the injected authority itself.
   const start = async () => {
     const server = createAgentServer(j08SandboxServerOptions({ databasePath, scope, readToken: reader, reviewToken: reviewer, machineToken, runtime, world, suppressed, proofs,
@@ -43,9 +45,11 @@ async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) 
     return { server, origin: `http://127.0.0.1:${address.port}` };
   };
   let { server: app, origin } = await start();
-  closes.push(async () => { await app.close(); store.close(); rmSync(directory, { recursive: true, force: true }); });
+  // The synthetic runtime shares the server's own connection: one SQLite connection, no lock contention between two.
+  await runtime.initialize(app.store.database);
+  closes.push(async () => { await app.close(); rmSync(directory, { recursive: true, force: true }); });
   /** A process restart: the in-memory binding is discarded; only the shared SQLite file survives. */
-  const restart = async () => { await app.close(); ({ server: app, origin } = await start()); };
+  const restart = async () => { await app.close(); ({ server: app, origin } = await start()); runtime.attach(app.store.database); };
   async function post(path: string, body: unknown, token = machineToken, headers: Record<string, string> = {}) {
     const response = await fetch(origin + path, { method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() as Record<string, unknown> };
@@ -67,7 +71,7 @@ async function sandbox(options: { failOnce?: boolean; maxItems?: number } = {}) 
     expect(answer.status, JSON.stringify(answer.body)).toBe(200);
     return runtimeApiAckSchema.parse(answer.body).runRefs[0]!;
   };
-  // The hourly driver's next pass drains the durable J14 outbox; `rawWork` omits it to model a crash or an unanswered pass.
+  // The machine route drains the durable J14 outbox before each mutating command; `work` also drains after it, as the hourly driver's next pass would.
   const rawWork = (runRef: string, maxItems = 10) => machine("work", { runRef, maxItems });
   const work = async (runRef: string, maxItems = 10) => { const answer = await rawWork(runRef, maxItems); await app.contentMonitor!.drainRoutes(); return answer; };
   const read = (viewKey: string, filters: Record<string, unknown> = {}) => post("/v1/read", { schemaVersion: SCHEMA_VERSION, operation: "readView", requestId: "synthetic-j08-read",
@@ -292,11 +296,34 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_HELD"]);
     expect(s.observations()).toBe(1);
     app.providerHealth.check = check;
-    // Activation is revoked: J08 admits nothing, yet the trigger's activation step still drains the outbox to J14.
+    // Activation is revoked: J08 admits nothing, yet the machine route drains the outbox to J14 before the runtime refuses the command.
     s.runtime.kit.state.active = false;
     expect((await s.rawWork(run)).status).toBeGreaterThanOrEqual(400);
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_OBSERVED"]);
     expect(s.observations()).toBe(2);
+  });
+
+  it("read paths never drain the J14 outbox: fenced run and registration reads make no J14 check and no write", async () => {
+    const s = await sandbox({ failOnce: false });
+    const app = s.app, check = app.providerHealth.check;
+    app.providerHealth.check = async () => { throw new Error("synthetic J14 outage"); };
+    s.world.access.set("synthetic-tt-account-d", "denied");
+    const run = await s.fire(1);
+    await s.rawWork(run);
+    app.providerHealth.check = check;
+    const calls = vi.fn(check);
+    app.providerHealth.check = calls;
+    const before = [s.observations(), count(app, "content_monitor_items WHERE health_route IS NOT NULL")];
+    // The fenced owner reads behind runDetail, /v1/read, operations control and readForMachine (readRunWithFence, readRegistrationWithFence).
+    const inner = app.runtimeApi.readOpaqueRunRef(run);
+    await app.runtime.readRun(inner);
+    await app.runtime.readRegistration(s.runtime.registration.registrationRef);
+    expect(calls).not.toHaveBeenCalled();
+    expect([s.observations(), count(app, "content_monitor_items WHERE health_route IS NOT NULL")]).toEqual(before);
+    // The next mutating machine command drains it.
+    await s.rawWork(run);
+    expect(calls).toHaveBeenCalled();
+    expect(s.observations()).toBe(before[0]! + 1);
   });
 
   it("M1-a: rows denied on their first read and then suppressed still prevent all clear", async () => {

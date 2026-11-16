@@ -48,6 +48,10 @@ export type WindowRow = { subjectRef: string; runRef: string | null; item: JobIt
 
 // The runtime's own source lease ceiling. A page older than that is not a current observation.
 const SOURCE_LEASE_MS = 15 * 60_000;
+// Per-drain bounds for J14 routing. J14's own probe is itself bounded to 8 seconds.
+const DRAIN_MAX_ROWS = 20, DRAIN_BUDGET_MS = 10_000;
+// A cached ledger snapshot older than this is re-read, so a run resumed later never joins stale orders.
+const LEDGER_MAX_AGE_MS = 60_000;
 const takeoverKinds = { loginRequired: "login", mfaRequired: "mfa", captcha: "captcha", termsChanged: "termsChanged", uiDrift: "uiDrift" } as const;
 const transientAccess = (access: string | null) => access === "throttled" || access === "unavailable";
 /** The runtime checkpoint holds the stage and the bounded source cursor itself; there is no second cursor store. */
@@ -147,9 +151,8 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
   /** Server composition: the injected source authority signs each J08 window lease over J08's own frozen membership, never its own list. */
   function composeAuthority(base: RuntimeAuthority): RuntimeAuthority {
     return {
-      // Activation is resolved on every J08 trigger, work call, catch-up and read, even while J08 is disabled, so the J14 outbox drains there
-      // first. A revoked activation therefore still routes recorded failures to J14.
-      async resolveActivation(r) { if (refs.has(r.registrationRef)) await drainRoutes(); return base.resolveActivation(r); },
+      // Activation also backs runtime reads, so it never drains the outbox: reads stay free of provider calls and writes.
+      resolveActivation: r => base.resolveActivation(r),
       assertActivation: (p, r, at) => base.assertActivation(p, r, at),
       async prepareWindow(input) {
         if (!refs.has(input.registration.registrationRef)) return base.prepareWindow(input);
@@ -181,8 +184,11 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
    * window and condition. Routing runs before the runtime's next items, never inside an item that is still being committed.
    */
   async function drainRoutes() {
+    const started = Date.now();
     try {
-      for (const row of repo.unroutedFailures(200)) {
+      // Bounded per drain: a row cap and a time budget. The rest waits for the next mutating pass.
+      for (const row of repo.unroutedFailures(DRAIN_MAX_ROWS)) {
+        if (Date.now() - started > DRAIN_BUDGET_MS) break;
         const route = await routeToJ14(row.windowRef, row.reason);
         // Every J14 answer is recorded for visibility; only an observation leaves the outbox (`unroutedFailures`), so a held or
         // unconfigured answer is retried on the next drain.
@@ -194,10 +200,13 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
    * The funnel ledger is read once per runtime run and reused by its pages. Orders or publication records that arrive mid-run are picked up
    * by the next run; the monitor reader's reconciled totals re-verify against the current ledger in the meantime.
    */
-  let ledgerCache: { runRef: string; events: FunnelEvent[] } | null = null;
-  function ledgerFor(runRef: string): FunnelEvent[] {
-    if (ledgerCache?.runRef !== runRef) ledgerCache = { runRef, events: effectiveEvents(deps.funnel.snapshot({ asOf: new Date(now()).toISOString() }).events) };
-    return ledgerCache.events;
+  let ledgerCache: { runRef: string; asOf: string; events: FunnelEvent[] } | null = null;
+  function ledgerFor(runRef: string): { asOf: string; events: FunnelEvent[] } {
+    if (ledgerCache?.runRef !== runRef || now() - Date.parse(ledgerCache.asOf) > LEDGER_MAX_AGE_MS) {
+      const asOf = new Date(now()).toISOString();
+      ledgerCache = { runRef, asOf, events: effectiveEvents(deps.funnel.snapshot({ asOf }).events) };
+    }
+    return { asOf: ledgerCache.asOf, events: ledgerCache.events };
   }
   /** Whether the runtime committed a run item as completed, cached per call. */
   function committedCheck(): Committed {
@@ -283,18 +292,20 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
         if (transientAccess(page.access)) return { state: "retry", reasonCode: failure.reason, retryAfterMs: page.retryAfterMs ?? 1000 };
         // A row-level denial completes its runtime item with an explicit inaccessible outcome, so it cannot block later pages of the window.
         // The condition stays visible and owned: the J08 outcome, the J14 outbox and all clear all carry it.
-        // The runtime step evidence carries the inaccessible reason, so runtime views never read a denial as a plain success.
+        // The runtime step evidence carries the inaccessible reason, so runtime views never read a denial as a plain success. The runtime
+        // requires evidence refs not to exceed the record count; the one record is the source's access observation itself, not a post.
         if (page.access === "denied") return { state: "completed", evidenceRefs: [`j08-inaccessible:${failure.reason}`], recordCount: 1, sourceReceiptRef: page.receiptRef };
         return { state: "takeover", kind: takeoverKinds[page.access], reasonCode: failure.reason, ownerRef: j08Owners.J14,
           handoffRef: `j08-handoff:${digest([apiBindingHash, page.access])}` };
       }
       const ledger = ledgerFor(context.runRef);
-      repo.recordPage({ ...item, stage, page, campaigns: current.campaigns, policy, creativeOf: creativeResolver(ledger) }, fence);
+      repo.recordPage({ ...item, stage, page, campaigns: current.campaigns, policy, creativeOf: creativeResolver(ledger.events) }, fence);
       if (page.nextCursor !== null || stage === "posts")
         return { state: "checkpoint", evidenceRefs: [], recordCount, sourceReceiptRef: page.receiptRef,
           nextCursor: page.nextCursor !== null ? encodeCursor(stage, page.nextCursor) : encodeCursor("inbox", null) };
       // Both stages are complete: join the canonical order ledger for this row's Farda content.
-      const asOf = new Date(now()).toISOString(), events = ledger;
+      // Attribution is labeled with the ledger snapshot's own time, never a later clock reading.
+      const { asOf, events } = ledger;
       const attributions = new Map(repo.subjectContent(subject.subjectRef).filter(c => c.assignment.state === "attributed" && c.assignment.campaignId && !c.conflict)
         .map(c => [c.contentKey, orderAttribution({ network: c.network, postId: c.postId, creatorId: current.creatorId, campaignId: c.assignment.campaignId!,
           publishedAt: c.publishedAt }, events, asOf, policy.attributionWindows)] as const));
