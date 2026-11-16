@@ -41,7 +41,7 @@ type MembershipRecord = {
 export type ContentMonitorMembership = { monitorMembership(limit?: number): { records: MembershipRecord[]; total: number; complete: boolean } };
 type Health = Pick<ReturnType<typeof createProviderHealth>, "check" | "get" | "exceptions">;
 export type ContentMonitorDeps = { intake: ContentMonitorMembership; funnel: Pick<FunnelRepository, "snapshot">; jobs: Pick<JobRepository, "getRun">;
-  runtime: () => Pick<JobRuntime, "windowPages" | "takeovers"> | undefined; health?: () => Health | undefined; secret: string; now?: () => number };
+  runtime: () => Pick<JobRuntime, "windowPages" | "takeovers" | "registrationOfRun"> | undefined; health?: () => Health | undefined; secret: string; now?: () => number };
 type Eligible = J08Subject & { creatorId: string; revision: number; campaigns: string[]; notionReceipt: string; sheetsReceipt: string };
 export type WindowRow = { subjectRef: string; runRef: string | null; item: JobItemView | null; outcome: J08ItemOutcome | null; category: J08Category; lastSuccessAt: string | null;
   notAdmitted?: "J08_PRIOR_PAGE_INCOMPLETE" | "J08_PAGE_NOT_YET_ADMITTED" };
@@ -52,6 +52,8 @@ const SOURCE_LEASE_MS = 15 * 60_000;
 const DRAIN_MAX_ROWS = 20, DRAIN_BUDGET_MS = 10_000;
 // A cached ledger snapshot older than this is re-read, so a run resumed later never joins stale orders.
 const LEDGER_MAX_AGE_MS = 60_000;
+/** Mutating machine commands that drain J08's J14 outbox when they target a J08 registration. */
+const drainingOperations = new Set(["fire", "catchUp", "work", "continue", "takeover"]);
 const takeoverKinds = { loginRequired: "login", mfaRequired: "mfa", captcha: "captcha", termsChanged: "termsChanged", uiDrift: "uiDrift" } as const;
 const transientAccess = (access: string | null) => access === "throttled" || access === "unavailable";
 /** The runtime checkpoint holds the stage and the bounded source cursor itself; there is no second cursor store. */
@@ -147,6 +149,16 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
     const page = watch.entries.slice(offset, offset + max), more = offset + max < watch.entries.length;
     return { items: page.map(e => ({ itemKey: e.subjectRef, subjectRef: e.subjectRef, evidenceRef: null, enrollmentRef: e.enrollmentRef })),
       coverage: more ? "partial" : "complete", continuation: more ? `j08-page:${offset + max}` : null, total: watch.entries.length - offset };
+  }
+  /**
+   * True only for a mutating machine command on one of J08's own registrations (the hourly one or the manual recheck), named directly or
+   * through one of its runs. Every other command, mirror reconciliation included, never drains J08's outbox.
+   */
+  function ownsCommand(command: { operation: string; input: unknown }): boolean {
+    if (!drainingOperations.has(command.operation) || !command.input || typeof command.input !== "object") return false;
+    const input = command.input as { registrationRef?: unknown; runRef?: unknown };
+    if (typeof input.registrationRef === "string") return refs.has(input.registrationRef);
+    return typeof input.runRef === "string" && refs.has(deps.runtime()?.registrationOfRun(input.runRef) ?? "");
   }
   /** Server composition: the injected source authority signs each J08 window lease over J08's own frozen membership, never its own list. */
   function composeAuthority(base: RuntimeAuthority): RuntimeAuthority {
@@ -380,6 +392,6 @@ export function bindContentMonitor(repo: ContentMonitorRepository, scope: Operat
   return { registry: { registrations: registry.registrations, executors } as RuntimeRegistry, source, plan, composeAuthority, coverage, windows,
     trace: view.trace, output: view.output, report: view.report, proposals: () => repo.proposals(),
     /** Drains the durable J14 routing outbox now; window admission and refresh also drain it. */
-    drainRoutes, subject: (subjectRef: string) => repo.subject(subjectRef), registrationRef: hourly.registrationRef,
+    drainRoutes, ownsCommand, subject: (subjectRef: string) => repo.subject(subjectRef), registrationRef: hourly.registrationRef,
     manualRecheckRef: manual?.registrationRef ?? null, evidenceStage: binding.evidenceStage, capabilityId };
 }

@@ -416,7 +416,14 @@ export function createAgentServer(options: AgentServerOptions) {
       secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
       // Public reads already consume the shared transport admission below. Standalone
       // runtime gateways retain their default own admission; machine writes always do.
-      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now });
+      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now,
+      // J08's durable J14 routing outbox drains only after a command's machine proof is verified, only for a mutating command on one of
+      // J08's registrations, and before the runtime's activation check, so a revoked activation still drains. Bounded; never on a read path.
+      afterMachineProof: async command => {
+        let owned: boolean;
+        try { owned = contentMonitor?.ownsCommand(command) ?? false; } catch { owned = false; }
+        if (owned) await contentMonitor!.drainRoutes();
+      } });
     siteTrafficApi = createSiteTrafficImportApi({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       service: siteTraffic, machine: options.siteTraffic?.machine, limits: actionFoundation.limits, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
@@ -639,9 +646,6 @@ export function createAgentServer(options: AgentServerOptions) {
         if (!req.headers["content-type"]?.startsWith("application/json")) return reply(res, 415, { code: "JSON_REQUIRED", executionCertainty: "uncertain" });
         const parsed = runtimeApiCommandSchema.safeParse(await bodyOf(req));
         if (!parsed.success) throw new RuntimeApiError("INVALID_INPUT", 422, "uncertain");
-        // J08's durable J14 routing outbox drains before an authenticated mutating machine command, even one that activation will then
-        // refuse. It is bounded, touches only J08's unrouted failures, and never runs on a read path.
-        if (contentMonitor && ["fire", "catchUp", "work", "continue", "takeover"].includes(parsed.data.operation)) await contentMonitor.drainRoutes();
         return reply(res, 200, await runtimeApi.execute(parsed.data.operation, parsed.data.input, req.headers.authorization));
       }
       if (path === "/v1/worker/dispatch" || path === "/v1/approvals/observe") {

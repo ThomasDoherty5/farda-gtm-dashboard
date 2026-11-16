@@ -296,7 +296,7 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_HELD"]);
     expect(s.observations()).toBe(1);
     app.providerHealth.check = check;
-    // Activation is revoked: J08 admits nothing, yet the machine route drains the outbox to J14 before the runtime refuses the command.
+    // Activation is revoked: J08 admits nothing, yet a verified J08 command drains the outbox to J14 before the runtime's activation check refuses it.
     s.runtime.kit.state.active = false;
     expect((await s.rawWork(run)).status).toBeGreaterThanOrEqual(400);
     expect(s.out().nextActionQueue.filter(a => a.owner === "J14").map(a => "route" in a ? a.route : null)).toEqual(["J14_OBSERVED"]);
@@ -324,6 +324,36 @@ describe("J08 hourly content and Inbox monitoring through the registered runtime
     await s.rawWork(run);
     expect(calls).toHaveBeenCalled();
     expect(s.observations()).toBe(before[0]! + 1);
+  });
+
+  it("the drain is scoped to J08 and runs only after a verified machine proof", async () => {
+    const s = await sandbox({ failOnce: false });
+    const app = s.app, check = app.providerHealth.check;
+    app.providerHealth.check = async () => { throw new Error("synthetic J14 outage"); };
+    s.world.access.set("synthetic-tt-account-d", "denied");
+    const run = await s.fire(1);
+    await s.rawWork(run);
+    const calls = vi.fn(check);
+    app.providerHealth.check = calls;
+    const before = s.observations();
+    // A command on a registration that is not J08's, with a valid proof: the runtime refuses it, and J08's outbox is untouched.
+    const other = await s.machine("fire", { registrationRef: "synthetic-mirror-reconciliation", registrationVersion: 1, intendedAt: slot(1), triggerEventRef: "synthetic-other" });
+    expect(other.status).toBeGreaterThanOrEqual(400);
+    // Reconcile is not a draining command, even on a J08 run.
+    await s.machine("reconcile", { runRef: run });
+    expect(calls).not.toHaveBeenCalled();
+    // A J08 command whose machine proof is invalid is refused before any drain.
+    s.runtime.state.machineProofValid = false;
+    const unproven = await s.rawWork(run);
+    expect(unproven.status, JSON.stringify(unproven.body)).toBe(403);
+    expect(unproven.body).toMatchObject({ code: "RUNTIME_MACHINE_PROOF_INVALID" });
+    expect(calls).not.toHaveBeenCalled();
+    expect(s.observations()).toBe(before);
+    // The same J08 command with a valid proof drains the outbox.
+    s.runtime.state.machineProofValid = true;
+    await s.rawWork(run);
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(s.observations()).toBe(before + 1);
   });
 
   it("M1-a: rows denied on their first read and then suppressed still prevent all clear", async () => {

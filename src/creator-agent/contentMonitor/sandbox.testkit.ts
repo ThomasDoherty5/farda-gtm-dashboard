@@ -173,7 +173,8 @@ export function createJ08SandboxRuntime(options: { now: () => number; maxItems?:
   // The testkit is attached to the agent server's own SQLite connection after the server starts, so no second connection contends for locks.
   let attached: ReturnType<typeof createRuntimeTestkit> | null = null;
   const current = () => { if (!attached) throw new Error("Attach the synthetic runtime to the server connection first."); return attached; };
-  const state = { ignoreMembership: false };
+  // `machineProofValid: false` makes the synthetic machine binding refuse its per-command proof.
+  const state = { ignoreMembership: false, machineProofValid: true };
   const issued = new Map<string, string>(), base = new Map<string, RuntimePreflight>(), enrollments = new Map<string, string>();
   const remember = <T extends { receiptRef: string }>(proof: T): T => { issued.set(proof.receiptRef, digest(proof)); return structuredClone(proof); };
   const lease = (receiptRef: string) => ({ scope: current().options.scope, receiptRef, observedAt: new Date(options.now()).toISOString(), validUntil: new Date(options.now() + 60_000).toISOString() });
@@ -336,8 +337,8 @@ export function j08SandboxServerOptions(input: { databasePath: string; scope: { 
     funnelAuthority: { resolve: async (s, _request, ref) => input.proofs.has(ref) ? { ...s, eventHash: input.proofs.get(ref)! } : null },
     runtime: { registry: { registrations: runtime.registrations, executors: new Map() }, authority: runtime.authority,
       machine: { token: input.machineToken, workerRef: runtime.workerRef,
-        resolve: async (s, operation, request) => ({ scope: s, workerRef: runtime.workerRef, operation, inputHash: digest(request), proofRef: "synthetic-machine-proof",
-          observedAt: at(), validUntil: until() }), assertCurrent: () => {} } },
+        resolve: async (s, operation, request) => runtime.state.machineProofValid ? ({ scope: s, workerRef: runtime.workerRef, operation, inputHash: digest(request), proofRef: "synthetic-machine-proof",
+          observedAt: at(), validUntil: until() }) : { scope: s, workerRef: runtime.workerRef, operation, inputHash: "synthetic-invalid-proof" }, assertCurrent: () => {} } },
     contentMonitor: { registrationRef: runtime.registration.registrationRef, manualRecheck: { registrationRef: runtime.manual.registrationRef },
       policy: input.policy, source: createJ08SandboxSource(world), evidenceStage: "synthetic" } };
 }

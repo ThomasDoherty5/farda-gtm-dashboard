@@ -126,7 +126,7 @@ J14 routing is a durable outbox. A failure row is persisted with the failure, an
 
 The outbox drains at two points, both on write paths:
 
-- **The runtime machine route**, before an authenticated mutating J08 command reaches the runtime: `fire` (hourly trigger or manual recheck), `catchUp`, `work`, `continue` and `takeover`. The drain runs before the runtime checks activation, so a revoked activation still drains the outbox.
+- **A verified mutating J08 machine command:** `fire` (hourly trigger or manual recheck), `catchUp`, `work`, `continue` or `takeover`, on one of J08's two registrations, named directly or through one of its runs. The runtime API calls an optional `afterMachineProof` hook once the command's per-command machine proof is verified, and before the runtime executes the command. The drain therefore runs before the runtime's activation check, so a revoked activation still drains the outbox. A command without a valid proof, a command on any other registration (mirror reconciliation included) and `reconcile` never drain.
 - **Window admission and refresh** (`prepareWindow`).
 
 Reads never drain. Fenced run and registration reads back `runDetail`, `/v1/read`, the operations-control readers and the runtime's own read-before-machine step, so a read makes no J14 check and no write.
