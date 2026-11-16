@@ -83,11 +83,13 @@ export const runtimeFireSchema=z.object({registrationRef:runtimeRef,registration
 export const runtimeWorkSchema=z.object({runRef:runtimeRef,maxItems:z.number().int().min(1).max(100).default(1)}).strict();
 export const runtimeCatchUpSchema=z.object({registrationRef:runtimeRef,registrationVersion:z.number().int().positive().safe(),through:runtimeInstant,limit:z.number().int().min(1).max(24).default(10),cursor:runtimeInstant.optional()}).strict();
 export const runtimeTakeoverSchema=z.object({runRef:runtimeRef,itemRef:runtimeRef,expectedVersion:z.number().int().positive().safe(),receiptRef:runtimeRef,requestKey:runtimeRef}).strict();
+export type RuntimeMembership={items:{itemKey:string;subjectRef:string;evidenceRef:string|null;enrollmentRef:string|null}[];coverage:"complete"|"partial";continuation:string|null;total:number|null};
 export type RuntimePreflightRequest={registration:RuntimeRegistration;window:RuntimeWindow;item:z.infer<typeof referenceInputSchema>;cursor:string|null;checkpointHash:string;binding:z.infer<typeof expectedBindingSchema>;requestKey:string};
 export type RuntimeAuthority={
   resolveActivation(registration:RuntimeRegistration):Promise<unknown>;
   assertActivation(proof:RuntimeActivation,registration:RuntimeRegistration,now:number):void;
-  prepareWindow(input:{registration:RuntimeRegistration;window:RuntimeWindow;continuation:string|null}):Promise<unknown>;
+  /** `membership`, when present, is the owning job's frozen page of members; the source authority signs its lease over exactly these items. */
+  prepareWindow(input:{registration:RuntimeRegistration;window:RuntimeWindow;continuation:string|null;membership?:RuntimeMembership}):Promise<unknown>;
   assertWindow(proof:RuntimeWindowPlan,registration:RuntimeRegistration,now:number):void;
   resolvePreflight(input:RuntimePreflightRequest):Promise<unknown>;
   assertCurrent(proof:RuntimePreflight,input:RuntimePreflightRequest,now:number):void;

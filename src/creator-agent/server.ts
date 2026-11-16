@@ -26,6 +26,8 @@ import { toD13SourceFreshness, mirrorRefSchema } from "./mirrorFreshness.ts";
 import { MirrorFreshnessRuntime, type MirrorRuntimeConfig } from "./mirrorFreshnessRuntime.ts";
 import { MirrorReconciliationRepository } from "./mirrorReconciliation/repository.ts";
 import { bindMirrorReconciliation, type MirrorReconciliationBinding } from "./mirrorReconciliation/runtime.ts";
+import { ContentMonitorRepository } from "./contentMonitor/repository.ts";
+import { bindContentMonitor, type ContentMonitorBinding } from "./contentMonitor/runtime.ts";
 import { OperationalAlertRepository } from "./operationalAlerts/repository.ts";
 import { bindOperationalAlertSweep, type OperationalAlertSweepBinding } from "./operationalAlerts/runtime.ts";
 import type { OperationalAlertReportBinding } from "./operationalAlerts/report.ts";
@@ -137,6 +139,9 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   collaborationSourceReader?: CollaborationSourceReader; intakeAuthority?: IntakeAuthority; rewardAuthority?: RewardAuthority;
   stockSupportSource?: StockSupportSource;
   monitorSource?: MonitorSourceReader;
+  /** J08 hourly content and Inbox monitoring through the existing registered runtime. Its store backs the monitor reads; it is
+   * mutually exclusive with `monitorSource`. This does not activate a schedule: activation stays with the runtime authority. */
+  contentMonitor?: ContentMonitorBinding;
   lifecycleSource?: LifecycleSourceReader;
   shippingHubSource?: ShippingHubSource;
   /** Source-owned fulfillment plans and canonical owners; unset grants no proposal or provider authority. */
@@ -194,6 +199,7 @@ export function createAgentServer(options: AgentServerOptions) {
       options.actionFoundation?.decisionRelay?.token, options.actionFoundation?.reporting?.token].some(other => other !== undefined && safeEqual(token, other)))
       throw new Error("Runtime machine authority requires its own distinct server-only credential.");
   }
+  if (options.monitorSource && options.contentMonitor) throw new Error("One content monitor source owner is required.");
   if (options.commercialPolicy && options.offerAuthority?.commercialPolicy && options.commercialPolicy !== options.offerAuthority.commercialPolicy)
     throw new Error("One shared commercial policy source is required");
   const commercialPolicy = options.commercialPolicy ?? options.offerAuthority?.commercialPolicy;
@@ -238,6 +244,7 @@ export function createAgentServer(options: AgentServerOptions) {
   let runtime: JobRuntime;
   let runtimeApi: ReturnType<typeof createRuntimeApi>;
   let reconciliation: ReturnType<typeof bindMirrorReconciliation> | null;
+  let contentMonitor: ReturnType<typeof bindContentMonitor> | null;
   let operationalAlerts: OperationalAlertRepository | null;
   let commercialProjection: ReturnType<typeof createCommercialProjection>;
   let recruitment: ReturnType<typeof createRecruitmentSourceReader>;
@@ -269,6 +276,12 @@ export function createAgentServer(options: AgentServerOptions) {
         reconciliationScope, runtimeRegistry, options.mirrorReconciliation)
       : null;
     if (reconciliation) runtimeRegistry = reconciliation.registry;
+    contentMonitor = options.contentMonitor
+      ? bindContentMonitor(new ContentMonitorRepository(store.database, reconciliationScope, { now: options.operations?.now }), reconciliationScope,
+        runtimeRegistry, options.contentMonitor, { intake, funnel, jobs: operations.jobs, runtime: () => runtime, health: () => providerHealth,
+          secret: operationsSecret, now: options.operations?.now })
+      : null;
+    if (contentMonitor) runtimeRegistry = contentMonitor.registry;
     operationalAlerts = options.operationalAlerts
       ? new OperationalAlertRepository(store.database, reconciliationScope, operationsSecret, options.operations?.now) : null;
     if (operationalAlerts && options.operationalAlerts) {
@@ -293,7 +306,7 @@ export function createAgentServer(options: AgentServerOptions) {
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.stockSupportSource, options.operations?.now);
     monitor = createMonitorReader({ db: store.database,
       scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, secret: operationsSecret,
-      funnel, intake, source: options.monitorSource, now: options.operations?.now });
+      funnel, intake, source: options.monitorSource ?? contentMonitor?.source, now: options.operations?.now });
     providerHealth = createProviderHealth(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       operations.ledger, operations.jobs, options.providerHealth);
     shippingHub = createShippingHubReader({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
@@ -396,12 +409,21 @@ export function createAgentServer(options: AgentServerOptions) {
     runtime = new JobRuntime(store.database, { scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       jobs: operations.jobs, ledger: operations.ledger, dispatch: actionFoundation.dispatch,
       registry: runtimeRegistry,
-      authority: options.runtime?.authority, now: options.operations?.now });
+      // J08 windows are planned from J08's frozen watchlist; the injected source authority signs the lease over exactly those items.
+      authority: contentMonitor && options.runtime?.authority ? contentMonitor.composeAuthority(options.runtime.authority) : options.runtime?.authority,
+      now: options.operations?.now });
     runtimeApi = createRuntimeApi({ runtime, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       secret: operationsSecret, machine: options.runtime?.machine, actorSources: actionBindings?.approvals?.sources,
       // Public reads already consume the shared transport admission below. Standalone
       // runtime gateways retain their default own admission; machine writes always do.
-      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now });
+      readAdmission: "upstream", limits: actionFoundation.limits, now: options.operations?.now,
+      // J08's durable J14 routing outbox drains only after a command's machine proof is verified, only for a mutating command on one of
+      // J08's registrations, and before the runtime's activation check, so a revoked activation still drains. Bounded; never on a read path.
+      afterMachineProof: async command => {
+        let owned: boolean;
+        try { owned = contentMonitor?.ownsCommand(command) ?? false; } catch { owned = false; }
+        if (owned) await contentMonitor!.drainRoutes();
+      } });
     siteTrafficApi = createSiteTrafficImportApi({ scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       service: siteTraffic, machine: options.siteTraffic?.machine, limits: actionFoundation.limits, now: options.operations?.now });
     evidenceReviews = new EvidenceReviewRepository(store, { workspaceId: options.workspaceId, accountId: options.accountId },
@@ -907,7 +929,12 @@ export function createAgentServer(options: AgentServerOptions) {
         reviewerEvidence: { annotations: "immutable-versioned", completionAuthority: "source-j20" },
         collaborationReview: { sourceAuthority: options.collaborationSourceReader ? "injected" : "notConnected", proposals: "durable", dispatch: "notConnected" },
         stockSupportReview: { sourceAuthority: options.stockSupportSource ? "injected" : "notConnected", proposals: "durable", inventoryExecution: "notConnected", supportExecution: "notConnected" },
-        contentMonitor: { sourceAuthority: options.monitorSource ? "injected" : "notConnected", views: "read-only-projections", sourceExecution: "notConnected", retryAuthority: "notConnected" },
+        contentMonitor: { sourceAuthority: contentMonitor ? "j08-store" : options.monitorSource ? "injected" : "notConnected", views: "read-only-projections",
+          // Synthetic J08 evidence is never reported as a connected source.
+          sourceExecution: contentMonitor ? contentMonitor.evidenceStage === "synthetic" ? "sandbox" : "registered-runtime" : "notConnected",
+          evidenceStage: contentMonitor?.evidenceStage ?? null, scheduleActivation: contentMonitor ? "runtime-authority" : "notConnected",
+          followUpProposals: contentMonitor ? "recorded-run-output-no-owner" : "notConnected", sourceHealth: contentMonitor ? "routed-to-j14" : "notConnected",
+          outboundActions: "none", retryAuthority: "notConnected" },
         financeReads: { sourceAuthority: options.financeSource ? "injected" : "notConnected", views: "read-only-projections", paymentExecution: "notConnected", closeExecution: "notConnected", exportExecution: "notConnected" },
         operationsReads: { sourceAuthority: options.operationsReadSource ? "injected" : "notConnected", views: "read-only-projections", shippingDecisionExecution: "notConnected", returnExecution: "notConnected", customerReveal: "notConnected" },
         teamInvitationReads: { sourceAuthority: options.teamInvitationReadSource ? "injected" : "notConnected", views: "read-only-projections", roleChangeExecution: "notConnected", ownerAssignmentExecution: "notConnected", invitationSendExecution: "notConnected" },
@@ -1621,7 +1648,7 @@ export function createAgentServer(options: AgentServerOptions) {
   server.headersTimeout = 10_000;
   let closing: Promise<void> | undefined;
   return { server, store, operations, providerHealth, actionFoundation, runtime, runtimeApi, mediaDomain, mirrorRuntime,
-    mirrorReconciliation: reconciliation, operationalAlerts, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
+    mirrorReconciliation: reconciliation, contentMonitor, operationalAlerts, close: () => closing ??= new Promise<void>((resolve, reject) => server.close((error) => {
     let failure: Error | undefined = error;
     mirrorRuntime?.stop();
     try { operations.close(); } catch (cause) { failure ??= cause instanceof Error ? cause : new Error("OPERATIONS_CLOSE_FAILED"); }

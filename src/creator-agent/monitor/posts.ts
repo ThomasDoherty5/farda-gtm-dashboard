@@ -13,6 +13,25 @@ type Projected={post:Post;history:Measurement[];publicationHistory:Visibility[]}
 export type MonitorPublication=Projected;
 const nativeKey=(network:string,account:string,postId:string)=>JSON.stringify([network,account,postId]);
 const sourceId=(ref:FunnelEvent["sourceAccount"]|null)=>ref?.canonicalId ?? ref?.sourceId ?? null;
+/**
+ * One order-assignment rule for the reader and J08. An order event with a post ID assigns that post; an order event without one makes the
+ * order creator-wide. Only a refund without a post ID inherits its order's single explicit post. Anything else is unassigned.
+ */
+export function orderAssignments(events:FunnelEvent[]){
+  const orders=new Map<string,{posts:Set<string>;creatorWide:boolean}>();
+  for(const e of events){
+    if(!e.details.orderId || (e.eventType!=="retainedOrder"&&e.eventType!=="refund"))continue;
+    const entry=orders.get(e.details.orderId)??{posts:new Set<string>(),creatorWide:false};
+    if(e.details.postId)entry.posts.add(e.details.postId);else if(e.eventType==="retainedOrder")entry.creatorWide=true;
+    orders.set(e.details.orderId,entry);
+  }
+  const assignedPost=(e:FunnelEvent):string|null=>{
+    if(e.details.postId)return e.details.postId;
+    const entry=e.details.orderId?orders.get(e.details.orderId):undefined;
+    return e.eventType==="refund"&&entry&&entry.posts.size===1&&!entry.creatorWide?[...entry.posts][0]!:null;
+  };
+  return {orders,assignedPost};
+}
 export function effectiveEvents(events:FunnelEvent[]) {
   const corrected=new Set(events.map(e=>e.correctsEventId).filter(Boolean));
   return events.filter(e=>!corrected.has(e.eventId));
@@ -26,6 +45,8 @@ export function selectMeasurement(history:Measurement[]) {
 /** Membership requires a recorded Farda publication, never a like threshold or a creator-name match. */
 export function projectPosts(events:FunnelEvent[],snapshot:MonitorSnapshot|null,alias:Alias,scope:OperationsScope,secret:string):Map<string,Projected>{
   const posts=new Map<string,Projected>();
+  // Only a source that declares lifecycle ownership (J08) owns its posts' lifecycle and metrics; other sources keep the merged ledger history.
+  const sourceOwned=snapshot?.lifecycleOwnership==="source";
   const sourcePosts=new Map((snapshot?.posts??[]).map(p=>[nativeKey(p.network,p.account,p.postId),p]));
   const native=events.filter(e=>nativePost(e) && e.details.postId && sourceId(e.sourceAccount) &&
     (e.network==="instagram" || e.network==="tiktok"));
@@ -68,11 +89,20 @@ export function projectPosts(events:FunnelEvent[],snapshot:MonitorSnapshot|null,
   }
   for(const e of native){
     const account=e.sourceAccount.sourceId ?? e.sourceAccount.canonicalId!;
-    const item=posts.get(nativeKey(e.network,account,e.details.postId!)); if(!item)continue;
+    const key=nativeKey(e.network,account,e.details.postId!),item=posts.get(key); if(!item)continue;
     const receipt=alias("receipt",e.evidenceRef.provenanceRef);
     const creator=sourceId(e.creatorRef),campaign=sourceId(e.campaignCohortRef);
     if(!creator || !campaign || item.post.creator!==alias("creator",creator) || item.post.campaign!==alias("campaign",campaign)){
       item.post.conflict=true;continue;
+    }
+    // A lifecycle-owning source keeps its own history and counters. A newer saved ledger lifecycle event that disagrees with the source's
+    // current confirmed visibility is a visible conflict, never a silent override or a silent drop.
+    if(sourceOwned && sourcePosts.has(key)){
+      const ledgerState=e.eventType==="removed"?"deleted":e.eventType==="published"?"public":null;
+      const sourceAt=item.post.visibilityAt?Date.parse(item.post.visibilityAt):-Infinity;
+      if(ledgerState && ["public","private","deleted","expired"].includes(item.post.visibility) && ledgerState!==item.post.visibility && Date.parse(e.observedAt)>sourceAt)
+        item.post.conflict=true;
+      continue;
     }
     if(e.eventType==="published" || e.eventType==="removed"){
       const state=e.eventType==="removed"?"deleted":"public";
@@ -126,18 +156,21 @@ function reconciledSales(posts:Post[],events:FunnelEvent[],asOf:string,alias:Ali
   const linked:FunnelEvent[]=[];
   // An order receipt with no post assignment stays creator/campaign-wide. Never divide it across posts.
   const assigned=new Map<string,Set<string>>();
+  // A refund usually carries no post ID. It inherits its order's single explicit post; a post-less order event stays creator-wide.
+  const {assignedPost}=orderAssignments(financial);
   for(const e of financial){
-    if(!e.details.postId || !e.details.orderId || e.evidenceRef.access!=="verified" || !e.maturationAt || Date.parse(e.maturationAt)>Date.parse(asOf) ||
+    const postId=assignedPost(e);
+    if(!postId || !e.details.orderId || e.evidenceRef.access!=="verified" || !e.maturationAt || Date.parse(e.maturationAt)>Date.parse(asOf) ||
       e.details.attributionWindow!==claims[0]!.window || alias("terms",e.details.attributionVersion??"")!==claims[0]!.version ||
       e.details.currency!==currency || e.details.retainedMinor==null || e.details.blockers.length)return unknown;
     // A checkout account isn't a publishing account. Match the native post only if one campaign/creator owner exists.
-    const matches=postIndex.get(JSON.stringify([e.network,e.details.postId,alias("creator",sourceId(e.creatorRef)??""),
+    const matches=postIndex.get(JSON.stringify([e.network,postId,alias("creator",sourceId(e.creatorRef)??""),
       alias("campaign",sourceId(e.campaignCohortRef)??"")]))??[];
     if(matches.length!==1 || matches[0]!.post.conflict)return unknown;
-    const postId=matches[0]!.post.id;
-    const keys=assigned.get(e.details.orderId)??new Set<string>();keys.add(postId);assigned.set(e.details.orderId,keys);
+    const projectedId=matches[0]!.post.id;
+    const keys=assigned.get(e.details.orderId)??new Set<string>();keys.add(projectedId);assigned.set(e.details.orderId,keys);
     if(keys.size!==1)return unknown;
-    if(selected.has(postId))linked.push(e);
+    if(selected.has(projectedId))linked.push(e);
   }
   const result=projectFunnel(linked,{},asOf);
   const orders=result.outcomes.find(m=>m.name==="Attributed orders")?.value;

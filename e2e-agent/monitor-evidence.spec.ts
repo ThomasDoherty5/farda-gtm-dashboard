@@ -1,6 +1,7 @@
 import { screenReaderCheckpoint } from "./support/screen-reader";
 import AxeBuilder from "@axe-core/playwright";
 import { mkdirSync,writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { expect,test,type Page } from "@playwright/test";
 import { createAgentServer } from "../src/creator-agent/server.ts";
 import { digest } from "../src/creator-agent/config.ts";
@@ -9,6 +10,12 @@ import { MonitorError } from "../src/creator-agent/monitor/reader.ts";
 import { intakeInputSchema,type SinkBinding,type SinkReceipt } from "../src/creator-agent/intake/contract.ts";
 import type { CanonicalRecord } from "../src/creator-agent/intake/repository.ts";
 import { SYNTHETIC_READ_TOKEN,SYNTHETIC_REVIEW_TOKEN } from "../src/creator-agent/testFixtures.ts";
+import { SCHEMA_VERSION } from "../src/adapter/contract.ts";
+import { nativeContentSchema } from "../src/creator-agent/monitor/contract.ts";
+import { runtimeSyntheticScope } from "../src/creator-agent/jobs/runtime.testkit.ts";
+import { runtimeApiAckSchema } from "../src/creator-agent/jobs/runtimeViews.ts";
+import { createJ08SandboxRuntime,createJ08SandboxWorld,ingestJ08Orders,j08SandboxOrders,j08SandboxPolicy,j08SandboxServerOptions,
+  seedJ08Intake } from "../src/creator-agent/contentMonitor/sandbox.testkit.ts";
 
 function sink(name:string){
   const records=new Map<string,SinkReceipt>();
@@ -205,5 +212,110 @@ test("all four real monitor reads preserve source scope, zero, identity, restart
     s.coverage="complete";s.posts=[];await page.reload();
     await expect(page.getByText("No matching saved campaign posts. Provider-wide post count is unknown.")).toBeVisible();
     writeFileSync(dir+"/native-browser-proof.json",JSON.stringify({audit,source:"Actual local agent service and SQLite with scoped synthetic J01/J08 authority",externalActions:0},null,2));
+  }finally{await app.close();}
+});
+
+test("J08 sandbox run feeds the monitor reads through the registered runtime, with resume and truthful coverage",async({page},testInfo)=>{
+  test.setTimeout(180_000);
+  const dir=testInfo.outputPath("j08-sandbox-evidence");mkdirSync(dir,{recursive:true});
+  const scope=runtimeSyntheticScope,databasePath=join(dir,"agent.sqlite");
+  // The base hour is fixed once, so a run that crosses an hour boundary keeps the same windows.
+  const base=Math.floor(Date.now()/3600_000),slot=(hoursAgo:number)=>new Date((base-hoursAgo)*3600_000).toISOString();
+  const world=createJ08SandboxWorld(Date.now,Date.now()),suppressed=new Set<string>(),proofs=new Map<string,string>();
+  const runtime=createJ08SandboxRuntime({now:Date.now});
+  const token="synthetic-j08-runtime-worker-credential-e2e0";
+  // No test holder: the server composes J08's frozen watchlist into the injected runtime authority.
+  const app=createAgentServer(j08SandboxServerOptions({databasePath,scope,readToken:SYNTHETIC_READ_TOKEN,reviewToken:SYNTHETIC_REVIEW_TOKEN,machineToken:token,runtime,world,
+    suppressed,proofs,policy:()=>j08SandboxPolicy}));
+  // The synthetic runtime shares the server's own SQLite connection.
+  await runtime.initialize(app.store.database);
+  await new Promise<void>((resolve,reject)=>{app.server.once("error",reject);app.server.listen(Number(process.env.E2E_AGENT_SERVER_PORT),"127.0.0.1",resolve);});
+  const origin=`http://127.0.0.1:${process.env.E2E_AGENT_SERVER_PORT}`;
+  const post=async(path:string,body:unknown,bearer=token,headers:Record<string,string>={})=>{const r=await fetch(origin+path,{method:"POST",headers:{authorization:"Bearer "+bearer,"content-type":"application/json",...headers},body:JSON.stringify(body)});return {status:r.status,body:await r.json() as Record<string,unknown>};};
+  const fire=async(registrationRef:string,intendedAt:string,trigger:string)=>{const fired=await post("/v1/runtime/machine",{operation:"fire",input:{registrationRef,registrationVersion:1,intendedAt,triggerEventRef:trigger}});
+    expect(fired.status,JSON.stringify(fired.body)).toBe(200);return runtimeApiAckSchema.parse(fired.body).runRefs[0]!;};
+  const work=async(runRef:string)=>{const answer=await post("/v1/runtime/machine",{operation:"work",input:{runRef,maxItems:10}});expect(answer.status,JSON.stringify(answer.body)).toBe(200);
+    // The hourly driver's next pass drains the durable J14 routing outbox.
+    await app.contentMonitor!.drainRoutes();};
+  const latest=()=>app.contentMonitor!.windows()[0]!.windowRef;
+  try{
+    const ids=await seedJ08Intake(post,scope,SYNTHETIC_REVIEW_TOKEN);
+    await ingestJ08Orders(post,proofs,j08SandboxOrders(ids,scope,Date.now()),Date.now(),SYNTHETIC_REVIEW_TOKEN);
+    // J14 owns source health: its target observes the J08 source before the runtime treats the binding as ready.
+    expect((await app.providerHealth.check({capabilityId:app.contentMonitor!.capabilityId,eventId:"synthetic-initial-health"},"synthetic-initial-health")).health).toMatchObject({state:"ready"});
+    const run1=await fire(runtime.registration.registrationRef,slot(1),"synthetic-hourly-trigger");
+    await work(run1);
+    const window1=latest();
+    expect(app.contentMonitor!.output(window1).freshnessCoverage).toMatchObject({snapshotCount:6,deferred:1,complete:false,noNewContent:null,allClear:null});
+    // The interrupted row resumes from its runtime checkpoint.
+    await page.waitForTimeout(200);
+    await work(run1);
+    expect(app.contentMonitor!.output(window1).freshnessCoverage).toMatchObject({snapshotCount:6,scanned:6,newContent:6,complete:true,allClear:true});
+    // Reproducible four-metric output from the complete window. Cross-network views are not comparable, so their total stays unknown.
+    const metrics=async(filters:Record<string,unknown>)=>{
+      const read=await post("/v1/read",{schemaVersion:SCHEMA_VERSION,operation:"readView",requestId:"synthetic-j08-metrics",requestedScope:{workspaceId:scope.workspaceId,accountIds:[scope.accountId],environment:"sandbox"},
+        viewKey:"contentMonitor",filters,period:null,sort:[],page:{limit:100,cursor:null}},SYNTHETIC_READ_TOKEN);
+      const data=nativeContentSchema.parse(read.body.data);
+      return {data,summary:{views:data.views,rate:data.rate,orders:data.orders,net:data.net,basis:data.metricBasis,posts:data.total,sourceState:data.sourceState}};
+    };
+    const spring=(await metrics({})).data.posts.find(p=>p.originalUrl?.includes("SYNTHA1"))!.campaign;
+    const fourMetrics={all:(await metrics({})).summary,instagram:(await metrics({network:"instagram"})).summary,tiktok:(await metrics({network:"tiktok"})).summary,
+      springInstagram:(await metrics({network:"instagram",campaign:spring})).summary};
+    expect(fourMetrics.all).toMatchObject({sourceState:"current",views:null,rate:null,orders:null,net:null,posts:6});
+    expect(fourMetrics.springInstagram).toMatchObject({views:2000,orders:1,net:{minorUnits:4000,currency:"USD"},posts:3});
+    expect(fourMetrics.springInstagram.rate).toBeCloseTo(7.7,5);
+    expect(fourMetrics.tiktok).toMatchObject({views:5300,rate:null,orders:null,posts:2});
+    // A bounded manual recheck is its own window on the same source binding; it re-reads and reports unchanged rows.
+    await work(await fire(runtime.manual.registrationRef,new Date(Date.parse(slot(0))-60_000).toISOString(),"synthetic-manual-recheck"));
+    expect(app.contentMonitor!.output(latest()).freshnessCoverage).toMatchObject({snapshotCount:6,unchanged:6,complete:true,noNewContent:true});
+    world.access.set("synthetic-tt-account-d","denied");world.privatePosts.add("SYNTHA2");
+    await work(await fire(runtime.registration.registrationRef,slot(0),"synthetic-hourly-trigger-next"));
+    const window2=app.contentMonitor!.windows().find(w=>w.intendedAt===slot(0))!.windowRef;
+    expect(app.contentMonitor!.output(window2).freshnessCoverage).toMatchObject({snapshotCount:6,unchanged:5,inaccessible:1,newContent:0,complete:false,noNewContent:null,allClear:null});
+
+    expect((await page.request.get("/v1/session",{headers:{authorization:"Bearer "+SYNTHETIC_READ_TOKEN}})).ok()).toBe(true);
+    await page.goto("/content");
+    const posts=page.getByRole("region",{name:"Saved campaign posts"});
+    await expect(posts).toContainText("inaccessible");await expect(posts).toContainText("private");
+    await expect(page.getByRole("status").filter({hasText:"Partial source coverage"})).toBeVisible();
+    // An incomplete window withholds totals instead of claiming them.
+    const fourMetricsAfter={all:(await metrics({})).summary};
+    expect(fourMetricsAfter.all).toMatchObject({sourceState:"partial",views:null,rate:null,orders:null,net:null,posts:6});
+    await page.getByRole("link",{name:"View hourly runs"}).click();
+    await expect(page.getByRole("heading",{name:"Every hourly check leaves evidence.",level:1})).toBeVisible();
+    await expect(page.getByText("0 failed, 1 inaccessible and 0 deferred profile checks.",{exact:false})).toBeVisible();
+    await expect(page.getByText("0 failed · 1 inaccessible · 0 deferred",{exact:true})).toBeVisible();
+    await page.getByText("Inspect profile check receipts",{exact:true}).click();
+    const trace=page.getByRole("region",{name:"Read-only run trace"});
+    await expect(trace).toContainText("inaccessible · denied");await expect(trace).toContainText("SOURCE_DENIED; recovery owner J14 source health (J14_OBSERVED)");
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+      const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
+      expect(result.violations.map(v=>v.id)).toEqual([]);
+      await page.evaluate(async()=>{window.scrollTo(0,0);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));});
+      await page.screenshot({path:`${dir}/j08-hourly-run-${width}.png`,fullPage:true});
+    }
+    await page.setViewportSize({width:1440,height:900});
+    await page.goto("/content?network=tiktok");
+    await page.getByRole("region",{name:"Saved campaign posts"}).getByRole("link").filter({hasText:/post-/}).first().click();
+    await expect(page.getByRole("heading",{name:"One post. Its evidence and impact.",level:1})).toBeVisible();
+    await page.getByText("Inspect source metric observations",{exact:true}).click();
+    const observations=page.getByRole("region",{name:"Post metric observations"});
+    // A captured checkpoint names its actual age; a late fetch is labeled late and never presented as the checkpoint.
+    await expect(observations).toContainText(/(24h checkpoint, observed at actual age \d+(\.\d)?h|late observation at actual age \d+(\.\d)?h; the 168h checkpoint was not captured)/);
+    for(const width of [1440,390]){
+      await page.setViewportSize({width,height:900});
+      expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBe(width);
+      const result=await new AxeBuilder({page:page as never}).withTags(["wcag2a","wcag2aa","wcag21a","wcag21aa"]).analyze();
+      expect(result.violations.map(v=>v.id)).toEqual([]);
+      await page.evaluate(async()=>{window.scrollTo(0,0);await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));});
+      await page.screenshot({path:`${dir}/j08-post-checkpoint-${width}.png`,fullPage:true});
+    }
+    const key="synthetic-j08-e2e-trace-key-00000000000";
+    const saved=JSON.stringify({stage:"fixture",evidence:"synthetic only; no provider contacted; no live hourly schedule activated",fourMetrics,fourMetricsAfter,
+      windows:app.contentMonitor!.windows().map(w=>app.contentMonitor!.trace(w.windowRef,key))},null,2);
+    for(const raw of ["synthetic-tt-account-d","synthetic-ig-account-a","7300000000000000004",...ids.values()])expect(saved).not.toContain(raw);
+    writeFileSync(join(dir,"j08-sandbox-run.json"),saved);
   }finally{await app.close();}
 });

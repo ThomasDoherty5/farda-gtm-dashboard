@@ -73,6 +73,16 @@ export class JobRuntime{
   private pageByRun(runRef:string):StoredPage{const row=this.db.prepare("SELECT * FROM job_runtime_pages WHERE run_ref=?").get(runRef);if(!row)throw new RuntimeError("RUNTIME_RUN_NOT_FOUND",404);return{pageRef:String(row.page_ref),plan:runtimeWindowPlanSchema.parse(parse(row.plan)),runRef:String(row.run_ref),parentRunRef:row.parent_run_ref===null?null:String(row.parent_run_ref)};}
   private page(pageRef:string):StoredPage|null{const row=this.db.prepare("SELECT * FROM job_runtime_pages WHERE page_ref=?").get(pageRef);return row?{pageRef,plan:runtimeWindowPlanSchema.parse(parse(row.plan)),runRef:row.run_ref===null?null:String(row.run_ref),parentRunRef:row.parent_run_ref===null?null:String(row.parent_run_ref)}:null;}
   ownsRun(runRef:string):boolean{return Boolean(this.db.prepare("SELECT 1 FROM job_runtime_pages WHERE run_ref=?").get(runRef));}
+  /** Read-only: the registration that owns a run, or null for an unknown run. No activation, source call or write. */
+  registrationOfRun(runRef:string):string|null{const row=this.db.prepare("SELECT registration_ref FROM job_runtime_pages WHERE run_ref=? LIMIT 1").get(runRef);return row?String(row.registration_ref):null;}
+  /** Read-only: admitted source pages of one registration, newest window first. No source call and no write. */
+  windowPages(registrationRef:string,limit=50):{pageRef:string;runRef:string;plan:RuntimeWindowPlan}[]{runtimeRef.parse(registrationRef);if(!Number.isSafeInteger(limit)||limit<1||limit>500)throw new RuntimeError("RUNTIME_READ_BOUND_INVALID",422);
+    return this.db.prepare("SELECT page_ref,run_ref,plan FROM job_runtime_pages WHERE registration_ref=? AND run_ref IS NOT NULL ORDER BY json_extract(plan,'$.window.intendedAt') DESC,page_ref LIMIT ?").all(registrationRef,limit)
+      .map(row=>({pageRef:String(row.page_ref),runRef:String(row.run_ref),plan:runtimeWindowPlanSchema.parse(parse(row.plan))}));}
+  /** Read-only: owned takeovers recorded for one run. */
+  takeovers(runRef:string):{itemRef:string;version:number;kind:string;ownerRef:string;bindingHash:string;resolved:boolean}[]{runtimeRef.parse(runRef);
+    return this.db.prepare("SELECT * FROM job_runtime_takeovers WHERE run_ref=? ORDER BY item_ref,version").all(runRef).map(row=>{const body=parse(row.body) as {kind:string;ownerRef:string;bindingHash:string};
+      return{itemRef:String(row.item_ref),version:Number(row.version),kind:body.kind,ownerRef:body.ownerRef,bindingHash:body.bindingHash,resolved:Boolean(row.resolved)};});}
   private async readForMachine(runRef:string,machine:RuntimeMachine){try{const result=await this.readRun(runRef);this.machine(machine);return result;}catch(error){const page=this.pageByRun(runRef);if(page.plan.kind!=="source"&&this.options.dispatch)this.outcomeError(error,runRef);
     // A denied projection cannot undo an already committed native observation/proposal receipt.
     if(this.db.prepare("SELECT 1 FROM job_runtime_steps WHERE run_ref=? LIMIT 1").get(runRef)&&error instanceof RuntimeError)throw new RuntimeError(error.code,error.status,"applied");throw error;

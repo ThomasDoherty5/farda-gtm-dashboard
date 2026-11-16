@@ -100,6 +100,13 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
+          name: synthetic-j08-sandbox-run
+          path: test-results/agent/**/j08-sandbox-evidence/j08-sandbox-run.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
           name: synthetic-weekly-kpi-trend
           path: test-results/agent/**/weekly-kpi-trend-*.png
           if-no-files-found: ignore

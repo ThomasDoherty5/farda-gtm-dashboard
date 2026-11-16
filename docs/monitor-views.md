@@ -13,7 +13,9 @@ The four monitor screens read the authenticated adapter and retain the existing 
 
 ## Source contract
 
-The server option `monitorSource` accepts a `MonitorSourceReader`. Its input contains the exact workspace, account and sandbox environment. Its result contains a versioned finite snapshot with observation time, expiry, coverage, canonical membership references, native post identities and run evidence. A source implementation must verify these facts through its existing authorized source connections before returning them. The launcher currently supplies no live J08 source.
+The server option `monitorSource` accepts a `MonitorSourceReader`. Its input contains the exact workspace, account and sandbox environment. Its result contains a versioned finite snapshot with observation time, expiry, coverage, canonical membership references, native post identities and run evidence. A source implementation must verify these facts through its existing authorized source connections before returning them.
+
+The server option `contentMonitor` composes the J08 hourly monitor through the registered job runtime. Its store then backs these four reads, and it cannot be combined with `monitorSource`. See [content-monitor-j08.md](./content-monitor-j08.md). The launcher binds no live J08 source; the only J08 runs so far are synthetic sandbox runs.
 
 The snapshot reader has no browser ingestion endpoint. Configuration, scheduling, identity resolution, source sessions, replies and other provider actions retain their existing owners. The displayed retry capability stays held until an exact J08 authority is available.
 
@@ -31,7 +33,9 @@ Search also matches a known handle only when the post's canonical creator, netwo
 
 The view total requires comparable metric definitions, windows, counter basis and organic/paid context. Its DTO retains that exact basis beside the neutral Observed views label. Missing components remain unknown. Same-instant contradictory measurements are quarantined even when their timestamps use different offsets. Counter corrections retain their signed change.
 
-Post-level outcomes require an explicit post attribution claim. Creator- or campaign-level outcomes appear separately. Multi-post sales totals require matching verified order receipts, exact attribution window/version and currency, then reuse the existing funnel projection for order/refund deduplication. Ambiguous assignments remain unknown. Signed money accumulation uses exact integers before safe-number bounds checks. TikTok GMV retains its own definition.
+A source snapshot that declares `lifecycleOwnership: "source"` (J08 does) owns the lifecycle and metrics of every post it observes. For such a post, saved ledger `published`/`removed`/`postMetrics` events are not merged into its history. They still raise a visible conflict when they disagree on creator or campaign, or when a newer lifecycle event disagrees with the source's confirmed visibility. Other sources keep the merged history.
+
+Post-level outcomes require an explicit post attribution claim. Creator- or campaign-level outcomes appear separately. Multi-post sales totals require matching verified order receipts, exact attribution window/version and currency, then reuse the existing funnel projection for order/refund deduplication. A refund without a post ID inherits its order's single explicit post assignment; an order event without one stays creator-wide (`orderAssignments`, shared with J08). Ambiguous assignments remain unknown. Signed money accumulation uses exact integers before safe-number bounds checks. TikTok GMV retains its own definition.
 
 ## Protected reads and recovery
 
@@ -47,6 +51,7 @@ Native screens retain the original source layout, shared tabs, filters, cards an
 
 - `src/creator-agent/monitor/reader.test.ts` covers identity ambiguity, suppression, source expiry, cursor binding/renewal, checked/failed distinctions, native publication provenance, financial reconciliation, first-observed removal, timestamp conflicts and exact signed accumulation.
 - `src/features/monitor/monitor.test.tsx`, `postEvidence.test.tsx` and `src/adapter/viewSchemas/monitor.test.ts` preserve the existing typed fixture and interaction coverage.
+- `src/creator-agent/contentMonitor.integration.test.ts` and the J08 test in `e2e-agent/monitor-evidence.spec.ts` serve these reads from the J08 sandbox store. The hourly run page shows inaccessible checks as their own count. The post page labels a post-age checkpoint with its actual age.
 - `e2e-agent/monitor-evidence.spec.ts` uses the actual local HTTP service and SQLite with fictional server-owned J01/J08 authorities. It covers all four screens, desktop/mobile accessibility, source failure/recovery, identity receipt joins and distinct post/creator attribution.
 - The same native journey exercises read-only identity, intake-history, message and status-suggestion dialogs, denied detail, real Escape/focus return, and desktop/mobile captures of both ends of scrollable dialogs. `nativeMonitor.test.tsx` separately verifies scoped adapter reads and removal of denied details. Isolated Linux CI uses actual Orca/AT-SPI speech and recorded audio; a jsdom dialog shim is never counted as native keyboard or screen-reader proof.
 
