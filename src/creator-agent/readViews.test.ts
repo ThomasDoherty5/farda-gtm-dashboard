@@ -9,7 +9,8 @@ import { protectCommentAuthors } from "./evidencePrivacy.ts";
 import { loadOperationsSecret } from "./operationsSecret.ts";
 import { bindConfig, type ConfigBinding } from "./config.ts";
 import { assessCreator } from "./policy.ts";
-import { POLICY_VERSION } from "./assessmentSchema.ts";
+import { holdForReview } from "./assessmentHandoff.ts";
+import { J02_SNAPSHOT_FIELDS, POLICY_VERSION } from "./assessmentSchema.ts";
 import type { EvidencePacket } from "./evidence.ts";
 import type { StoredAssessment } from "./store.ts";
 import { agentAssessmentRecordSchema, agentSourcingSchema, type AgentAssessmentRecord, type AgentSourcingData } from "./readViews.ts";
@@ -170,7 +171,9 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     const valid = agentAssessmentRecordSchema.parse(response.body.data);
     for (const flags of [{ stale: true, superseded: false }, { stale: true, superseded: true, evidenceId: null }])
       expect(agentAssessmentRecordSchema.safeParse({ ...valid, ...flags }).success).toBe(false);
-    const validStale = { ...valid, stale: true, qualification: { ...valid.qualification, state: "reviewNeeded" } };
+    // A stale read also withdraws the unsent J04 handoff; keeping it beside a review-needed state is contradictory.
+    expect(agentAssessmentRecordSchema.safeParse({ ...valid, stale: true, qualification: { ...valid.qualification, state: "reviewNeeded" } }).success).toBe(false);
+    const validStale = { ...valid, stale: true, qualification: holdForReview(valid.qualification, valid.qualification.reasonCodes) };
     expect(agentAssessmentRecordSchema.safeParse(validStale).success).toBe(true);
     expect(validStale.assessedQualification.state).toBe("activationReady");
     for (const key of ["qualification", "assessedQualification"] as const) {
@@ -205,6 +208,8 @@ describe("actual agent sourcing and immutable assessment read models", () => {
     const p = withActivationEvidence(syntheticPacket());
     const old = {...assessCreator(p,bindings[0]!),agentVersion:"1.0.0" as const,state:"activationReady" as const};
     delete old.routeEvidence;
+    // A real 1.0.0 record predates these fields as well as route evidence.
+    for (const key of J02_SNAPSHOT_FIELDS) delete old[key];
     const stored = app!.store.save(p,old,0,"legacy-generic-gates");
     const readback = await read<AgentAssessmentRecord>("assessmentRecord",{creatorId:p.creatorId,assessmentId:stored.runId});
     expect(readback.body.data).toMatchObject({stale:true,qualification:{state:"reviewNeeded"},assessedQualification:{state:"activationReady",agentVersion:"1.0.0"}});

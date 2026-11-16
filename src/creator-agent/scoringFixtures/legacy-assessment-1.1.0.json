@@ -1,0 +1,923 @@
+{
+ "runId": "e38d5ee6-5a36-4246-a93e-5d0a9b0633a4",
+ "revision": 1,
+ "recordedAt": "2026-11-15T01:22:46.264Z",
+ "packetHash": "bd719950da7dfa6340ba26bf3409e8906da4b698e10f4e228befdc1583894035",
+ "packet": {
+  "creatorId": "synthetic-legacy-website",
+  "briefId": "synthetic-travel-use",
+  "checkoutRoute": "website",
+  "evidenceRevision": "synthetic-evidence-v1",
+  "termsRevision": "synthetic-terms-v1",
+  "posts": [
+   {
+    "postId": "synthetic-post-1",
+    "canonicalMediaId": "synthetic-media-1",
+    "network": "instagram",
+    "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_1/",
+    "publishedAt": "2026-10-01T12:00:00.000Z",
+    "observedAt": "2026-11-04T12:00:00.000Z",
+    "relevant": true,
+    "nativeLikes": {
+     "status": "known",
+     "value": 201,
+     "exact": true,
+     "sourceRef": "synthetic:metric:1"
+    },
+    "review": {
+     "status": "complete",
+     "visualMethod": "continuous",
+     "audioMethod": "unassessed",
+     "sampledPoints": [],
+     "watchedIntervals": [
+      {
+       "startSec": 0,
+       "endSec": 8
+      }
+     ],
+     "observedActions": [
+      {
+       "atSec": 4,
+       "action": "Opens a fictional case and returns it to a travel bag.",
+       "meaningfulUse": true
+      }
+     ],
+     "claims": [],
+     "inferences": [],
+     "sourceRef": "synthetic:review:1"
+    },
+    "comments": {
+     "status": "observed",
+     "ordering": "First visible top-level rows in source order",
+     "observedAt": "2026-11-04T12:00:00.000Z",
+     "rows": [
+      {
+       "commentId": "synthetic-comment-1",
+       "authorRef": "author:19c47e4baf87a4f0562e6a967c3fbc8ccae4bc298601fe0916a93e015f6ad269",
+       "creator": false,
+       "promotional": false,
+       "prompted": false,
+       "categories": [
+        "purchaseEvaluation",
+        "productUnderstanding"
+       ],
+       "text": "Would this fictional case fit a small bag?"
+      },
+      {
+       "commentId": "synthetic-comment-2",
+       "authorRef": "author:5d78a503135013281f7696123b6460b74b2a988b5557bd4aa7d563e26fbe90c7",
+       "creator": false,
+       "promotional": false,
+       "prompted": true,
+       "categories": [
+        "promptedKeyword"
+       ],
+       "text": "FICTIONAL LINK"
+      }
+     ]
+    }
+   },
+   {
+    "postId": "synthetic-post-2",
+    "canonicalMediaId": "synthetic-media-2",
+    "network": "instagram",
+    "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_2/",
+    "publishedAt": "2026-10-02T12:00:00.000Z",
+    "observedAt": "2026-11-04T12:00:00.000Z",
+    "relevant": true,
+    "nativeLikes": {
+     "status": "known",
+     "value": 201,
+     "exact": true,
+     "sourceRef": "synthetic:metric:2"
+    },
+    "review": {
+     "status": "complete",
+     "visualMethod": "sampledFrames",
+     "audioMethod": "unassessed",
+     "sampledPoints": [
+      0,
+      4,
+      8
+     ],
+     "watchedIntervals": [],
+     "observedActions": [
+      {
+       "atSec": 4,
+       "action": "Opens a fictional case and returns it to a travel bag.",
+       "meaningfulUse": true
+      }
+     ],
+     "claims": [],
+     "inferences": [],
+     "sourceRef": "synthetic:review:2"
+    },
+    "comments": {
+     "status": "unavailable",
+     "reason": "Synthetic source-access limitation."
+    }
+   },
+   {
+    "postId": "synthetic-post-3",
+    "canonicalMediaId": "synthetic-media-3",
+    "network": "instagram",
+    "sourceUrl": "https://www.instagram.com/reel/SYNTHETIC_3/",
+    "publishedAt": "2026-10-02T12:00:00.000Z",
+    "observedAt": "2026-11-04T12:00:00.000Z",
+    "relevant": true,
+    "nativeLikes": {
+     "status": "known",
+     "value": 201,
+     "exact": true,
+     "sourceRef": "synthetic:metric:3"
+    },
+    "review": {
+     "status": "complete",
+     "visualMethod": "sampledFrames",
+     "audioMethod": "unassessed",
+     "sampledPoints": [
+      0,
+      4,
+      8
+     ],
+     "watchedIntervals": [],
+     "observedActions": [],
+     "claims": [],
+     "inferences": [],
+     "sourceRef": "synthetic:review:3"
+    },
+    "comments": {
+     "status": "observed",
+     "ordering": "First visible top-level rows in source order",
+     "observedAt": "2026-11-04T12:00:00.000Z",
+     "rows": []
+    }
+   }
+  ],
+  "recentPosts": [
+   {
+    "postId": "synthetic-recent-1",
+    "canonicalMediaId": "synthetic-recent-media-1",
+    "publishedAt": "2026-10-01T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 5,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:1"
+    },
+    "views": {
+     "status": "known",
+     "value": 0,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-2",
+    "canonicalMediaId": "synthetic-recent-media-2",
+    "publishedAt": "2026-10-02T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 301,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:2"
+    },
+    "views": {
+     "status": "known",
+     "value": 100,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-3",
+    "canonicalMediaId": "synthetic-recent-media-3",
+    "publishedAt": "2026-10-03T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 5,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:3"
+    },
+    "views": {
+     "status": "known",
+     "value": 200,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-4",
+    "canonicalMediaId": "synthetic-recent-media-4",
+    "publishedAt": "2026-10-04T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 301,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:4"
+    },
+    "views": {
+     "status": "known",
+     "value": 300,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-5",
+    "canonicalMediaId": "synthetic-recent-media-5",
+    "publishedAt": "2026-10-05T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 5,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:5"
+    },
+    "views": {
+     "status": "known",
+     "value": 400,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-6",
+    "canonicalMediaId": "synthetic-recent-media-6",
+    "publishedAt": "2026-10-06T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 301,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:6"
+    },
+    "views": {
+     "status": "known",
+     "value": 500,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-7",
+    "canonicalMediaId": "synthetic-recent-media-7",
+    "publishedAt": "2026-10-07T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 5,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:7"
+    },
+    "views": {
+     "status": "known",
+     "value": 600,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-8",
+    "canonicalMediaId": "synthetic-recent-media-8",
+    "publishedAt": "2026-10-08T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 301,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:8"
+    },
+    "views": {
+     "status": "known",
+     "value": 700,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-9",
+    "canonicalMediaId": "synthetic-recent-media-9",
+    "publishedAt": "2026-10-09T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 5,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:9"
+    },
+    "views": {
+     "status": "known",
+     "value": 800,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   },
+   {
+    "postId": "synthetic-recent-10",
+    "canonicalMediaId": "synthetic-recent-media-10",
+    "publishedAt": "2026-10-10T12:00:00.000Z",
+    "relevant": true,
+    "pinned": false,
+    "nativeLikes": {
+     "status": "known",
+     "value": 301,
+     "exact": true,
+     "sourceRef": "synthetic:recent-likes:10"
+    },
+    "views": {
+     "status": "known",
+     "value": 900,
+     "definition": "synthetic native video views",
+     "window": "lifetime at synthetic snapshot"
+    },
+    "paid": "no"
+   }
+  ],
+  "ratings": {
+   "routine": 5,
+   "demo": 4
+  },
+  "criterionRatings": {
+   "verifiedCommerce": 3,
+   "audienceAlignment": 4,
+   "reliability": 4,
+   "offerEconomics": 4
+  },
+  "criterionEvidenceRefs": {
+   "verifiedCommerce": [
+    "synthetic:criterion-proof:verifiedCommerce"
+   ],
+   "audienceAlignment": [
+    "synthetic:criterion-proof:audienceAlignment"
+   ],
+   "reliability": [
+    "synthetic:criterion-proof:reliability"
+   ],
+   "offerEconomics": [
+    "synthetic:criterion-proof:offerEconomics"
+   ]
+  },
+  "invitationGates": [
+   {
+    "id": "identity",
+    "status": "pass",
+    "sourceRef": "synthetic:invite:identity"
+   },
+   {
+    "id": "sourcePermission",
+    "status": "pass",
+    "sourceRef": "synthetic:invite:sourcePermission"
+   },
+   {
+    "id": "suppression",
+    "status": "pass",
+    "sourceRef": "synthetic:invite:suppression"
+   },
+   {
+    "id": "supportedBrief",
+    "status": "pass",
+    "sourceRef": "synthetic:invite:supportedBrief"
+   }
+  ],
+  "activationGates": [
+   {
+    "id": "audience",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:audience"
+   },
+   {
+    "id": "terms",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:terms"
+   },
+   {
+    "id": "programEligibility",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:programEligibility"
+   },
+   {
+    "id": "attribution",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:attribution"
+   },
+   {
+    "id": "supportedClaims",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:supportedClaims"
+   },
+   {
+    "id": "websiteProgramEligibility",
+    "status": "pass",
+    "sourceRef": "synthetic:activate:websiteProgramEligibility"
+   }
+  ]
+ },
+ "assessment": {
+  "schemaVersion": "creator-agent.v1",
+  "policyVersion": "2026-11-04",
+  "agentVersion": "1.1.0",
+  "creatorId": "synthetic-legacy-website",
+  "briefId": "synthetic-travel-use",
+  "evidenceRevision": "synthetic-evidence-v1",
+  "termsRevision": "synthetic-terms-v1",
+  "modelId": "WEBSITE-AFFILIATE-v3",
+  "config": {
+   "status": "bound",
+   "version": "2026-11-04.launch-v1",
+   "hash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6",
+   "baselineHash": "048db012fb33cf8aa5f5ec8e02e31ab56d08e32fb7e4259cf2c329dea71697e6",
+   "numericHash": "f4d4bccc424dd9a8dfc36cd1b71337b81f441cce312ec2e1b8bfea0e13ac6488"
+  },
+  "configuration": {
+   "criteria": [
+    {
+     "id": "routineFit",
+     "label": "Contextual / routine fit",
+     "weight": 25,
+     "rating": 5
+    },
+    {
+     "id": "demonstrationStorytelling",
+     "label": "Demonstration / storytelling",
+     "weight": 20,
+     "rating": 4
+    },
+    {
+     "id": "verifiedCommerce",
+     "label": "Verified comparable commerce",
+     "weight": 15,
+     "rating": 3
+    },
+    {
+     "id": "audienceAlignment",
+     "label": "Audience alignment",
+     "weight": 15,
+     "rating": 4
+    },
+    {
+     "id": "reliability",
+     "label": "Collaboration reliability",
+     "weight": 10,
+     "rating": 4
+    },
+    {
+     "id": "offerEconomics",
+     "label": "Offer economics",
+     "weight": 15,
+     "rating": 4
+    }
+   ],
+   "bands": [
+    {
+     "id": "hold",
+     "min": 0
+    },
+    {
+     "id": "manualReview",
+     "min": 65
+    },
+    {
+     "id": "priorityReview",
+     "min": 80
+    }
+   ],
+   "arithmetic": "weight*rating/5;round-complete-total;no-rescaling"
+  },
+  "state": "activationReady",
+  "contentQualification": "pass",
+  "gates": [
+   {
+    "id": "QUALIFYING_POSTS",
+    "state": "pass",
+    "reason": "3/3 independent relevant complete posts with exact native likes >200"
+   },
+   {
+    "id": "PUBLICATION_DATES",
+    "state": "pass",
+    "reason": "2/2 publication dates"
+   },
+   {
+    "id": "MEANINGFUL_USE",
+    "state": "pass",
+    "reason": "2/2 on-brief action/use examples"
+   },
+   {
+    "id": "ROUTINE_FLOOR",
+    "state": "pass",
+    "reason": "Verified rating 5/5; minimum 3/5"
+   },
+   {
+    "id": "DEMO_FLOOR",
+    "state": "pass",
+    "reason": "Verified rating 4/5; minimum 3/5"
+   },
+   {
+    "id": "CONFIG_BOUND",
+    "state": "pass",
+    "reason": "Immutable current/baseline numeric configuration verified"
+   },
+   {
+    "id": "INVITE:identity",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:identity"
+   },
+   {
+    "id": "INVITE:sourcePermission",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:sourcePermission"
+   },
+   {
+    "id": "INVITE:suppression",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:suppression"
+   },
+   {
+    "id": "INVITE:supportedBrief",
+    "state": "pass",
+    "reason": "pass; source synthetic:invite:supportedBrief"
+   },
+   {
+    "id": "ACTIVATE:audience",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:audience"
+   },
+   {
+    "id": "ACTIVATE:terms",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:terms"
+   },
+   {
+    "id": "ACTIVATE:programEligibility",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:programEligibility"
+   },
+   {
+    "id": "ACTIVATE:attribution",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:attribution"
+   },
+   {
+    "id": "ACTIVATE:supportedClaims",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:supportedClaims"
+   },
+   {
+    "id": "ACTIVATE:websiteProgramEligibility",
+    "state": "pass",
+    "reason": "pass; source synthetic:activate:websiteProgramEligibility"
+   },
+   {
+    "id": "SOURCE:route",
+    "state": "pass",
+    "reason": "fixture:program"
+   },
+   {
+    "id": "SOURCE:terms",
+    "state": "pass",
+    "reason": "fixture:accepted-offer-v1"
+   },
+   {
+    "id": "SOURCE:audience",
+    "state": "pass",
+    "reason": "synthetic:criterion-proof:audienceAlignment"
+   },
+   {
+    "id": "SOURCE:supportedClaims",
+    "state": "pass",
+    "reason": "fixture:claims"
+   },
+   {
+    "id": "SOURCE:offerEconomics",
+    "state": "pass",
+    "reason": "synthetic:criterion-proof:offerEconomics"
+   },
+   {
+    "id": "SOURCE:websiteLink",
+    "state": "pass",
+    "reason": "fixture:link"
+   },
+   {
+    "id": "SOURCE:attributionPrecedence",
+    "state": "pass",
+    "reason": "fixture:precedence"
+   },
+   {
+    "id": "SOURCE:orderRefundTest",
+    "state": "pass",
+    "reason": "fixture:test-order-and-refund"
+   },
+   {
+    "id": "INVITE_NUMERIC_RULES",
+    "state": "pass",
+    "reason": "Bound invitation score/coverage rules; missing criteria never rescale"
+   }
+  ],
+  "packet": {
+   "qualifyingPosts": 3,
+   "publicationDates": 2,
+   "meaningfulUsePosts": 2,
+   "postIds": [
+    "synthetic-post-1",
+    "synthetic-post-2",
+    "synthetic-post-3"
+   ]
+  },
+  "criteria": {
+   "routine": 5,
+   "demo": 4
+  },
+  "score": {
+   "earned": 82,
+   "max": 100,
+   "total": 82,
+   "unknownCount": 0,
+   "band": "priorityReview"
+  },
+  "metadata": {
+   "sampleSize": 10,
+   "coverage": "complete",
+   "reasonCodes": [],
+   "postIds": [
+    "synthetic-recent-10",
+    "synthetic-recent-9",
+    "synthetic-recent-8",
+    "synthetic-recent-7",
+    "synthetic-recent-6",
+    "synthetic-recent-5",
+    "synthetic-recent-4",
+    "synthetic-recent-3",
+    "synthetic-recent-2",
+    "synthetic-recent-1"
+   ],
+   "medianViews": 450,
+   "minViews": 0,
+   "maxViews": 900,
+   "comparableViewCount": 10
+  },
+  "comments": [
+   {
+    "postId": "synthetic-post-1",
+    "status": "observed",
+    "rowCount": 2,
+    "uniqueAuthors": 2,
+    "unknownAuthorRows": 0,
+    "promptedRows": 1,
+    "creatorRows": 0,
+    "promotionalRows": 0,
+    "categoryCounts": {
+     "generalReaction": 0,
+     "routineApplication": 0,
+     "productUnderstanding": 1,
+     "practicalObjection": 0,
+     "purchaseEvaluation": 1,
+     "promptedKeyword": 1,
+     "selfReportedOwnership": 0
+    },
+    "ordering": "First visible top-level rows in source order",
+    "reason": null
+   },
+   {
+    "postId": "synthetic-post-2",
+    "status": "unavailable",
+    "rowCount": null,
+    "uniqueAuthors": null,
+    "unknownAuthorRows": null,
+    "promptedRows": null,
+    "creatorRows": null,
+    "promotionalRows": null,
+    "categoryCounts": null,
+    "ordering": null,
+    "reason": "Synthetic source-access limitation."
+   },
+   {
+    "postId": "synthetic-post-3",
+    "status": "observed",
+    "rowCount": 0,
+    "uniqueAuthors": 0,
+    "unknownAuthorRows": 0,
+    "promptedRows": 0,
+    "creatorRows": 0,
+    "promotionalRows": 0,
+    "categoryCounts": {
+     "generalReaction": 0,
+     "routineApplication": 0,
+     "productUnderstanding": 0,
+     "practicalObjection": 0,
+     "purchaseEvaluation": 0,
+     "promptedKeyword": 0,
+     "selfReportedOwnership": 0
+    },
+    "ordering": "First visible top-level rows in source order",
+    "reason": null
+   }
+  ],
+  "reviews": [
+   {
+    "postId": "synthetic-post-1",
+    "status": "complete",
+    "visualMethod": "continuous",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 0,
+    "continuousSeconds": 8,
+    "likeGate": "pass"
+   },
+   {
+    "postId": "synthetic-post-2",
+    "status": "complete",
+    "visualMethod": "sampledFrames",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 3,
+    "continuousSeconds": 0,
+    "likeGate": "pass"
+   },
+   {
+    "postId": "synthetic-post-3",
+    "status": "complete",
+    "visualMethod": "sampledFrames",
+    "audioMethod": "unassessed",
+    "sampledPointCount": 3,
+    "continuousSeconds": 0,
+    "likeGate": "pass"
+   }
+  ],
+  "routeEvidence": {
+   "route": "website",
+   "status": "verified",
+   "verifiedModelId": "WEBSITE-AFFILIATE-v3",
+   "reason": "SOURCE_VERIFIED",
+   "sourceRef": "fixture:provider-snapshot",
+   "provider": "external-affiliate",
+   "programId": "fixture-program",
+   "programVersion": "v1",
+   "market": "US",
+   "creatorSourceId": "source-creator-id",
+   "observedAt": "2020-02-01T00:00:00Z",
+   "validUntil": "2100-01-01T00:00:00Z",
+   "coveredWeight": 100,
+   "metrics": [
+    {
+     "name": "retainedSales",
+     "value": 2500,
+     "unit": "minorCurrency",
+     "currency": "USD",
+     "definition": "Net of mature refunds",
+     "denominator": "eligible creator orders",
+     "windowStart": "2020-01-01T00:00:00Z",
+     "windowEnd": "2020-02-01T00:00:00Z",
+     "sampleSize": 2,
+     "maturity": "mature",
+     "sourceRef": "synthetic:criterion-proof:verifiedCommerce"
+    }
+   ],
+   "confidence": {
+    "completePublicReviews": 3,
+    "distinctPublicationDates": 2,
+    "commentsObservedPosts": 2,
+    "unassessedAudioPosts": 3,
+    "verifiedCriteria": 6,
+    "configuredCriteria": 6,
+    "sourceCoverage": "complete"
+   },
+   "criteria": [
+    {
+     "id": "routineFit",
+     "rating": 5,
+     "anchor": "Consistently useful supported-use explanations in multiple contexts or formats.",
+     "sourceRefs": [
+      "synthetic:review:1",
+      "synthetic:review:2",
+      "synthetic:review:3"
+     ],
+     "rationale": null
+    },
+    {
+     "id": "demonstrationStorytelling",
+     "rating": 4,
+     "anchor": "Repeated clear execution, visible useful payoff and credible explanation; retail CTA optional.",
+     "sourceRefs": [
+      "synthetic:review:1",
+      "synthetic:review:2",
+      "synthetic:review:3"
+     ],
+     "rationale": null
+    },
+    {
+     "id": "verifiedCommerce",
+     "rating": 3,
+     "anchor": "Source-defined retained sales support this category in a comparable window.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:verifiedCommerce"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "audienceAlignment",
+     "rating": 4,
+     "anchor": "Comparable audience observations repeatedly support the brief.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:audienceAlignment"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "reliability",
+     "rating": 4,
+     "anchor": "Repeated comparable commitments were fulfilled with documented follow-through.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:reliability"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    },
+    {
+     "id": "offerEconomics",
+     "rating": 4,
+     "anchor": "The accepted offer and sourced costs support payback in base and downside cases.",
+     "sourceRefs": [
+      "synthetic:criterion-proof:offerEconomics"
+     ],
+     "rationale": "Fixture measurement reviewed for this criterion."
+    }
+   ],
+   "comparison": {
+    "status": "known",
+    "count": 10,
+    "median": 450,
+    "spread": 900,
+    "definition": "synthetic native video views",
+    "window": "lifetime at synthetic snapshot",
+    "paid": "no",
+    "firstPublishedAt": "2026-10-01T12:00:00.000Z",
+    "lastPublishedAt": "2026-10-10T12:00:00.000Z"
+   },
+   "commerce": {
+    "kind": "website",
+    "linkOrCodeRef": "fixture:link",
+    "attributionPrecedence": "fixture:precedence",
+    "test": {
+     "expectedProviderCredit": true,
+     "orderId": "test-order",
+     "refundOfOrderId": "test-order",
+     "refundApplied": true,
+     "sourceRef": "fixture:test-order-and-refund"
+    }
+   },
+   "acceptedTerms": {
+    "origin": "provider",
+    "offerId": "fixture-offer",
+    "version": "v1",
+    "manifestHash": "synthetic-manifest-digest",
+    "acceptedRef": "fixture:accepted-offer-v1",
+    "termsRevision": "synthetic-terms-v1",
+    "shopAdsRateBps": null,
+    "nativeStandardRateVersion": null,
+    "nativeAdsRateVersion": null,
+    "provider": "external-affiliate",
+    "programId": "fixture-program",
+    "programVersion": "v1",
+    "currency": "USD",
+    "commission": {
+     "kind": "percentage",
+     "basisPoints": 2000
+    },
+    "eligibleBase": "retained merchandise",
+    "refundRule": "reverse refunded credit",
+    "guaranteedFeeMinor": 0
+   },
+   "audience": {
+    "sourceRef": "synthetic:criterion-proof:audienceAlignment",
+    "denominator": "audience panel",
+    "sampleSize": 150,
+    "windowStart": "2020-01-01T00:00:00Z",
+    "windowEnd": "2020-02-01T00:00:00Z",
+    "country": "source aggregate geography",
+    "age": "source aggregate age groups",
+    "language": "source aggregate languages",
+    "alignment": "pass"
+   }
+  },
+  "reasonCodes": []
+ }
+}

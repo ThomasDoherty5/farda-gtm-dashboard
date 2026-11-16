@@ -102,8 +102,9 @@ export class AgentStore {
     if (recorded !== caller.hash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
     return original;
   }
+  /** `assertBasis` runs inside the write transaction, after replay and version checks, so a caller can fence what it read. */
   save(packet: EvidencePacket, assessment: CreatorAssessment, expectedVersion: number, idempotencyKey: string,
-    normalizePacket: (packet: EvidencePacket) => EvidencePacket = value => value, caller?: CallerRequest): StoredAssessment {
+    normalizePacket: (packet: EvidencePacket) => EvidencePacket = value => value, caller?: CallerRequest, assertBasis?: () => void): StoredAssessment {
     packet = normalizePacket(packet);
     const requestHash = digest({ packet, expectedVersion, policyVersion: assessment.policyVersion, configHash: assessment.config.hash });
     this.db.exec("BEGIN IMMEDIATE");
@@ -125,6 +126,7 @@ export class AgentStore {
       }
       const latest = this.latest(packet.creatorId);
       if ((latest?.revision ?? 0) !== expectedVersion) throw new AgentConflict("VERSION_CONFLICT");
+      assertBasis?.();
       // A revision label cannot be reused to conceal materially changed evidence or terms.
       if (latest) {
         const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates,

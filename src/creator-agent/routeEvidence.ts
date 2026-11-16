@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { EvidencePacket } from "./evidence.ts";
 import type { OfferRepository } from "./offers/repository.ts";
+import { commerceCompatibility } from "./metricCompatibility.ts";
 
 const text = z.string().trim().min(1).max(500);
 const instant = z.string().datetime({ offset: true });
@@ -217,7 +218,8 @@ export function criterionSource(s: ScorecardSourceSnapshot | null | undefined, i
   switch (claim.id) {
     case "verifiedCommerce":
       if (routeEligibility(s).status !== "pass" || (s.commerce.kind === "tiktok-shop" && s.commerce.nativeAttribution.status !== "pass")) return null;
-      eligibleRefs = s.metrics.filter(m => m.name === "retainedSales" && m.maturity === "mature" && m.sampleSize > 0).map(m => m.sourceRef);
+      // J02-05: the cited measurements must agree on unit, basis, window, cohort, definition and refund basis.
+      eligibleRefs = commerceCompatibility(s, claim.sourceRefs).state === "derived" ? claim.sourceRefs : [];
       break;
     case "audienceAlignment": eligibleRefs = s.audience && s.audience.alignment !== "unknown" ? [s.audience.sourceRef] : []; break;
     case "reliability": eligibleRefs = s.reliability && s.reliability.status !== "unknown" ? [s.reliability.sourceRef] : []; break;
