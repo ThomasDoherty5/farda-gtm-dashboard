@@ -298,3 +298,12 @@ describe("J20 third-pass findings (pure rules)", () => {
   });
 });
 
+describe("J20 fourth-pass findings (pure rules)", () => {
+  it("R3: treatment wording catches outcome claims without matching figurative packing language", () => {
+    const gate = (text: string) => assess(collect([dated(1, 1, { review: { ...structuredClone(fixtureReviews.complete),
+      claims: [{ atSec: 9, text, method: "heard" as const, topic: "productFunction" as const }] } })]).packet).gates.find(g => g.id === "CLAIMS_REVIEWED")?.state ?? "absent";
+    for (const text of ["Says it eases the headache of packing.", "Says it helps with allergy season packing.", "Says it soothes the rash of stress shopping."]) expect(gate(text), text).toBe("absent");
+    for (const text of ["Says it fixed her hormonal acne.", "Says it reduces bloating.", "Says it lowers blood pressure."]) expect(gate(text), text).toBe("unknown");
+  });
+});
+

@@ -718,5 +718,56 @@ describe("J20 third-pass findings", () => {
     await (await h.runDay()).work();
     expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "unknown" });
   });
+
+  it("R1: a replayed reviewer request settles from its original receipt after a ruling or a collection; a different body is still refused", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("r1");
+    const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref };
+    const body = { packet: human, expectedVersion: 0, policyVersion: "2026-11-04", configHash: syntheticBinding().hash };
+    const first = await h.call("PUT", `/v1/creators/${creatorId}`, body, reviewer, "r1-human");
+    expect(first.status).toBe(200);
+    h.collector.on(null, h.collector.page(three()));
+    await (await h.runDay()).work();
+    expect(h.app.store.latest(creatorId)!.packet.collection).toBeDefined();
+    const replay = await h.call("PUT", `/v1/creators/${creatorId}`, body, reviewer, "r1-human");
+    expect(replay).toMatchObject({ status: 200, body: { runId: first.body.runId, revision: 1 } });
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, { ...body, packet: { ...human, evidenceRevision: "different" } }, reviewer, "r1-human"))
+      .toMatchObject({ status: 409, body: { code: "IDEMPOTENCY_KEY_REUSED" } });
+    // A rating on collected evidence, then a ruling, then the same rating request replayed.
+    const medical = { atSec: 9, text: "Says the case keeps her medication cool all day.", method: "heard" as const, topic: "medical" as const };
+    h.collector.on(null, h.collector.page([fixtureSourcePost(1, { review: { ...structuredClone(fixtureReviews.complete), claims: [medical] } }), ...three().slice(1)]));
+    await (await h.runDay()).work();
+    const collected = h.app.store.latest(creatorId)!;
+    const rate = { packet: { ...collected.packet, evidenceRevision: "r1-rated", ratings: { routine: 3, demo: 3 } }, expectedVersion: collected.revision,
+      policyVersion: "2026-11-04", configHash: syntheticBinding().hash };
+    const rated = await h.call("PUT", `/v1/creators/${creatorId}`, rate, reviewer, "r1-rate");
+    expect(rated.status).toBe(200);
+    const post = collected.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!;
+    const view = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: post.postId })).body.data) as
+      { version: string; sourceReview: { basisHash: string; runId: string; targets: { id: string }[] } };
+    expect((await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "r1-rule", resourceKind: "reviewerAssessment", resourceRef: post.postId,
+      expectedVersion: view.version, idempotencyKey: "r1-rule", payload: { kind: "disagree", creatorId, runId: view.sourceReview.runId, basisHash: view.sourceReview.basisHash,
+        targetId: view.sourceReview.targets.find(t => t.id.startsWith("claim-digest-"))!.id, reason: "A person rules this claim unsupported." } })).status).toBe(200);
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, rate, reviewer, "r1-rate")).toMatchObject({ status: 200, body: { runId: rated.body.runId } });
+  });
+
+  it("R2: a failed re-assessment never fails the saved ruling, and the next write carries it", async () => {
+    const medical = { atSec: 9, text: "Says the case keeps her medication cool all day.", method: "heard" as const, topic: "medical" as const };
+    const { h, creatorId, put } = await collectedCreator("r2", { ...structuredClone(fixtureReviews.complete), claims: [medical] });
+    const current = h.app.store.latest(creatorId)!;
+    const post = current.packet.posts.find(p => p.sourceUrl.endsWith("SYNTHJ201/"))!;
+    const view = evidenceViewSchemas.evidenceRecord!.parse((await h.readView("evidenceRecord", { creatorId, evidenceId: post.postId })).body.data) as
+      { version: string; sourceReview: { basisHash: string; runId: string; targets: { id: string }[] } };
+    const save = h.app.store.save.bind(h.app.store);
+    let failures = 1;
+    h.app.store.save = ((...args: Parameters<typeof save>) => { if (failures-- > 0) throw new Error("synthetic storage failure"); return save(...args); }) as typeof save;
+    const ruled = await h.call("POST", "/v1/save", { ...readFields, operation: "saveResource", requestId: "r2-rule", resourceKind: "reviewerAssessment", resourceRef: post.postId,
+      expectedVersion: view.version, idempotencyKey: "r2-rule", payload: { kind: "override", creatorId, runId: view.sourceReview.runId, basisHash: view.sourceReview.basisHash,
+        targetId: view.sourceReview.targets.find(t => t.id.startsWith("claim-digest-"))!.id, reason: "A person rules this claim unsupported.", replacement: "None." } });
+    expect(ruled).toMatchObject({ status: 200, body: { reasonCodes: ["ASSESSMENT_REFRESH_PENDING"] } });
+    expect(h.app.store.latest(creatorId)!.revision).toBe(current.revision);
+    expect((await put({ ...current.packet, evidenceRevision: "r2-rated", ratings: { routine: 3, demo: 3 } }, "r2-rate", current.revision)).status).toBe(200);
+    expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
+  });
 });
 

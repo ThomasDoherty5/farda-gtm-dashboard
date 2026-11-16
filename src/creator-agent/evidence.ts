@@ -105,7 +105,7 @@ const MEDICAL_WORDING = /\b(?:cur(?:e|ed|es|ing)\s+(?:my|her|his|their|your|the)
  * always need a person. Explicit medical wording also does, whatever the topic. The agent never resolves these.
  */
 /** A treatment verb aimed at a condition ("treats her eczema", "heals acne", "relieves her migraines", "helps her anxiety"). */
-const TREATMENT_CLAIM = /\b(?:treat(?:s|ed|ing)?|heal(?:s|ed|ing)?|reliev(?:e|es|ed|ing)|cur(?:e|es|ed|ing)|help(?:s|ed|ing)?(?:\s+with)?|eas(?:e|es|ed|ing)|soothe(?:s|d)?)\s+(?:(?:my|her|his|their|your|the|of)\s+)?(?:\w+\s+)?(?:eczema|acne|migraines?|headaches?|anxiety|depression|psoriasis|rosacea|arthritis|insomnia|asthma|allerg(?:y|ies)|nausea|cramps|inflammation|infections?|rash(?:es)?|adhd|ptsd|ibs|menopause|hot flashes|chronic pain|joint pain|back pain|period pain)\b/i;
+const TREATMENT_CLAIM = /\b(?:treat(?:s|ed|ing)?|heal(?:s|ed|ing)?|reliev(?:e|es|ed|ing)|cur(?:e|es|ed|ing)|help(?:s|ed|ing)?(?:\s+with)?|eas(?:e|es|ed|ing)|soothe(?:s|d)?|fix(?:es|ed|ing)?|reduc(?:e|es|ed|ing)|lower(?:s|ed|ing)?|clear(?:s|ed|ing)?)\s+(?:(?:my|her|his|their|your|the|of)\s+)?(?:\w+\s+)?(?:eczema|acne|migraines?|headaches?|anxiety|depression|psoriasis|rosacea|arthritis|insomnia|asthma|allerg(?:y|ies)|nausea|cramps|bloating|inflammation|infections?|rash(?:es)?|adhd|ptsd|ibs|menopause|hot flashes|blood pressure|blood sugar|cholesterol|chronic pain|joint pain|back pain|period pain)\b(?!\s+(?:of|season)\b)/i;
 export const claimNeedsPerson = (claim: { text: string; topic?: z.infer<typeof claimTopicSchema> }) =>
   (claim.topic !== undefined && HUMAN_REVIEW_CLAIM_TOPICS.includes(claim.topic)) || MEDICAL_WORDING.test(claim.text) || TREATMENT_CLAIM.test(claim.text);
 const spokenMethod = z.enum(["heard", "asr", "nativeCaptions"]);

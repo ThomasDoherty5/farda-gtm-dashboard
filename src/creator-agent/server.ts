@@ -480,17 +480,18 @@ export function createAgentServer(options: AgentServerOptions) {
   /**
    * Trigger `reviewerDisposition`: right after a person rules on a collected claim, append a re-assessed revision of the latest
    * collected packet through the shared writer, so the stored assessment reflects the ruling without waiting for J20. A
-   * replayed save whose ruling is already stored appends nothing. A concurrent write leaves the merge to the next write.
+   * replayed save whose ruling is already stored appends nothing. The annotation is already committed, so any failure here is
+   * reported as a pending refresh; every later write merges the ruling before J02 runs.
    */
   const reassessAfterClaimRuling = async (annotation: { id: string; input: { kind: string; creatorId: string }; original: { id: string } | null }) => {
     if (annotation.input.kind === "observation" || !annotation.original || !/^(?:claim-\d+|claim-digest-[0-9a-f]{32})$/.test(annotation.original.id)) return;
     const latest = store.latest(annotation.input.creatorId);
     if (!latest?.packet.collection || latest.packet.collection.claimDispositions?.some(entry => entry.annotationRef === annotation.id)) return;
-    if (!evidenceReviews.claimDispositions(annotation.input.creatorId).some(entry => entry.annotationRef === annotation.id)) return;
     try {
+      if (!evidenceReviews.claimDispositions(annotation.input.creatorId).some(entry => entry.annotationRef === annotation.id)) return;
       await evidenceWriter.write({ packet: latest.packet, expectedVersion: latest.revision, configHash: modelBinding(latest.packet.checkoutRoute)?.hash ?? null },
         `reviewer-disposition:${annotation.id}`, { origin: "reviewerDisposition" });
-    } catch (error) { if (!(error instanceof AgentConflict)) throw error; }
+    } catch { return "ASSESSMENT_REFRESH_PENDING" as const; }
   };
   const commercialBasis = (stored: StoredAssessment): AssessmentBasis => {
     const record = current(stored, store.latest(stored.packet.creatorId)?.runId !== stored.runId);
@@ -864,11 +865,11 @@ export function createAgentServer(options: AgentServerOptions) {
           if ((kind === "observation") !== (input.resourceKind === "evidenceDraft"))
             return reply(res, 422, { code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
           const saved = evidenceReviews.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey, "agent-reviewer", input.resourceKind);
-          await reassessAfterClaimRuling(saved.resource);
+          const refresh = await reassessAfterClaimRuling(saved.resource);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
             resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: saved.persistedByRef, record: saved.resource,
-            reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
+            reasonCodes: refresh ? [...saved.reasonCodes, refresh] : saved.reasonCodes, executionCertainty: "applied" });
         }
         const record = offers.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
