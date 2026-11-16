@@ -11,17 +11,47 @@ const providerFamily = z.enum(["shopify-collabs", "external-affiliate", "tiktok-
 const currency = z.string().regex(/^[A-Z]{3}$/);
 const metricName = z.enum(["gmv", "orders", "items", "refundAmount", "refundedOrders", "retainedSales", "creatorPayout"]);
 const countMetrics = new Set(["orders", "items", "refundedOrders"]);
-const metricSchema = z.object({
-  name: metricName, value: z.number().int().safe(), unit: z.enum(["count", "minorCurrency"]),
+/**
+ * J20 MetricObservation provenance. Optional so earlier snapshots and stored assessments still parse unchanged. J02 checks
+ * these before comparing or deriving from two measurements.
+ */
+const metricProvenance = {
+  /** The label exactly as the source displayed it. */
+  rawLabel: z.string().trim().min(1).max(80).nullable().optional(),
+  /** Snapshot time of this measurement, distinct from the window it covers. */
+  observedAt: instant.optional(),
+  definitionVersion: text.optional(),
+  sourceType: z.enum(["nativeReport", "nativePublicCounter", "authorizedExport", "derived"]).optional(),
+  refundBasis: z.enum(["included", "excluded", "unknown", "notApplicable"]).optional(),
+  trafficMix: z.enum(["organic", "paid", "mixed", "unknown"]).optional(),
+  numeratorKey: text.nullable().optional(),
+  postAgeDays: z.object({ min: count, max: count }).strict().nullable().optional(),
+};
+const metricShape = {
+  name: metricName, unit: z.enum(["count", "minorCurrency"]),
   currency: currency.nullable(), definition: text, denominator: text, windowStart: instant, windowEnd: instant,
-  sampleSize: count, maturity: z.enum(["mature", "open", "unknown"]), sourceRef: text,
-}).strict().superRefine((m, ctx) => {
+  sampleSize: count, maturity: z.enum(["mature", "open", "unknown"]), sourceRef: text, ...metricProvenance,
+};
+type MetricFacts = { name: z.infer<typeof metricName>; unit: "count" | "minorCurrency"; currency: string | null; windowStart: string; windowEnd: string;
+  observedAt?: string; postAgeDays?: { min: number; max: number } | null };
+function checkMetric(m: MetricFacts, value: number | null, ctx: z.RefinementCtx) {
   const isCount = countMetrics.has(m.name);
-  if (isCount !== (m.unit === "count") || isCount !== (m.currency === null) || (isCount && m.value < 0))
+  if (isCount !== (m.unit === "count") || isCount !== (m.currency === null) || (isCount && value !== null && value < 0))
     ctx.addIssue({ code: "custom", message: "Preserve the source metric's unit, currency and denominator." });
   if (Date.parse(m.windowEnd) <= Date.parse(m.windowStart))
     ctx.addIssue({ code: "custom", message: "Metric windows must have positive duration." });
-});
+  if (m.observedAt !== undefined && Date.parse(m.observedAt) < Date.parse(m.windowEnd))
+    ctx.addIssue({ code: "custom", message: "A measurement cannot be observed before its window closes." });
+  if (m.postAgeDays && m.postAgeDays.min > m.postAgeDays.max) ctx.addIssue({ code: "custom", message: "Post ages need an ordered range." });
+}
+const metricSchema = z.object({ ...metricShape, value: z.number().int().safe() }).strict().superRefine((m, ctx) => checkMetric(m, m.value, ctx));
+/** A metric the source could not show. It stays null with its reason; a hidden figure is never zero. */
+const unavailableMetricSchema = z.object({
+  ...metricShape, value: z.null(),
+  missingReason: z.enum(["hidden", "unavailable", "notAuthorized", "unsupported", "stale", "notCollected", "notApplicable"]),
+}).strict().superRefine((m, ctx) => checkMetric(m, null, ctx));
+export type RouteMetric = z.infer<typeof metricSchema>;
+export type UnavailableRouteMetric = z.infer<typeof unavailableMetricSchema>;
 const receipt = z.object({ status, sourceRef: text }).strict();
 const terms = z.object({
   origin: z.enum(["provider", "saved-offer"]), offerId: text, version: text, manifestHash: text, acceptedRef: text, termsRevision: text,
@@ -56,20 +86,34 @@ const criterionEvidence = z.object({
 const audience = z.object({
   sourceRef: text, denominator: text, sampleSize: count.positive(), windowStart: instant, windowEnd: instant,
   country: text, age: text, language: text, alignment: status,
+  /** Only an authorized dated native report or a creator export with provenance. No inferred, self-described or location route exists. */
+  sourceType: z.enum(["authorizedNativeAnalytics", "datedCreatorExport"]).optional(), provenanceRef: text.optional(),
 }).strict().refine((a) => Date.parse(a.windowEnd) > Date.parse(a.windowStart), { message: "Audience needs an ordered source window." });
+/** New provider proof: an aligned or misaligned audience must name its authorized report type and provenance. Stored history keeps the earlier optional shape. */
+const sourceAudience = audience.superRefine((a, ctx) => {
+  if (a.alignment !== "unknown" && (!a.sourceType || !a.provenanceRef))
+    ctx.addIssue({ code: "custom", message: "Verified audience evidence names an authorized native report or dated creator export and its provenance." });
+});
 
 /** Independent, server-supplied evidence snapshot; this is never accepted from a dashboard POST/PUT. */
 export const sourceSnapshotSchema = z.object({
   workspaceId: text, accountId: text, creatorId: text, creatorSourceId: text, checkoutRoute: route, evidenceRevision: text, termsRevision: text,
   sourceRef: text, observedAt: instant, validUntil: instant, provider: providerFamily, market: text, programId: text, programVersion: text,
   programEligibility: receipt, supportedClaims: receipt.nullable(), terms: terms.nullable(), commerce: z.discriminatedUnion("kind", [website, shop]),
-  metrics: z.array(metricSchema).max(50), audience: audience.nullable(), reliability: receipt.nullable(), economics: receipt.nullable(),
+  metrics: z.array(metricSchema).max(50), audience: sourceAudience.nullable(), reliability: receipt.nullable(), economics: receipt.nullable(),
   criteria: z.array(criterionEvidence).max(4),
+  unavailableMetrics: z.array(unavailableMetricSchema).max(50).optional(),
 }).strict().superRefine((s, ctx) => {
   if (s.checkoutRoute !== s.commerce.kind || (s.checkoutRoute === "tiktok-shop") !== (s.provider === "tiktok-shop") || new Set(s.criteria.map(c => c.id)).size !== s.criteria.length)
     ctx.addIssue({ code: "custom", message: "Source snapshot must describe one route with unique criterion claims." });
-  if (s.metrics.some(m => Date.parse(m.windowEnd) > Date.parse(s.observedAt)) || (s.audience && Date.parse(s.audience.windowEnd) > Date.parse(s.observedAt)))
+  const measured = [...s.metrics, ...s.unavailableMetrics ?? []];
+  if (measured.some(m => Date.parse(m.windowEnd) > Date.parse(s.observedAt) || (m.observedAt !== undefined && Date.parse(m.observedAt) > Date.parse(s.observedAt))) ||
+      (s.audience && Date.parse(s.audience.windowEnd) > Date.parse(s.observedAt)))
     ctx.addIssue({ code: "custom", message: "Source proof cannot include a measurement window in its future." });
+  const basis = (m: { name: string; windowStart: string; windowEnd: string; definition: string }) => JSON.stringify([m.name, m.windowStart, m.windowEnd, m.definition]);
+  const known = new Set(s.metrics.map(basis));
+  if ((s.unavailableMetrics ?? []).some(m => known.has(basis(m))))
+    ctx.addIssue({ code: "custom", message: "One measurement cannot be both known and unavailable." });
   if (Date.parse(s.validUntil) <= Date.parse(s.observedAt))
     ctx.addIssue({ code: "custom", message: "Source proof requires an explicit validity interval." });
 });
@@ -187,6 +231,7 @@ export const routeAssessmentSchema = z.object({
   provider: text.nullable(), programId: text.nullable(), programVersion: text.nullable(), market: text.nullable(),
   creatorSourceId: text.nullable(), observedAt: instant.nullable(), validUntil: instant.nullable(), coveredWeight: count.max(100),
   metrics: z.array(metricSchema).max(50),
+  unavailableMetrics: z.array(unavailableMetricSchema).max(50).optional(),
   confidence: z.object({
     completePublicReviews: count, distinctPublicationDates: count, commentsObservedPosts: count, unassessedAudioPosts: count,
     verifiedCriteria: count, configuredCriteria: count, sourceCoverage: z.enum(["unknown", "partial", "complete"]),

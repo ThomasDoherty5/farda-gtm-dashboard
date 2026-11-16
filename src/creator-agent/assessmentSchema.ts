@@ -2,7 +2,7 @@ import { z } from "zod";
 import { routeAssessmentSchema } from "./routeEvidence.ts";
 
 export const POLICY_VERSION = "2026-11-04";
-export const AGENT_VERSION = "1.1.0";
+export const AGENT_VERSION = "1.2.0";
 export const AGENT_SCHEMA_VERSION = "creator-agent.v1";
 const text = z.string().min(1);
 const nullableText = text.nullable();
@@ -12,7 +12,7 @@ export const gateSchema = z.object({ id: text, state: z.enum(["pass", "fail", "u
 const assessmentShapeSchema = z.object({
   schemaVersion: z.literal(AGENT_SCHEMA_VERSION),
   policyVersion: z.literal(POLICY_VERSION),
-  agentVersion: z.enum(["1.0.0", AGENT_VERSION]),
+  agentVersion: z.enum(["1.0.0", "1.1.0", AGENT_VERSION]),
   creatorId: text,
   briefId: text,
   evidenceRevision: text,

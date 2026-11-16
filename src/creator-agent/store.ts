@@ -11,6 +11,11 @@ export class AgentConflict extends Error {}
 export type StoredAssessment = { runId: string; revision: number; recordedAt: string; packetHash: string; packet: EvidencePacket; assessment: CreatorAssessment };
 export type SourcingSnapshot = { rowId: number; anchorRunId: string | null };
 export type SourcingPosition = { recordedAt: string; runId: string };
+/**
+ * The caller's own request identity, before any server augmentation. It is stored on the receipt row in the save transaction,
+ * so a same-key replay settles from its original receipt. `legacyHash` derives it for receipts recorded before the column.
+ */
+export type CallerRequest = { hash: string; legacyHash(original: StoredAssessment): string };
 
 /** Append-only evidence and assessment revisions. A retry returns its original receipt; history is never overwritten. */
 export class AgentStore {
@@ -33,6 +38,7 @@ export class AgentStore {
       this.db.close();
       throw new Error("DATABASE_SCOPE_MISMATCH");
     }
+    if (!this.db.prepare("PRAGMA table_info(requests)").all().some(row => row.name === "caller_hash")) this.db.exec("ALTER TABLE requests ADD COLUMN caller_hash TEXT");
     const meta = this.db.prepare("SELECT version FROM agent_meta WHERE id=1").get();
     if (meta?.version !== 1) throw new Error("UNSUPPORTED_STORAGE_SCHEMA");
   }
@@ -87,12 +93,25 @@ export class AgentStore {
   history(creatorId: string): StoredAssessment[] {
     return this.db.prepare("SELECT body FROM assessments WHERE creator_id=? ORDER BY revision").all(creatorId).map((row) => JSON.parse(String(row.body)) as StoredAssessment);
   }
+  /** The original receipt when this key already settled the same caller request; a conflict for a different one; else null. */
+  settled(idempotencyKey: string, caller: CallerRequest): StoredAssessment | null {
+    const prior = this.db.prepare("SELECT response, caller_hash FROM requests WHERE key=?").get(idempotencyKey);
+    if (!prior) return null;
+    const original = JSON.parse(String(prior.response)) as StoredAssessment;
+    const recorded = prior.caller_hash === null ? caller.legacyHash(original) : String(prior.caller_hash);
+    if (recorded !== caller.hash) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
+    return original;
+  }
   save(packet: EvidencePacket, assessment: CreatorAssessment, expectedVersion: number, idempotencyKey: string,
-    normalizePacket: (packet: EvidencePacket) => EvidencePacket = value => value): StoredAssessment {
+    normalizePacket: (packet: EvidencePacket) => EvidencePacket = value => value, caller?: CallerRequest): StoredAssessment {
     packet = normalizePacket(packet);
     const requestHash = digest({ packet, expectedVersion, policyVersion: assessment.policyVersion, configHash: assessment.config.hash });
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      if (caller) {
+        const original = this.settled(idempotencyKey, caller);
+        if (original) { this.db.exec("COMMIT"); return original; }
+      }
       const prior = this.db.prepare("SELECT request_hash, response FROM requests WHERE key=?").get(idempotencyKey);
       if (prior) {
         const original = JSON.parse(String(prior.response)) as StoredAssessment;
@@ -108,7 +127,9 @@ export class AgentStore {
       if ((latest?.revision ?? 0) !== expectedVersion) throw new AgentConflict("VERSION_CONFLICT");
       // A revision label cannot be reused to conceal materially changed evidence or terms.
       if (latest) {
-        const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates });
+        const evidenceDomain = (p: EvidencePacket) => ({ creatorId: p.creatorId, briefId: p.briefId, checkoutRoute: p.checkoutRoute, posts: p.posts, recentPosts: p.recentPosts, ratings: p.ratings, criterionRatings: p.criterionRatings, criterionEvidenceRefs: p.criterionEvidenceRefs, invitationGates: p.invitationGates,
+          // J20 collection facts are evidence too; absent on earlier packets, so their comparison is unchanged.
+          ...(p.collection ? { collection: p.collection } : {}), ...(p.detachedCollection ? { detachedCollection: p.detachedCollection } : {}) });
         const termsDomain = (p: EvidencePacket) => p.activationGates;
         if (digest(evidenceDomain(normalizePacket(latest.packet))) !== digest(evidenceDomain(packet)) && latest.packet.evidenceRevision === packet.evidenceRevision)
           throw new AgentConflict("EVIDENCE_REVISION_REUSED");
@@ -118,7 +139,7 @@ export class AgentStore {
       const record: StoredAssessment = { runId: randomUUID(), revision: expectedVersion + 1, recordedAt: new Date().toISOString(), packetHash: digest(packet), packet, assessment };
       const body = JSON.stringify(record);
       this.db.prepare("INSERT INTO assessments VALUES(?,?,?,?,?,?)").run(packet.creatorId, record.revision, record.runId, record.recordedAt, record.packetHash, body);
-      this.db.prepare("INSERT INTO requests VALUES(?,?,?)").run(idempotencyKey, requestHash, body);
+      this.db.prepare("INSERT INTO requests(key,request_hash,response,caller_hash) VALUES(?,?,?,?)").run(idempotencyKey, requestHash, body, caller?.hash ?? null);
       this.db.exec("COMMIT");
       return record;
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }

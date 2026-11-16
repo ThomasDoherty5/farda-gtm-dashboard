@@ -548,7 +548,7 @@ The historical demo contracts above remain reproduction references. The native s
 
 | Surface | Native contract |
 | -- | -- |
-| `evidenceRecord` | Exact creator/post plus optional immutable run. `sourceReview` binds media, evidence, policy, model, terms and annotation versions. |
+| `evidenceRecord` | Exact creator/post plus optional immutable run. `sourceReview` binds media, evidence, policy, model, terms and annotation versions. For J20-collected packets only, `videoEvidenceQuality` separates footage, modality coverage and metadata-only discovery; it is not rendered (see `video-evidence.md`). |
 | `evidenceDraft`, `reviewerAssessment` | Append-only observations or disagreements, with the exact source basis and `er-` expected version. No source review completion or source fact overwrite. |
 | `socialCatBoard`, `tiktokBoard`, `socialCatDashboard`, `tiktokDashboard` | Saved canonical funnel projections with owner/search/network/cohort filters, scoped fixed-membership cursors and unknown provider-wide coverage. |
 | `collaborationDetail`, `collaborationEvidence` | Same canonical or scoped opaque collaboration reference; authoritative source membership and exact saved asset/portfolio evidence stay separate. |

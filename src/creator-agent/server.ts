@@ -6,7 +6,7 @@ import { z } from "zod";
 import { evidencePacketSchema } from "./evidence.ts";
 import { digest, type ConfigBinding } from "./config.ts";
 import { AGENT_SCHEMA_VERSION, POLICY_VERSION, AGENT_VERSION } from "./assessmentSchema.ts";
-import { assessCreator, MODEL_FOR_ROUTE } from "./policy.ts";
+import { MODEL_FOR_ROUTE } from "./policy.ts";
 import { ratingPolicy } from "./ratingPolicy.ts";
 import { AgentStore, AgentConflict } from "./store.ts";
 import type { StoredAssessment } from "./store.ts";
@@ -37,6 +37,8 @@ import type { CollaborationSourceReader } from "./collaborationWorkflowSchema.ts
 import { openCollaborationRef } from "./creatorPlatformReferences.ts";
 import { creatorPlatformKeys, creatorPlatformFilterSchema, readCreatorPlatformView } from "./creatorPlatformReader.ts";
 import { protectCommentAuthors } from "./evidencePrivacy.ts";
+import { createCreatorEvidenceWriter, type CreatorEvidenceWriter } from "./creatorEvidenceWriter.ts";
+import { bindVideoEvidence, type BoundVideoEvidence, type VideoEvidenceBinding } from "./videoEvidence/runtime.ts";
 
 import { OfferRepository, type OfferAuthority } from "./offers/repository.ts";
 import { handleOfferRoute } from "./offers/routes.ts";
@@ -57,7 +59,7 @@ import { funnelFilterSchema } from "./funnelContract.ts";
 import { readScorecardPreview, scorecardPreviewFilters } from "./scorecardPreview.ts";
 import { createMediaComposition, type MediaComposition, type MediaDomainBindings } from "./mediaComposition.ts";
 import { createMediaResources } from "./mediaResources.ts";
-import { isScorecardProofExpired, resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
+import { isScorecardProofExpired, type ScorecardAuthority } from "./routeEvidence.ts";
 import { createStockSupportWorkflow, StockSupportError, type StockSupportSource } from "./stockSupport.ts";
 import { inventoryFilters, supportFilters, transferIntent, handoffIntent } from "./stockSupportSchema.ts";
 import { createMonitorReader, MonitorError, monitorViewKeys, monitorFilters, type MonitorSourceReader } from "./monitor/reader.ts";
@@ -171,6 +173,8 @@ export type AgentServerOptions = { databasePath: string; readToken: string; revi
   /** Trusted source and existing daily observe registration. This does not activate a job or bind a repair writer. */
   mirrorReconciliation?: MirrorReconciliationBinding;
   operationalAlerts?: { sweep: OperationalAlertSweepBinding; report?: OperationalAlertReportBinding };
+  /** Trusted J20 collector and an existing compiled daily J20 registration. It writes only through the creator evidence writer. */
+  videoEvidence?: VideoEvidenceBinding;
   /** Mirror freshness: `boundMirrors` names the mirrors with a run recorder; thresholds are proposed defaults unless overridden.
    * An unbound mirror reads as unknown (MIRROR_RUNS_NOT_BOUND); with none bound the read is unavailable. */
   mirrorFreshness?: Pick<MirrorFreshnessOptions, "approval" | "policies"> & MirrorRuntimeConfig;
@@ -213,6 +217,8 @@ export function createAgentServer(options: AgentServerOptions) {
   let mirrorFreshness: MirrorFreshnessRepository | null = null;
   let mirrorRuntime: MirrorFreshnessRuntime | null = null;
   let operationsSecret: string;
+  let evidenceWriter: CreatorEvidenceWriter;
+  let videoEvidence: BoundVideoEvidence | null;
   let evidenceReviews: EvidenceReviewRepository;
   let collaborationWorkflow: ReturnType<typeof createCollaborationWorkflow>;
   let stockSupport: ReturnType<typeof createStockSupportWorkflow>;
@@ -262,6 +268,9 @@ export function createAgentServer(options: AgentServerOptions) {
     assets = new AssetRepository(store.database, { workspaceId: options.workspaceId, accountId: options.accountId }, options.assetAuthority);
     operations = createOperations(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, options.operations);
     operationsSecret = loadOperationsSecret(store.database, { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" });
+    evidenceWriter = createCreatorEvidenceWriter({ store, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
+      secret: operationsSecret, scorecardAuthority: options.scorecardAuthority, modelBinding: route => modelBinding(route), acceptedTerms: id => offers.acceptedTerms(id),
+      claimDispositions: creatorId => evidenceReviews.claimDispositions(creatorId) });
     let runtimeRegistry = options.runtime?.registry ?? { registrations: new Map(), executors: new Map() };
     const reconciliationScope = { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" as const };
     reconciliation = options.mirrorReconciliation
@@ -275,6 +284,9 @@ export function createAgentServer(options: AgentServerOptions) {
       runtimeRegistry = bindOperationalAlertSweep(operationalAlerts, reconciliationScope, runtimeRegistry,
         options.operationalAlerts.sweep, options.operations?.now);
     }
+    videoEvidence = options.videoEvidence ? bindVideoEvidence({ registry: runtimeRegistry, binding: options.videoEvidence, intake, store,
+      writer: evidenceWriter, modelBinding: route => modelBinding(route), scope: reconciliationScope, now: options.operations?.now }) : null;
+    if (videoEvidence) runtimeRegistry = videoEvidence.registry;
     siteTraffic = createSiteTrafficService({ db: store.database, scope: { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" },
       referenceKey: operationsSecret, source: options.siteTraffic?.source, orders: options.siteTraffic?.orders, clicks: options.siteTraffic?.clicks, now: options.operations?.now });
     commercialProjection = createCommercialProjection({ offers, db: store.database,
@@ -464,6 +476,22 @@ export function createAgentServer(options: AgentServerOptions) {
     return { ...record, packet: protectCommentAuthors(record.packet,
       { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret),
       stale, assessment: stale ? { ...record.assessment, state: "reviewNeeded" as const, reasonCodes: [...new Set([...record.assessment.reasonCodes, "STALE_ASSESSMENT", ...(contested ? ["EVIDENCE_DISPUTED"] : []), ...(superseded ? ["SUPERSEDED_ASSESSMENT"] : [])])] } : record.assessment };
+  };
+  /**
+   * Trigger `reviewerDisposition`: right after a person rules on a collected claim, append a re-assessed revision of the latest
+   * collected packet through the shared writer, so the stored assessment reflects the ruling without waiting for J20. A
+   * replayed save whose ruling is already stored appends nothing. The annotation is already committed, so any failure here is
+   * reported as a pending refresh; every later write merges the ruling before J02 runs.
+   */
+  const reassessAfterClaimRuling = async (annotation: { id: string; input: { kind: string; creatorId: string }; original: { id: string } | null }) => {
+    if (annotation.input.kind === "observation" || !annotation.original || !/^(?:claim-\d+|claim-digest-[0-9a-f]{32})$/.test(annotation.original.id)) return;
+    const latest = store.latest(annotation.input.creatorId);
+    if (!latest?.packet.collection || latest.packet.collection.claimDispositions?.some(entry => entry.annotationRef === annotation.id)) return;
+    try {
+      if (!evidenceReviews.claimDispositions(annotation.input.creatorId).some(entry => entry.annotationRef === annotation.id)) return;
+      await evidenceWriter.write({ packet: latest.packet, expectedVersion: latest.revision, configHash: modelBinding(latest.packet.checkoutRoute)?.hash ?? null },
+        `reviewer-disposition:${annotation.id}`, { origin: "reviewerDisposition" });
+    } catch { return "ASSESSMENT_REFRESH_PENDING" as const; }
   };
   const commercialBasis = (stored: StoredAssessment): AssessmentBasis => {
     const record = current(stored, store.latest(stored.packet.creatorId)?.runId !== stored.runId);
@@ -837,10 +865,11 @@ export function createAgentServer(options: AgentServerOptions) {
           if ((kind === "observation") !== (input.resourceKind === "evidenceDraft"))
             return reply(res, 422, { code: "VALIDATION_FAILED", executionCertainty: "notApplied" });
           const saved = evidenceReviews.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey, "agent-reviewer", input.resourceKind);
+          const refresh = await reassessAfterClaimRuling(saved.resource);
           return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
             scope: { ...input.requestedScope, authorizationScopeVersion: "creator-agent.scope.v1" }, resourceRef: saved.resourceRef,
             resourceVersion: saved.version, persistedAt: saved.updatedAt, persistedByRef: saved.persistedByRef, record: saved.resource,
-            reasonCodes: saved.reasonCodes, executionCertainty: "applied" });
+            reasonCodes: refresh ? [...saved.reasonCodes, refresh] : saved.reasonCodes, executionCertainty: "applied" });
         }
         const record = offers.saveFromAdapter(input.resourceRef, input.expectedVersion, input.payload, input.idempotencyKey);
         return reply(res, 200, { schemaVersion: ADAPTER_SCHEMA, requestId: input.requestId,
@@ -915,6 +944,7 @@ export function createAgentServer(options: AgentServerOptions) {
         lifecycleConfiguration: { sourceAuthority: options.lifecycleSource ? "injected" : "notConnected", drafts: "durable-versioned", publicationExecution: "notConnected", deliveryExecution: "notConnected" },
         operationsControls: { sourceAuthority: options.operationsControlAuthority||options.operationsControlSource ? "injected" : "notConnected", proposals: "durable", taskExecution: operationsBridge?.supports("task")?"canonical-source-guarded":"notConnected", repairExecution: operationsBridge?.supports("repair")?"canonical-source-guarded":"notConnected", assignmentAuthority: "source-owned" },
         nightlyReconciliation: { readBinding: options.mirrorReconciliation ? "injected" : "notConnected", repairWriter: "notConnected" },
+        videoEvidence: videoEvidence?.capability ?? { collector: "notConnected", collectorQualification: "none", writer: "creator-evidence-writer", queue: "intake-j20", scoring: "j02-only", dispatch: "notConnected" },
         operationalThresholds: { sourceAuthority: operationalAlerts ? "injected" : "notConnected",
           delivery: options.operationalAlerts?.report && options.actionFoundation?.reporting ? "shared-reporting" : "notConnected" },
         siteTraffic: { aggregateStorage: "durable-versioned", sourceAuthority: options.siteTraffic?.source ? "injected" : "notConnected",
@@ -969,14 +999,7 @@ export function createAgentServer(options: AgentServerOptions) {
         if (input.packet.creatorId !== decodeURIComponent(match[1]!)) return reply(res, 400, { code: "IDENTITY_MISMATCH" });
         const key = req.headers["idempotency-key"];
         if (typeof key !== "string" || !key.trim() || key.length > 240) return reply(res, 400, { code: "IDEMPOTENCY_KEY_REQUIRED" });
-        const binding = modelBinding(input.packet.checkoutRoute);
-        if (input.configHash !== (binding?.hash ?? null)) return reply(res, 409, { code: "CONFIG_VERSION_CONFLICT", executionCertainty: "notApplied" });
-        const protect = (packet: z.infer<typeof evidencePacketSchema>) => protectCommentAuthors(packet,
-          { workspaceId: options.workspaceId, accountId: options.accountId, environment: "sandbox" }, operationsSecret);
-        const packet = protect(input.packet);
-        const proof = await resolveScorecardEvidence(options.scorecardAuthority, { workspaceId: options.workspaceId, accountId: options.accountId }, packet, Date.now(), id => offers.acceptedTerms(id));
-        const assessment = assessCreator(packet, binding, proof);
-        const saved = store.save(packet, assessment, input.expectedVersion, key, protect);
+        const saved = await evidenceWriter.write(input, key, { origin: "reviewer", principal: "agent-reviewer" });
         return reply(res, 200, current(saved, store.latest(saved.packet.creatorId)?.runId !== saved.runId));
       }
       if (path === "/v1/read" && req.method === "POST") {

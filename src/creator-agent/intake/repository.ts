@@ -481,6 +481,20 @@ export class IntakeRepository {
       aliases: this.db.prepare("SELECT network,handle,first_seen FROM intake_aliases WHERE creator_id=? ORDER BY network,handle").all(creatorId)
         .map((r) => ({ network: String(r.network), handle: String(r.handle), firstSeen: String(r.first_seen) })) };
   }
+  /**
+   * The J20 review queue for one creator: present only while the creator's latest revision came from a discovery event that
+   * emitted `nextWork: "J20"` and its canonical enrollment is still verified. Read-only; a stale or excluded entry returns null.
+   */
+  reviewWork(creatorId: string) {
+    if (!opaqueRef.safeParse(creatorId).success || !this.creatorExists(creatorId)) return null;
+    const revision = this.revision(creatorId), snapshot = this.delivery.snapshot(creatorId, revision);
+    if (!snapshot) return null;
+    const { input } = snapshot;
+    const result = this.event(input.recruitmentSource, input.eventId, input.sourceCandidate.accountId);
+    if (result?.nextWork !== "J20" || result.creatorRef?.canonicalId !== creatorId) return null;
+    return { creatorId, revision, eventId: input.eventId, briefRef: input.briefRef ? { ...input.briefRef } : null,
+      profiles: snapshot.record.profiles.map(p => ({ network: p.network, accountId: p.accountId, sourceId: p.sourceId, url: p.url })) };
+  }
   sourceStatus(source: RecruitmentSource, sourceAccountId: string) {
     const row = this.db.prepare("SELECT * FROM intake_cursors WHERE source=? AND source_account=?").get(source, sourceAccountId);
     if (!row) return null;
