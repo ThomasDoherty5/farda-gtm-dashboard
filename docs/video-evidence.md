@@ -61,6 +61,8 @@ Every new field is optional, so earlier packets, assessments, packet hashes and 
   - History keeps the collected revision unchanged. J02 reports `J20_DETACHED` while the packet is detached.
   - J20 holds with `J20_COLLECTION_DETACHED` while the latest packet is detached on the queued brief. A reviewer write that drops the marker, or a new brief, lets collection resume.
 - **Reviewer-entered packets.** Reviewer evidence is replaced only when J20 has at least one accessible, sourced post (otherwise `J20_AWAITING_ACCESSIBLE_EVIDENCE`). Its packet must also be at least as complete: as many qualifying posts, or its own packet gates passing (otherwise `J20_LESS_COMPLETE_THAN_REVIEWER_EVIDENCE`). When J20 does replace the evidence, the collected post set starts from J20 posts, the reviewer's gates, terms and criterion ratings are kept, and creative ratings return to unknown because the rated footage is no longer in the packet.
+- **Replays.** A same-key replay of a writer request settles from its original receipt, judged against the caller's own request rather than the server-augmented packet. A different request under the same key is still `IDEMPOTENCY_KEY_REUSED`.
+- **Ruling refresh.** If the re-assessment after a ruling fails, the saved ruling still returns 200 with `ASSESSMENT_REFRESH_PENDING`, and the next write merges the ruling before J02 runs.
 - **Privacy.** Provider accounts and comment authors are stored only as scoped aliases. Run views alias creator subjects.
 
 ## Contract notes
@@ -78,7 +80,7 @@ Every new field is optional, so earlier packets, assessments, packet hashes and 
 - Confirmation of the lifestyle vocabulary and its version label. Only the three exclusions gate today.
 - An explicit human "accepted" disposition for collected claims. The reviewer path offers disagree and override only. On a J20 `claim-digest-` target either one resolves the claim; on main's `claim-N` targets it still opens a dispute under main's rule.
 - The scoped change to dispute semantics: a ruling on a J20 `claim-digest-` target is treated as resolved by `contested`. Main's targets are untouched. This needs the evidence-review owner's sign-off.
-- Whether reviewers may reuse J20 values (identities or the same native posts) after a detach. Refused by default.
+- Whether reviewers may reuse J20 values (identities or the same native posts) after a detach. Refused by default. As a consequence, a reviewer cannot restore their own pre-J20 packet after a detach when J20 collected the same native posts; that write returns 409.
 - The completeness rule for J20 replacing reviewer-entered evidence (today: as many qualifying posts, or J20's packet gates passing).
 - Access-aware packet counts also apply to reviewer-entered packets that record access. A reviewer packet with one deleted post counted three qualifying posts on main and counts two now (`e2e-agent/evidence-review.spec.ts` writes exactly this and still passes).
 - Whether reviewer creative ratings should carry when J20 first replaces reviewer-entered posts. Today they return to unknown, because the rated footage is no longer in the packet.
