@@ -769,5 +769,26 @@ describe("J20 third-pass findings", () => {
     expect((await put({ ...current.packet, evidenceRevision: "r2-rated", ratings: { routine: 3, demo: 3 } }, "r2-rate", current.revision)).status).toBe(200);
     expect(h.app.store.latest(creatorId)!.assessment.gates.find(g => g.id === "CLAIMS_REVIEWED")).toMatchObject({ state: "pass" });
   });
+
+  it("F1: the caller hash is stored in the same receipt row as the save, and legacy receipts without one still settle", async () => {
+    const h = await harness();
+    const { creatorId } = await h.discover("f1");
+    const human = { ...syntheticPacket(), creatorId, briefId: fixtureBrief.ref };
+    const body = { packet: human, expectedVersion: 0, policyVersion: "2026-11-04", configHash: syntheticBinding().hash };
+    const first = await h.call("PUT", `/v1/creators/${creatorId}`, body, reviewer, "f1-human");
+    expect(first.status).toBe(200);
+    const db = h.app.store.database;
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name='creator_evidence_caller_requests'").get()).toBeUndefined();
+    expect(db.prepare("SELECT caller_hash FROM requests WHERE key=?").get("f1-human")?.caller_hash).toMatch(/^[a-f0-9]{64}$/);
+    // A receipt row written in one transaction has no crash window: collection moves the head, the replay still settles.
+    h.collector.on(null, h.collector.page(three()));
+    await (await h.runDay()).work();
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, body, reviewer, "f1-human")).toMatchObject({ status: 200, body: { runId: first.body.runId } });
+    // A legacy receipt (no caller hash) for an unaugmented packet settles from its original record too.
+    db.prepare("UPDATE requests SET caller_hash=NULL WHERE key=?").run("f1-human");
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, body, reviewer, "f1-human")).toMatchObject({ status: 200, body: { runId: first.body.runId } });
+    expect(await h.call("PUT", `/v1/creators/${creatorId}`, { ...body, packet: { ...human, evidenceRevision: "f1-other" } }, reviewer, "f1-human"))
+      .toMatchObject({ status: 409, body: { code: "IDEMPOTENCY_KEY_REUSED" } });
+  });
 });
 

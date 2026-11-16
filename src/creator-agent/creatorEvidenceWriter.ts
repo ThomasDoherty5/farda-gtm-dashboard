@@ -5,7 +5,7 @@ import type { OfferRepository } from "./offers/repository.ts";
 import type { OperationsScope } from "./operations.ts";
 import { assessCreator } from "./policy.ts";
 import { resolveScorecardEvidence, type ScorecardAuthority } from "./routeEvidence.ts";
-import { AgentConflict, type AgentStore, type StoredAssessment } from "./store.ts";
+import { AgentConflict, type AgentStore, type CallerRequest, type StoredAssessment } from "./store.ts";
 
 export type CreatorEvidenceWrite = { packet: EvidencePacket; expectedVersion: number; configHash: string | null };
 export type CreatorEvidenceWriter = {
@@ -92,30 +92,20 @@ export function createCreatorEvidenceWriter(deps: { store: AgentStore; scope: Op
   scorecardAuthority?: ScorecardAuthority; modelBinding(route: EvidencePacket["checkoutRoute"]): ConfigBinding | null;
   acceptedTerms: OfferRepository["acceptedTerms"]; claimDispositions?: (creatorId: string) => ClaimDisposition[] }): CreatorEvidenceWriter {
   const protect = (packet: EvidencePacket) => protectCommentAuthors(packet, deps.scope, deps.secret);
-  const db = deps.store.database;
-  // The caller's own request, before any server augmentation, so a same-key replay settles from its original receipt.
-  db.exec("CREATE TABLE IF NOT EXISTS creator_evidence_caller_requests (key TEXT PRIMARY KEY, caller_hash TEXT NOT NULL)");
-  const callerHash = (input: CreatorEvidenceWrite, origin: string) => digest({ origin, packet: protect(input.packet), expectedVersion: input.expectedVersion, configHash: input.configHash });
-  /** An existing receipt for this key: the original record for the same caller request, a conflict for a different one, or null. */
-  const settled = (input: CreatorEvidenceWrite, key: string, origin: string): StoredAssessment | null => {
-    const prior = db.prepare("SELECT response FROM requests WHERE key=?").get(key);
-    if (!prior) return null;
-    const original = JSON.parse(String(prior.response)) as StoredAssessment;
-    const caller = db.prepare("SELECT caller_hash FROM creator_evidence_caller_requests WHERE key=?").get(key);
-    // Receipts recorded before caller hashes existed were never augmented, so the stored packet is the caller's packet.
-    const same = caller ? caller.caller_hash === callerHash(input, origin)
-      : digest({ packet: protect(original.packet), expectedVersion: original.revision - 1, configHash: original.assessment.config.hash }) ===
-        digest({ packet: protect(input.packet), expectedVersion: input.expectedVersion, configHash: input.configHash });
-    if (!same) throw new AgentConflict("IDEMPOTENCY_KEY_REUSED");
-    return original;
-  };
+  // The caller's own request, before any server augmentation; the store keeps it on the receipt row in the save transaction.
+  const callerHashOf = (packet: EvidencePacket, expectedVersion: number, configHash: string | null, origin: string) =>
+    digest({ origin, packet: protect(packet), expectedVersion, configHash });
+  const callerOf = (input: CreatorEvidenceWrite, origin: string): CallerRequest => ({ hash: callerHashOf(input.packet, input.expectedVersion, input.configHash, origin),
+    // Receipts from before the column were never augmented, so the stored packet is the caller's packet.
+    legacyHash: original => callerHashOf(original.packet, original.revision - 1, original.assessment.config.hash, origin) });
   return {
     protect,
     async write(input, idempotencyKey, options = {}) {
       const binding = deps.modelBinding(input.packet.checkoutRoute);
       if (input.configHash !== (binding?.hash ?? null)) throw new AgentConflict("CONFIG_VERSION_CONFLICT");
       const origin = options.origin ?? "reviewer";
-      const replayed = settled(input, idempotencyKey, origin);
+      const caller = callerOf(input, origin);
+      const replayed = deps.store.settled(idempotencyKey, caller);
       if (replayed) return replayed;
       let packet = protect(input.packet);
       if (origin === "reviewer") packet = reviewerWrite(deps.store, packet, input.expectedVersion, protect, options.principal ?? "agent-reviewer");
@@ -124,9 +114,7 @@ export function createCreatorEvidenceWriter(deps: { store: AgentStore; scope: Op
         packet, Date.now(), id => deps.acceptedTerms(id));
       const assessment = assessCreator(packet, binding, proof);
       options.fence?.();
-      const saved = deps.store.save(packet, assessment, input.expectedVersion, idempotencyKey, protect);
-      db.prepare("INSERT OR IGNORE INTO creator_evidence_caller_requests VALUES(?,?)").run(idempotencyKey, callerHash(input, origin));
-      return saved;
+      return deps.store.save(packet, assessment, input.expectedVersion, idempotencyKey, protect, caller);
     },
   };
 }
